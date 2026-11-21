@@ -1,0 +1,239 @@
+<svg xmlns="http://www.w3.org/2000/svg" role="img" font-family="'Terminess Nerd Font Mono', 'DejaVu Sans Mono', Consolas, monospace" aria-labelledby="map-title map-description" viewBox="0 0 1000 857" width="1000" height="857">
+  <title id="map-title">TuxBox runtime compatibility</title>
+  <desc id="map-description">Current runtime capabilities, retail output and Xbox DLL coverage. A checked circle marks complete coverage, a half-filled circle partial coverage and an open ring incomplete coverage.</desc>
+  <rect x="0" y="0" width="1000" height="857" fill="#0b0b0f" />
+  <rect x="0" y="0" width="1000" height="48" fill="#090910" />
+  <rect x="0" y="47" width="1000" height="1" fill="#272733" />
+  <rect x="14" y="10" width="210" height="27" fill="#e2bc8c" />
+  <text x="119" y="29" fill="#0b0b0f" font-size="15" text-anchor="middle" font-weight="bold">Runtime compatibility</text>
+  <text x="500" y="32" fill="#e2bc8c" font-size="22" text-anchor="middle" font-weight="bold" letter-spacing="4">TUXBOX</text>
+  <text x="986" y="30" fill="#6fc7d4" font-size="16" text-anchor="end" font-weight="normal">Xbox Series X|S</text>
+  <g transform="translate(14 60)">
+    <title>Runtime capabilities</title>
+    <rect x="0" y="0" width="509" height="409" fill="#14141d" stroke="#e2bc8c" stroke-width="2" />
+    <rect x="1" y="1" width="507" height="32" fill="#0d0d15" />
+    <rect x="1" y="33" width="507" height="1" fill="#272733" />
+    <circle cx="16" cy="17" r="4.5" fill="#e74c3c" />
+    <circle cx="32" cy="17" r="4.5" fill="#f1c40f" />
+    <circle cx="48" cy="17" r="4.5" fill="#2ecc71" />
+    <text x="68" y="22" fill="#6fc7d4" font-size="14" text-anchor="start" font-weight="normal">~/docs/PROGRESS.md</text>
+    <text x="18" y="70" fill="#e2bc8c" font-size="25" text-anchor="start" font-weight="bold">Runtime capabilities</text>
+    <rect x="18" y="83" width="473" height="1" fill="#272733" />
+    <text x="18" y="106" fill="#d7d7de" font-size="16" text-anchor="start" font-weight="bold">Identify a package</text>
+    <text x="491" y="106" fill="#2ecc71" font-size="14" text-anchor="end" font-weight="normal">Verified</text>
+    <text x="18" y="125" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Selects manifest entries and reads PE imports</text>
+    <rect x="18" y="136" width="473" height="1" fill="#272733" />
+    <text x="18" y="159" fill="#d7d7de" font-size="16" text-anchor="start" font-weight="bold">Native process and memory</text>
+    <text x="491" y="159" fill="#e2bc8c" font-size="14" text-anchor="end" font-weight="normal">Partial</text>
+    <text x="18" y="178" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Rust XMem reserves and commits guest memory</text>
+    <rect x="18" y="189" width="473" height="1" fill="#272733" />
+    <text x="18" y="212" fill="#d7d7de" font-size="16" text-anchor="start" font-weight="bold">Guest graphics submission</text>
+    <text x="491" y="212" fill="#e2bc8c" font-size="14" text-anchor="end" font-weight="normal">Partial</text>
+    <text x="18" y="231" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Submits command lists through Xbox device slots</text>
+    <rect x="18" y="242" width="473" height="1" fill="#272733" />
+    <text x="18" y="265" fill="#d7d7de" font-size="16" text-anchor="start" font-weight="bold">Retail shader and resource translation</text>
+    <text x="491" y="265" fill="#e2bc8c" font-size="14" text-anchor="end" font-weight="normal">Partial</text>
+    <text x="18" y="284" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Runs retail shaders on NVIDIA and AMD</text>
+    <rect x="18" y="295" width="473" height="1" fill="#272733" />
+    <text x="18" y="318" fill="#d7d7de" font-size="16" text-anchor="start" font-weight="bold">Playable platform services</text>
+    <text x="491" y="318" fill="#e2bc8c" font-size="14" text-anchor="end" font-weight="normal">Partial</text>
+    <text x="18" y="337" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Reads mouse, keyboard and XInput gamepads</text>
+    <rect x="18" y="348" width="473" height="1" fill="#272733" />
+    <text x="18" y="371" fill="#d7d7de" font-size="16" text-anchor="start" font-weight="bold">Multi-title compatibility and performance</text>
+    <text x="491" y="371" fill="#a0a0b1" font-size="14" text-anchor="end" font-weight="normal">Pending</text>
+    <text x="18" y="390" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Awaits a second retail launch</text>
+  </g>
+  <g transform="translate(535 60)">
+    <title>The Matrix Awakens</title>
+    <rect x="0" y="0" width="451" height="409" fill="#14141d" stroke="#272733" stroke-width="1" />
+    <rect x="1" y="1" width="449" height="32" fill="#0d0d15" />
+    <rect x="1" y="33" width="449" height="1" fill="#272733" />
+    <circle cx="16" cy="17" r="4.5" fill="#e74c3c" />
+    <circle cx="32" cy="17" r="4.5" fill="#f1c40f" />
+    <circle cx="48" cy="17" r="4.5" fill="#2ecc71" />
+    <text x="68" y="22" fill="#6fc7d4" font-size="14" text-anchor="start" font-weight="normal">~/evidence/matrix-awakens-launch.json</text>
+    <text x="18" y="70" fill="#e2bc8c" font-size="25" text-anchor="start" font-weight="bold">The Matrix Awakens</text>
+    <desc>Trial menu-video-audio. Title code reached. Frame verified. Unresolved imports in loaded DLLs: 1</desc>
+    <text x="18" y="96" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Retail launch with reference providers</text>
+    <text x="18" y="118" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Proton Experimental · RTX 4070 Ti SUPER</text>
+    <rect x="18" y="136" width="415" height="1" fill="#272733" />
+    <text x="18" y="161" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Chase cinematics</text>
+    <text x="433" y="161" fill="#2ecc71" font-size="15" text-anchor="end" font-weight="normal">Rendered</text>
+    <rect x="18" y="175" width="415" height="1" fill="#272733" />
+    <text x="18" y="200" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Menu input</text>
+    <text x="433" y="200" fill="#2ecc71" font-size="15" text-anchor="end" font-weight="normal">Keyboard, mouse, XInput</text>
+    <rect x="18" y="214" width="415" height="1" fill="#272733" />
+    <text x="18" y="239" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Real-time dialogue</text>
+    <text x="433" y="239" fill="#e74c3c" font-size="15" text-anchor="end" font-weight="normal">Near-black</text>
+    <rect x="18" y="253" width="415" height="1" fill="#272733" />
+    <text x="18" y="278" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Driving and shooting</text>
+    <text x="433" y="278" fill="#a0a0b1" font-size="15" text-anchor="end" font-weight="normal">Unverified</text>
+    <rect x="18" y="292" width="415" height="1" fill="#272733" />
+    <text x="18" y="317" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Recorded chase run</text>
+    <text x="433" y="317" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">12m 55s</text>
+    <rect x="18" y="331" width="415" height="1" fill="#272733" />
+    <text x="18" y="356" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">First-boot prep</text>
+    <text x="433" y="356" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">11 shaders · 7 pipelines</text>
+  </g>
+  <g transform="translate(14 481)">
+    <title>Xbox library coverage</title>
+    <rect x="0" y="0" width="972" height="330" fill="#14141d" stroke="#272733" stroke-width="1" />
+    <rect x="1" y="1" width="970" height="32" fill="#0d0d15" />
+    <rect x="1" y="33" width="970" height="1" fill="#272733" />
+    <circle cx="16" cy="17" r="4.5" fill="#e74c3c" />
+    <circle cx="32" cy="17" r="4.5" fill="#f1c40f" />
+    <circle cx="48" cy="17" r="4.5" fill="#2ecc71" />
+    <text x="68" y="22" fill="#6fc7d4" font-size="14" text-anchor="start" font-weight="normal">~/evidence/library-status.json</text>
+    <text x="18" y="70" fill="#e2bc8c" font-size="25" text-anchor="start" font-weight="bold">Xbox library coverage</text>
+    <text x="954" y="68" fill="#a0a0b1" font-size="15" text-anchor="end" font-weight="normal">16 tracked DLLs · TuxBox and reference providers</text>
+    <g transform="translate(23 99)">
+      <circle cx="0" cy="0" r="5.5" fill="none" stroke="#2ecc71" stroke-width="1.7" />
+      <path d="M-3,0 -1,2 3,-2" fill="none" stroke="#2ecc71" stroke-width="1.5" />
+    </g>
+    <text x="38" y="104" fill="#2ecc71" font-size="15" text-anchor="start" font-weight="normal">0 complete</text>
+    <g transform="translate(167 99)">
+      <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
+      <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
+    </g>
+    <text x="182" y="104" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">10 partial</text>
+    <g transform="translate(311 99)">
+      <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
+    </g>
+    <text x="326" y="104" fill="#e74c3c" font-size="15" text-anchor="start" font-weight="normal">6 incomplete</text>
+    <rect x="18.0" y="123" width="225.0" height="1" fill="#272733" />
+    <text x="18.0" y="151" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Graphics and memory</text>
+    <g>
+      <title>d3d12_xs.dll · Partial · TuxBox Rust D3D12 provider. The retail run uses patched TomBox. TuxBox creates a device for profile 0x20002 and submits two guest command lists with verified output. The reference path accepts Frosty's 0x20004 profile and renders the menu and movies.</title>
+      <g transform="translate(24.0 172)">
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
+        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
+      </g>
+      <text x="39.0" y="177" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">d3d12_xs.dll</text>
+    </g>
+    <g>
+      <title>dxcompiler_xs.dll · Partial · TuxBox PE forwarder to desktop DXC. DxcCreateInstance supplies a working IDxcUtils factory. A 257-byte blob retained its contents and lifetime across interface releases on Valve and GE-Proton.</title>
+      <g transform="translate(24.0 202)">
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
+        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
+      </g>
+      <text x="39.0" y="207" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">dxcompiler_xs.dll</text>
+    </g>
+    <g>
+      <title>xmem.dll · Partial · TuxBox Rust allocator. The retail reference run uses TomBox. Six named and ordinal exports cover allocation/free, working-set statistics and virtual allocation. Guest tests check alignment, reservation, page access and lifetime.</title>
+      <g transform="translate(24.0 232)">
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
+        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
+      </g>
+      <text x="39.0" y="237" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">xmem.dll</text>
+    </g>
+    <g>
+      <title>xg_xs.dll · Incomplete · Supplied console XG library. Four RGBA8 and BC7 texture descriptions exercise linear and tiled layouts through XGCreateTextureComputer using TuxBox memory allocation.</title>
+      <g transform="translate(24.0 262)">
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
+      </g>
+      <text x="39.0" y="267" fill="#e74c3c" font-size="15" text-anchor="start" font-weight="normal">xg_xs.dll</text>
+    </g>
+    <rect x="255.0" y="123" width="225.0" height="1" fill="#272733" />
+    <text x="255.0" y="151" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Platform and storage</text>
+    <g>
+      <title>xgameruntime.dll · Partial · ScarlettX reference runtime with a task-queue fix. Frosty initializes the reference runtime and enters Unreal startup. A paired control verifies termination of a queue with a manual completion port.</title>
+      <g transform="translate(261.0 172)">
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
+        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
+      </g>
+      <text x="276.0" y="177" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">xgameruntime.dll</text>
+    </g>
+    <g>
+      <title>xcrdapi.dll · Partial · TomBox storage bridge to desktop DirectStorage. DStorageGetFactory supplies the storage path Frosty uses to initialize its I/O dispatcher and mount its IoStore container.</title>
+      <g transform="translate(261.0 202)">
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
+        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
+      </g>
+      <text x="276.0" y="207" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">xcrdapi.dll</text>
+    </g>
+    <g>
+      <title>gameconfighelper.dll · Incomplete · Supplied console configuration helper in the embedded-runtime trial. The loader found the supplied helper in the package-runtime experiment.</title>
+      <g transform="translate(261.0 232)">
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
+      </g>
+      <text x="276.0" y="237" fill="#e74c3c" font-size="15" text-anchor="start" font-weight="normal">gameconfighelper.dll</text>
+    </g>
+    <rect x="492.0" y="123" width="225.0" height="1" fill="#272733" />
+    <text x="492.0" y="151" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Input and audio</text>
+    <g>
+      <title>GameInput.dll · Partial · TomBox GameInput bridge with TuxBox mouse and keyboard mapping. The retail menu accepts keyboard, mouse and Xbox D-pad input. A virtual Xbox controller verifies analog readings, simultaneous button presses, hotplug and keyboard fallback through Proton XInput.</title>
+      <g transform="translate(498.0 172)">
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
+        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
+      </g>
+      <text x="513.0" y="177" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">GameInput.dll</text>
+    </g>
+    <g>
+      <title>AcpHal.dll · Partial · TomBox audio hardware abstraction. Frosty starts its mixer and submits an eight-channel buffer with the reference AcpHal provider.</title>
+      <g transform="translate(498.0 202)">
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
+        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
+      </g>
+      <text x="513.0" y="207" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">AcpHal.dll</text>
+    </g>
+    <g>
+      <title>XAudio2_9.dll · Incomplete · Proton XAudio2. Host XAudio2 accepts the title's first mixer buffer. A separate private stereo loopback matches the intro soundtrack.</title>
+      <g transform="translate(498.0 232)">
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
+      </g>
+      <text x="513.0" y="237" fill="#e74c3c" font-size="15" text-anchor="start" font-weight="normal">XAudio2_9.dll</text>
+    </g>
+    <g>
+      <title>GameChat2.dll · Incomplete · Supplied title library, delay-loaded. Frosty declares 15 delay imports for game chat.</title>
+      <g transform="translate(498.0 262)">
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
+      </g>
+      <text x="513.0" y="267" fill="#e74c3c" font-size="15" text-anchor="start" font-weight="normal">GameChat2.dll</text>
+    </g>
+    <rect x="729.0" y="123" width="225.0" height="1" fill="#272733" />
+    <text x="729.0" y="151" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Media</text>
+    <g>
+      <title>mfplat.dll · Partial · TuxBox sample bridge with TomBox and Proton Media Foundation. The bridge provides the D3D12 video-sample path. Guest readback and retail movie comparisons verify decoded output.</title>
+      <g transform="translate(735.0 172)">
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
+        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
+      </g>
+      <text x="750.0" y="177" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">mfplat.dll</text>
+    </g>
+    <g>
+      <title>mfhevcdec.dll · Partial · TuxBox transform adapter around the supplied HEVC decoder. The adapter delivers synchronized D3D12 NV12 samples. Original intro and chase footage passed decoded-frame comparisons.</title>
+      <g transform="translate(735.0 202)">
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
+        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
+      </g>
+      <text x="750.0" y="207" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">mfhevcdec.dll</text>
+    </g>
+    <g>
+      <title>mfh264dec.dll · Partial · TuxBox transform adapter around the supplied H.264 decoder. The registered H.264 transform returns D3D12 samples for both 1024 × 512 menu previews.</title>
+      <g transform="translate(735.0 232)">
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
+        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
+      </g>
+      <text x="750.0" y="237" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">mfh264dec.dll</text>
+    </g>
+    <g>
+      <title>mfreadwrite.dll · Incomplete · Proton Media Foundation source reader. The source-reader control opens a movie byte stream and obtains its video media type.</title>
+      <g transform="translate(735.0 262)">
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
+      </g>
+      <text x="750.0" y="267" fill="#e74c3c" font-size="15" text-anchor="start" font-weight="normal">mfreadwrite.dll</text>
+    </g>
+    <g>
+      <title>MSAudDecMFT.dll · Incomplete · Supplied audio decoder registered in the test prefix. The original AAC decoder processes 96 access units. The six-channel PCM output was compared with FFmpeg.</title>
+      <g transform="translate(735.0 292)">
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
+      </g>
+      <text x="750.0" y="297" fill="#e74c3c" font-size="15" text-anchor="start" font-weight="normal">MSAudDecMFT.dll</text>
+    </g>
+  </g>
+  <g transform="translate(14 823)">
+    <title>Guest regression checks</title>
+    <text x="0" y="21" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Guest regression checks</text>
+    <text x="972" y="21" fill="#a0a0b1" font-size="15" text-anchor="end" font-weight="normal">47 of 52 passed across 4 host configurations</text>
+  </g>
+</svg>

@@ -1,0 +1,284 @@
+//! Present one RGBA8 guest texture through a double-buffered DXGI swap chain.
+
+use std::mem::{ManuallyDrop, swap};
+use std::sync::Mutex;
+use windows::Win32::Foundation::{E_FAIL, E_INVALIDARG, E_NOTIMPL, HANDLE, HWND};
+use windows::Win32::Graphics::Direct3D12::*;
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
+};
+use windows::Win32::Graphics::Dxgi::*;
+use windows::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
+use windows::Win32::UI::WindowsAndMessaging::{IsWindow, IsWindowVisible};
+use windows::core::{HRESULT, Interface, Result};
+
+#[derive(Default)]
+pub(crate) struct Presentation {
+    session: Mutex<Option<SwapChain>>,
+}
+
+impl Presentation {
+    pub(crate) fn present(&self, queue: &ID3D12CommandQueue, source: &ID3D12Resource) -> HRESULT {
+        self.present_texture(queue, source)
+            .unwrap_or_else(|error| error.code())
+    }
+
+    fn present_texture(
+        &self,
+        queue: &ID3D12CommandQueue,
+        source: &ID3D12Resource,
+    ) -> Result<HRESULT> {
+        // SAFETY: source is a live native resource held by the caller.
+        let desc = unsafe { source.GetDesc() };
+        if desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D
+            || desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM
+            || desc.DepthOrArraySize != 1
+            || desc.MipLevels != 1
+            || desc.SampleDesc.Count != 1
+            || desc.SampleDesc.Quality != 0
+            || desc.Width > u64::from(u32::MAX)
+        {
+            return Err(E_NOTIMPL.into());
+        }
+        let owner = device_of(source)?;
+        let device = device_of(queue)?;
+        if owner.as_raw() != device.as_raw() {
+            return Err(E_INVALIDARG.into());
+        }
+
+        let mut session = self.session.lock().map_err(|_| E_FAIL)?;
+        let chain = match session.as_mut() {
+            Some(chain) => chain,
+            None => session.insert(SwapChain::new(queue, &device, &desc)?),
+        };
+        chain.present(queue, source, &desc)
+    }
+}
+
+fn device_of(child: &ID3D12DeviceChild) -> Result<ID3D12Device> {
+    let mut device = None;
+    // SAFETY: COM writes an owned device reference into the empty output slot.
+    unsafe { child.GetDevice(&mut device) }.map_err(|_| E_INVALIDARG)?;
+    device.ok_or_else(|| E_INVALIDARG.into())
+}
+
+struct Frame {
+    allocator: ID3D12CommandAllocator,
+    list: ID3D12GraphicsCommandList,
+    // ExecuteCommandLists does not retain resource references until GPU completion.
+    source: Option<ID3D12Resource>,
+    retire: u64,
+}
+
+impl Frame {
+    fn new(device: &ID3D12Device) -> Result<Self> {
+        // SAFETY: the fresh list and its allocator have the same device and type.
+        unsafe {
+            let allocator = device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)?;
+            let list: ID3D12GraphicsCommandList =
+                device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)?;
+            list.Close()?;
+            Ok(Self {
+                allocator,
+                list,
+                source: None,
+                retire: 0,
+            })
+        }
+    }
+}
+
+struct SwapChain {
+    chain: IDXGISwapChain3,
+    fence: ID3D12Fence,
+    frames: [Frame; 2],
+    // A window handle is an OS identifier. The originating thread owns the window.
+    window: usize,
+    width: u32,
+    height: u32,
+    next: u64,
+    // Once execution has begun, a failed signal leaves the work without a
+    // retirement point. Keep its queue for a final synchronization attempt.
+    failed_signal: Option<(HRESULT, ID3D12CommandQueue)>,
+}
+
+impl SwapChain {
+    fn new(
+        queue: &ID3D12CommandQueue,
+        device: &ID3D12Device,
+        desc: &D3D12_RESOURCE_DESC,
+    ) -> Result<Self> {
+        // SAFETY: Win32 returns the calling thread's active window; DXGI copies the
+        // descriptor and takes a reference to the queue on successful creation.
+        unsafe {
+            let window = GetActiveWindow();
+            if window.is_invalid() || !IsWindowVisible(window).as_bool() {
+                return Err(DXGI_ERROR_INVALID_CALL.into());
+            }
+
+            let params = DXGI_SWAP_CHAIN_DESC1 {
+                Width: desc.Width as u32,
+                Height: desc.Height,
+                Format: desc.Format,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                BufferCount: 2,
+                SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
+                Scaling: DXGI_SCALING_STRETCH,
+                AlphaMode: DXGI_ALPHA_MODE_IGNORE,
+                ..Default::default()
+            };
+            let factory: IDXGIFactory2 = CreateDXGIFactory1()?;
+            let base = factory.CreateSwapChainForHwnd(queue, window, &params, None, None)?;
+            Ok(Self {
+                chain: base.cast()?,
+                fence: device.CreateFence(0, D3D12_FENCE_FLAG_NONE)?,
+                frames: [Frame::new(device)?, Frame::new(device)?],
+                window: window.0 as usize,
+                width: params.Width,
+                height: params.Height,
+                next: 1,
+                failed_signal: None,
+            })
+        }
+    }
+
+    fn present(
+        &mut self,
+        queue: &ID3D12CommandQueue,
+        source: &ID3D12Resource,
+        desc: &D3D12_RESOURCE_DESC,
+    ) -> Result<HRESULT> {
+        if let Some((failure, _)) = &self.failed_signal {
+            return Err((*failure).into());
+        }
+        // SAFETY: IsWindow accepts an opaque previously returned HWND. The caller
+        // holds the session lock for the entire copy, signal and present sequence.
+        unsafe {
+            if !IsWindow(Some(HWND(self.window as _))).as_bool() {
+                return Err(DXGI_ERROR_INVALID_CALL.into());
+            }
+            if u64::from(self.width) != desc.Width || self.height != desc.Height {
+                return Err(E_NOTIMPL.into());
+            }
+            // The maximum fence value reports device removal and must stay reserved.
+            let next_value = self.next.checked_add(1).ok_or(E_FAIL)?;
+            let index = self.chain.GetCurrentBackBufferIndex();
+            let frame = self
+                .frames
+                .get_mut(index as usize)
+                .ok_or(DXGI_ERROR_INVALID_CALL)?;
+            wait_for(&self.fence, frame.retire)?;
+            let buffer = self.chain.GetBuffer(index)?;
+            frame.allocator.Reset()?;
+            frame.list.Reset(&frame.allocator, None)?;
+            record_copy(&frame.list, source, &buffer);
+            frame.list.Close()?;
+            frame.source = Some(source.clone());
+            queue.ExecuteCommandLists(&[Some(ID3D12CommandList::clone(&frame.list))]);
+            if let Err(error) = queue.Signal(&self.fence, self.next) {
+                self.failed_signal = Some((error.code(), queue.clone()));
+                return Err(error);
+            }
+            frame.retire = self.next;
+            self.next = next_value;
+            // Return DXGI status codes such as DXGI_STATUS_OCCLUDED to the guest.
+            Ok(self.chain.Present(1, DXGI_PRESENT(0)))
+        }
+    }
+    fn drain(&self) -> Result<()> {
+        if let Some((_, queue)) = &self.failed_signal {
+            // SAFETY: this marker follows the unfenced copy on its original queue.
+            unsafe { queue.Signal(&self.fence, self.next)? };
+            wait_for(&self.fence, self.next)?;
+        }
+        for frame in &self.frames {
+            wait_for(&self.fence, frame.retire)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Presentation {
+    fn drop(&mut self) {
+        let session = self
+            .session
+            .get_mut()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let Some(chain) = session.take() else { return };
+        if chain.drain().is_err() {
+            // SAFETY: the fence retains its device. Following device removal no
+            // queued GPU work can continue accessing these allocations.
+            let removed = device_of(&chain.fence)
+                .is_ok_and(|device| unsafe { device.GetDeviceRemovedReason() }.is_err());
+            if !removed {
+                // No completion marker and a possibly running GPU: releasing the
+                // source, swap buffers or allocator could free memory mid-copy.
+                std::mem::forget(chain);
+            }
+        }
+    }
+}
+
+fn wait_for(fence: &ID3D12Fence, value: u64) -> Result<()> {
+    if value == 0 {
+        return Ok(());
+    }
+    // SAFETY: a null event handle requests a synchronous wait on a live fence.
+    unsafe {
+        let completed = fence.GetCompletedValue();
+        if completed == u64::MAX {
+            return Err(DXGI_ERROR_DEVICE_REMOVED.into());
+        }
+        if completed < value {
+            fence.SetEventOnCompletion(value, HANDLE::default())?;
+        }
+    }
+    Ok(())
+}
+
+fn record_copy(list: &ID3D12GraphicsCommandList, source: &ID3D12Resource, buffer: &ID3D12Resource) {
+    let transition = |resource: &ID3D12Resource, before, after| D3D12_RESOURCE_BARRIER {
+        Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+        Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+        Anonymous: D3D12_RESOURCE_BARRIER_0 {
+            Transition: ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
+                pResource: ManuallyDrop::new(Some(resource.clone())),
+                Subresource: 0,
+                StateBefore: before,
+                StateAfter: after,
+            }),
+        },
+    };
+    let mut barriers = [
+        transition(
+            source,
+            D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+        ),
+        transition(
+            buffer,
+            D3D12_RESOURCE_STATE_PRESENT,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+        ),
+    ];
+    // SAFETY: both union arms are Transition. The list is open and its resources
+    // belong to the same device. Release the two owned pointers in the union
+    // after recording both transitions; D3D12 copies the barrier descriptors.
+    unsafe {
+        list.ResourceBarrier(&barriers);
+        list.CopyResource(buffer, source);
+        for barrier in &mut barriers {
+            let transition = &mut *barrier.Anonymous.Transition;
+            swap(&mut transition.StateBefore, &mut transition.StateAfter);
+        }
+        list.ResourceBarrier(&barriers);
+        for barrier in &mut barriers {
+            let transition = &mut *barrier.Anonymous.Transition;
+            ManuallyDrop::drop(&mut transition.pResource);
+        }
+    }
+}

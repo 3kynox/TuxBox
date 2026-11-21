@@ -1,0 +1,207 @@
+{
+  "scope": "Xbox-facing platform libraries reviewed during Frosty bring-up, including the input, audio and media providers reached through the host. Coverage describes translation of console interfaces. Package middleware and ordinary Win32 dependencies are inventoried separately.",
+  "levels": {
+    "complete": "All identified console exports and interfaces for the reviewed build have an implemented, behaviorally verified replacement.",
+    "partial": "A TuxBox provider or named reference bridge implements at least one verified Xbox-facing behavior. Other exports, interface methods or execution paths remain open.",
+    "incomplete": "The baseline has no verified replacement for this library's Xbox-specific behavior. Tests may exercise the original binary or the host implementation."
+  },
+  "libraries": [
+    {
+      "name": "d3d12_xs.dll",
+      "group": "Graphics and memory",
+      "status": "partial",
+      "provider": "TuxBox Rust D3D12 provider. The retail run uses patched TomBox.",
+      "scope": "TuxBox creates a device for profile 0x20002 and submits two guest command lists with verified output. The reference path accepts Frosty's 0x20004 profile and renders the menu and movies.",
+      "remaining": "More device profiles, shader and resource operations, and correct real-time chase rendering.",
+      "evidence": [
+        "runtime/d3d12/README.md",
+        "evidence/matrix-awakens/retail-chase-cinematic.json"
+      ]
+    },
+    {
+      "name": "dxcompiler_xs.dll",
+      "group": "Graphics and memory",
+      "status": "partial",
+      "provider": "TuxBox PE forwarder to desktop DXC.",
+      "scope": "DxcCreateInstance supplies a working IDxcUtils factory. A 257-byte blob retained its contents and lifetime across interface releases on Valve and GE-Proton.",
+      "remaining": "The reviewed console DLL also exports DxcCreateInstance2, CreateXdxrCompiler and CreateXdxrCompiler2.",
+      "evidence": [
+        "runtime/dxc/dxcompiler_xs.def",
+        "evidence/matrix-awakens/valve-dxc-utils.json",
+        "evidence/matrix-awakens/ge-dxc-utils.json"
+      ],
+      "console_exports": {
+        "binary_sha256": "40c0d27a4c8e580975b64b386a5decee083aa1465317d4f62bc16445f63681db",
+        "names": [
+          "CreateXdxrCompiler",
+          "CreateXdxrCompiler2",
+          "DxcCreateInstance",
+          "DxcCreateInstance2"
+        ]
+      }
+    },
+    {
+      "name": "xmem.dll",
+      "group": "Graphics and memory",
+      "status": "partial",
+      "provider": "TuxBox Rust allocator. The retail reference run uses TomBox.",
+      "scope": "Six named and ordinal exports cover allocation/free, working-set statistics and virtual allocation. Guest tests check alignment, reservation, page access and lifetime.",
+      "remaining": "Physical page allocation, mapping and release needed by Frosty, plus GPU-visible memory and additional attribute profiles.",
+      "evidence": [
+        "runtime/xmem/xmem.def",
+        "runtime/xmem/README.md",
+        "evidence/valve-nvidia.json"
+      ]
+    },
+    {
+      "name": "xg_xs.dll",
+      "group": "Graphics and memory",
+      "status": "incomplete",
+      "provider": "Supplied console XG library.",
+      "scope": "Four RGBA8 and BC7 texture descriptions exercise linear and tiled layouts through XGCreateTextureComputer using TuxBox memory allocation.",
+      "remaining": "Implement the texture computer and layout calculations in a replacement XG library.",
+      "evidence": [
+        "runtime/xg/guest.cpp",
+        "evidence/valve-nvidia.json"
+      ]
+    },
+    {
+      "name": "xgameruntime.dll",
+      "group": "Platform and storage",
+      "status": "partial",
+      "provider": "ScarlettX reference runtime with a task-queue fix.",
+      "scope": "Frosty initializes the reference runtime and enters Unreal startup. A paired control verifies termination of a queue with a manual completion port.",
+      "remaining": "Several runtime interface queries fail. User and service operations need broader coverage.",
+      "evidence": [
+        "evidence/matrix-awakens/reference-runtime.json",
+        "evidence/matrix-awakens/runtime-wrappers.csv"
+      ]
+    },
+    {
+      "name": "xcrdapi.dll",
+      "group": "Platform and storage",
+      "status": "partial",
+      "provider": "TomBox storage bridge to desktop DirectStorage.",
+      "scope": "DStorageGetFactory supplies the storage path Frosty uses to initialize its I/O dispatcher and mount its IoStore container.",
+      "remaining": "Console-specific storage controls and additional request paths.",
+      "evidence": [
+        "evidence/matrix-awakens/reference-runtime.json"
+      ]
+    },
+    {
+      "name": "gameconfighelper.dll",
+      "group": "Platform and storage",
+      "status": "incomplete",
+      "provider": "Supplied console configuration helper in the embedded-runtime trial.",
+      "scope": "The loader found the supplied helper in the package-runtime experiment.",
+      "remaining": "A replacement for configuration and package-identity queries with independent behavioral tests.",
+      "evidence": [
+        "evidence/matrix-awakens-launch.json"
+      ]
+    },
+    {
+      "name": "GameInput.dll",
+      "group": "Input and audio",
+      "status": "partial",
+      "provider": "TomBox GameInput bridge with TuxBox mouse and keyboard mapping.",
+      "scope": "The retail menu accepts keyboard, mouse and Xbox D-pad input. A virtual Xbox controller verifies analog readings, simultaneous button presses, hotplug and keyboard fallback through Proton XInput.",
+      "remaining": "Additional GameInput device kinds and interfaces, physical-controller checks and input-driven chase gameplay.",
+      "evidence": [
+        "evidence/matrix-awakens/retail-mixed-input.json",
+        "evidence/matrix-awakens/xinput-desktop.json"
+      ]
+    },
+    {
+      "name": "AcpHal.dll",
+      "group": "Input and audio",
+      "status": "partial",
+      "provider": "TomBox audio hardware abstraction.",
+      "scope": "Frosty starts its mixer and submits an eight-channel buffer with the reference AcpHal provider.",
+      "remaining": "The retail import trace still reports AcpHalReleaseShapeContexts unresolved.",
+      "evidence": [
+        "evidence/matrix-awakens/frosty-engine-control.json",
+        "evidence/matrix-awakens-launch.json"
+      ]
+    },
+    {
+      "name": "XAudio2_9.dll",
+      "group": "Input and audio",
+      "status": "incomplete",
+      "provider": "Proton XAudio2.",
+      "scope": "Host XAudio2 accepts the title's first mixer buffer. A separate private stereo loopback matches the intro soundtrack.",
+      "remaining": "Xbox-specific XAudio2 behavior has no independently verified replacement here.",
+      "evidence": [
+        "evidence/matrix-awakens/frosty-engine-control.json",
+        "evidence/matrix-awakens-launch.json"
+      ]
+    },
+    {
+      "name": "GameChat2.dll",
+      "group": "Input and audio",
+      "status": "incomplete",
+      "provider": "Supplied title library, delay-loaded.",
+      "scope": "Frosty declares 15 delay imports for game chat.",
+      "remaining": "A working chat provider and a voice-session test.",
+      "evidence": [
+        "evidence/matrix-awakens-launch.json"
+      ]
+    },
+    {
+      "name": "mfplat.dll",
+      "group": "Media",
+      "status": "partial",
+      "provider": "TuxBox sample bridge with TomBox and Proton Media Foundation.",
+      "scope": "The bridge provides the D3D12 video-sample path. Guest readback and retail movie comparisons verify decoded output.",
+      "remaining": "The remaining console Media Foundation platform and device-management interfaces.",
+      "evidence": [
+        "evidence/matrix-awakens/media-valve.json",
+        "evidence/matrix-awakens/retail-chase-cinematic.json"
+      ]
+    },
+    {
+      "name": "mfhevcdec.dll",
+      "group": "Media",
+      "status": "partial",
+      "provider": "TuxBox transform adapter around the supplied HEVC decoder.",
+      "scope": "The adapter delivers synchronized D3D12 NV12 samples. Original intro and chase footage passed decoded-frame comparisons.",
+      "remaining": "The codec implementation still comes from the supplied decoder. Other decoder modes need validation.",
+      "evidence": [
+        "evidence/matrix-awakens/hevc-valve.json",
+        "evidence/matrix-awakens/wake-hevc-valve.json"
+      ]
+    },
+    {
+      "name": "mfh264dec.dll",
+      "group": "Media",
+      "status": "partial",
+      "provider": "TuxBox transform adapter around the supplied H.264 decoder.",
+      "scope": "The registered H.264 transform returns D3D12 samples for both 1024 × 512 menu previews.",
+      "remaining": "The supplied codec and additional output formats and transform modes.",
+      "evidence": [
+        "evidence/matrix-awakens/h264-valve.json"
+      ]
+    },
+    {
+      "name": "mfreadwrite.dll",
+      "group": "Media",
+      "status": "incomplete",
+      "provider": "Proton Media Foundation source reader.",
+      "scope": "The source-reader control opens a movie byte stream and obtains its video media type.",
+      "remaining": "Console source-reader behavior relies on the host.",
+      "evidence": [
+        "evidence/matrix-awakens/media-valve.json"
+      ]
+    },
+    {
+      "name": "MSAudDecMFT.dll",
+      "group": "Media",
+      "status": "incomplete",
+      "provider": "Supplied audio decoder registered in the test prefix.",
+      "scope": "The original AAC decoder processes 96 access units. The six-channel PCM output was compared with FFmpeg.",
+      "remaining": "A replacement for the packaged decoder.",
+      "evidence": [
+        "evidence/matrix-awakens/aac-valve.json"
+      ]
+    }
+  ]
+}

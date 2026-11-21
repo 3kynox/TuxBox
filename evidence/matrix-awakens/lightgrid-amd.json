@@ -1,0 +1,27 @@
+{
+  "archive_sha256": "afab84fa891e491d64f1c2a9bdf26a66afc2054aef2cd9110e358402473b4fb2",
+  "entry": 3260,
+  "shader": "LightGridInjectionCS",
+  "native_sha256": "6ec18a57d2b2a826882ddf5719b540498d7a9815d7b41807d69649b020a111c0",
+  "hlsl_sha256": "a815b699ad03dab7d8a15a4076a0d67abb487de92b7db33ca841974b947fd4b8",
+  "dxil_sha256": "3df9529ba9d181de9e7822bcb43bb6afeb75001d03905e4ade9f8eeaf1fb058a",
+  "dxil_bytes": 15636,
+  "guest_sha256": "e3b40672d46bcc135aed38835ccfef87897fc0517ff25c9cb078754af6d7eb6d",
+  "host": "1793301796 experimental-11.0-20261027b-x86_64",
+  "groups": [
+    1,
+    1,
+    1
+  ],
+  "scope": "One 64-lane workgroup. A broad local light covers 24 cells, a small local light only lane 34, and a reflection capture covers all 24 in both dispatches.",
+  "readback": {
+    "adapter": "1002:13c0",
+    "wave_min": "32",
+    "wave_max": "64",
+    "broad_counter": "53",
+    "broad_matched_words": "512",
+    "small_counter": "30",
+    "small_matched_words": "512"
+  },
+  "exit": 0
+}

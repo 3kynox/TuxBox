@@ -1,0 +1,3 @@
+LIBRARY xg_xs
+EXPORTS
+    XGCreateTextureComputer

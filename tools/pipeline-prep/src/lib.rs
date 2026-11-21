@@ -1,0 +1,202 @@
+//! Warm Frosty's profiled compute shaders through the title's app-local provider.
+
+use std::ffi::{OsStr, c_void};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
+use std::mem::ManuallyDrop;
+use std::os::windows::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
+use std::ptr;
+use std::time::Instant;
+use windows::Win32::Foundation::{E_POINTER, HMODULE};
+use windows::Win32::Graphics::Direct3D12::*;
+use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW, SetDllDirectoryW};
+use windows::core::{GUID, HRESULT, Interface, Owned, PCWSTR, s};
+
+type CreateDevice =
+    unsafe extern "system" fn(*mut c_void, *const u32, *const GUID, *mut *mut c_void) -> HRESULT;
+
+// Frosty's 72-byte device creation record, including its AutoHDR field.
+const CREATION: [u32; 18] = [
+    0x20004,
+    0,
+    u32::MAX,
+    0,
+    0,
+    0,
+    u32::MAX,
+    u32::MAX,
+    0,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+];
+
+fn checked<T>(operation: &str, result: windows::core::Result<T>) -> Result<T, String> {
+    result.map_err(|error| format!("{operation} failed: 0x{:08x}", error.code().0 as u32))
+}
+
+fn wide(path: &Path) -> Vec<u16> {
+    path.as_os_str().encode_wide().chain(Some(0)).collect()
+}
+
+fn create_guest_device(module: HMODULE) -> Result<ID3D12Device, String> {
+    // SAFETY: the module stays loaded until the device and all its children are
+    // released. This named export takes the Scarlett factory ABI and writes one
+    // owned COM reference to the cleared output pointer on success.
+    unsafe {
+        let address = GetProcAddress(module, s!("D3D12XboxCreateDevice"))
+            .ok_or("missing Xbox device factory")?;
+        let factory: CreateDevice = std::mem::transmute(address);
+        let mut device: Option<ID3D12Device> = None;
+        let status = factory(
+            ptr::null_mut(),
+            CREATION.as_ptr(),
+            &ID3D12Device::IID,
+            (&raw mut device).cast(),
+        );
+        checked("CreateDevice", status.ok())?;
+        checked("CreateDevice", device.ok_or_else(|| E_POINTER.into()))
+    }
+}
+
+fn compute_root(guest: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
+    // Frosty's serialized v1.1 root contains one distinct table per range.
+    let descriptors = D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
+    let static_data = descriptors | D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE;
+    let volatile_data = descriptors | D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
+    let ranges = [
+        (D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 64, static_data),
+        (D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 16, static_data),
+        (D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 16, descriptors),
+        (D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 16, volatile_data),
+    ]
+    .map(|(kind, count, flags)| D3D12_DESCRIPTOR_RANGE1 {
+        RangeType: kind,
+        NumDescriptors: count,
+        Flags: flags,
+        OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
+        ..Default::default()
+    });
+    let parameters = ranges.each_ref().map(|range| D3D12_ROOT_PARAMETER1 {
+        ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+        Anonymous: D3D12_ROOT_PARAMETER1_0 {
+            DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE1 {
+                NumDescriptorRanges: 1,
+                pDescriptorRanges: range,
+            },
+        },
+        ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
+    });
+    let descriptor = D3D12_VERSIONED_ROOT_SIGNATURE_DESC {
+        Version: D3D_ROOT_SIGNATURE_VERSION_1_1,
+        Anonymous: D3D12_VERSIONED_ROOT_SIGNATURE_DESC_0 {
+            Desc_1_1: D3D12_ROOT_SIGNATURE_DESC1 {
+                NumParameters: parameters.len() as u32,
+                pParameters: parameters.as_ptr(),
+                ..Default::default()
+            },
+        },
+    };
+    // SAFETY: both arrays outlive serialization. The blob owns the returned
+    // slice for the duration of the guest's shared CreateRootSignature slot.
+    unsafe {
+        let mut bytes = None;
+        checked(
+            "SerializeVersionedRootSignature",
+            D3D12SerializeVersionedRootSignature(&descriptor, &mut bytes, None),
+        )?;
+        let bytes = checked(
+            "SerializeVersionedRootSignature",
+            bytes.ok_or_else(|| E_POINTER.into()),
+        )?;
+        let data =
+            std::slice::from_raw_parts(bytes.GetBufferPointer().cast(), bytes.GetBufferSize());
+        checked("CreateRootSignature", guest.CreateRootSignature(1, data))
+    }
+}
+
+fn prepare(title_dir: &Path, report_path: &Path, shaders: &[PathBuf]) -> Result<(), String> {
+    let directory_error = "cannot select the title's binary directory";
+    let title_dir = std::path::absolute(title_dir).map_err(|_| directory_error)?;
+    std::env::set_current_dir(&title_dir).map_err(|_| directory_error)?;
+    // SAFETY: each Win32 path buffer is NUL-terminated and lives through the
+    // call. The owned module is declared before the COM objects that call it.
+    let module = unsafe {
+        SetDllDirectoryW(PCWSTR(wide(&title_dir).as_ptr())).map_err(|_| directory_error)?;
+        let provider = wide(&title_dir.join("d3d12_xs.dll"));
+        Owned::new(
+            LoadLibraryW(PCWSTR(provider.as_ptr())).map_err(|_| "missing Xbox device factory")?,
+        )
+    };
+    let guest = create_guest_device(*module)?;
+    let root = compute_root(&guest)?;
+
+    // The guest and desktop vtables differ. The root returns an owned desktop
+    // device; pipeline creation must use that device's CreateComputePipelineState.
+    let mut host = None;
+    // SAFETY: root is live and GetDevice writes to an empty COM reference slot.
+    checked("GetDevice", unsafe { root.GetDevice(&mut host) })?;
+    let host: ID3D12Device = checked("GetDevice", host.ok_or_else(|| E_POINTER.into()))?;
+
+    let mut report = File::create(report_path).map_err(|error| error.to_string())?;
+    for shader_path in shaders {
+        let shader = fs::read(shader_path).map_err(|_| "missing prepared compute shader")?;
+        if shader.is_empty() {
+            return Err("missing prepared compute shader".into());
+        }
+        let descriptor = D3D12_COMPUTE_PIPELINE_STATE_DESC {
+            pRootSignature: ManuallyDrop::new(Some(root.clone())),
+            NodeMask: 1,
+            CS: D3D12_SHADER_BYTECODE {
+                pShaderBytecode: shader.as_ptr().cast(),
+                BytecodeLength: shader.len(),
+            },
+            ..Default::default()
+        };
+        let start = Instant::now();
+        // SAFETY: the descriptor borrows initialized shader bytes for the call.
+        // Release its explicit COM reference on success and failure.
+        let result = unsafe { host.CreateComputePipelineState::<ID3D12PipelineState>(&descriptor) };
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        drop(ManuallyDrop::into_inner(descriptor.pRootSignature));
+        let _pipeline = checked("CreateComputePipelineState", result)?;
+        let key = shader_path
+            .file_stem()
+            .unwrap_or(OsStr::new(""))
+            .to_string_lossy();
+        writeln!(report, "{key} {elapsed_ms}")
+            .and_then(|()| report.flush())
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+/// Unicode console entry point invoked by the MSVC CRT. Rust's Windows
+/// args_os reads the native command line without a narrow-codepage conversion.
+#[unsafe(no_mangle)]
+pub extern "C" fn wmain(_argc: i32, _argv: *const *const u16) -> i32 {
+    let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
+    let [title_dir, report, shaders @ ..] = args.as_slice() else {
+        return 2;
+    };
+    if shaders.is_empty() {
+        return 2;
+    }
+    match prepare(title_dir, report, shaders) {
+        Ok(()) => 0,
+        Err(error) => {
+            if let Ok(mut output) = OpenOptions::new().create(true).append(true).open(report) {
+                let _ = writeln!(output, "{error}");
+            }
+            let _ = writeln!(io::stderr().lock(), "Pipeline preparation failed: {error}");
+            1
+        }
+    }
+}

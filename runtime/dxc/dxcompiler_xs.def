@@ -1,0 +1,3 @@
+LIBRARY dxcompiler_xs
+EXPORTS
+    DxcCreateInstance=dxcompiler.DxcCreateInstance

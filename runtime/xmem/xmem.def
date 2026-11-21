@@ -1,0 +1,8 @@
+LIBRARY xmem
+EXPORTS
+    XMemAlloc=XMemAllocDefault @1
+    XMemAllocDefault @2
+    XMemFree=XMemFreeDefault @6
+    XMemFreeDefault @7
+    XMemGetWorkingSetStatistics @16
+    XMemVirtualAlloc @31
