@@ -7,6 +7,10 @@ use windows::Win32::Foundation::{E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINT
 use windows::Win32::Graphics::{Direct3D12::*, Dxgi::Common::DXGI_SAMPLE_DESC};
 use windows::core::{GUID, HRESULT, Interface};
 
+// In the packaged mesh builder at RVA 0x57577d0, Xbox AS and MS are one
+// lower than the corresponding desktop subobject tags.
+const AMPLIFICATION_X: i32 = 23;
+const MESH_X: i32 = 24;
 const STENCIL_X: i32 = 26;
 
 fn subobject<T>() -> (usize, usize) {
@@ -19,8 +23,8 @@ fn subobject<T>() -> (usize, usize) {
 
 fn layout(tag: i32) -> Option<(usize, usize)> {
     Some(match tag {
-        0 => subobject::<*mut c_void>(),               // root signature
-        1..=6 => subobject::<D3D12_SHADER_BYTECODE>(), // VS, PS, DS, HS, GS, CS
+        0 => subobject::<*mut c_void>(), // root signature
+        1..=6 | AMPLIFICATION_X | MESH_X => subobject::<D3D12_SHADER_BYTECODE>(),
         7 => subobject::<D3D12_STREAM_OUTPUT_DESC>(),
         8 => subobject::<D3D12_BLEND_DESC>(),
         9 | 13 | 14 | 16 | 18 | 20 => subobject::<u32>(), // mask, strip cut, topology, DSV, node, flags
@@ -79,8 +83,8 @@ unsafe fn create(
     unsafe { ptr::copy_nonoverlapping(input, output, size) };
     let mut depth = None;
     let mut stages = Vec::new();
-    let mut original = [None; 6];
-    let mut fields = [None; 6];
+    let mut original = [None; 8];
+    let mut fields = [None; 8];
     let mut seen = 0u32;
     let mut at = 0;
     while at < size {
@@ -102,7 +106,19 @@ unsafe fn create(
                 // alive until CreatePipelineState returns.
                 unsafe { handle.write(root.map_or(ptr::null_mut(), Interface::as_raw)) };
             }
-            1..=6 => {
+            1..=6 | AMPLIFICATION_X | MESH_X => {
+                let index = match tag {
+                    AMPLIFICATION_X | MESH_X => {
+                        let native = if tag == AMPLIFICATION_X {
+                            D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_AS
+                        } else {
+                            D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS
+                        };
+                        unsafe { record.cast::<i32>().write(native.0) };
+                        (6 + tag - AMPLIFICATION_X) as usize
+                    }
+                    _ => (tag - 1) as usize,
+                };
                 let shader = unsafe { &mut *payload.cast::<D3D12_SHADER_BYTECODE>() };
                 if shader.BytecodeLength != 0 {
                     if shader.pShaderBytecode.is_null()
@@ -113,10 +129,15 @@ unsafe fn create(
                     let code = unsafe {
                         slice::from_raw_parts(shader.pShaderBytecode.cast(), shader.BytecodeLength)
                     };
-                    fields[(tag - 1) as usize] = Some(ptr::from_mut(shader));
-                    let compiled = shader_cache::prepared(code);
-                    original[(tag - 1) as usize] =
-                        Some((code, compiled.as_ref().map(|_| stages.len())));
+                    fields[index] = Some(ptr::from_mut(shader));
+                    let compiled = match tag {
+                        AMPLIFICATION_X => {
+                            shader_cache::mesh_stage(code, shader_cache::Stage::Amplification)?
+                        }
+                        MESH_X => shader_cache::mesh_stage(code, shader_cache::Stage::Mesh)?,
+                        _ => shader_cache::prepared(code),
+                    };
+                    original[index] = Some((code, compiled.as_ref().map(|_| stages.len())));
                     if let Some(compiled) = compiled {
                         shader.pShaderBytecode = compiled.as_ptr().cast();
                         shader.BytecodeLength = compiled.len();
@@ -152,6 +173,16 @@ unsafe fn create(
     // all stay alive throughout this synchronous call on the desktop Device2.
     let initial = unsafe { host.CreatePipelineState(&native_desc) };
     let Err(error) = &initial else {
+        if fields[7].is_some() {
+            static FIRST_MESH: std::sync::Once = std::sync::Once::new();
+            crate::diagnostics::log_once(&FIRST_MESH, || {
+                format!(
+                    "created Xbox mesh pipeline ({}-byte stream, amplification={})",
+                    desc.SizeInBytes,
+                    fields[6].is_some()
+                )
+            });
+        }
         return initial;
     };
     let status = error.code();
@@ -165,7 +196,8 @@ unsafe fn create(
     // Pixel inputs come from the last active raster stage. Geometry outputs
     // take precedence over vertex outputs, even in a stream that has both.
     let producer = if fields[4].is_some() { 4 } else { 0 };
-    let direct = fields[5].is_none() && (producer == 4 || fields[2..4].iter().all(Option::is_none));
+    let direct = fields[5..].iter().all(Option::is_none)
+        && (producer == 4 || fields[2..4].iter().all(Option::is_none));
     if direct
         && let (Some(field), Some((source, _)), Some((pixel, _))) =
             (fields[producer], &hashes[producer], &hashes[1])

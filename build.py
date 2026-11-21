@@ -111,8 +111,8 @@ def d3d12_exports(src, out, reference):
             slot = ordinals.get(name)
             if slot is None:
                 # The frame ABI guest imports the device IID. Additional SDK IDs
-                # vary with the GDK build and are optional in both DLL and guest.
-                if flags == ["DATA"] and name != "IID_ID3D12Device":
+                # vary with the GDK build. D3D12ZeroMemoryX is Series-specific.
+                if (flags == ["DATA"] and name != "IID_ID3D12Device") or name == "D3D12ZeroMemoryX":
                     continue
                 raise ValueError(f"{reference.name} lacks {name}, required by the D3D12 guests")
             if ("DATA" in flags) != (slot in data):
@@ -238,7 +238,7 @@ def build_target(tools, target, dxc, d3d12_reference=None):
         tools.link(out / "d3d12-exports.exe", exports, "d3d12_xs.lib", "kernel32.lib")
         for name, source in (("features", "feature_guest.cpp"), ("queries", "query_guest.cpp"),
                              ("queues", "queue_guest.cpp"), ("heaps", "heap_guest.cpp"),
-                             ("placement", "placement_guest.cpp"),
+                             ("placement", "placement_guest.cpp"), ("copy-resource", "copy_resource_guest.cpp"),
                              ("frame-events", "frame_event_guest.cpp")):
             obj = tools.compile(src / source, out, "/W4", "/WX")
             tools.link(out / f"d3d12-{name}.exe", obj, "d3d12_xs.lib", "kernel32.lib", "dxgi.lib")
@@ -263,11 +263,16 @@ def build_target(tools, target, dxc, d3d12_reference=None):
             ("triangle", "VSMain", "vs_6_0", "triangle_vs", "triangle_vs"),
             ("triangle", "VSFromBuffer", "vs_6_0", "triangle_input_vs", "triangle_input_vs"),
             ("triangle", "PSMain", "ps_6_0", "triangle_ps", "triangle_ps"),
+            ("mesh_groups", "mesh", "ms_6_5", "mesh_ms", "mesh_ms"),
+            ("mesh_groups", "mesh", "ms_6_5", "mesh_ms_payload", "mesh_ms_payload"),
+            ("mesh_groups", "amplify", "as_6_5", "mesh_as", "mesh_as"),
+            ("mesh_groups", "pixel", "ps_6_5", "mesh_ps", "mesh_ps"),
         ):
-            subprocess.run([dxc, "-T", profile, "-E", entry, "-O3", "-Fh", f"{header}.h",
+            payload = ["-DWITH_PAYLOAD=1"] if header == "mesh_ms_payload" else []
+            subprocess.run([dxc, "-T", profile, "-E", entry, "-O3", *payload, "-Fh", f"{header}.h",
                             "-Vn", variable, str(src / f"{shader}.hlsl")], cwd=out, check=True)
         for name, source in (("tables", "table_guest.cpp"), ("indirect", "indirect_guest.cpp"),
-                             ("draw", "graphics_guest.cpp")):
+                             ("draw", "graphics_guest.cpp"), ("mesh", "mesh_guest.cpp")):
             obj = tools.compile(src / source, out, "/W4", "/WX", f"/I{out}")
             tools.link(out / f"d3d12-{name}.exe", obj, "d3d12_xs.lib", "dxgi.lib", "kernel32.lib")
         guest = tools.compile(src / "guest.cpp", out, f"/I{out}")

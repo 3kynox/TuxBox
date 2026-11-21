@@ -11,8 +11,8 @@
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox Rust device and command providers with desktop D3D12 root-signature serialization.",
-      "scope": "Two Xbox device profiles, seven feature queries, GPU heaps, guest-backed read-only textures, queues, indirect compute, descriptor and query operations, and 32 identifiers. Frosty creates pipelines from 712-byte ID3D12Device2 streams and presents 3840 × 2160 frames. A fresh Proton prefix running the checkout-built providers displays the menu and video preview, opens Settings and enters the Wake Up sequence. GPU tests cover indexed draws, depth/stencil writes and NV12 plane copies.",
-      "remaining": "Eight PE functions, additional Xbox interface methods and pipeline subobjects, more retail shaders and writable textures at guest-selected addresses remain open.",
+      "scope": "Two Xbox device profiles, eight feature queries, GPU heaps, guest-backed textures, queues, indirect compute, direct and indirect mesh dispatch, descriptor and query operations, and 32 identifiers. Frosty creates 680-byte mesh pipelines and 712-byte graphics pipelines through ID3D12Device2 and presents 3840 × 2160 frames. A fresh Proton prefix running the checkout-built providers displays the menu and video preview, opens Settings and enters the Wake Up sequence. GPU tests cover indexed draws, depth/stencil writes, NV12 plane copies, and whole and regional copies into a tiled RGBA8 texture with guest-memory writeback and alias readback.",
+      "remaining": "Seven PE functions, additional Xbox interface methods and pipeline subobjects, and more retail shaders remain open. Guest-backed color textures still need render-target and UAV writes. Using distinct overlapping layouts in the same GPU write batch remains unsupported.",
       "evidence": [
         "runtime/d3d12/README.md",
         "evidence/matrix-awakens/retail-chase-cinematic.json",
@@ -45,7 +45,13 @@
         "evidence/matrix-awakens/tuxbox-media-copy.json",
         "evidence/matrix-awakens/tuxbox-linked-materials.json",
         "evidence/matrix-awakens/tuxbox-present-sizing.json",
-        "evidence/matrix-awakens/tuxbox-menu-startup.json"
+        "evidence/matrix-awakens/tuxbox-menu-startup.json",
+        "evidence/providers/d3d12-cpu-clear.json",
+        "evidence/matrix-awakens/d3d12-xs-interfaces.json",
+        "evidence/matrix-awakens/command-list-copy.json",
+        "evidence/matrix-awakens/mesh-command-list-nvidia.json",
+        "evidence/matrix-awakens/mesh-command-list-radeon.json",
+        "evidence/matrix-awakens/nanite-mesh-retail.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/d3d12_xs.dll",
@@ -96,6 +102,7 @@
           "D3D12XboxCreateDevice",
           "D3D12XboxGetProcessDebugFlags",
           "D3D12XboxSetProcessDebugFlags",
+          "D3D12ZeroMemoryX",
           "DXGIXGetFrameStatistics",
           "DXGIXPresentArray",
           "DXGIXSetFrameNotification",
@@ -133,7 +140,7 @@
           "IID_IGraphicsUnknown",
           "WKPDID_D3DDebugObjectNameW"
         ],
-        "notes": "Fourteen of 22 functions and all 32 data exports have verified behavior. The original DLL returns DXGI_ERROR_UNSUPPORTED for four legacy DXGIX exports. Rendering coverage is tracked through separate device and command-list tests."
+        "notes": "Fifteen of 22 functions and all 32 data exports have verified behavior. The original DLL returns DXGI_ERROR_UNSUPPORTED for four legacy DXGIX exports. Rendering coverage is tracked through separate device and command-list tests. D3D12ZeroMemoryX was checked in CPU mode."
       },
       "inventory": {
         "source_path": "EmbeddedXvd/Windows/System32/d3d12_xs.dll",

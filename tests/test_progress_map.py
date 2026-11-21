@@ -4,10 +4,32 @@ from tempfile import TemporaryDirectory
 import unittest
 from xml.etree import ElementTree as ET
 
-from project_tuxbox.progress_map import export_progress, library_table, render_map, write_map
+from project_tuxbox.progress_map import export_progress, instance_cull_readbacks, library_table, render_map, write_map
 
 
 class ProgressMapTests(unittest.TestCase):
+    def test_instance_readbacks_link_the_current_compiler_to_retail_shader_bytes(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            dest = root / "matrix-awakens"
+            dest.mkdir()
+            retail = dict(global_archive_sha256="archive", compiler_sha256="old", d3d12_xs_sha256="provider",
+                          entry=5, source_sha256="source", dxil_sha256="bytecode", family={"archive_entries": [5, 6]})
+            (dest / "instance-cull-retail.json").write_text(json.dumps(retail))
+            program = dict(entry=5, source_sha256="source", dxil_sha256="bytecode",
+                           cases={"sparse": {"checked_words": 48, "checked_texels": 16}})
+            run = dict(name="InstanceCull", compiler_sha256="current", global_archive_sha256="archive",
+                       provider_sha256="provider", programs=[program])
+            for suffix, adapter in (("amd", "1002:13c0"), ("nvidia", "10de:2705")):
+                (dest / f"instance-cull-{suffix}.json").write_text(json.dumps(dict(run, adapter=adapter)))
+            self.assertIn("1/2", instance_cull_readbacks(root, "archive", "current"))
+            self.assertFalse(instance_cull_readbacks(root, "archive", "old"))
+            self.assertFalse(instance_cull_readbacks(root, "other", "current"))
+            for changed in (dict(dxil_sha256="different"), dict(cases={})):
+                (dest / "instance-cull-amd.json").write_text(json.dumps(
+                    dict(run, adapter="1002:13c0", programs=[dict(program, **changed)])))
+                self.assertFalse(instance_cull_readbacks(root, "archive", "current"))
+
     def test_workspace_map_matches_saved_receipts_and_milestones(self):
         root = Path(__file__).resolve().parents[1]
         self.assertEqual((root / "docs/progress.svg").read_text(encoding="utf-8"),

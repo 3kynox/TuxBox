@@ -1,5 +1,5 @@
 use core::ffi::c_void;
-use windows::Win32::Foundation::{E_NOINTERFACE, E_POINTER, S_OK};
+use windows::Win32::Foundation::{E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER, S_OK};
 use windows::Win32::Graphics::Direct3D12::ID3D12Debug;
 use windows::Win32::Graphics::Dxgi::DXGI_ERROR_UNSUPPORTED;
 use windows::core::{GUID, HRESULT, Interface};
@@ -84,4 +84,69 @@ pub unsafe extern "system" fn get_debug_interface(
 #[unsafe(no_mangle)]
 pub extern "system" fn tuxbox_dxgix_unsupported() -> HRESULT {
     DXGI_ERROR_UNSUPPORTED
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct MemoryRange {
+    address: *mut u8,
+    bytes: usize,
+}
+
+#[repr(C)]
+struct ClearWorkspace {
+    commands: *mut c_void,
+    command_bytes: u32,
+    scratch: *mut c_void,
+    scratch_bytes: u32,
+}
+
+// In the Series DLL bit 0 selects a synchronous CPU clear. The default mode
+// sets up a GPU operation, even when some ranges are cleared on the CPU.
+#[unsafe(export_name = "D3D12ZeroMemoryX")]
+unsafe extern "system" fn zero_memory(
+    count: u32,
+    ranges: *const MemoryRange,
+    workspace: *const ClearWorkspace,
+    flags: u32,
+) -> HRESULT {
+    if count == 0 {
+        return S_OK;
+    }
+    if ranges.is_null() {
+        return E_INVALIDARG;
+    }
+    // SAFETY: the guest supplies count readable records, separate from the
+    // memory being cleared. Validate the entire batch before changing bytes.
+    let ranges = unsafe { core::slice::from_raw_parts(ranges, count as usize) };
+    for &MemoryRange { address, bytes } in ranges {
+        if !address.addr().is_multiple_of(16)
+            || !bytes.is_multiple_of(16)
+            || (bytes != 0 && address.is_null())
+            || bytes > isize::MAX as usize
+            || address.addr().checked_add(bytes).is_none()
+        {
+            return E_INVALIDARG;
+        }
+    }
+    // SAFETY: a non-null workspace points to the complete 32-byte Xbox record.
+    if let Some(work) = unsafe { workspace.as_ref() }
+        && (work.commands.is_null()
+            || work.command_bytes < 0x10000
+            || work.scratch.is_null()
+            || work.scratch_bytes < 0x100)
+    {
+        return E_INVALIDARG;
+    }
+    if flags & 1 == 0 {
+        return E_NOTIMPL;
+    }
+    for &MemoryRange { address, bytes } in ranges {
+        if bytes != 0 {
+            // SAFETY: CPU-mode ranges refer to writable guest memory of the
+            // given length. Overlapping ranges are cleared in guest order.
+            unsafe { address.write_bytes(0, bytes) };
+        }
+    }
+    S_OK
 }

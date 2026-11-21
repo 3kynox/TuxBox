@@ -84,8 +84,10 @@ def compile_request(source, key, tools, cache, session):
             run_tool([dxv, order], timeout=10)
         run_tool([xshader, cooked, *flags, "--hlsl-out", hlsl, "--profile-out", profile], timeout=30)
         target = profile.read_text()
-        stages = "vs|gs" if linked else "cs|ps|vs|gs"
-        if not re.fullmatch(rf"({stages})_6_[016]", target):
+        # Mesh and amplification stages start at shader model 6.5. Linked
+        # requests currently repack the outputs of vertex and geometry shaders.
+        profiles = r"(vs|gs)_6_[016]" if linked else r"((cs|ps|vs|gs)_6_[016]|(ms|as)_6_[56])"
+        if not re.fullmatch(profiles, target):
             raise ValueError(f"unsupported compiler profile {target!r}")
         run_tool([dxc, "-T", target, "-E", "main", "-Fo", output, hlsl], timeout=50)
         run_tool([dxv, output], timeout=10)

@@ -112,6 +112,35 @@ pub(super) unsafe extern "system" fn draw(
     }
 }
 
+// FD3D12CommandContext::RHIDispatchMeshShader calls slot 127 at Frosty
+// RVA 0x578f241 with X/Y/Z group counts in the standard register order.
+pub(super) unsafe extern "system" fn dispatch_mesh(list: &List, x: u32, y: u32, z: u32) {
+    let mut state = recording(list);
+    if !state.can_record(&list.native) {
+        return;
+    }
+    if x.max(y).max(z) > D3D12_CS_DISPATCH_MAX_THREAD_GROUPS_PER_DIMENSION
+        || u64::from(x) * u64::from(y) * u64::from(z) > 1 << 22
+        || !matches!(
+            unsafe { list.native.GetType() },
+            D3D12_COMMAND_LIST_TYPE_DIRECT | D3D12_COMMAND_LIST_TYPE_BUNDLE
+        )
+    {
+        state.error = E_INVALIDARG;
+        return;
+    }
+    let Some(native) = list.state.mesh.get_or_init(|| list.native.cast().ok()) else {
+        state.error = windows::Win32::Foundation::E_NOINTERFACE;
+        return;
+    };
+    state.sample_heap();
+    unsafe { native.DispatchMesh(x, y, z) };
+    static FIRST_MESH: std::sync::Once = std::sync::Once::new();
+    crate::diagnostics::log_once(&FIRST_MESH, || {
+        format!("recorded Xbox slot 127 DispatchMesh ({x}, {y}, {z})")
+    });
+}
+
 // Frosty's RHIDrawIndexedPrimitive chooses DXGI_FORMAT_R16_UINT or R32_UINT
 // at RVA 0x578ec32 and sends the packed GPU address, size and format to slot 47.
 pub(super) unsafe extern "system" fn index_buffer(

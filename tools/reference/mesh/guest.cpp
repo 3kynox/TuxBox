@@ -1,5 +1,5 @@
 #include "amplify.h"
-#include "frame_abi.h"
+#include "frame_stream.h"
 #include "mesh.h"
 #include "mesh_as.h"
 #include "pixel.h"
@@ -7,29 +7,7 @@
 using frame_abi::check;
 using frame_abi::ComPtr;
 
-template <typename T> struct alignas(void*) Part {
-    UINT tag;
-    T payload;
-};
-struct Stream {
-    Part<UINT> flags{20, 0};
-    Part<ID3D12RootSignature*> root{0, nullptr};
-    Part<D3D12_PRIMITIVE_TOPOLOGY_TYPE> topology{14, D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE};
-    Part<D3D12_SHADER_BYTECODE> ms{24, {}}, as{23, {}}, ps{2, {}};
-    Part<D3D12_BLEND_DESC> blend{8, {}};
-    Part<D3D12_DEPTH_STENCIL_DESC1> depth{21, {}};
-    Part<DXGI_FORMAT> dsv{16, DXGI_FORMAT_UNKNOWN};
-    Part<D3D12_RASTERIZER_DESC> raster{10, {}};
-    Part<D3D12_RT_FORMAT_ARRAY> formats{15, {}};
-    Part<DXGI_SAMPLE_DESC> samples{17, {1, 0}};
-    Part<UINT> mask{9, ~0u};
-    Part<D3D12_CACHED_PIPELINE_STATE> cached{19, {}};
-    UINT extension = 26;
-    BYTE stencil[28]{};
-};
-static_assert(offsetof(Stream, ms) == 0x20 && offsetof(Stream, as) == 0x38);
-static_assert(offsetof(Stream, ps) == 0x50 && offsetof(Stream, depth) == 0x1b8);
-static_assert(offsetof(Stream, extension) == 0x288 && sizeof(Stream) == 0x2a8);
+using Stream = frame_abi::MeshPipelineStream;
 
 static ComPtr<ID3D12Resource> buffer(ID3D12Device* d, bool readback) {
     D3D12_HEAP_PROPERTIES heap{};

@@ -1,0 +1,682 @@
+{
+  "host": "1793301796 experimental-11.0-20261027b-x86_64",
+  "adapter": "10de:2705",
+  "global_archive_sha256": "afab84fa891e491d64f1c2a9bdf26a66afc2054aef2cd9110e358402473b4fb2",
+  "name": "InstanceCull",
+  "guest_sha256": "5f4c02011224182601536da69dc76c447705f6278beb7d9dd1a8d76708b1854e",
+  "provider_sha256": "847b82925c9311b93b4beaa8cf141959b2435f0f87c35de7bd818aa6e6357a6a",
+  "compiler_sha256": "32d16ac56a82035fe4edb895299f0a0c59f9e649e729c4410f4024cc7c1aeb2f",
+  "programs": [
+    {
+      "entry": 3425,
+      "visibility_format": "R32_UINT",
+      "source_sha256": "b07d956ff61846c8e25f0de1fd0f72d3d72a4910fca9599d990b401d34fc7637",
+      "dxil_sha256": "607f5bf8c0b9d20cbf2a982c342c78272cb4fcb972a96f7af17231d83923b0cf",
+      "cases": {
+        "empty": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 0,
+          "queue_ids": [],
+          "counters": [
+            3,
+            19
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        },
+        "clip": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 0,
+          "queue_ids": [],
+          "counters": [
+            3,
+            19
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        },
+        "upper": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 1,
+          "queue_ids": [
+            37
+          ],
+          "counters": [
+            4,
+            20
+          ],
+          "stats_counter": 44,
+          "checked_words": 336
+        },
+        "sparse": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 6,
+          "queue_ids": [
+            3,
+            7,
+            31,
+            32,
+            47,
+            63
+          ],
+          "counters": [
+            9,
+            25
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        },
+        "capacity": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 5,
+          "queue_ids": [
+            3,
+            15
+          ],
+          "counters": [
+            8,
+            24
+          ],
+          "stats_counter": 48,
+          "checked_words": 336
+        },
+        "two-groups": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "3e800000"
+          ],
+          "groups": 2,
+          "visible": 6,
+          "queue_ids": [
+            3,
+            34,
+            61,
+            64,
+            95,
+            106
+          ],
+          "counters": [
+            9,
+            25
+          ],
+          "stats_counter": 49,
+          "checked_words": 336
+        },
+        "visibility": {
+          "checked_texels": 81,
+          "changed_visibility_words": 1,
+          "center_words": [
+            "3f400000"
+          ],
+          "groups": 1,
+          "visible": 0,
+          "queue_ids": [],
+          "counters": [
+            3,
+            19
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        },
+        "visibility-guard": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "3f600000"
+          ],
+          "groups": 1,
+          "visible": 0,
+          "queue_ids": [],
+          "counters": [
+            3,
+            19
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        }
+      }
+    },
+    {
+      "entry": 3444,
+      "visibility_format": "R32G32_UINT",
+      "source_sha256": "06444185d9d7411b6a4cdf41ce1bd9a549ed6ab66add5a04b06a6209874a760d",
+      "dxil_sha256": "140a3c4b61fd91cfb7e297d9b9f626c32b9c9c093914f49eaebabafd4a7bf22d",
+      "cases": {
+        "empty": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "00000028",
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 0,
+          "queue_ids": [],
+          "counters": [
+            3,
+            19
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        },
+        "clip": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "00000028",
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 0,
+          "queue_ids": [],
+          "counters": [
+            3,
+            19
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        },
+        "upper": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "00000028",
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 1,
+          "queue_ids": [
+            37
+          ],
+          "counters": [
+            4,
+            20
+          ],
+          "stats_counter": 44,
+          "checked_words": 336
+        },
+        "sparse": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "00000028",
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 6,
+          "queue_ids": [
+            3,
+            7,
+            31,
+            32,
+            47,
+            63
+          ],
+          "counters": [
+            9,
+            25
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        },
+        "capacity": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "00000028",
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 5,
+          "queue_ids": [
+            3,
+            15
+          ],
+          "counters": [
+            8,
+            24
+          ],
+          "stats_counter": 48,
+          "checked_words": 336
+        },
+        "two-groups": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "00000028",
+            "3e800000"
+          ],
+          "groups": 2,
+          "visible": 6,
+          "queue_ids": [
+            3,
+            34,
+            61,
+            64,
+            95,
+            106
+          ],
+          "counters": [
+            9,
+            25
+          ],
+          "stats_counter": 49,
+          "checked_words": 336
+        },
+        "visibility": {
+          "checked_texels": 81,
+          "changed_visibility_words": 2,
+          "center_words": [
+            "800025a1",
+            "3f400000"
+          ],
+          "groups": 1,
+          "visible": 0,
+          "queue_ids": [],
+          "counters": [
+            3,
+            19
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        },
+        "visibility-guard": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "ffffffff",
+            "3f600000"
+          ],
+          "groups": 1,
+          "visible": 0,
+          "queue_ids": [],
+          "counters": [
+            3,
+            19
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        },
+        "visibility-tie": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "ffffffff",
+            "3f400000"
+          ],
+          "groups": 1,
+          "visible": 0,
+          "queue_ids": [],
+          "counters": [
+            3,
+            19
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        }
+      }
+    },
+    {
+      "entry": 3452,
+      "visibility_format": "R32_UINT",
+      "source_sha256": "85fe16be29d6ba9dae77cfc7fb2885b99ed3acb35ce0550e0b7464a90c361c61",
+      "dxil_sha256": "c613cb962b33e07fd15313ec38c45a87e3749df033633c9e841dada34ea700e3",
+      "cases": {
+        "empty": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 0,
+          "queue_ids": [],
+          "counters": [
+            3,
+            19
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        },
+        "clip": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 0,
+          "queue_ids": [],
+          "counters": [
+            3,
+            19
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        },
+        "upper": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 1,
+          "queue_ids": [
+            37
+          ],
+          "counters": [
+            4,
+            20
+          ],
+          "stats_counter": 44,
+          "checked_words": 336
+        },
+        "sparse": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 6,
+          "queue_ids": [
+            3,
+            7,
+            31,
+            32,
+            47,
+            63
+          ],
+          "counters": [
+            9,
+            25
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        },
+        "capacity": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 5,
+          "queue_ids": [
+            3,
+            15
+          ],
+          "counters": [
+            8,
+            24
+          ],
+          "stats_counter": 48,
+          "checked_words": 336
+        },
+        "two-groups": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "3e800000"
+          ],
+          "groups": 2,
+          "visible": 6,
+          "queue_ids": [
+            3,
+            34,
+            61,
+            64,
+            95,
+            106
+          ],
+          "counters": [
+            9,
+            25
+          ],
+          "stats_counter": 49,
+          "checked_words": 336
+        },
+        "visibility": {
+          "checked_texels": 81,
+          "changed_visibility_words": 1,
+          "center_words": [
+            "3f400000"
+          ],
+          "groups": 1,
+          "visible": 0,
+          "queue_ids": [],
+          "counters": [
+            3,
+            19
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        },
+        "visibility-guard": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "3f600000"
+          ],
+          "groups": 1,
+          "visible": 0,
+          "queue_ids": [],
+          "counters": [
+            3,
+            19
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        }
+      }
+    },
+    {
+      "entry": 3473,
+      "visibility_format": "R32G32_UINT",
+      "source_sha256": "cbe4d099f555f59bd1c3c5c2667918dcf5e01340cf7fbc4cb23f9374f15ffec9",
+      "dxil_sha256": "eb45e70f46a8066fc1e5587025f8499e5c3a845805f5d517768fb2fc40c9b97d",
+      "cases": {
+        "empty": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "00000028",
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 0,
+          "queue_ids": [],
+          "counters": [
+            3,
+            19
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        },
+        "clip": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "00000028",
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 0,
+          "queue_ids": [],
+          "counters": [
+            3,
+            19
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        },
+        "upper": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "00000028",
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 1,
+          "queue_ids": [
+            37
+          ],
+          "counters": [
+            4,
+            20
+          ],
+          "stats_counter": 44,
+          "checked_words": 336
+        },
+        "sparse": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "00000028",
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 6,
+          "queue_ids": [
+            3,
+            7,
+            31,
+            32,
+            47,
+            63
+          ],
+          "counters": [
+            9,
+            25
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        },
+        "capacity": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "00000028",
+            "3e800000"
+          ],
+          "groups": 1,
+          "visible": 5,
+          "queue_ids": [
+            3,
+            15
+          ],
+          "counters": [
+            8,
+            24
+          ],
+          "stats_counter": 48,
+          "checked_words": 336
+        },
+        "two-groups": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "00000028",
+            "3e800000"
+          ],
+          "groups": 2,
+          "visible": 6,
+          "queue_ids": [
+            3,
+            34,
+            61,
+            64,
+            95,
+            106
+          ],
+          "counters": [
+            9,
+            25
+          ],
+          "stats_counter": 49,
+          "checked_words": 336
+        },
+        "visibility": {
+          "checked_texels": 81,
+          "changed_visibility_words": 2,
+          "center_words": [
+            "800025a1",
+            "3f400000"
+          ],
+          "groups": 1,
+          "visible": 0,
+          "queue_ids": [],
+          "counters": [
+            3,
+            19
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        },
+        "visibility-guard": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "ffffffff",
+            "3f600000"
+          ],
+          "groups": 1,
+          "visible": 0,
+          "queue_ids": [],
+          "counters": [
+            3,
+            19
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        },
+        "visibility-tie": {
+          "checked_texels": 81,
+          "changed_visibility_words": 0,
+          "center_words": [
+            "ffffffff",
+            "3f400000"
+          ],
+          "groups": 1,
+          "visible": 0,
+          "queue_ids": [],
+          "counters": [
+            3,
+            19
+          ],
+          "stats_counter": 43,
+          "checked_words": 336
+        }
+      }
+    }
+  ],
+  "scope": "Original compute shader and root signature at Xbox device slot 62. The fixtures check frustum culling, wave allocation, clipped queue writes, optional statistics and impostor visibility atomics. Every dispatch reads back the full visibility image, queue and both counter buffers."
+}

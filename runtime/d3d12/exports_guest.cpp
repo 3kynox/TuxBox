@@ -3,6 +3,7 @@
 #include <d3dcommon.h>
 #include <d3d12sdklayers.h>
 #include <dxgi.h>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
@@ -91,6 +92,40 @@ static bool check_blob(HMODULE module) {
     return bytes[0] == 0x49 && bytes[256] == 0x49 && blob->Release() == 0;
 }
 
+#ifdef ORD_D3D12ZeroMemoryX
+static bool check_zero_memory(HMODULE module) {
+    struct Range { void* address; SIZE_T bytes; };
+    struct Workspace { void* commands; UINT command_bytes; void* scratch; UINT scratch_bytes; };
+    using Clear = HRESULT (WINAPI*)(UINT, const Range*, const Workspace*, UINT);
+    auto clear = reinterpret_cast<Clear>(lookup(module, "D3D12ZeroMemoryX", ORD_D3D12ZeroMemoryX));
+    if (!clear || clear(0, nullptr, nullptr, 0) != S_OK || clear(1, nullptr, nullptr, 1) != E_INVALIDARG)
+        return false;
+    alignas(16) std::array<BYTE, 128> data;
+    data.fill(0xa5);
+    auto expected = data;
+    static BYTE commands[65536], scratch[256];
+    Workspace work{commands, sizeof(commands), scratch, sizeof(scratch)};
+    Range ranges[] = {{data.data() + 16, 32}, {data.data() + 96, 16},
+                      {data.data() + 32, 32}, {nullptr, 0}};
+    Range bad[] = {ranges[0], {data.data() + 97, 16}};
+    if (clear(2, bad, &work, 1) != E_INVALIDARG || data != expected) return false;
+    bad[1] = {data.data() + 96, 17};
+    if (clear(2, bad, &work, 1) != E_INVALIDARG || data != expected) return false;
+    const Workspace invalid[] = {{nullptr, 65536, scratch, 256}, {commands, 65535, scratch, 256},
+                                 {commands, 65536, nullptr, 256}, {commands, 65536, scratch, 255}};
+    for (const auto& item : invalid)
+        if (clear(4, ranges, &item, 1) != E_INVALIDARG || data != expected) return false;
+    if (clear(4, ranges, &work, 1) != S_OK) return false;
+    std::memset(expected.data() + 16, 0, 48);
+    std::memset(expected.data() + 96, 0, 16);
+    if (data != expected) return false;
+    data.fill(0x4d);
+    expected = data;
+    std::memset(expected.data() + 16, 0, 32);
+    return clear(1, ranges, nullptr, 0x81) == S_OK && data == expected;
+}
+#endif
+
 int wmain(int argc, wchar_t** argv) {
     int arg = 1;
     // Pin the packaged driver during a control run, as a live device would.
@@ -106,8 +141,14 @@ int wmain(int argc, wchar_t** argv) {
     if (!module || !check_debug(module)) { std::fputs("Debug interface failed\n", stderr); return 1; }
     if (!check_dxgix(module)) { std::fputs("Legacy DXGIX calls failed\n", stderr); return 1; }
     if (!check_blob(module)) { std::fputs("Blob checks failed\n", stderr); return 1; }
+#ifdef ORD_D3D12ZeroMemoryX
+    if (!check_zero_memory(module)) { std::fputs("CPU memory clear failed\n", stderr); return 1; }
+    const char* summary = "d3d12-exports PASS debug=1 blob=1 dxgix=4 cpu_clear=1\n";
+#else
+    const char* summary = "d3d12-exports PASS debug=1 blob=1 dxgix=4\n";
+#endif
     FILE* out = stdout;
     if (argc != arg && _wfopen_s(&out, argv[arg + 1], L"wb")) return 2;
-    const int result = std::fputs("d3d12-exports PASS debug=1 blob=1 dxgix=4\n", out);
+    const int result = std::fputs(summary, out);
     return (out != stdout && std::fclose(out)) || result < 0;
 }

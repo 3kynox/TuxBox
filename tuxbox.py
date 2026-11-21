@@ -19,6 +19,7 @@ from project_tuxbox.backend_log import check_log_path
 from project_tuxbox.game_log import game_log
 from project_tuxbox.host import Host
 from project_tuxbox.inspect import binary_file, image, launch_target, package
+from project_tuxbox.d3d12_status import d3d12_table
 from project_tuxbox.progress_map import library_table, shader_table, write_map
 from project_tuxbox.shader_prep import prepare_for_launch
 from project_tuxbox.symbols import lookup_symbols
@@ -90,6 +91,7 @@ def main():
     status_format = show.add_mutually_exclusive_group()
     status_format.add_argument("--svg", type=Path, metavar="PATH", help="write the visual progress map")
     status_format.add_argument("--libraries", action="store_true", help="list verified exports per Xbox DLL")
+    status_format.add_argument("--d3d12-xs", action="store_true", help="show checked Xbox D3D12 interface slots")
     status_format.add_argument("--shaders", action="store_true", help="show packaged and requested shaders by stage")
     args = parser.parse_args()
     if args.command == "status":
@@ -98,6 +100,8 @@ def main():
             write_map(evidence, args.svg)
         elif args.libraries:
             print(library_table(evidence))
+        elif args.d3d12_xs:
+            print(d3d12_table(evidence))
         elif args.shaders:
             print(shader_table(evidence))
         else:

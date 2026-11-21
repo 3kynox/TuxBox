@@ -10,6 +10,14 @@ The scan parsed all **245 system-image DLLs** and **4 game-folder DLLs** with no
 | 🟡 Partial | 17 | A TuxBox provider or named reference bridge covers some behavior; other operations remain open. |
 | 🔴 Incomplete | 43 | The DLL is inventoried, but no TuxBox export behavior has been verified. |
 
+## Xbox D3D12 interface methods
+
+Frosty calls most graphics operations through objects created by `d3d12_xs.dll`. Run `python tuxbox.py status --d3d12-xs` to see the tracked slot numbers, test scope and number of handlers in each TuxBox proxy table. The GPU copy test writes a guest-backed RGBA8 texture through graphics command-list slots 84 (whole resource) and 83 (region). It exercises the slot 26 state transitions and checks the tiled bytes after a fence, including the padding. A second handle at the same address and a separately placed array slice both read back the expected pixels. [Interface inventory](../evidence/matrix-awakens/d3d12-xs-interfaces.json) · [GPU copy results](../evidence/matrix-awakens/command-list-copy.json)
+
+The Xbox graphics command list supports direct mesh dispatch at slot 127 and indirect mesh dispatch at slot 59. Both GPU paths produced the expected pixels on NVIDIA and Radeon. [NVIDIA checks](../evidence/matrix-awakens/mesh-command-list-nvidia.json) · [Radeon checks](../evidence/matrix-awakens/mesh-command-list-radeon.json)
+
+The denominator for an interface is the set of distinct slots catalogued from this Frosty build and its associated guest traces. Slot numbers are local to each interface. For example, slot 15 copies a buffer on the graphics command list and records a barrier on the compact DMA list. A checked method has a recorded TuxBox test for the behavior listed. Additional methods and argument combinations can still be discovered. Run `python tools/map_d3d12_xs.py` after changing a proxy table, and then regenerate the chart with `python tuxbox.py status --svg docs/progress.svg`. The mapper reads the compiled x64 tables and excludes their unsupported-method handlers.
+
 ## Frosty's imported Xbox-facing APIs
 
 Frosty imports **60 symbols across 11 tracked DLLs**. The executable also imports ordinary Windows libraries. Across the whole executable there are 537 regular imports and another 15 delay imports, all from GameChat2. The table counts named and ordinal imports against the reviewed binary. A verified import has at least one tested TuxBox behavior. A factory can pass that test while a game still needs more methods on the object it returns.
@@ -97,7 +105,7 @@ The new Rust AcpHal builds the seven functions Frosty imports. The earlier launc
 
 | Library | Status | Provider and observed behavior |
 | --- | --- | --- |
-| `d3d12_xs.dll` | 🟡 Partial | **46/54 exports** (14/22 functions and 32/32 identifiers). Frosty creates graphics pipelines from Xbox `ID3D12Device2` streams and displays its main menu. GPU readbacks verify indexed draws, depth and stencil planes, decoded video copies, indirect compute and guest-backed placed textures. [GPU checks](../runtime/d3d12/README.md#what-runs-on-the-gpu) · [Export comparison](../evidence/providers/d3d12-exports.json) · [Retail startup](../evidence/matrix-awakens/tuxbox-menu-startup.json) |
+| `d3d12_xs.dll` | 🟡 Partial | **47/54 exports** (15/22 functions and 32/32 identifiers). The CPU mode of `D3D12ZeroMemoryX` matches the packaged DLL. Frosty creates graphics pipelines from Xbox `ID3D12Device2` streams and displays its main menu. GPU readbacks verify indexed draws, depth and stencil planes, decoded video copies, indirect compute and guest-backed placed textures. [CPU clear comparison](../evidence/providers/d3d12-cpu-clear.json) · [GPU checks](../runtime/d3d12/README.md#what-runs-on-the-gpu) · [Export comparison](../evidence/providers/d3d12-exports.json) · [Retail startup](../evidence/matrix-awakens/tuxbox-menu-startup.json) |
 | `dxcompiler_xs.dll` | 🟡 Partial | Two of four Scarlett factories are verified for owned blobs, caller allocation, portable shader compilation and compiler diagnostics. The two ray-tracing factories remain open. [Compiler checks](../evidence/providers/dxc-factories.json) |
 | `dxcompiler_x.dll` | 🟡 Partial | Both Xbox One factories work for the same tests at ordinals 1 and 2. Xbox-specific GPU code generation and compiler intrinsics remain open. [Original and TuxBox comparisons](../evidence/providers/dxc-factories.json) |
 | `xmem.dll` | 🟡 Partial | All nine Frosty imports have CPU-side checks. The three physical-page calls retain data when 64 KiB pages are unmapped and remapped in a different order. GPU-visible backing and retail use of these mappings remain open. [Memory tests](../runtime/xmem/README.md) · [Page remapping](../evidence/providers/xmem-pages.json) |

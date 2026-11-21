@@ -156,7 +156,10 @@ pub(super) unsafe extern "system" fn place_virtual(
     {
         return result;
     }
-    let result = super::placement::Texture::new(&device.native, address, desc, state, clear);
+    let result = device
+        .state
+        .placements
+        .texture(&device.native, address, desc, state, clear);
     match result {
         Ok(texture) => {
             let native = texture.native.clone();

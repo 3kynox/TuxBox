@@ -64,7 +64,9 @@ pub(super) unsafe extern "system" fn query(
         D3D12_FEATURE_D3D12_OPTIONS => 64,
         D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS => 16,
         D3D12_FEATURE_FORMAT_SUPPORT | D3D12_FEATURE_D3D12_OPTIONS5 => 12,
-        D3D12_FEATURE_FORMAT_INFO | D3D12_FEATURE_GPU_VIRTUAL_ADDRESS_SUPPORT => 8,
+        D3D12_FEATURE_FORMAT_INFO
+        | D3D12_FEATURE_GPU_VIRTUAL_ADDRESS_SUPPORT
+        | D3D12_FEATURE_D3D12_OPTIONS7 => 8,
         D3D12_FEATURE_ROOT_SIGNATURE => 4,
         _ => return E_NOTIMPL,
     };
@@ -88,6 +90,23 @@ unsafe fn translate(
         D3D12_FEATURE_D3D12_OPTIONS5 => {
             // TuxBox has no guest tiled SRV, render-pass, or DXR command interface.
             unsafe { words.cast::<[u32; 3]>().write_unaligned([0; 3]) };
+        }
+        D3D12_FEATURE_D3D12_OPTIONS7 => {
+            // At RVA 0x51844 the Scarlett UMD writes mesh tier then sampler
+            // feedback tier. Feedback maps require additional device methods.
+            let mesh = match host_query(
+                device,
+                feature,
+                D3D12_FEATURE_DATA_D3D12_OPTIONS7::default(),
+            ) {
+                Ok(host) if host.MeshShaderTier.0 >= D3D12_MESH_SHADER_TIER_1.0 => {
+                    D3D12_MESH_SHADER_TIER_1
+                }
+                // Older desktop runtimes may not recognize this feature query.
+                Ok(_) | Err(E_INVALIDARG | E_NOTIMPL) => D3D12_MESH_SHADER_TIER_NOT_SUPPORTED,
+                Err(error) => return Err(error),
+            };
+            unsafe { words.cast::<[u32; 2]>().write_unaligned([mesh.0 as u32, 0]) };
         }
         D3D12_FEATURE_ROOT_SIGNATURE => {
             // The packaged driver always reports 1.0, including for a 1.1 request.

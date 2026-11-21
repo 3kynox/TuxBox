@@ -10,16 +10,16 @@ import sys
 import subprocess
 import tempfile
 
-from .inspect import digest, image, launch_target
+from .inspect import digest, export_table, image, launch_target
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build"
 BASE_SUITES = ("cpu", "xmem", "xgameruntime", "xcrdapi", "graphics", "graphics-abi", "guest-frame", "present", "lanes",
                "cpu-benchmark", "d3d12-exports", "d3d12-features", "d3d12-indirect", "d3d12-queries", "d3d12-queues", "d3d12-tables",
-               "d3d12-heaps", "d3d12-placement", "d3d12-draw", "d3d12-stream", "d3d12-frame-events",
+               "d3d12-heaps", "d3d12-placement", "d3d12-copy-resource", "d3d12-draw", "d3d12-stream", "d3d12-frame-events",
                "d3d12-guids", "d3d12-signatures", "xg-provider", "frontpanel", "gameconfig", "gamechat", "mfreadwrite", "xaudio")
 OPTIONAL_PROVIDERS = {"dxc-utils": "dxc-utils/dxcompiler.dll", "xg": "xg/xg_xs.dll"}
-SUITES = (*BASE_SUITES, *OPTIONAL_PROVIDERS)
+SUITES = (*BASE_SUITES, "d3d12-mesh", *OPTIONAL_PROVIDERS)
 
 
 def cpu_model():
@@ -233,15 +233,25 @@ def verify(host, output, adapter, selected=None, samples=1):
                        r"inset=208 guards=3 fence=2 compute_fence=7")
         frame_provider = {"d3d12-smoke/d3d12_xs.dll": ("D3D12XboxCreateDevice",)}
         if "d3d12-exports" in selected:
+            dll = "d3d12-smoke/d3d12_xs.dll"
+
+            def exports_receipt(_imports):
+                slots, _ = export_table(BUILD / dll)
+                cpu_clear = any("D3D12ZeroMemoryX" in names for names in slots.values())
+                return "d3d12-exports PASS debug=1 blob=1 dxgix=4" + (" cpu_clear=1" if cpu_clear else "")
+
             check("d3d12-exports", "d3d12-smoke/d3d12-exports.exe", ["--report"],
-                  r"d3d12-exports PASS debug=1 blob=1 dxgix=4",
-                  providers={"d3d12-smoke/d3d12_xs.dll": ("D3D10CreateBlob", "D3D12XboxGetProcessDebugFlags",
-                             "D3D12XboxSetProcessDebugFlags")})
+                  exports_receipt, providers={dll: ("D3D10CreateBlob", "D3D12XboxGetProcessDebugFlags",
+                                                   "D3D12XboxSetProcessDebugFlags")})
         for suite, expected in (
             ("features", r"queries=7 binding=[1-3] heap=[12] root=1 dxr=0 allocations=4 footprints=4"),
             ("heaps", r"heap=32MiB offsets=0,65536 words=256/256 invalid=4 display=3840x2160/RGB10A2 pixel=c00ffc00 volume=45/45"),
             ("placement", r"slot=44 VA-offsets=0,4096,0 passes=2 BC1-blocks=522 cube-blocks=16404 R8-texels=262144 rejected=3"),
+            ("copy-resource", r"slot=84 buffer_bytes=1028 texture_subresources=8 nonzero_option=E_NOTIMPL "
+                              r"self_copy=E_INVALIDARG source_and_destination=verified placed_uploads=2 placed_dst=verified "
+                              r"same_va_alias=verified cpu_writeback=verified partial_copy_texels=2 overlap_mips=4 pending_reader=verified"),
             ("draw", r"red=36 blue=220"),
+            ("mesh", r"tier=1 stream=680 direct=6 amplified=12 indirect=2 zero=0 pixels=256/256 guards=32 rejected=5"),
             ("frame-events", r"slots=78,79,80,81 tokens=2 timeout=S_FALSE flip=1 detached=1 stats=2"),
             ("tables", r"words=16/16 guards=4 heaps=2 rejected=3 placed-srv=16/16 range-copies=4 descriptor-mode=1"),
             ("queues", r"queues=3 bytes=64 wait=1 signal-x=2"),
@@ -324,7 +334,7 @@ GATE_LABELS = {
     "xmem-pages": "CPU page allocation, remapping and release",
     "invalid-route": "Invalid input exit status", "xmem-default": "Xbox memory allocation and working set",
     "d3d12-signatures": "Root signature 1.0 and 1.1 serialization, deserialization and errors",
-    "d3d12-exports": "Blob, debug interface and four DXGIX entry points",
+    "d3d12-exports": "Blob, debug interface, four DXGIX entry points and Series CPU memory clear",
     "d3d12-features": "Xbox capability records compared with the selected adapter",
     "d3d12-indirect": "Indirect dispatch and texture cache flushes between compute writes",
     "guest-frame-rgb10": "RGB10A2 display allocation and two guarded GPU readbacks",
@@ -335,6 +345,8 @@ GATE_LABELS = {
     "d3d12-frame-events": "Frame origins, timeout tokens, completed presentation events and display statistics",
     "d3d12-heaps": "Placed resources and allocation offsets in a shared memory heap",
     "d3d12-placement": "Virtual-address BC1 cubes and R8 textures across page changes",
+    "d3d12-copy-resource": "Whole-buffer and multi-mip texture copies through Xbox command-list slot 84",
+    "d3d12-mesh": "Mesh and amplification shader dispatch on a mesh-tier adapter",
     "d3d12-draw": "Scissored triangle through Xbox graphics pipeline and draw slots",
     "d3d12-stream": "Xbox Device2 graphics pipeline stream, ownership and masked draw",
     "d3d12-tables": "Shader reads and writes through tables, including a late-copied texture view",

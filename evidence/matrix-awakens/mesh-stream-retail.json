@@ -69,5 +69,23 @@
     "vkd3d_warning": "Attempting to use stencil reference in shader 98d4613a3b73bac9, but this is not supported."
   },
   "provider_sha256": "77a877584436d661c069e33cca447dce54cf00a42f84e4c350be9023650707b5",
-  "patch_sha256": "28df50e9857c8f91772944c67db092b5db99594d4ff646034560899e3a2c4f5d"
+  "patch_sha256": "28df50e9857c8f91772944c67db092b5db99594d4ff646034560899e3a2c4f5d",
+  "dispatch_mesh": {
+    "method": "FD3D12CommandContext::RHIDispatchMeshShader",
+    "function_rva": "0x578f1b0",
+    "call_rva": "0x578f241",
+    "vtable_offset": "0x3f8",
+    "slot": 127,
+    "arguments": "The title passes the command list in RCX and the X, Y and Z group counts in EDX, R8D and R9D."
+  },
+  "feature_query_32": {
+    "provider": "xgs12_10.dll",
+    "provider_sha256": "036b9a0d8569ba662e52e2f7454c3f0e6506415b3b4f7423d51f3c7e31a3a288",
+    "dispatch_table_rva": "0x51884",
+    "case_rva": "0x51844",
+    "minimum_bytes": 8,
+    "mesh_shader_tier": 10,
+    "sampler_feedback_tier": 101,
+    "invalid_result": "E_INVALIDARG for null data or size below eight bytes"
+  }
 }

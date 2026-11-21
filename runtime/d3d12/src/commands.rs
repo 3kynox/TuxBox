@@ -2,7 +2,7 @@
 //! before a batch reaches the desktop API.
 
 use core::{ffi::c_void, mem, ops::Range, ptr, slice};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use windows::Win32::Foundation::{E_FAIL, E_INVALIDARG, E_NOTIMPL, E_OUTOFMEMORY, RECT, S_OK};
 use windows::Win32::Graphics::Direct3D12::*;
@@ -30,6 +30,7 @@ enum ListState {
 struct Recording {
     media: Option<media::Recording>,
     placed_reads: Vec<Arc<Texture>>,
+    placed_writes: Vec<Arc<Texture>>,
     resource_heap: Option<Range<usize>>,
     sampled_heaps: Vec<Range<usize>>,
     phase: ListState,
@@ -37,6 +38,25 @@ struct Recording {
 }
 
 impl Recording {
+    fn prepare_copy(
+        &mut self,
+        destination: Option<&Arc<Texture>>,
+        source: Option<&Arc<Texture>>,
+    ) -> Result<(), HRESULT> {
+        for (accesses, texture) in [
+            (&mut self.placed_reads, source),
+            (&mut self.placed_writes, destination),
+        ] {
+            if let Some(texture) = texture
+                && !accesses.iter().any(|known| Arc::ptr_eq(known, texture))
+            {
+                accesses.try_reserve(1).map_err(|_| E_OUTOFMEMORY)?;
+                accesses.push(Arc::clone(texture));
+            }
+        }
+        Ok(())
+    }
+
     fn sample_heap(&mut self) {
         if let Some(heap) = &self.resource_heap
             && !self.sampled_heaps.contains(heap)
@@ -82,6 +102,7 @@ struct ListData {
     recording: Mutex<Recording>,
     extended: OnceLock<Option<ID3D12GraphicsCommandList1>>,
     enhanced_barriers: OnceLock<Option<ID3D12GraphicsCommandList7>>,
+    mesh: OnceLock<Option<ID3D12GraphicsCommandList6>>,
 }
 
 type List = Proxy<ID3D12GraphicsCommandList, ListData>;
@@ -106,9 +127,9 @@ struct QueueState {
     kind: D3D12_COMMAND_LIST_TYPE,
     // ExecuteCommandLists is void. Report a rejected batch on the next fence
     // signal or present, and never signal completion for missing work.
-    error: AtomicI32,
+    placement: placement::QueueAccess,
+    submission: Mutex<()>,
     presentation: Presentation,
-    placement_fence: OnceLock<ID3D12Fence>,
 }
 
 type Queue = Proxy<ID3D12CommandQueue, QueueState>;
@@ -179,6 +200,7 @@ unsafe extern "system" fn reset(
             state.media = Some(media::Recording::new(allocator));
         }
         state.placed_reads.clear();
+        state.placed_writes.clear();
         state.resource_heap = None;
         state.sampled_heaps.clear();
         state.error = S_OK;
@@ -384,16 +406,25 @@ unsafe extern "system" fn transition(
                 }
                 host.resource = ptr::null_mut();
             } else if resource.state.placed().is_some() {
-                if !placement::read_state(host.before) || !placement::read_state(host.after) {
+                if !placement::supported_state(host.before)
+                    || !placement::supported_state(host.after)
+                {
                     crate::diagnostics::recording_error(format_args!(
                         "placed texture transition {:#x} to {:#x}",
                         host.before.0, host.after.0
                     ));
                     return Err(E_NOTIMPL);
                 }
-                // Read-only guest states are implicit promotions of the native
-                // simultaneous-access texture; no explicit transition is needed.
-                host.resource = ptr::null_mut();
+                // Read promotions can accumulate implicitly. An explicit barrier
+                // orders copy writes against other uses within the same batch.
+                host.resource = if different
+                    && (host.before == D3D12_RESOURCE_STATE_COPY_DEST
+                        || host.after == D3D12_RESOURCE_STATE_COPY_DEST)
+                {
+                    resource.native.as_raw()
+                } else {
+                    ptr::null_mut()
+                };
             } else if different && host.before == host.after {
                 host.resource = ptr::null_mut();
             } else {
@@ -614,20 +645,9 @@ unsafe extern "system" fn copy_texture(
         state.error = E_INVALIDARG;
         return;
     };
-    if destination.is_some() {
-        crate::diagnostics::recording_error(format_args!(
-            "copy into a guest-backed read-only texture"
-        ));
-        state.error = E_NOTIMPL; // Copying GPU writes back into tiled guest memory is a separate path.
+    if let Err(error) = state.prepare_copy(destination, source) {
+        state.error = error;
         return;
-    }
-    if let Some(texture) = source
-        && !state
-            .placed_reads
-            .iter()
-            .any(|known| Arc::ptr_eq(known, texture))
-    {
-        state.placed_reads.push(texture.clone());
     }
     unsafe {
         (list.native.vtable().CopyTextureRegion)(
@@ -640,6 +660,63 @@ unsafe extern "system" fn copy_texture(
             region,
         );
     }
+}
+
+// Frosty's pool allocator and its buffer and texture copy routines all use
+// slot 84 with destination, source and zero options.
+unsafe extern "system" fn copy_resource(
+    list: &List,
+    dst: *mut c_void,
+    src: *mut c_void,
+    options: u32,
+) {
+    let mut state = recording(list);
+    if !state.can_record(&list.native) {
+        return;
+    }
+    if options != 0 {
+        crate::diagnostics::recording_error(format_args!(
+            "slot 84 CopyResource options {options:#x}"
+        ));
+        state.error = E_NOTIMPL;
+        return;
+    }
+    let owner = parent(&list.parent);
+    // SAFETY: each guest argument is a live COM object or null. Only resource
+    // proxies owned by the list's device yield borrowed native interfaces.
+    let (Some(dst), Some(src)) = (unsafe { device::resource_proxy(dst, owner) }, unsafe {
+        device::resource_proxy(src, owner)
+    }) else {
+        state.error = E_INVALIDARG;
+        return;
+    };
+    let (d, s) = unsafe { (dst.native.GetDesc(), src.native.GetDesc()) };
+    if dst.native == src.native
+        || d.Dimension != s.Dimension
+        || d.DepthOrArraySize != s.DepthOrArraySize
+        || d.MipLevels != s.MipLevels
+        || d.SampleDesc != s.SampleDesc
+        // D3D12 also allows reinterpret copies between some differently sized
+        // block-compressed and uncompressed textures. Leave those to the driver.
+        || (d.Format == s.Format && (d.Width != s.Width || d.Height != s.Height))
+    {
+        state.error = E_INVALIDARG;
+        return;
+    }
+    if let Err(error) = state.prepare_copy(dst.state.placed(), src.state.placed()) {
+        state.error = error;
+        return;
+    }
+    // SAFETY: both native resources belong to this open command list's device.
+    // The guest supplies their copy states via barriers and owns their lifetimes.
+    unsafe { list.native.CopyResource(&dst.native, &src.native) };
+    static FIRST_COPY: std::sync::Once = std::sync::Once::new();
+    crate::diagnostics::log_once(&FIRST_COPY, || {
+        format!(
+            "recorded slot 84 CopyResource (dimension {}, {} x {} x {}, {} mips)",
+            s.Dimension.0, s.Width, s.Height, s.DepthOrArraySize, s.MipLevels
+        )
+    });
 }
 
 // Frosty's RHIDispatchIndirectComputeShader calls slot 59 (RVA 0x57876df).
@@ -735,15 +812,18 @@ static LIST_SLOTS: Slots<149> = {
     slots[67] = crate::slot!(flush_texture_cache);
     slots[68] = crate::slot!(graphics::depth_bounds);
     slots[83] = crate::slot!(copy_texture);
+    slots[84] = crate::slot!(copy_resource);
+    slots[127] = crate::slot!(graphics::dispatch_mesh);
     slots
 };
 
 fn reject(queue: &Queue, error: HRESULT) {
-    let _ =
-        queue
-            .state
-            .error
-            .compare_exchange(S_OK.0, error.0, Ordering::AcqRel, Ordering::Acquire);
+    let _ = queue.state.placement.error.compare_exchange(
+        S_OK.0,
+        error.0,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
     unsafe {
         OutputDebugStringA(s!(
             "Project TuxBox: direct queue rejected a guest command-list batch\n"
@@ -752,7 +832,12 @@ fn reject(queue: &Queue, error: HRESULT) {
 }
 
 unsafe extern "system" fn execute(queue: &Queue, count: u32, lists: *const *mut c_void) {
-    if queue.state.error.load(Ordering::Acquire) < 0 || count == 0 {
+    let _submission = queue
+        .state
+        .submission
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if queue.state.placement.error.load(Ordering::Acquire) < 0 || count == 0 {
         return;
     }
     if lists.is_null() {
@@ -762,8 +847,8 @@ unsafe extern "system" fn execute(queue: &Queue, count: u32, lists: *const *mut 
     let guest = unsafe { slice::from_raw_parts(lists, count as usize) };
     let result = translate_batch(
         guest,
-        (Vec::new(), Vec::new()),
-        |&item, (textures, shader_views)| {
+        (Vec::new(), Vec::new(), Vec::new()),
+        |&item, (textures, writes, shader_views)| {
             let list: &List = unsafe {
                 unwrap(item, parent(&queue.parent), &LIST_SLOTS)
                     .or_else(|| unwrap(item, parent(&queue.parent), &media::SLOTS))
@@ -780,16 +865,21 @@ unsafe extern "system" fn execute(queue: &Queue, count: u32, lists: *const *mut 
                 .try_reserve(state.placed_reads.len())
                 .map_err(|_| E_OUTOFMEMORY)?;
             textures.extend(state.placed_reads.iter().cloned());
+            writes
+                .try_reserve(state.placed_writes.len())
+                .map_err(|_| E_OUTOFMEMORY)?;
+            writes.extend(state.placed_writes.iter().cloned());
             shader_views.extend(state.sampled_heaps.iter().cloned());
             Ok(list.native.as_raw())
         },
-        |host, (mut textures, shader_views)| {
+        |host, (mut textures, mut writes, shader_views)| {
             unsafe {
                 placement::submit(
                     parent(&queue.parent),
                     &queue.native,
-                    &queue.state.placement_fence,
+                    &queue.state.placement,
                     &mut textures,
+                    &mut writes,
                     &shader_views,
                     || {
                         (queue.native.vtable().ExecuteCommandLists)(
@@ -814,7 +904,12 @@ unsafe extern "system" fn queue_fence<const WAIT: bool>(
     fence: *mut c_void,
     value: u64,
 ) -> HRESULT {
-    let hr = HRESULT(queue.state.error.load(Ordering::Acquire));
+    let _submission = queue
+        .state
+        .submission
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let hr = HRESULT(queue.state.placement.error.load(Ordering::Acquire));
     if hr.is_err() {
         return hr;
     }
@@ -885,7 +980,12 @@ unsafe extern "system" fn present(
     planes: *const PresentPlane,
     params: *const PresentParameters,
 ) -> HRESULT {
-    let hr = HRESULT(queue.state.error.load(Ordering::Acquire));
+    let _submission = queue
+        .state
+        .submission
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let hr = HRESULT(queue.state.placement.error.load(Ordering::Acquire));
     if hr.is_err() {
         return hr;
     }
@@ -958,8 +1058,10 @@ pub(crate) unsafe fn wrap_command_list(
         pipeline_packets: core::cell::UnsafeCell::new([0; 32]),
         extended: OnceLock::new(),
         enhanced_barriers: OnceLock::new(),
+        mesh: OnceLock::new(),
         recording: Mutex::new(Recording {
             placed_reads: Vec::new(),
+            placed_writes: Vec::new(),
             resource_heap: None,
             sampled_heaps: Vec::new(),
             media: compact.then(|| media::Recording::new(allocator)),
@@ -999,9 +1101,9 @@ pub(crate) unsafe fn wrap_command_queue(
     let state = QueueState {
         reserved: 0,
         kind: unsafe { native.GetDesc() }.Type,
-        error: AtomicI32::new(S_OK.0),
+        placement: placement::QueueAccess::default(),
+        submission: Mutex::new(()),
         presentation: Presentation::default(),
-        placement_fence: OnceLock::new(),
     };
     unsafe {
         allocate(

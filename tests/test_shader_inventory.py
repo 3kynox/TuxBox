@@ -84,6 +84,29 @@ class ShaderInventoryTests(unittest.TestCase):
             self.assertIn("Frosty shader coverage", [e.text for e in svg.findall(".//{*}text")])
             self.assertIn(absent, shader_table(evidence.parent))
 
+    def test_mesh_pipeline_counts_require_matching_archive_and_compiler(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence = root / "matrix-awakens"
+            evidence.mkdir()
+            inventory = {
+                "archives": {"global": {"member_sha256": "archive"}}, "compiler_sha256": "compiler",
+                "requested": [], "linked_variants": 0,
+                "stages": [{"stage": "Mesh", "global": 2, "material": 0, "unique_dxbc": 2, "hlsl_emitted": 2,
+                            "profiled_dxbc": 0, "requested_in_profile": 0, "requested_dxbc": 0}],
+            }
+            (evidence / "shader-inventory.json").write_text(json.dumps(inventory))
+            receipt = {"global_archive_sha256": "archive", "mesh_pipelines": {
+                "compiler_sha256": "compiler", "archive_entries": [18, 19]}}
+            path = evidence / "nanite-mesh-nvidia.json"
+            path.write_text(json.dumps(receipt))
+            self.assertIn("NVIDIA 2/2", shader_table(root))
+            path.write_text(json.dumps(dict(receipt, global_archive_sha256="other")))
+            self.assertNotIn("NVIDIA 2/2", shader_table(root))
+            receipt["mesh_pipelines"]["compiler_sha256"] = "other"
+            path.write_text(json.dumps(receipt))
+            self.assertNotIn("NVIDIA 2/2", shader_table(root))
+
     def test_archive_rejects_invalid_tables_and_shader_map_indices(self):
         with self.assertRaisesRegex(ValueError, "exceeds the member"):
             parse_tables(b"\x02\0\0\0\xff\xff\xff\xff")

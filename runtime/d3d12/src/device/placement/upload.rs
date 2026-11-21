@@ -223,12 +223,29 @@ impl Upload {
 
 impl Change {
     fn detile(&self, output: &mut [u8]) -> Result<()> {
-        let mip = &self.texture.mips[self.level];
-        let element = self.texture.plane.element_bytes() as usize;
+        self.texture.layout_runs(self.level, |tiled, linear| {
+            output
+                .get_mut(linear)
+                .ok_or(E_INVALIDARG)?
+                .copy_from_slice(self.bytes.get(tiled).ok_or(E_INVALIDARG)?);
+            Ok(())
+        })
+    }
+}
+
+impl Texture {
+    /// Corresponding contiguous byte runs in the tiled Xbox mip and in its
+    /// D3D12 footprint. Upload and writeback must use the same addresses.
+    pub(super) fn layout_runs(
+        &self,
+        level: usize,
+        mut visit: impl FnMut(std::ops::Range<usize>, std::ops::Range<usize>) -> Result<()>,
+    ) -> Result<()> {
+        let mip = &self.mips[level];
+        let element = self.plane.element_bytes() as usize;
         let pitch = mip.footprint.Footprint.RowPitch as usize;
-        // Linear rows are contiguous. In layout 0x105, X occupies the
-        // low address bits through byte 15 for every supported element width.
-        let run = if self.texture.desc.Layout.0 == 0x100 {
+        // In layout 0x105, X occupies the low address bits through byte 15.
+        let run = if self.desc.Layout.0 == 0x100 {
             mip.elements as usize
         } else {
             16 / element
@@ -236,18 +253,13 @@ impl Change {
         for y in 0..mip.rows {
             for x in (0..mip.elements).step_by(run) {
                 let count = (mip.elements - x).min(run as u32) as usize * element;
-                let offset = self
-                    .texture
+                let tiled = self
                     .plane
                     .element_offset_in_slice(mip.slice, mip.level, x.into(), y)
-                    .and_then(|addr| addr.checked_sub(mip.source.start))
+                    .and_then(|a| a.checked_sub(mip.source.start))
                     .ok_or(E_INVALIDARG)? as usize;
-                let source = self.bytes.get(offset..offset + count).ok_or(E_INVALIDARG)?;
-                let dst = y as usize * pitch + x as usize * element;
-                output
-                    .get_mut(dst..dst + count)
-                    .ok_or(E_INVALIDARG)?
-                    .copy_from_slice(source);
+                let linear = y as usize * pitch + x as usize * element;
+                visit(tiled..tiled + count, linear..linear + count)?;
             }
         }
         Ok(())

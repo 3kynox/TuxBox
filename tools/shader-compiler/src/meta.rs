@@ -12,23 +12,59 @@ fn u32_at(b: &[u8], off: usize) -> Result<u32, String> {
 /// RDNA2 packs enabled raster inputs into consecutive VGPRs. The ancillary
 /// word follows the barycentrics, line stipple, position and front face.
 pub(crate) fn ancillary_vgpr(fssm: &[u8]) -> Option<usize> {
+    let enabled = ps_input_enable(fssm)?;
+    (enabled & (1 << 13) != 0).then(|| packed_pixel_vgpr(enabled, 13))
+}
+
+fn ps_input_enable(fssm: &[u8]) -> Option<u32> {
     if fssm.get(..8)? != b"FSSM\x01\x01\0\0" {
         return None;
     }
     let enabled = u32_at(fssm, 0x248).ok()?;
-    if enabled & (1 << 13) == 0 || enabled >> 16 != 0 {
+    (enabled >> 16 == 0).then_some(enabled)
+}
+
+fn packed_pixel_vgpr(enabled: u32, bit: usize) -> usize {
+    const WIDTHS: [usize; 13] = [2, 2, 2, 3, 2, 2, 2, 1, 1, 1, 1, 1, 1];
+    WIDTHS[..bit].iter().enumerate()
+        .filter(|(i, _)| enabled & (1 << i) != 0)
+        .map(|(_, width)| width)
+        .sum()
+}
+
+/// XYZ-only inputs have matching signature/PA read masks. Their first enabled
+/// component immediately follows the enabled barycentric/stipple registers.
+/// The separate reciprocal-W and unused-position ABIs use the existing setup.
+pub(crate) fn position_vgprs(fssm: &[u8], read: u8) -> Option<[Option<usize>; 4]> {
+    let enabled = ps_input_enable(fssm)?;
+    if !(1..=7).contains(&read) || (enabled >> 8) & 15 != u32::from(read) {
         return None;
     }
-    let widths = [2, 2, 2, 3, 2, 2, 2, 1, 1, 1, 1, 1, 1];
-    Some(widths.iter().enumerate()
-        .filter(|(bit, _)| enabled & (1 << bit) != 0)
-        .map(|(_, width)| width)
-        .sum())
+    Some(std::array::from_fn(|i| {
+        (read & (1 << i) != 0).then(|| packed_pixel_vgpr(enabled, 8 + i))
+    }))
 }
 
 #[cfg(test)]
 mod pixel_inputs {
-    use super::ancillary_vgpr;
+    use super::{ancillary_vgpr, position_vgprs};
+
+    #[test]
+    fn sparse_fragment_position_follows_enabled_barycentrics() {
+        let mut fssm = [0; 0x24c];
+        fssm[..8].copy_from_slice(b"FSSM\x01\x01\0\0");
+        for (mask, read, slots) in [
+            (0x402u32, 4, Some([None, None, Some(2), None])),
+            (0x702, 7, Some([Some(2), Some(3), Some(4), None])),
+            (0x528, 5, Some([Some(5), None, Some(6), None])),
+            (0x402, 3, None),
+            (0xb02, 11, None),
+            (0x20, 0, None),
+        ] {
+            fssm[0x248..].copy_from_slice(&mask.to_le_bytes());
+            assert_eq!(position_vgprs(&fssm, read), slots);
+        }
+    }
 
     #[test]
     fn ancillary_location_follows_enabled_inputs() {
@@ -79,6 +115,32 @@ pub fn parse_psv0_gs(body: &[u8]) -> Option<GsInfo> {
         input_primitive: u32_at(info, 0).ok()?,
         output_topology: u32_at(info, 4).ok()?,
         max_vertex_count: u16::from_le_bytes([*info.get(26)?, *info.get(27)?]),
+    })
+}
+
+/// PSVRuntimeInfoMS0 gives the output capacities, PSVRuntimeInfo1 the topology,
+/// and PSVRuntimeInfo2 the logical Xbox thread-group dimensions.
+#[derive(Clone, Copy, Debug)]
+pub struct MeshInfo {
+    pub vertices: u16,
+    pub primitives: u16,
+    pub topology: u8,
+    pub threads: [u32; 3],
+    pub payload: u32,
+    pub shared_bytes: u32,
+}
+
+pub fn parse_mesh_info(body: &[u8]) -> Option<MeshInfo> {
+    let size = u32_at(body, 0).ok()? as usize;
+    let info = body.get(4..4usize.checked_add(size)?)?;
+    if info.get(24) != Some(&13) { return None; }
+    Some(MeshInfo {
+        vertices: u16::from_le_bytes(info.get(12..14)?.try_into().ok()?),
+        primitives: u16::from_le_bytes(info.get(14..16)?.try_into().ok()?),
+        shared_bytes: u32_at(info, 0).ok()?,
+        payload: u32_at(info, 8).ok()?,
+        topology: *info.get(27)?,
+        threads: [u32_at(info, 36).ok()?, u32_at(info, 40).ok()?, u32_at(info, 44).ok()?],
     })
 }
 

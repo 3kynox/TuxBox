@@ -20,10 +20,17 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 
 mod compare;
+mod mesh;
+mod mesh_exports;
 mod exec_group;
 mod hair_cluster;
+mod instance_cull;
+mod instance_cull_tail;
 mod int16;
 mod particle_sort;
+mod persistent;
+mod persistent_lanes;
+mod persistent_resources;
 mod lds_tile;
 mod lds_order;
 mod ps09_classify;
@@ -307,6 +314,8 @@ struct Emitter<'a> {
     samp_cmp: BTreeSet<u32>,
     uav: BTreeMap<u32, u32>,       // slot -> dim
     sbuf: BTreeMap<(bool, u32), u32>, // (is_uav, slot) -> element dwords used
+    /// PersistentClusterCull's validated buffer layout and cross-group UAV queue.
+    persistent_queue: bool,
     raw: BTreeSet<(bool, u32)>,
     tbuf: BTreeSet<(bool, u32)>,      // typed buffers (is_uav, slot)
     tbuf_uint: BTreeSet<u32>,         // typed UAV slots whose element must be uint (atomics)
@@ -716,6 +725,12 @@ pub fn translate_linked(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>) -> R
 pub fn translate_ordered(
     ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_order: &[String],
 ) -> Result<Translated, String> {
+    if ex.stage == Stage::Mesh {
+        return mesh::translate(ex, feeds_ps);
+    }
+    if persistent::applies(ex) {
+        return persistent::translate(ex);
+    }
     let (profile, is_ps) = match ex.stage {
         Stage::Vertex => ("vs_5_0", false),
         Stage::Pixel => ("ps_5_0", true),
@@ -738,6 +753,7 @@ pub fn translate_ordered(
     lower_local_pc_transfers(&mut insns)?;
     let particle_sort = particle_sort::prepare(ex, &mut insns);
     let hair_cluster = hair_cluster::prepare(ex, &mut insns);
+    let instance_cull = instance_cull::prepare(ex, &mut insns);
     let subsurface_setup = subsurface_setup::prepare(ex, &mut insns);
     let material_classify = ps09_classify::prepare(ex, &mut insns);
     let allocation_wave64 = mark_wave_allocations(&mut insns)?;
@@ -857,6 +873,7 @@ pub fn translate_ordered(
         em.tbuf_uint.extend([0, 1]);
     }
     if material_classify { ps09_classify::resources(&mut em)?; }
+    if instance_cull { instance_cull::resources(&mut em)?; }
     let live_in = em.live_in();
     em.live = live_in.clone();
     em.emit_body(is_ps)?;
@@ -871,10 +888,15 @@ pub fn translate_ordered(
 ");
         em.body.push_str(hair_cluster::EPILOGUE);
     }
+    if instance_cull {
+        em.body.insert_str(0, "    bool cull_candidate = false; uint4 cull_record = 0;\n");
+        em.body.push_str(instance_cull::EPILOGUE);
+    }
     if particle_sort { em.body.push_str(particle_sort::EPILOGUE); }
     let mut hlsl = em.finish(is_ps, output_order)?;
     if particle_sort { hlsl.insert_str(0, particle_sort::DECLARATIONS); }
     if hair_cluster { hlsl.insert_str(0, hair_cluster::DECLARATIONS); }
+    if instance_cull { hlsl.insert_str(0, instance_cull::DECLARATIONS); }
     if material_classify { hlsl.insert_str(0, ps09_classify::DECLARATIONS); }
     hlsl.insert_str(0, &format!("// entry-live registers (read before written): {}
 ", live_in.join(" ")));
@@ -931,6 +953,8 @@ pub fn translate_valu_probe(words: &[u32], nvgprs: u32) -> Result<String, String
         output_sig: Vec::new(),
         resources: Vec::new(),
         gs_info: None,
+        mesh_info: None,
+        primitive_sig: vec![],
         root_sig: None,
     };
     let insns = disassemble(&ex.isa);
@@ -1026,6 +1050,8 @@ pub fn translate_mem_probe(words: &[u32], nvgprs: u32) -> Result<(String, MemPro
         output_sig: Vec::new(),
         resources: Vec::new(),
         gs_info: None,
+        mesh_info: None,
+        primitive_sig: vec![],
         // Root parameters 0, 1, 2 arrive in s4, s5, s6 (compute user-data base 4).
         root_sig: Some(RootSig { version: 1, flags: 0, params: vec![table(0), table(3), table(1)], num_static_samplers: 0, static_samplers: vec![] }),
     };
@@ -1118,6 +1144,7 @@ impl<'a> Emitter<'a> {
             samp_cmp: BTreeSet::new(),
             uav: BTreeMap::new(),
             sbuf: BTreeMap::new(),
+            persistent_queue: false,
             raw: BTreeSet::new(),
             tbuf: BTreeSet::new(),
             tbuf_uint: BTreeSet::new(),
@@ -1178,7 +1205,13 @@ impl<'a> Emitter<'a> {
             _ => None,
         });
         // Geometry shaders: SRV table in s22, CBV table in s23 (6a6bdf123db8b5b0).
-        let base = if self.is_cs { 4 } else if self.ex.stage == Stage::Geometry { 22 } else { chained.unwrap_or(8) };
+        let base = match self.ex.stage {
+            Stage::Compute => 4,
+            Stage::Geometry => 22,
+            // In the NGG ABI s25/s26 are mesh-visible parameter tables 9/10.
+            Stage::Mesh => 16,
+            _ => chained.unwrap_or(8),
+        };
         let idx = (sgpr as usize).checked_sub(base)?;
         match &self.ex.root_sig.as_ref()?.params.get(idx)?.kind {
             crate::meta::RootParamKind::Table(r) => Some(r),
@@ -1721,6 +1754,9 @@ impl<'a> Emitter<'a> {
     /// A heuristic (TECHNICAL_DEBT).
     fn sbuf_words(&self, key: (bool, u32)) -> u32 {
         let raw = self.sbuf.get(&key).copied().unwrap_or(1).max(1);
+        if self.persistent_queue {
+            return raw;
+        }
         // Unreal's instance-culling work item packs two uints per record. Both
         // the single-instance and general permutations index those words using
         // the descriptor's 8-byte stride. Rounding this SRV to a float4 skips
@@ -2685,6 +2721,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             _ => {}
         }
         if hair_cluster::emit(self, ins) { return Ok(()); }
+        if instance_cull::emit(self, ins)? { return Ok(()); }
         if ps09_classify::emit(self, ins) { return Ok(()); }
         if let Some(tile) = self.lds_tile {
             if tile.emit(self, idx)? { return Ok(()); }
@@ -4232,7 +4269,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         }
         if m == "v_readfirstlane_b32" {
             let value = r(&s[0])?;
-            if self.is_cs && compute_group(self.ex) == [1, 1, 1] {
+            if self.ex.stage == Stage::Mesh || (self.is_cs && compute_group(self.ex) == [1, 1, 1]) {
                 return self.ws(&d, &value);
             }
             // Scalar writes reach every invocation. Select the first lane whose guest
@@ -4360,6 +4397,12 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             "v_mul_lo_u32" => format!("({a} * {b})"),
             // Count the mask bits below this lane in the selected 32-bit word.
             "v_mbcnt_lo_u32_b32" | "v_mbcnt_hi_u32_b32" => {
+                if self.ex.stage == Stage::Mesh {
+                    // These forms count the low/high 32 lanes preceding this logical wave64 lane.
+                    if s[0] != Opnd::ConstInt(-1) { return Err("mesh mbcnt with a dynamic mask".into()); }
+                    let count = if m == "v_mbcnt_lo_u32_b32" { "min(lane & 63u, 32u)" } else { "max(lane & 63u, 32u) - 32u" };
+                    return self.wv(&d, &format!("{} + ({count})", r(&s[1])?));
+                }
                 let lane = if m == "v_mbcnt_lo_u32_b32" { "WaveGetLaneIndex()" } else { "max(32u, WaveGetLaneIndex()) - 32u" };
                 let t = self.tmp;
                 self.tmp += 1;
@@ -5042,14 +5085,21 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             if ins.mnemonic.starts_with("image_atomic_") {
                 // Image atomics → Interlocked* on a RWTexture<uint> texel; vdata carries the
                 // operand in and the previous value out.
-                if ins.aux.mask == 3 && as_uint && dim == 1 && slot == 0
-                    && ins.raw.as_slice() == [0xf05c1308, 0x00000301]
-                    && self.ex.stage == Stage::Pixel && self.ex.entry.as_deref() == Some("HWRasterizePS")
-                    && matches!(self.ex.resources.as_slice(), [resource] if
-                        (resource.res_type, resource.space, resource.lower, resource.upper) == (6, 0, 0, 0))
-                    && (packed_root::matches_program(&self.ex.isa, 104, 0x62a4894f274d7459)
-                        || packed_root::matches_program(&self.ex.isa, 120, 0xc974f220d28f72d8))
-                {
+                if ins.aux.mask == 3 && as_uint && dim == 1 && slot == 0 {
+                    let visibility = match (self.ex.stage, ins.raw.as_slice()) {
+                        (Stage::Pixel, [0xf05c1308, 0x00000301]) => {
+                            self.ex.entry.as_deref() == Some("HWRasterizePS")
+                                && matches!(self.ex.resources.as_slice(), [r] if
+                                    (r.res_type, r.space, r.lower, r.upper) == (6, 0, 0, 0))
+                                && (packed_root::matches_program(&self.ex.isa, 104, 0x62a4894f274d7459)
+                                    || packed_root::matches_program(&self.ex.isa, 120, 0xc974f220d28f72d8))
+                        }
+                        (Stage::Compute, [0xf05c1308, _]) => self.wide_visibility_uav,
+                        _ => false,
+                    };
+                    if !visibility {
+                        return Err("unknown two-word visibility atomic".into());
+                    }
                     self.wide_visibility_uav = true;
                     return packed_root::ps09_raster::emit_wide_image(self, ins, "uav0");
                 }
@@ -5720,7 +5770,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             let _ = writeln!(h, "SamplerComparisonState scmp{slot} : register(s{slot});");
         }
-        let device_fence = self.packed.as_ref().is_some_and(|p| !p.device_sync_before.is_empty() || !p.device_sync_barriers.is_empty())
+        let device_fence = self.persistent_queue || self.packed.as_ref().is_some_and(|p| !p.device_sync_before.is_empty() || !p.device_sync_barriers.is_empty())
             || (self.is_cs && self.insns.iter().any(|i| i.enc == Enc::Mubuf && matches!(i.op, 0x71 | 0x72)));
         let coherent = if device_fence { "globallycoherent " } else { "" };
         for (is_uav, slot) in &self.raw {
@@ -6044,8 +6094,7 @@ void main(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {{");
                 }
                 init.push_str("#endif\n");
             }
-            // PS entry ABI (observed): v0/v1 = perspective-centre barycentrics, then the
-            // fragment position x, y, z, 1/w in v2..v5 when the shader reads it.
+            // The native rasterizer packs enabled inputs into consecutive VGPRs.
             if let Some(plan) = &self.packed { plan.init_args(&mut init); }
             if let Some(mask) = ex.ps09_pixel_inputs {
                 // Bit 7 (line stipple) occupies v0 in both observed layouts.
@@ -6076,8 +6125,11 @@ void main(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {{");
                 if let Some(ei) = ex.input_sig.iter().position(|e| e.sysval == 1) {
                     let p = format!("i.i{ei}");
                     let exprs = [format!("{p}.x"), format!("{p}.y"), format!("{p}.z"), format!("1.0 / {p}.w")];
-                    for (k, expr) in exprs.iter().enumerate() {
-                        let v = format!("v{}", 2 + k);
+                    let positions = crate::meta::position_vgprs(&ex.fssm, ex.input_sig[ei].rw_mask)
+                        .unwrap_or([Some(2), Some(3), Some(4), Some(5)]);
+                    for (slot, expr) in positions.into_iter().zip(&exprs) {
+                        let Some(slot) = slot else { continue; };
+                        let v = format!("v{slot}");
                         if self.live.contains(&v) && !ancillary.as_ref().is_some_and(|(reg, _)| *reg == v) {
                             let _ = writeln!(init, "    {v} = asuint({expr});");
                         }

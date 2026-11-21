@@ -8,16 +8,20 @@ use std::fmt::Write as _;
 use std::fs::File;
 use std::io::Read;
 use std::sync::{LazyLock, Mutex, Once};
+use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL};
 use windows::Win32::Security::Cryptography::{BCRYPT_SHA256_ALG_HANDLE, BCryptHash};
+use windows::core::HRESULT;
 
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, PartialEq)]
-enum Stage {
+pub(super) enum Stage {
     Pixel,
     Vertex,
     Geometry,
     Compute,
+    Mesh,
+    Amplification,
 }
 
 impl Stage {
@@ -26,11 +30,15 @@ impl Stage {
         static VERTEX: Once = Once::new();
         static GEOMETRY: Once = Once::new();
         static COMPUTE: Once = Once::new();
+        static MESH: Once = Once::new();
+        static AMPLIFICATION: Once = Once::new();
         let (name, first_hit) = match self {
             Self::Pixel => ("pixel", &PIXEL),
             Self::Vertex => ("vertex", &VERTEX),
             Self::Geometry => ("geometry", &GEOMETRY),
             Self::Compute => ("compute", &COMPUTE),
+            Self::Mesh => ("mesh", &MESH),
+            Self::Amplification => ("amplification", &AMPLIFICATION),
         };
         static TRACE: LazyLock<bool> =
             LazyLock::new(|| std::env::var("TUXBOX_TRACE_SHADERS").as_deref() == Ok("1"));
@@ -103,6 +111,8 @@ fn shader_code(data: &[u8]) -> Option<(Stage, ShaderCode)> {
         1 => Stage::Vertex,
         2 => Stage::Geometry,
         5 => Stage::Compute,
+        13 => Stage::Mesh,
+        14 => Stage::Amplification,
         _ => return None,
     };
     if version & 0xf0 != 0x60 || word(dxil, 4)? * 4 != dxil.len() || dxil.get(8..12)? != b"DXIL" {
@@ -192,6 +202,22 @@ pub(super) fn prepared(shader: &[u8]) -> Option<Vec<u8>> {
     let (stage, ShaderCode::Xbox) = shader_code(shader)? else {
         return None;
     };
+    translate(shader, stage)
+}
+
+/// Console mesh stages always use a DXIL container. Resolve stripped programs
+/// before the host call and require portable replacements to match the stage.
+pub(super) fn mesh_stage(shader: &[u8], expected: Stage) -> Result<Option<Vec<u8>>, HRESULT> {
+    match shader_code(shader) {
+        Some((stage, ShaderCode::Portable)) if stage == expected => Ok(None),
+        Some((stage, ShaderCode::Xbox)) if stage == expected => {
+            translate(shader, stage).map(Some).ok_or(E_NOTIMPL)
+        }
+        _ => Err(E_INVALIDARG),
+    }
+}
+
+fn translate(shader: &[u8], stage: Stage) -> Option<Vec<u8>> {
     let source = source_digest(shader)?;
     let translation = read_portable("by_source", &source, stage)
         .or_else(|| compile::on_demand(shader, &source, stage));

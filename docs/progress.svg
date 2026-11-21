@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" role="img" font-family="'Terminess Nerd Font Mono', 'DejaVu Sans Mono', Consolas, monospace" aria-labelledby="map-title map-description" viewBox="0 0 1000 3337" width="1000" height="3337">
+<svg xmlns="http://www.w3.org/2000/svg" role="img" font-family="'Terminess Nerd Font Mono', 'DejaVu Sans Mono', Consolas, monospace" aria-labelledby="map-title map-description" viewBox="0 0 1000 3619" width="1000" height="3619">
   <title id="map-title">TuxBox runtime compatibility</title>
   <desc id="map-description">Current runtime capabilities, retail output, Xbox DLL coverage and shader preparation. A checked circle marks complete coverage, a half-filled circle partial coverage and an open ring incomplete coverage. Shader bars show frontend and preparation coverage. DLL bars show verified exports.</desc>
-  <rect x="0" y="0" width="1000" height="3337" fill="#0b0b0f" />
+  <rect x="0" y="0" width="1000" height="3619" fill="#0b0b0f" />
   <rect x="0" y="0" width="1000" height="48" fill="#090910" />
   <rect x="0" y="47" width="1000" height="1" fill="#272733" />
   <rect x="14" y="10" width="210" height="27" fill="#e2bc8c" />
@@ -77,8 +77,39 @@
     <text x="433" y="317" fill="#a0a0b1" font-size="15" text-anchor="end" font-weight="normal">Unverified</text>
   </g>
   <g transform="translate(14 553)">
+    <title>d3d12_xs Xbox interface methods</title>
+    <rect x="0" y="0" width="972" height="207" fill="#14141d" stroke="#272733" stroke-width="1" />
+    <rect x="1" y="1" width="970" height="32" fill="#0d0d15" />
+    <rect x="1" y="33" width="970" height="1" fill="#272733" />
+    <circle cx="16" cy="17" r="4.5" fill="#e74c3c" />
+    <circle cx="32" cy="17" r="4.5" fill="#f1c40f" />
+    <circle cx="48" cy="17" r="4.5" fill="#2ecc71" />
+    <text x="68" y="22" fill="#6fc7d4" font-size="14" text-anchor="start" font-weight="normal">d3d12_xs.dll / interface methods</text>
+    <text x="18" y="63" fill="#d7d7de" font-size="18" text-anchor="start" font-weight="bold">Checked slots in Frosty’s catalogued interfaces</text>
+    <text x="18" y="86" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">Build 1.20.1831.3754 · Counts show methods with TuxBox checks / identified methods in the sample.</text>
+    <text x="18" y="113" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Device</text>
+    <text x="297" y="113" fill="#6fc7d4" font-size="14" text-anchor="end" font-weight="normal">18/18</text>
+    <text x="336" y="113" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Device2</text>
+    <text x="615" y="113" fill="#6fc7d4" font-size="14" text-anchor="end" font-weight="normal">1/1</text>
+    <text x="654" y="113" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Device8</text>
+    <text x="933" y="113" fill="#a0a0b1" font-size="14" text-anchor="end" font-weight="normal">0/1</text>
+    <text x="18" y="136" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Graphics command list</text>
+    <text x="297" y="136" fill="#6fc7d4" font-size="14" text-anchor="end" font-weight="normal">7/7</text>
+    <text x="336" y="136" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">DMA command list</text>
+    <text x="615" y="136" fill="#6fc7d4" font-size="14" text-anchor="end" font-weight="normal">4/4</text>
+    <text x="654" y="136" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Command queue</text>
+    <text x="933" y="136" fill="#6fc7d4" font-size="14" text-anchor="end" font-weight="normal">2/2</text>
+    <text x="18" y="159" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Descriptor heap</text>
+    <text x="297" y="159" fill="#6fc7d4" font-size="14" text-anchor="end" font-weight="normal">1/1</text>
+    <text x="336" y="159" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">State object</text>
+    <text x="615" y="159" fill="#a0a0b1" font-size="14" text-anchor="end" font-weight="normal">0/1</text>
+    <text x="654" y="159" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">State object properties</text>
+    <text x="933" y="159" fill="#a0a0b1" font-size="14" text-anchor="end" font-weight="normal">0/1</text>
+    <text x="18" y="192" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">Compiled TuxBox handlers: 40 device · 46 graphics list · 13 DMA list · 15 queue</text>
+  </g>
+  <g transform="translate(14 772)">
     <title>Frosty shader coverage</title>
-    <rect x="0" y="0" width="972" height="432" fill="#14141d" stroke="#272733" stroke-width="1" />
+    <rect x="0" y="0" width="972" height="495" fill="#14141d" stroke="#272733" stroke-width="1" />
     <rect x="1" y="1" width="970" height="32" fill="#0d0d15" />
     <rect x="1" y="33" width="970" height="1" fill="#272733" />
     <circle cx="16" cy="17" r="4.5" fill="#e74c3c" />
@@ -86,7 +117,7 @@
     <circle cx="48" cy="17" r="4.5" fill="#2ecc71" />
     <text x="68" y="22" fill="#6fc7d4" font-size="14" text-anchor="start" font-weight="normal">~/evidence/matrix-awakens/shader-inventory.json</text>
     <text x="18" y="70" fill="#e2bc8c" font-size="25" text-anchor="start" font-weight="bold">Frosty shader coverage</text>
-    <text x="954" y="68" fill="#a0a0b1" font-size="14" text-anchor="end" font-weight="normal">43,407 shipped entries · 206 in profile · 7 linked variants</text>
+    <text x="954" y="68" fill="#a0a0b1" font-size="14" text-anchor="end" font-weight="normal">43,407 shipped entries · 210 in profile · 7 linked variants</text>
     <text x="18" y="97" fill="#a0a0b1" font-size="14" text-anchor="start" font-weight="normal">HLSL counts unique source programs the translator can read and emit as desktop shader code.</text>
     <text x="18" y="118" fill="#a0a0b1" font-size="14" text-anchor="start" font-weight="normal">Requests are distinct programs seen in captured title runs. A pipeline can request a shader before drawing.</text>
     <text x="18" y="151" fill="#6fc7d4" font-size="14" text-anchor="start" font-weight="normal">Stage</text>
@@ -101,16 +132,19 @@
     <rect x="299" y="172" width="98.0" height="7" fill="#2ecc71" />
     <text x="561" y="181" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">19,634 / 19,634</text>
     <rect x="722" y="172" width="94" height="7" fill="#272733" />
-    <rect x="722" y="172" width="32.38655462184874" height="7" fill="#e2bc8c" />
-    <text x="954" y="181" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">41 / 119</text>
+    <rect x="722" y="172" width="10.825842696629213" height="7" fill="#e2bc8c" />
+    <text x="954" y="181" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">41 / 356</text>
     <text x="694" y="181" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">41</text>
     <rect x="18" y="188" width="936" height="1" fill="#272733" />
     <text x="18" y="208" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Mesh</text>
     <text x="263" y="208" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">192</text>
     <rect x="299" y="199" width="98" height="7" fill="#272733" />
-    <text x="561" y="208" fill="#e74c3c" font-size="14" text-anchor="end" font-weight="normal">0 / 192</text>
-    <text x="954" y="208" fill="#a0a0b1" font-size="15" text-anchor="end" font-weight="normal">—</text>
-    <text x="694" y="208" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">0</text>
+    <rect x="299" y="199" width="98.0" height="7" fill="#2ecc71" />
+    <text x="561" y="208" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">192 / 192</text>
+    <rect x="722" y="199" width="94" height="7" fill="#272733" />
+    <rect x="722" y="199" width="94.0" height="7" fill="#2ecc71" />
+    <text x="954" y="208" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">1 / 1</text>
+    <text x="694" y="208" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">1</text>
     <rect x="18" y="215" width="936" height="1" fill="#272733" />
     <text x="18" y="235" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Pixel</text>
     <text x="263" y="235" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">12,351</text>
@@ -118,9 +152,9 @@
     <rect x="299" y="226" width="97.5847119224187" height="7" fill="#e2bc8c" />
     <text x="561" y="235" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">12,219 / 12,271</text>
     <rect x="722" y="226" width="94" height="7" fill="#272733" />
-    <rect x="722" y="226" width="47.262569832402235" height="7" fill="#e2bc8c" />
-    <text x="954" y="235" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">90 / 179</text>
-    <text x="694" y="235" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">91</text>
+    <rect x="722" y="226" width="13.708333333333334" height="7" fill="#e2bc8c" />
+    <text x="954" y="235" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">91 / 624</text>
+    <text x="694" y="235" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">92</text>
     <rect x="18" y="242" width="936" height="1" fill="#272733" />
     <text x="18" y="262" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Geometry</text>
     <text x="263" y="262" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">112</text>
@@ -135,12 +169,12 @@
     <text x="18" y="289" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Compute</text>
     <text x="263" y="289" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">3,242</text>
     <rect x="299" y="280" width="98" height="7" fill="#272733" />
-    <rect x="299" y="280" width="83.60160841323848" height="7" fill="#e2bc8c" />
-    <text x="561" y="289" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">2,758 / 3,233</text>
+    <rect x="299" y="280" width="83.84410763996289" height="7" fill="#e2bc8c" />
+    <text x="561" y="289" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">2,766 / 3,233</text>
     <rect x="722" y="280" width="94" height="7" fill="#272733" />
-    <rect x="722" y="280" width="51.795918367346935" height="7" fill="#e2bc8c" />
-    <text x="954" y="289" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">27 / 49</text>
-    <text x="694" y="289" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">72</text>
+    <rect x="722" y="280" width="39.45679012345679" height="7" fill="#e2bc8c" />
+    <text x="954" y="289" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">34 / 81</text>
+    <text x="694" y="289" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">74</text>
     <rect x="18" y="296" width="936" height="1" fill="#272733" />
     <text x="18" y="316" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Ray generation</text>
     <text x="263" y="316" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">289</text>
@@ -159,10 +193,13 @@
     <text x="561" y="370" fill="#a0a0b1" font-size="15" text-anchor="end" font-weight="normal">—</text>
     <text x="954" y="370" fill="#a0a0b1" font-size="15" text-anchor="end" font-weight="normal">—</text>
     <text x="694" y="370" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">0</text>
-    <text x="18" y="397" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Standalone DXIL passed for 349/349 tested programs among 349 distinct title requests.</text>
-    <text x="18" y="418" fill="#a0a0b1" font-size="14" text-anchor="start" font-weight="normal">Ray-tracing entries contain serialized state objects. Their translation has a separate path.</text>
+    <text x="18" y="397" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Standalone DXIL passed for 1063/1064 tested programs among 1064 distinct title requests.</text>
+    <text x="18" y="418" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Packaged mesh shaders with a GPU pipeline · NVIDIA 192/192 · Radeon 192/192</text>
+    <text x="18" y="439" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Nanite InstanceCull · 4/76 packaged variants passed GPU readback on both adapters</text>
+    <text x="18" y="460" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Nanite PersistentClusterCull · 4/32 pass DXIL validation · 4 pass GPU readback on both adapters</text>
+    <text x="18" y="481" fill="#a0a0b1" font-size="14" text-anchor="start" font-weight="normal">Ray-tracing entries contain serialized state objects. Their translation has a separate path.</text>
   </g>
-  <g transform="translate(14 997)">
+  <g transform="translate(14 1279)">
     <title>Xbox library coverage</title>
     <rect x="0" y="0" width="972" height="2294" fill="#14141d" stroke="#272733" stroke-width="1" />
     <rect x="1" y="1" width="970" height="32" fill="#0d0d15" />
@@ -191,17 +228,17 @@
     <rect x="18.0" y="148" width="936.0" height="1" fill="#272733" />
     <text x="18.0" y="173" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Graphics and memory</text>
     <g>
-      <title>d3d12_xs.dll · Partial · Verified TuxBox exports 46/54 (85.2%). TuxBox Rust device and command providers with desktop D3D12 root-signature serialization. Two Xbox device profiles, seven feature queries, GPU heaps, guest-backed read-only textures, queues, indirect compute, descriptor and query operations, and 32 identifiers. Frosty creates pipelines from 712-byte ID3D12Device2 streams and presents 3840 × 2160 frames. A fresh Proton prefix running the checkout-built providers displays the menu and video preview, opens Settings and enters the Wake Up sequence. GPU tests cover indexed draws, depth/stencil writes and NV12 plane copies. Frosty direct imports verified 6/6. Verified (D3D12XboxCreateDevice, IID_ID3D12Device, D3D12SerializeRootSignature, D3D12SerializeVersionedRootSignature, D3D12CreateDevice, D3D12XboxSetProcessDebugFlags).</title>
+      <title>d3d12_xs.dll · Partial · Verified TuxBox exports 47/54 (87%). TuxBox Rust device and command providers with desktop D3D12 root-signature serialization. Two Xbox device profiles, eight feature queries, GPU heaps, guest-backed textures, queues, indirect compute, direct and indirect mesh dispatch, descriptor and query operations, and 32 identifiers. Frosty creates 680-byte mesh pipelines and 712-byte graphics pipelines through ID3D12Device2 and presents 3840 × 2160 frames. A fresh Proton prefix running the checkout-built providers displays the menu and video preview, opens Settings and enters the Wake Up sequence. GPU tests cover indexed draws, depth/stencil writes, NV12 plane copies, and whole and regional copies into a tiled RGBA8 texture with guest-memory writeback and alias readback. Frosty direct imports verified 6/6. Verified (D3D12XboxCreateDevice, IID_ID3D12Device, D3D12SerializeRootSignature, D3D12SerializeVersionedRootSignature, D3D12CreateDevice, D3D12XboxSetProcessDebugFlags).</title>
       <g transform="translate(24.0 195)">
         <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
         <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
       <text x="38.0" y="200" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">d3d12_xs.dll *</text>
       <rect x="390.4" y="191" width="420.6" height="7" fill="#272733" />
-      <rect x="390.4" y="191" width="358.2889" height="7" fill="#6fc7d4" />
-      <text x="871.0" y="200" fill="#a0a0b1" font-size="13" text-anchor="end" font-weight="normal">46/54</text>
-      <text x="954.0" y="200" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">85.2%</text>
-      <text x="38.0" y="216" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">14/22 functions, 32/32 data</text>
+      <rect x="390.4" y="191" width="366.0778" height="7" fill="#6fc7d4" />
+      <text x="871.0" y="200" fill="#a0a0b1" font-size="13" text-anchor="end" font-weight="normal">47/54</text>
+      <text x="954.0" y="200" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">87%</text>
+      <text x="38.0" y="216" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">15/22 functions, 32/32 data</text>
     </g>
     <g>
       <title>dxcompiler_xs.dll · Partial · Verified TuxBox exports 2/4 (50%). TuxBox PE forwarder to desktop DXC. Both SDK factories create a desktop DXC utility object through the Xbox DLL. Tests check blob contents, lifetime and use of a caller-supplied allocator. Frosty direct imports verified 1/1. Verified (DxcCreateInstance).</title>
@@ -850,7 +887,7 @@
       <text x="954.0" y="2265" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
     </g>
   </g>
-  <g transform="translate(14 3303)">
+  <g transform="translate(14 3585)">
     <title>Guest regression checks</title>
     <text x="0" y="21" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Guest regression checks</text>
     <text x="972" y="21" fill="#a0a0b1" font-size="15" text-anchor="end" font-weight="normal">47 of 52 passed across 4 host configurations</text>

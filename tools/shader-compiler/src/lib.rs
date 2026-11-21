@@ -101,6 +101,8 @@ pub struct ShaderExtract {
     pub resources: Vec<meta::PsvResource>,
     /// Geometry-shader info from PSV0 (only meaningful for `Stage::Geometry`).
     pub gs_info: Option<meta::GsInfo>,
+    pub mesh_info: Option<meta::MeshInfo>,
+    pub primitive_sig: Vec<meta::SigElement>,
     pub root_sig: Option<meta::RootSig>,
 }
 
@@ -167,6 +169,10 @@ pub fn extract(dxbc: &[u8]) -> Result<ShaderExtract, String> {
         output_sig: chunk_body(b"OSG1").and_then(|b| meta::parse_signature(b).ok()).unwrap_or_default(),
         resources: chunk_body(b"PSV0").and_then(|b| meta::parse_psv0(b).ok()).unwrap_or_default(),
         gs_info: chunk_body(b"PSV0").and_then(meta::parse_psv0_gs),
+        mesh_info: chunk_body(b"PSV0").and_then(meta::parse_mesh_info),
+        primitive_sig: if stage == Stage::Mesh {
+            meta::parse_signature(chunk_body(b"PSG1").ok_or("mesh primitive signature missing")?)?
+        } else { Vec::new() },
         root_sig: chunk_body(b"RTS0").and_then(|b| meta::parse_rts0(b).ok()),
     })
 }

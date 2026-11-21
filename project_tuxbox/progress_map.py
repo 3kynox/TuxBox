@@ -5,6 +5,7 @@ from pathlib import Path
 from textwrap import wrap
 from xml.etree import ElementTree as ET
 
+from .d3d12_status import interface_inventory
 from .verify import homebrew_matrix
 
 
@@ -457,6 +458,54 @@ def shader_validation(data):
             f"among {len(checks)} distinct title requests.")
 
 
+def instance_cull_readbacks(evidence, archive, compiler):
+    retail = read_json(evidence / "matrix-awakens/instance-cull-retail.json")
+    if not retail or not archive or not compiler or retail["global_archive_sha256"] != archive:
+        return ""
+    family = set(retail["family"]["archive_entries"])
+    paired = []
+    for suffix, adapter in (("amd", "1002:13c0"), ("nvidia", "10de:2705")):
+        run = read_json(evidence / f"matrix-awakens/instance-cull-{suffix}.json")
+        if (run.get("adapter") != adapter or run.get("name") != "InstanceCull"
+                or run.get("compiler_sha256") != compiler or run.get("global_archive_sha256") != archive
+                or run.get("provider_sha256") != retail["d3d12_xs_sha256"]):
+            return ""
+        paired.append({(p["entry"], p["source_sha256"], p["dxil_sha256"]) for p in run["programs"]
+                       if p["entry"] in family and p["cases"]
+                       and all(c["checked_words"] > 0 and c["checked_texels"] > 0 for c in p["cases"].values())})
+    verified = paired[0] & paired[1]
+    # The historical trace identifies the retail pipeline by both bytecodes.
+    # A later compiler must still produce the same DXIL for this title request.
+    if (retail["entry"], retail["source_sha256"], retail["dxil_sha256"]) not in verified:
+        return ""
+    count = len({entry for entry, _, _ in verified})
+    return f"Nanite InstanceCull · {count}/{len(family)} packaged variants passed GPU readback on both adapters"
+
+
+def shader_checks(evidence, data):
+    notes = [validation] if (validation := shader_validation(data)) else []
+    archive = data.get("archives", {}).get("global", {}).get("member_sha256")
+    total = next((row["global"] for row in data["stages"] if row["stage"] == "Mesh"), 0)
+    results = []
+    for suffix, gpu in (("nvidia", "NVIDIA"), ("amd", "Radeon")):
+        run = read_json(evidence / f"matrix-awakens/nanite-mesh-{suffix}.json")
+        pipelines = run.get("mesh_pipelines", {})
+        if (total and pipelines and run.get("global_archive_sha256") == archive
+                and pipelines["compiler_sha256"] == data["compiler_sha256"]):
+            results.append(f"{gpu} {len(set(pipelines['archive_entries']))}/{total}")
+    if results:
+        notes.append("Packaged mesh shaders with a GPU pipeline · " + " · ".join(results))
+    if cull := instance_cull_readbacks(evidence, archive, data.get("compiler_sha256")):
+        notes.append(cull)
+    persistent = read_json(evidence / "matrix-awakens/persistent-cluster-retail.json")
+    if (persistent and persistent["global_archive_sha256"] == archive
+            and persistent["compiler_sha256"] == data["compiler_sha256"]):
+        family = persistent["family"]
+        notes.append(f"Nanite PersistentClusterCull · {len(family['dxil_validated'])}/{len(family['archive_entries'])} "
+                     f"pass DXIL validation · {len(family['gpu_verified_on_both'])} pass GPU readback on both adapters")
+    return notes
+
+
 def shader_table(evidence):
     data = read_json(evidence / "matrix-awakens/shader-inventory.json")
     if not data:
@@ -470,8 +519,7 @@ def shader_table(evidence):
         lines.append(f"{row['stage']:<16} {row['global'] + row['material']:>9,} {hlsl:>21} "
                      f"{row['profiled_dxbc']:>11} {observed:>23}")
     lines.append(f"The preparation profile includes {data['linked_variants']} additional linked variants.")
-    if validation := shader_validation(data):
-        lines.append(validation)
+    lines.extend(shader_checks(evidence, data))
     for material in data.get("menu_materials", ()):
         requested = [f"{row['stage']} #{row['entry']}" for row in material["members"] if row["observed_in"]]
         matches = ", ".join(requested) or "none in these traces"
@@ -487,12 +535,13 @@ def shader_table(evidence):
     return "\n".join(lines)
 
 
-def draw_shaders(svg, y, data):
+def draw_shaders(svg, y, evidence):
+    data = read_json(evidence / "matrix-awakens/shader-inventory.json")
     if not data:
         return y
     rows = data["stages"]
-    validation = shader_validation(data)
-    height = 195 + 27 * len(rows) + (21 if validation else 0)
+    checks = shader_checks(evidence, data)
+    height = 195 + 27 * len(rows) + 21 * len(checks)
     group = section(svg, PAD, y, "Frosty shader coverage")
     window(group, INNER, height, "~/evidence/matrix-awakens/shader-inventory.json")
     text(group, 18, 70, "Frosty shader coverage", 25, AMBER, bold=True)
@@ -521,10 +570,33 @@ def draw_shaders(svg, y, data):
                 rect(group, x, top+8, width*value/total, 7, GREEN if value == total else AMBER)
             text(group, right, top+17, f"{value:,} / {total:,}", 14, TEXT if value else RED, anchor="end")
         text(group, 694, top+17, f"{row['profiled_dxbc']:,}", 15, TEXT, anchor="end")
-    if validation:
-        text(group, 18, height-35, validation, 14, TEXT)
+    for line, check in enumerate(checks):
+        text(group, 18, height-14-21*(len(checks)-line), check, 14, TEXT)
     text(group, 18, height-14, "Ray-tracing entries contain serialized state objects. Their translation has a separate path.", 14, MUTED)
     return y+height+GAP
+
+
+def draw_d3d12(svg, y, data):
+    if not data:
+        return y
+    rows = data["interfaces"]
+    height = 138 + 23 * ((len(rows) + 2) // 3)
+    group = section(svg, PAD, y, "d3d12_xs Xbox interface methods")
+    window(group, INNER, height, "d3d12_xs.dll / interface methods")
+    text(group, 18, 63, "Checked slots in Frosty’s catalogued interfaces", 18, TEXT, bold=True)
+    text(group, 18, 86, f"Build {data['package_version']} · Counts show methods with TuxBox checks / identified methods in the sample.", 13, MUTED)
+    for i, entry in enumerate(rows):
+        col, row = i % 3, i // 3
+        x, baseline = 18 + col * 318, 113 + 23 * row
+        slots = entry["slots"]
+        checked = sum(bool(slot.get("checks")) for slot in slots)
+        text(group, x, baseline, entry["name"], 14, TEXT)
+        text(group, x + 279, baseline, f"{checked}/{len(slots)}", 14, AQUA if checked else MUTED, anchor="end")
+    bindings = data["registered_slots"]
+    text(group, 18, height - 15, f"Compiled TuxBox handlers: {len(bindings['Device'])} device · "
+         f"{len(bindings['Graphics command list'])} graphics list · {len(bindings['DMA command list'])} DMA list · "
+         f"{len(bindings['Command queue'])} queue", 13, MUTED)
+    return y + height + GAP
 
 
 def draw_verification(svg, y, evidence):
@@ -557,7 +629,8 @@ def render_map(evidence):
     brand.set("letter-spacing", "4")
     text(svg, WIDTH-PAD, 30, "Xbox Series X|S", 16, AQUA, anchor="end")
     y = draw_runtime(svg, 48+GAP, evidence)
-    y = draw_shaders(svg, y, read_json(evidence / "matrix-awakens/shader-inventory.json"))
+    y = draw_d3d12(svg, y, interface_inventory(evidence))
+    y = draw_shaders(svg, y, evidence)
     data = read_json(evidence / "library-status.json")
     y = draw_libraries(svg, y, data, frosty_import_coverage(evidence, data.get("libraries", [])))
     height = draw_verification(svg, y, evidence) + 6

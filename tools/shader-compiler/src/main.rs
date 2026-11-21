@@ -54,10 +54,13 @@ fn run() -> Result<(), String> {
             Stage::Vertex => "vs",
             Stage::Geometry => "gs",
             Stage::Compute => "cs",
+            Stage::Mesh => "ms",
             _ => return Err("unsupported DXC stage".into()),
         };
         let model = if translated.required_wave_size.is_some() || translated.typed_int64_atomics {
             "6_6"
+        } else if shader.stage == Stage::Mesh {
+            "6_5"
         } else if translated.needs_barycentrics {
             "6_1"
         } else {

@@ -106,10 +106,10 @@ pub(super) fn recording_error(reason: std::fmt::Arguments<'_>) {
 
 // Multiple pipelines can fail on worker threads during the same frame. Keep a
 // bounded list of distinct failures so the exact shader pair can be prepared.
-pub(crate) fn pipeline_stages(stages: &[Option<(String, bool)>; 6], status: i32, linked: bool) {
+pub(crate) fn pipeline_stages(stages: &[Option<(String, bool)>; 8], status: i32, linked: bool) {
     use std::sync::Mutex;
     static REPORTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    let names = ["VS", "PS", "DS", "HS", "GS", "CS"];
+    let names = ["VS", "PS", "DS", "HS", "GS", "CS", "AS", "MS"];
     let shaders: Vec<_> = names
         .iter()
         .zip(stages)
