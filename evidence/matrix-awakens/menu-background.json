@@ -1,7 +1,7 @@
 {
   "title_sha256": "ae39eb1e92fa806df189c768c1478a53dfb54a2cc9769a9f2301ca7921e3eb04",
   "verified": true,
-  "observation": "Animated green code behind the Frosty main menu",
+  "observation": "Animated green columns and trails behind the retail Frosty menu",
   "live_trial": {
     "conditions": "Retail Frosty in an isolated Proton prefix on a private X display. TuxBox prepared the shaders and supplied its release D3D12 provider. RenderDoc was disabled. The package used the reduced-effects profile.",
     "provider": "1793301796 experimental-11.0-20261027b-x86_64",
@@ -264,5 +264,49 @@
       "reused": 212
     },
     "method": "Verified the SHA-256 of every staged binary against providers.json. Compared every by_source, by_vs_ps and by_gs_ps output byte for byte by SHA-256 between the isolated build and the desktop run."
+  },
+  "film_grain_trial": {
+    "shader": "global/3499 (FilmGrainReduceCS)",
+    "shader_evidence": "film-grain-reduction.json",
+    "run": "TuxBox, retail Frosty, reduced-effects profile with original film grain enabled, Proton Experimental and RTX 4070 Ti SUPER on Linux. Captured the live X11 game window (1232 × 693) scaled to 960 × 540 using area resampling.",
+    "ini_sha256": "d2cf0b898ab42e7d349e388a505c2efe004cdab803ba097ba894343c029210ed",
+    "source_video_sha256": "95bc6d7bcd5c04ba139c45fee74f28380324c156ff03bfbe5601a985df2bc276",
+    "frames": 96,
+    "seconds": 8.0,
+    "sample_fps": 12,
+    "regions": "Four live_trial rectangles covering background outside the preview and controls. Threshold: green > 40, 10 × green > 13 × red and 25 × green > 24 × blue.",
+    "region_pixels": 154300,
+    "green_pixels_min": 0,
+    "green_pixels_median": 13768.0,
+    "green_pixels_max": 17642,
+    "frames_with_green": 94,
+    "distinct_background_images": 96,
+    "consecutive_pairs_with_changed_green_mask": 95,
+    "animation": "menu-code-trails.webp",
+    "animation_sha256": "fd47579c02006b62bb081415d6a78cdc942f9ac76bee6c140242603052359406",
+    "animation_size": [
+      800,
+      450
+    ],
+    "animation_seconds": 8.0,
+    "final_build_check": {
+      "launcher": "tools/run_frosty.sh in a private X11 display, standard independent stage, sound disabled",
+      "prepared_graphics_provider_sha256": "c53f1973290caa837a0026664ff94347447db79e5b38d3768222429c90543110",
+      "shader_compiler_sha256": "5de45bdf3f8078f0863cedd1d642a8c397991d829cd87f9b9b64ce8d96f6e40e",
+      "frames": [
+        {
+          "png_sha256": "2eb2a87ff073fd577661abac50c3e69f594a93098ac3faae05d01bce7dd46191",
+          "green_pixels": 15150
+        },
+        {
+          "png_sha256": "d5af3ab649f77babb7d59f2fcb69b83e120962d82b919d28e01988ae2a92d0cd",
+          "green_pixels": 15871
+        },
+        {
+          "png_sha256": "6edf223aec1acb5c3936405e66883a4f2f67e5275a40a1bc921c5aefee4f3e93",
+          "green_pixels": 16506
+        }
+      ]
+    }
   }
 }

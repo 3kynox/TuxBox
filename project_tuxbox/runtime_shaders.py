@@ -1,10 +1,12 @@
-"""Compile unprofiled Xbox shaders requested by a running Proton game."""
+"""Compile Xbox shaders and link raster stages requested by a running Proton game."""
 from contextlib import contextmanager
 import hashlib
 import os
 from pathlib import Path
 import re
 import shutil
+import stat
+import struct
 import subprocess
 from tempfile import TemporaryDirectory
 from threading import Event, Thread
@@ -13,53 +15,103 @@ from .inspect import digest
 from .shader_prep import SOURCE_CACHE, compiler_tools, has_dxil_container, run_tool
 
 
+MAX_SHADER_BYTES = 64 << 20
+SOURCE_KEY = r"[a-f0-9]{64}"
+LINK_KEY = "_".join([SOURCE_KEY] * 3)
+
+
+def verified_input(path, expected):
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW), "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f"{path.name} is not a regular shader file")
+        if info.st_size > MAX_SHADER_BYTES:
+            raise ValueError("shader exceeds the 64 MiB runtime limit")
+        data = stream.read(MAX_SHADER_BYTES + 1)
+    if len(data) > MAX_SHADER_BYTES or hashlib.sha256(data).hexdigest() != expected:
+        raise ValueError(f"{path.name} contents differ from the requested digest")
+    return data
+
+
+def portable_pixel(data):
+    if not has_dxil_container(data):
+        return False
+    count, = struct.unpack_from("<I", data, 28)
+    stages = [struct.unpack_from("<H", data, offset + 10)[0]
+              for offset, in struct.iter_unpack("<I", memoryview(data)[32:32 + count * 4])
+              if data[offset:offset + 4] == b"DXIL"]
+    return stages == [0]  # D3D12_SHVER_PIXEL_SHADER
+
+
 def compile_request(source, key, tools, cache, session):
-    # Hash the exact snapshot sent to the compiler. Other GPU workers can
-    # submit the same source while the first request is in flight.
-    if source.stat().st_size > 64 << 20:
-        raise ValueError("shader exceeds the 64 MiB runtime limit")
-    with source.open("rb") as stream:
-        data = stream.read((64 << 20) + 1)
-    if len(data) > 64 << 20:
-        raise ValueError("oversized shader request")
-    if hashlib.sha256(data).hexdigest() != key:
-        raise ValueError("shader contents differ from the requested digest")
-    dest = cache / (key + ".cso")
+    linked = source.suffix == ".link"
     xshader, dxc, dxv = tools
     with TemporaryDirectory(dir=cache) as tmp:
         work = Path(tmp)
-        checksum = dest.with_suffix(".sha256")
-        if (dest.is_file() and dest.stat().st_size <= 64 << 20 and checksum.is_file()
-                and checksum.stat().st_size == 64 and checksum.read_bytes() == digest(dest).encode("ascii")):
-            compiled = False
+        flags = []
+        if linked:
+            if not stat.S_ISDIR(source.lstat().st_mode):
+                raise ValueError("linked shader request must be a directory")
+            producer_hash, pixel_hash, dxil_hash = key.split("_")
+            cooked = work / "producer.dxbc"
+            cooked.write_bytes(verified_input(source / "producer.dxbc", producer_hash))
+            pixel = work / "pixel.dxbc"
+            pixel.write_bytes(verified_input(source / "pixel.dxbc", pixel_hash))
+            pixel_code = verified_input(source / "pixel.cso", dxil_hash)
+            if not portable_pixel(pixel_code):
+                raise ValueError("pixel order requires a portable pixel DXIL container")
+            order = work / "pixel.cso"
+            order.write_bytes(pixel_code)
+            flags = ["--link-pixel", pixel, "--pixel-order", order]
         else:
-            cooked, hlsl, output, profile = (work / name for name in ("input.dxbc", "shader.hlsl", "out.cso", "profile"))
-            cooked.write_bytes(data)
-            run_tool([xshader, cooked, "--hlsl-out", hlsl, "--profile-out", profile], timeout=30)
-            target = profile.read_text()
-            if not re.fullmatch(r"(cs|ps|vs|gs)_6_[016]", target):
-                raise ValueError(f"unsupported compiler profile {target!r}")
-            run_tool([dxc, "-T", target, "-E", "main", "-Fo", output, hlsl], timeout=50)
-            run_tool([dxv, output], timeout=10)
-            if not has_dxil_container(output.read_bytes()):
-                raise ValueError("compiler returned an invalid DXIL container")
-            stamp = work / "sha256"
-            stamp.write_text(digest(output))
-            os.replace(output, dest)
-            os.replace(stamp, checksum)
-            compiled = True
-        # The persistent cache is shared by launches; every running title gets
-        # its own reply directory and only sees a completely written file.
+            cooked = work / "input.dxbc"
+            cooked.write_bytes(verified_input(source, key))
+
+        dest = cache / (key + ".cso")
+        checksum = dest.with_suffix(".sha256")
         reply = work / "reply"
-        shutil.copyfile(dest, reply)
+        if (dest.is_file() and dest.stat().st_size <= MAX_SHADER_BYTES
+                and checksum.is_file() and checksum.stat().st_size == 64):
+            # Check the exact bytes that will be returned even if a concurrent
+            # launch replaces the persistent entry while this worker is reading.
+            shutil.copyfile(dest, reply)
+            if checksum.read_bytes() == digest(reply).encode("ascii"):
+                os.replace(reply, session / dest.name)
+                return False
+
+        hlsl, output, profile = (work / name for name in ("shader.hlsl", "out.cso", "profile"))
+        if linked:
+            run_tool([dxv, order], timeout=10)
+        run_tool([xshader, cooked, *flags, "--hlsl-out", hlsl, "--profile-out", profile], timeout=30)
+        target = profile.read_text()
+        stages = "vs|gs" if linked else "cs|ps|vs|gs"
+        if not re.fullmatch(rf"({stages})_6_[016]", target):
+            raise ValueError(f"unsupported compiler profile {target!r}")
+        run_tool([dxc, "-T", target, "-E", "main", "-Fo", output, hlsl], timeout=50)
+        run_tool([dxv, output], timeout=10)
+        if not has_dxil_container(output.read_bytes()):
+            raise ValueError("compiler returned an invalid DXIL container")
+        stamp = work / "sha256"
+        stamp.write_text(digest(output))
+        shutil.copyfile(output, reply)
+        os.replace(output, dest)
+        os.replace(stamp, checksum)
         os.replace(reply, session / dest.name)
-    return compiled
+    return True
+
+
+def remove_request(path):
+    if not path.is_symlink() and path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
 
 
 def serve(session, stop, report):
     tools = cache = None
     while not stop.is_set():
-        requests = list((session / "requests").glob("*.dxbc"))
+        directory = session / "requests"
+        requests = [*directory.glob("*.dxbc"), *directory.glob("*.link")]
         if not requests:
             stop.wait(0.05)
             continue
@@ -67,8 +119,8 @@ def serve(session, stop, report):
             if stop.is_set():
                 return
             key = source.stem
-            if not re.fullmatch("[a-f0-9]{64}", key):
-                source.unlink(missing_ok=True)
+            if not re.fullmatch(LINK_KEY if source.suffix == ".link" else SOURCE_KEY, key):
+                remove_request(source)
                 continue
             try:
                 if tools is None:
@@ -87,7 +139,7 @@ def serve(session, stop, report):
                 (session / (key + ".failed")).touch()
                 report(f"Xbox shader {key}: {exc}")
             finally:
-                source.unlink(missing_ok=True)
+                remove_request(source)
 
 
 @contextmanager

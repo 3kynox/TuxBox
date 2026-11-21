@@ -9,6 +9,7 @@ name = "tuxbox_d3d12"
 crate-type = ["staticlib"]
 
 [dependencies]
+tuxbox-dxbc = { path = "../dxbc" }
 tuxbox-xg-layout = { path = "../xg-layout" }
 windows = { workspace = true, features = [
     "Win32_Foundation",

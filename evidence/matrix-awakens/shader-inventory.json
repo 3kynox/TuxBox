@@ -11,26 +11,26 @@
       "entries": 38831
     }
   },
-  "compiler_sha256": "907a3dd60c71b8a5766f0419a78839a905368ba2193487132da4eb589d61963a",
+  "compiler_sha256": "5de45bdf3f8078f0863cedd1d642a8c397991d829cd87f9b9b64ce8d96f6e40e",
   "desktop_tools": {
     "dxc_sha256": "3dfc856b76291ffc7e45e21fd37ab80e85b34101de76a03253df6608785c92a0",
     "dxv_sha256": "33778294d67143d9f81526f4759c66d5a67a95ea9873448ef3595650a643cbd3"
   },
   "traces": {
-    "Reduced-effects menu": {
-      "log_sha256": "b710f6a2a003000bcbbfed8acb3d2c966bbe473720ac155fe398ab6d22c58e85",
-      "trace": "per-source",
-      "unique_sources": 118
+    "Startup through Wake Up": {
+      "log_sha256": "6be7079154014dea5643f02cc7cab4c5e646598f12dec99e0a674593e3672cd3",
+      "trace": "first hits and misses",
+      "unique_sources": 5
     },
     "Bloom menu": {
       "log_sha256": "41f6cbf535153db3947b332f55c6acfac03a8bc32efc3c1e4087ab4998f39e23",
       "trace": "per-source",
       "unique_sources": 131
     },
-    "Startup through Wake Up": {
-      "log_sha256": "6be7079154014dea5643f02cc7cab4c5e646598f12dec99e0a674593e3672cd3",
-      "trace": "first hits and misses",
-      "unique_sources": 5
+    "Reduced-effects menu": {
+      "log_sha256": "b710f6a2a003000bcbbfed8acb3d2c966bbe473720ac155fe398ab6d22c58e85",
+      "trace": "per-source",
+      "unique_sources": 118
     },
     "Verified menu": {
       "log_sha256": "f339bf63806cf23dd9c78da30c5306a525ce362b1438a1f5c402b53bd91c5de9",
@@ -41,6 +41,16 @@
       "log_sha256": "7ab4803ac77e9d505eb1d0ef38d5b38d8db91c0d1deff16f1bc85137036e3115",
       "trace": "per-source",
       "unique_sources": 118
+    },
+    "Start Chase after film-grain fix": {
+      "log_sha256": "77ea30520a15ebd4022f89d88c582c3d4120519a74050bf9774cdaf514ac6bab",
+      "trace": "per-source",
+      "unique_sources": 128
+    },
+    "Start Chase with runtime shader linking": {
+      "log_sha256": "2ee8b55d481310f5c71cb632baa66e512d89ab0f05afa4bb6fca188ea40d5c24",
+      "trace": "per-source",
+      "unique_sources": 336
     }
   },
   "stages": [
@@ -50,9 +60,9 @@
       "material": 21031,
       "unique_dxbc": 19634,
       "profiled_dxbc": 41,
-      "hlsl_emitted": 19597,
-      "requested_dxbc": 29,
-      "requested_in_profile": 29
+      "hlsl_emitted": 19634,
+      "requested_dxbc": 119,
+      "requested_in_profile": 41
     },
     {
       "stage": "Mesh",
@@ -71,8 +81,8 @@
       "unique_dxbc": 12271,
       "profiled_dxbc": 91,
       "hlsl_emitted": 12219,
-      "requested_dxbc": 65,
-      "requested_in_profile": 65
+      "requested_dxbc": 179,
+      "requested_in_profile": 90
     },
     {
       "stage": "Geometry",
@@ -81,8 +91,8 @@
       "unique_dxbc": 112,
       "profiled_dxbc": 2,
       "hlsl_emitted": 112,
-      "requested_dxbc": 1,
-      "requested_in_profile": 1
+      "requested_dxbc": 2,
+      "requested_in_profile": 2
     },
     {
       "stage": "Compute",
@@ -90,9 +100,9 @@
       "material": 734,
       "unique_dxbc": 3233,
       "profiled_dxbc": 72,
-      "hlsl_emitted": 2664,
-      "requested_dxbc": 37,
-      "requested_in_profile": 23
+      "hlsl_emitted": 2758,
+      "requested_dxbc": 49,
+      "requested_in_profile": 27
     },
     {
       "stage": "Ray generation",
@@ -125,7 +135,7 @@
       "requested_in_profile": 0
     }
   ],
-  "linked_variants": 6,
+  "linked_variants": 7,
   "menu_materials": [
     {
       "asset": "Frosty/Content/Effect/UI/MatrixCodeUI/Materials/M_MatrixCode_UI.uasset",
@@ -142,6 +152,8 @@
             "Bloom menu",
             "Desktop menu",
             "Reduced-effects menu",
+            "Start Chase after film-grain fix",
+            "Start Chase with runtime shader linking",
             "Verified menu"
           ]
         },
@@ -179,6 +191,8 @@
             "Bloom menu",
             "Desktop menu",
             "Reduced-effects menu",
+            "Start Chase after film-grain fix",
+            "Start Chase with runtime shader linking",
             "Verified menu"
           ]
         },
@@ -215,6 +229,8 @@
             "Bloom menu",
             "Desktop menu",
             "Reduced-effects menu",
+            "Start Chase after film-grain fix",
+            "Start Chase with runtime shader linking",
             "Verified menu"
           ]
         },
@@ -244,6 +260,8 @@
             "Bloom menu",
             "Desktop menu",
             "Reduced-effects menu",
+            "Start Chase after film-grain fix",
+            "Start Chase with runtime shader linking",
             "Verified menu"
           ]
         },
@@ -273,6 +291,8 @@
             "Bloom menu",
             "Desktop menu",
             "Reduced-effects menu",
+            "Start Chase after film-grain fix",
+            "Start Chase with runtime shader linking",
             "Verified menu"
           ]
         },
@@ -298,15 +318,45 @@
   "requested": [
     {
       "stage": "Compute",
+      "source_sha256": "05196dd1db0a0262c8b8aff709f91457c847488aeeef97d635b9229a23f0e470",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/3355"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
       "source_sha256": "0c9ee329b71780a29dbdd8f608f43bc303a9da0b478bde3c70bfb6c176574c25",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
         "global/3906"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "14e8765062ebc9e18afe853301006f51b028e59273118c50a06ac91ffec41aee",
+      "observed_in": [
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/3358"
       ],
       "in_preparation_profile": true,
       "hlsl_emitted": true,
@@ -320,6 +370,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -363,6 +415,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -380,6 +434,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -410,6 +466,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -427,10 +485,27 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
         "global/369"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "47eb7fd9cd1412ab21ec37769fdceedf04c4de76cbdf27699b95c3f1bd672b3c",
+      "observed_in": [
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/973"
       ],
       "in_preparation_profile": true,
       "hlsl_emitted": true,
@@ -444,6 +519,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -469,11 +546,39 @@
     },
     {
       "stage": "Compute",
+      "source_sha256": "54a7865f7b2c42e4a2aa2f4a3111b0cc762260bf7858c638a12f78f97cecf342",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/2700"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "5761f86b29b095b2fc7919e8ceb7ca963ece56656d07366cbf59109d69177b22",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/3337"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
       "source_sha256": "57966dfcc6f37f7ada1338f226766593475242039f41f87b398092d707d3fa3e",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Startup through Wake Up",
         "Verified menu"
       ],
@@ -492,6 +597,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -510,6 +617,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -524,10 +633,25 @@
       "stage": "Compute",
       "source_sha256": "5ee232804ac9d010bf948657122f63097901943c9542d1c05fab9ceb1e20387b",
       "observed_in": [
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Startup through Wake Up"
       ],
       "archive_entries": [
         "global/1062"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "63f5e453f856d78ef84df4839fea274ad83d777d361e0cae56c2f1f3f86b4fca",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/2523"
       ],
       "in_preparation_profile": false,
       "hlsl_emitted": true,
@@ -540,6 +664,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -557,6 +683,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -587,6 +715,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -604,6 +734,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -621,6 +753,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -651,6 +785,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -668,6 +804,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -685,6 +823,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -702,6 +842,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -719,6 +861,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -750,6 +894,19 @@
       ],
       "archive_entries": [
         "global/2210"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "be701499f5de2494e3239353f890d8e36b4c53cb848cdc56daadf8c6e9e441e5",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/1779"
       ],
       "in_preparation_profile": false,
       "hlsl_emitted": true,
@@ -796,11 +953,40 @@
     },
     {
       "stage": "Compute",
+      "source_sha256": "d18c721812a952fa8d5fb031b10312b006a34b5a84365b8e0a9908bc7b5b7f6a",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/2499"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "d6ce4f1984b92b4106c31b052c92e1e5dccd60943a06da7a250fcb132c28d12b",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/2227"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
       "source_sha256": "d7f20d1948c7417d74f298a17eea6d78b64b05280cf9a8234b65faa19ecbe640",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -813,11 +999,26 @@
     },
     {
       "stage": "Compute",
+      "source_sha256": "e03f889311575865d6a5b499945ad20352d9d4c5ce8fb6ef888adb97bf00a370",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/3338"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
       "source_sha256": "e1665d19d2ff94d1295b7a78490bfc93a48039eb2aa87fe2e73e75fee8a86c75",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -843,6 +1044,20 @@
     },
     {
       "stage": "Compute",
+      "source_sha256": "e68bc41f0cbe9621f3e2d96c9fddcd17db27bb166c25e8fd4cc8b0a9111c132e",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/3876"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
       "source_sha256": "ebc3b7140bca183fcd7cbda19f4d20448f9be0356cf60c62acd37c7e24857d16",
       "observed_in": [
         "Bloom menu"
@@ -856,11 +1071,26 @@
     },
     {
       "stage": "Compute",
+      "source_sha256": "efd4339aa8cafcd6601fe6844b8fd09c188ae047216e239acf370c146ef7141d",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/2498"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
       "source_sha256": "fe7adadd002e364935ab1cbb7155a49f595cff93eb9a36303a880dccc50fb927",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -879,6 +1109,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Startup through Wake Up",
         "Verified menu"
       ],
@@ -891,12 +1123,41 @@
       "profile": "gs_6_0"
     },
     {
+      "stage": "Geometry",
+      "source_sha256": "76970fef92d44db39467a546c95109ce491f78221595b0fb5a373b67917b7d0c",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/2575"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "gs_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "0052a1c15df6255979aca9cc209408d7a6c9c441b9fa92d7f851e33c2d151556",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/18733"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
       "stage": "Pixel",
       "source_sha256": "03cb85e5d235348c9a2c69b9ada38f39bef2706bb7cfb071a0316bd799f739e8",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -909,11 +1170,26 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "041e4c1323fd86445354ecc87a3d67a694f0b44202eba6567213dbd4b6a9b030",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31687"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "05196c45243b54f3c24cb1b3efa053fb9c314e4611c1d79ab3c1edc2cd689962",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -926,11 +1202,65 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "076d1d346717a3aa97985ff38c03dd380f9e983585e055123c1edabe7e08c5ad",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/4268"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "07702c7e1a5672624b9db23a562b6311b56fcd416dc8074654cdab959d8f5d81",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/35552"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "08ee3924ef896833723c989a173e93525f7ccb92145e9a44de57d356b053670c",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/35534"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "09383b5b70451e37f04f929e268b26b69a6c9d29e15333769c3466c5002f9bd4",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/4164"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "09edf95b7ffd639fa094c8dd77d3ba5640c55c8df0518bcab67e7720ebe3e8fd",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -948,6 +1278,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -965,6 +1297,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -982,6 +1316,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Startup through Wake Up",
         "Verified menu"
       ],
@@ -995,11 +1331,26 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "0f3abde0a4d93326b3dea5c74844903084f10c08fe72888eb3df690006c3f4b2",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/35647"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "1393a2a537f0cd70b2bf4c8523f1c58b25d2ddac733fc989d11c2a63f0fd6897",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1012,15 +1363,110 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "14a35d9f95b5244861f1b3f335c3e78d4f0477c0b2f6d7eea0963ffd2aa2f4c1",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31706"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "16dd4e0af810ca97d1b1ea70329d4c0bcafc677269bf89b03c068b27e5a61ce3",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/33240"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "17bcd23e81b3f2e1916d4849f596823224cf6a2e9622c3f15059255c797d0f29",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/33192"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "186dfd012776189050a075817e735813dc0d208176e2f087c444586c9bc8fa9a",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
         "material/25040"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "1983deb4dc732c27e8933cff0eb8931e7acfb8cd507bbfc53e1eae23f643727f",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/15259"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "1a22cbdb33d692b19e4f5c2b6839282ebf6aba4bfede85f0dd65f2abcd4f9fca",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37304"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "1b2f4a75cbd9c7e9b33977dee95329e35b380a4fee703270647e3863267dde22",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/4128"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "1d97535157b971b03c2de5de5e3617ac5a30e3cc5ce6d07a4e002f58cf9af0df",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/2573"
       ],
       "in_preparation_profile": true,
       "hlsl_emitted": true,
@@ -1034,6 +1480,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1051,6 +1499,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1063,11 +1513,118 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "2273cbff37e1e09b1c7fe2936ba4b1a1b0972e57aabb04c0d0f5b483c7c4c29d",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/35724"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "246744f5e70bdde0338b4e47c7fd2c21acc07e930299763b6b972ba2812518da",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/33234"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "27fdefb41982cc8a01c6bab3db821a2469f9b1ee928e1fc964068ed41960583a",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/35407"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "2835ee598ab9310fff4fb997d496b9c65d5eda449a5229242b98e621efbec680",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/2572"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "2973a44b28719cb1a75f58ff4b87a51ea5afb3ab71e05ed922bdb11f40f28be2",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31807"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "2be4c3eb71f61cb6473e80bec17cf9aabe274eda07b71a15a6d3c74cd61d7e1c",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37348"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "318ed8d8d2a2aef0cc62e88da5b83c9ac10ca3f78b8857299811f056be6b0ec7",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37426"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "33b802b1b485fe6f87666adef80127520a232a6bb48caecffdda717f1bec5f23",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/35501"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "33cee61a7152691b24886ebc24d1171cbad4590adbbf7c52c11fc7da81ef21c4",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1080,11 +1637,39 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "353c721df654ddc2a71dac17e8325cc0d54b587b06749c205122ac4eb505ce5e",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37359"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "36b487c56063af9c49604d35f01e625ff69dd98876a70bccf809336dcb034e0a",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/3587"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "378ae09da94460648c803a12e222681f4aa758f2f2b81fe634f5fe9e1897e4a6",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1102,6 +1687,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1114,15 +1701,98 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "3873e583764a926c1055149b0e0901ff0478b87e457d346181e9f81bfc9296cc",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/5374"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "3ca45139817062553ab3bb8cb6f429211dc7c944458312cce8b64c872959f33d",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31750"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "3dde514142f5d0d3b9a171fc9f0338be342966dff08adcaca3cc24cd175cf3bf",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/36345"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "3e87c85d2aba34e2dc22d279aea590710d6c73110ebb83138d26aaa3fbabb5f0",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/38249"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "3f258e8299e0a04447e31d971cbb5c2bea8402a117380cfb585867fa7678532a",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/542"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "3f54352fc24aeb880667eef418bab165502dc5b488aa7dbf584e8c25cbabb990",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
         "material/1959"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "3f56d50360fc5b8f547fea079ad33a104a3e36a7b94b50e81fbfd71799f9cd8a",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/2597"
       ],
       "in_preparation_profile": true,
       "hlsl_emitted": true,
@@ -1136,6 +1806,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1153,6 +1825,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1170,6 +1844,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1182,11 +1858,26 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "43337666bb5b94f2aa4a9d4feee2fcaecd670f70dfc7d0ce31dafceb691bb9eb",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31698"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "436c6b9c4c6b7625f2e3f8f69e3f85b4c8f4bb1b416686e31bf1d2e29f4c116f",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1199,11 +1890,26 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "44494b477f5cb89196c16517b200c2b0decd4c1250b3c2af518dc32ae4d778a5",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/3583"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "4584d686c1a12cf2f009892d84be19c59454f0d97ef87eeb75f1461d4a291596",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1221,6 +1927,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1238,6 +1946,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1255,6 +1965,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1267,11 +1979,26 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "46701a08f4d49cfa1331a273d63009b7e8127c2ebee22d48e71c07654060a220",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31964"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "480e692c9b508088253ca4ae4f591bc9f055f9f175f13c9b0dec3bc2fe653edb",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1284,11 +2011,108 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "481914860d594d1882d1d13f82893a2330d3d920d66b41199088880673630ca4",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/5340"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "495afd34eaec605536690260243e6e98c3f5fd81abf63ae54784ec4eead653bf",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37306"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "4f84767d5360f5715f6e96faa98871c9a07eca698eb1ffb432b163d09d2dbdf6",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31767"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "528b3fc35837dcc6536a01ee0200a579e5066fc9b4f0d8367cd7c3e8dd4b844c",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/36318"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "52f9bc2302a44af0eba852d4d12455e76b1b7ad6ec01c4167eb1b6b098ccac2b",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/32044"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "550a17dceee971ee2432a5eb362df51c111686651f517448efa7438744892694",
+      "observed_in": [
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/3606"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "554edb6efa21c2f093ff37ebf3f10cc5c54119edd93934f6cb86bc1af2827a47",
+      "observed_in": [
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/700"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "555bd233a3ac7772ad83644b38a925075bd384656628e8f175962bfef6f93b5d",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1306,6 +2130,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1318,11 +2144,26 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "5854ef9cdb41524b71e5c228a74cc09f66cd582a804de7870372ab6784dc216d",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31821"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "58cea28d160f22f0263cf665d3444c093260d19ee503b94ed88fa50122ee7989",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1335,11 +2176,26 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "5ae147d0ab7339b90420acb55fb216c3383e458751a3fecab61ed97f8a3f1954",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/33310"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "5c89c4a1821fd930725c023754808b78879f186a651747e6492fdfe217f127f4",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1357,6 +2213,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1369,11 +2227,53 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "5f3dc7e29d699f8836dace25f998a2e423935af1d5d098d07da99a9158673932",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31823"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "605e872a18b5cc8f4f583f861aa664ecb20b9cae8ebce29e36410394aa956ea7",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/2598"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "6104222bedfb5ec0eb1eb868c95994022c672d4810601981348b9a91fd1f6cc6",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31818"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "61860fa935b89bd5057821a52722a237aa77f07717630bde161dd50fc505267e",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1386,11 +2286,40 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "62713fbe440614deb4241070cc1220e99645d50d6f64f316c83796469592fd3f",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31682"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "644e387b6fbb271ec88079459e5dea0fe2239ccbca6b5678b85d1b922b9a2141",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/684"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "6474fdf58beb7747c89002c1cdbe46139e04ecf8190222587763bbffb93ff70b",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1403,11 +2332,28 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "65aad0f8081beeab3fb758bc8413bf7bf5939e3a9145e7466e73728e2ccda496",
+      "observed_in": [
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/35914"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "66582875b1cc75c3429a6fa0efcf878affb89d5ca52fbc33e68aa0690e018c99",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1425,6 +2371,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1437,11 +2385,39 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "6997c31ac80a1155da3e0ce79fc95f53417c8c36987d01a3c8e21a4f7af16100",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/548"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "6bb1d767f0488b68102d8cf268d5ffb919842cec248eb80cdd9369304faee649",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/35554"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "6c8f888d1cd2d19e51fbcde77966f9d95e5ca6c277d47b3b447b57ecbc39662a",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1454,11 +2430,26 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "6d73e291bed545032242e36941538943716859d2301509985f6c9fa7dbeee6a5",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37452"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "6dc0207cffec0a9ee2fd6c029a5211319cd0b38516d98758769fd65f205ae24e",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1471,11 +2462,26 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "6e2941857c037ac2be00995d2aa2036edf0cc544fe58fc182f516bc036a6b7df",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/35595"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "6f8cf40f571ca49c025ba185629acd3b1db121bb72244acd458e66fa2ed67e7c",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1493,6 +2499,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1505,11 +2513,66 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "72ee8891aedd92663c48ee505e556d3d63f3c83e743cd68b3db2b6b4aaa35ab3",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/16717",
+        "material/37106"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "7465f73a4b0fa22dd9d4d30012f6e8a15b755b1e5e930a23619fe52d6166addd",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31831"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "77196b94f5dcc87a7976fcd36443fe5f9a293c4d4318d83dc251e2ddc0ad778c",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37439"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "78a6d7dcc96e90a589763fe03b9741be8c7f1afe85539d5927bf3555ca984adb",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37202"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "794bf442ef32ca4fc53573ff1749b7021011c3614a5a13be8c3b3f6914076d86",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1522,11 +2585,118 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "7a45fb076919eda3565eaacddf8ac34f8f533bc699841d6be2ad0c7967f60917",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/1776"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "7b8a5bf336a8b0b54787ad55c13606dc0be778ea3d580c8b5d2be03c56f16435",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31686"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "7d24ded3f500e877458b9b3d14f444f3515d698263aebaaa86d1d0350fd0d185",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37419"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "7fbf1743566cdcba2ef4ca485315fe4374904efd84c40ba7176069a1f7749c14",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37557"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "8199cb3a8144d33c3fc56f173890bed9f31f3f6d8c942433b7c63f7a14dc0e59",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37188"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "86012e86b3887c55e46805724b31c3102578ec71a3fe03ffe65bc3562210f542",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37208"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "86a16f5965cea3838ef6f7aa7e0b09f2a3525435ba3c087fdbe608f77044e46e",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31774"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "875e288f0dc3072fa57ca35e68de7ee864b02c5b87389919b55b8a8ba0e40f62",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/35856"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "898ff2f215addced17fbbd1e46324eaf9177c7a7b3b578758e9c717dc87ac9bf",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1539,11 +2709,52 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "8c081d7a69d7967176a6a268e8bcb0326cccebda8289646962b2afa47f9a0404",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/15245"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "8fcd21c3571f76f01da45a42948a21e6ad005c7091af5b104f71c094086b64d4",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/2214"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "8ff175a4ea453227abb1ca8e4ab8133022350d932653f00b11235bc39f0dbf3c",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37302"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "940b254ca2c07e927e796952be6e8caab01f7e2a9c8cff961b4c036f6eb74976",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1556,11 +2767,40 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "957a6e4166ed92902deaf942587ba0964c4d8fbc9c79cf17b4cf6a9be867821b",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37347"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "96fbf535d010fd038bd60b04e6d67d4e32ef22d0e8d3b81cc95fd17b33a600d9",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/35495"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "980313e9d96a0f363c41005ec40848ff2ee950c5848f9b3a30f00b0c7641acfa",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1573,11 +2813,53 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "9a630ff5a27984e7c09e0c4f19f3396ce7ed937a9e673fd63ba3128e8a23fdc6",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/36147"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "9f70c359c4c63ec3c8ab75d64f4d4249e7894a6f957d82dd715bfccf25c796ad",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37237"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "a2840e771a3d0db94619b1057e71fa917528900ae272f07f550846bc369d26b2",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37358"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "a59f0704de8672dc2693ae12a76b29c1c64c5fe5e64e1d4d6e01cec46c429f4c",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1595,6 +2877,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1607,11 +2891,106 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "a9092cd30baa1fd5f08b944c01bc754ac496ede7eb06452d899a8f22d90a279f",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/4169"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "aa96fcc729b69c001faecb1b46004827c9c5bce532ccfc09ac26d870739129e4",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/946"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "aafad073e97ea91f3c0c9ff70d67b9d6e0d7384c7abab5f8c1bb4b2bbe0379e0",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37506"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "ab9929c1f9159cf8acc7beacd381632693562fab327ccb5b4160b5025c785c8a",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/33221"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "ad2631c667b5ff0050820dd8837d289735123c2db974dc6689fb5fb277977f34",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/3586"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "b09fe4ad89bc221318efb7e3b19e6cacf8f27ee3fecd1a9d6c7b6746640a375f",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/30679"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "b0e6a8a77386c27ebc561ed73d618764718c02534c4ce2424b48b225bcf02b2a",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/4654"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "b25fb0d6556e17c29e577456c132d295dcc09346d7c9833777b4b6a12d48c3c6",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1629,6 +3008,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1641,11 +3022,52 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "b303c5dfd45d7ac228fb71e1ef1b312ac70cecb80d1711b0d274d05ae7358278",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/2422"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "b39ca0e46198ea74c41571e8b08390c4230fee8799e7652d4c0641e17b37f9d2",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/972"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "b3c6ef8a08f1e1e885a17ff6006e97578d50118ba153a811e7f53842a0c5c826",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/5406"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "b5c0e7b6e0328f06f321d61a95b4d3185dbb1a84c69f26958204311a6d84f8bc",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1658,11 +3080,53 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "b670a66d2109078eb2e8ca323257fbd25de4b5d74bcc77a7a010ee279c82fd57",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/32008"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "b6cf7f4f7b73958225c71dbdd9d215c2910cd48990f1b6ba71f441436c230a68",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31709"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "b78a6e8a4fd68f8083c9e936abca20109dcf1c4429c6e98d9632b0f715ca0989",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/170"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "b811e3ebb7870c0b5837091717706b3af9855f72b77ec653a5407a21170d44dc",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1676,11 +3140,93 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "b9017929607c437d45eb6b440dfba76c1d12b6c367bc42009e9bfa4b7dc192c6",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31775"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "ba7f8a3c638417f8366829d1c1b6c89acfacb383a78663fb01054dca1e1f50e3",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/38223"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "bb823e8c9eb58fb3767894baac690ddb02e88f837a9c7785854be85cfc75364a",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/4720"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "bb96d35a7b89df395e6667ac0253e865b8b383db42d02dba5ba8b0eab5383fe3",
+      "observed_in": [
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/4196"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "be1ab10553edd39289d32b017a6656c06502c1b05aa9760f70cf97a60be0d4da",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/35743"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "bf047ca9514ebd8d9804ac51563be0e230c10f1811cc763364e6b5d42790c28f",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/3535"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "bf851dbaac9b5fdefdbf6fe01ed5b58e3a6e78a6fb1d3177249d9425f691ba9f",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1698,6 +3244,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1710,11 +3258,40 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "c1116e1122dd5de78e12006f9249549a79824027e69d9b87894d3cb577db5f11",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37212"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "c2498e05e2ad1bfbc8140ff5f880a48967ae2ea2a820cd3c9876439f7c19e7e3",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/36317"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "c3785d227cfea6e2556882c59efb1340a3e8222fd9968fe36a4bbaa7b2850e73",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1732,6 +3309,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1749,6 +3328,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1761,11 +3342,26 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "c579b788cf736360207d1d819580ccb4e27cae4232af79f7022f10a56341511e",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31770"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "c7d2894d573fa0f68481d4525a90218aeb232ec51467e17b8cff25f1f73b0e86",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1778,11 +3374,26 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "c8055449a5e06bbbd3255bb2d98453d070d73ecd762754b49efa1b775134ed24",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/194"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "c9a1a1012b9bf3cac8f0cf7ecc9a30f5d3e53aa128dd1b6a262661c1fac9b770",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1800,6 +3411,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1812,11 +3425,41 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "cc87d287fa3adacff94e6056313ba418fa8cd1e7d21a8fe3116567830eb6a10d",
+      "observed_in": [
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/1268"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "cd155363e5efd717c95043a6486690437f65baec696090b451196d4f1d3490ca",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37197"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "cfc56b9198c243b207b63228930ef275fcd2ce4220f8a91bb848199ee3c4a1da",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1834,6 +3477,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1846,11 +3491,26 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "d7106c3dbf96b00e284a71118eacc05696614a5628cf945db9472ec5847bc3a5",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37180"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "dba77272c0759b672fea3651c15f0f1a88f5a2ac9bac97a882c8baa3702315e4",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1868,6 +3528,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1880,11 +3542,52 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "dbe784032f0e7b3aaeeb01f805dd801f356ac35a7774816eab94dd7346512c79",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/5353"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "de07cbbe782c26a2dde733883f93dcde5567a20bb8604902640d47fb3cfaba7a",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/5381"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "de2db91a96728a44502596bc1ede5b252f76acee49bf544c6ec550133268a7e7",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/6154"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "df212b4f9989e25ef6a02d4dbb1dcf866a3586d7c4440ac246c294eb3b1b7148",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1897,11 +3600,26 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "df952d506c5cb69ac8e5b0771d2fcd8a5cade97febd167bff6f4b24feb969222",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37396"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "e003301b28ba2279408d514c7ab827498ac03dede4bba6653e87e01142f09be5",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1914,11 +3632,39 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "e36c1f910e211b8fc17de099c102386e924537e46ab09701d04a16ed3d378b0d",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/33328"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "e438596db8bebd7ebced1e4a37fb5c608c9661f73ce24cd20e3ec7811deb1c54",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/35643"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "e54a417897c986336b9eef4f7248b4a456b04f31167a7b7459811df02e98e0e3",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1936,6 +3682,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1948,11 +3696,27 @@
     },
     {
       "stage": "Pixel",
+      "source_sha256": "ebdeab8e2f56c82146164afffd72b58422357469c51c489ee20b09c4552a74ec",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/17389"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
       "source_sha256": "ebfabb54fe45c769034a6e6d60bc3e9cb2c4e8d7ec950a29080d3f75ef5e4dd4",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1970,6 +3734,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -1987,10 +3753,133 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
         "global/1033"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "f09cf3e07c3c1d850d42bff3a7c03adae7e366ef515c60317395d6b3752004ae",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/33289"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "f1ae7080051a7c70748e21fbd7791e98435d14fc0f7bffd69354ded7351519b4",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37387"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "f273b04156a17f2295d2fd2fa040cbfb3f7abc5feab23fa4caa315d628cec2b6",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37423"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "f34481cd99f9488a4c9e58d4e7e762cb351528ee97585e4b6fc1308a34ae3c52",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37406"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "f457d6bdca953e7229541f02a0f89968036217ec45fb87fe2c91e1a2c269c53b",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/32016"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "f7f00818f1c134d9fb7d899c5d44c3850bbe1b3b628a578a50dbe3d15fff5181",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37565"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "f8a14574b77c6455944784aa1084c3fc625f7683c8ed5b4788de6027ce68680e",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/4141"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "fe54ca7e84e144ead622a916e696ba71d5a9bd201abf42cb5921cdf4f4263d57",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/3855"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "fe5b5c33d8fedc31470323ea0d3cab6b97c6ab3191d70829b12e6e68f6ef3263",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37222"
       ],
       "in_preparation_profile": true,
       "hlsl_emitted": true,
@@ -2004,6 +3893,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2016,11 +3907,39 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "051791ba964e5a6cdc6c3e04085d61cfab7affda0d3b024fa4820446d82c1eb0",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31722"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "07d7e5eef15012a92cf7a216ef00a4542bcda8f01c85b95ddc8182040d61d83b",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31672"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "0a363e21d0be113572ae6b5836bbbd2d9622403ea8e16b50e3f51eae5928247b",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2033,11 +3952,70 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "0b90c19e121811302636d8f9f5c40361379cf8527889cd6666343e005b63cb23",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/592"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "0def6b2e1621b495d8fd02a20f6bad8c5e0f7eb692bb819ced20671a76fa096f",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/567"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "0e5313e366a289063b2c8096f7aa8141a53150fae46f557c696eb0b5e132689a",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31759"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "1aae3684e46c8e038bb5ac3ed0518ef4d47201bbbf185752bdfd2ce1ac8fa776",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/4770",
+        "material/34161",
+        "material/37098",
+        "material/37947"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "1df591af1347edfe047b5569db7db44df8162a8193c427bb42a5f4a958dfd64a",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2050,11 +4028,27 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "20165a47b6dd7cf4d98ede9d5ea566c654d93b16b5f5f99f5d1a62e4cf71d733",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/5375",
+        "material/5444"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "2071c8d1544f03373e9e05049d462ca3019ab8fa0c7ad9a7347b89ecdc36fe79",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2067,11 +4061,39 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "2212ab46c3d85feeb5bd3241ada08513af67de597915e46af65e45bf50585242",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/18686"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "24c7605191604624685a90e7de00461ffb6ebd2969bbcc4bfe922358a2e1e3b6",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/804"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "2567c7e73444c884deefc8f81fd6b9d7e468c2957441d5f92680b613b24f56c4",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2084,11 +4106,40 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "265d825c93e17243000ef0576910296426e31513f781e22ad7af3ec2fc679bc8",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/34176",
+        "material/35716"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "267a98dc552123e7f42a48027a02f9cb6edea2622ab10071376a4c44e3e3b786",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37294"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "2c15f29c2ad02a4216ce96ab626d14ec9b626aaacb3e5b906f06d1a66743a62b",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2101,11 +4152,96 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "2f0f2e3b07dd7d42e62ade5a40f503a2932cc5858ef6e317d0e112ba470cbefd",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/4775",
+        "material/34067",
+        "material/36970",
+        "material/37901"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "2f985644f6e417db5680a19691a4603d1f0c06f0631238e351772a5e03491e58",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/32096",
+        "material/35396"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "31104b24b826e2b9cb95bf9731f9142fe435db5fc39339fc6528363689fb4fbc",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/1006"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "3575ba39ed19057989fef72653eb68c002cec9299e35813b7007dae81b14b592",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/4186"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "368253ae6b8d588e443c5ead43211da6bc98426426a2fa282e9c20d81643bbae",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/922"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "3ba8d542a7204016d1c5f8408b95d2a96b9d5c3a372473425ffea0bba58caa23",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37297"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "3c34d41ce3572589a10844ec483c7e1de79970f1a20fb4d957d492c0f39ab092",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2123,6 +4259,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2141,10 +4279,160 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
         "material/675"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "3fb248187ac4e27908de6b8a6d2a9b827030e886a460401e8f8ec8bc66a976a5",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/6150"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "3fee77502310e269997a32f1c7e6d05474735ebde6edf3a3704686d0a7be713a",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/4803",
+        "material/34081",
+        "material/37079",
+        "material/37959"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "41c70f684456a25eeaa20f48de15ec4b5b299c8379c5be76c14bbccdc2c96173",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31760"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "423386d10f8107296124396b17091c831e811fa91c713ae52e25660bc02fc9ff",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/35795"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "43251a2ef90f546652ca5a015a8211cf2847b7f615626faabbb467b868e33303",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/166"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "43439e7b91f82d355f2887ec28c6e31b541c87e7f6032921db8dad7e7442aaaa",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/35591"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "44738786239c3d4a6be26a7b6581b5360e019eafac0dd2083eecd1470c3d2de7",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/4208"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "467b2d4e6cbd096134a36e39a97df3dce7c4ada65e63c82a0483ac40b3965b3d",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/2343"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "4915ecfb65b8c4036c1de41d6940eed90c1444c1bb3bcadb135c41e83b97a816",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/4333"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "491efc543d94525ca52985eb8ab760b992c9555831ee0e286a05f8d970d00250",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/16727"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "4952ebb81b8868e66c39f8f1323501d9c9affec2f54fb6fcec21472933b46035",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/6113"
       ],
       "in_preparation_profile": true,
       "hlsl_emitted": true,
@@ -2158,6 +4446,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2170,11 +4460,53 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "503d3f8b9da949924524e0cc7960df347a6ca2d33455b72ce594620a3166b5ee",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/198"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "508631c0bb642d6cc9f921e704abbdb92b8b56dffe57d45f9da34de733e8cec3",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/6177"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "523d892458800ed3ceb0c1f659c339cda9f197bc3524d299a085784fc6ecba36",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/1127"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "54dac3a1f96f8b2aafe9e906f59936dca7ae0d45529262db80859c62f6b2dd1b",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2187,11 +4519,26 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "55cb975809e622e7e9f317e62376848c1484ea8ac495cd83a19c4ba54305adc1",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/13"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "55f202b0466ffd84710c548d909681b2f6e906501f57fbaa5709c88d82683401",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2204,11 +4551,211 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "56bd3d773e60cc25bc054e2045880a4e2e14bbeca37041476db84f2e64fffc8a",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/6184"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "58c7a93d7105cc18b2e51be750e81cb0d7ffbd89ba8f978d164b3acd6fb24c8c",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/6156"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "5b84fbd079f0af54040cc16111ed11257b8ce9d181d44471afdb8a6513135c12",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37298"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "5bb521c1acc6410f3e03526dad657723d8830dac1f5caa4b57f7ecc3ee8e055b",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/6169"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "5e432fc701516f1164c7ef3f1ce7ade5adc106e91c5f64c4845f44bf4b9709fe",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31944"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "621f5cf6d8f96040338866019929ed67a130fe9b61618b9d0d4b799909cdd4ad",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/5397",
+        "material/5410"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "647a0fd42ec321b6ceadb545920375054e5ca2c73c490ec1913c8c195318f717",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/33389"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "6483f7d01efac4780857475f1e6f5e3f6483128390f82ac83943f2c31c742094",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/6112"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "656e0145a2c59e8803fb552b18f932d5e99bf83dd0e4598d1a128fba278b892f",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/33251"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "663bb7eb2e15268a428375a828485cb86f653f92e2f43e220f8edd05cbd87c5e",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/2740"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "6ba5ff42d47584911f2de70229781b945e76738b108ea3602d3f45895d3f0916",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31640"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "6f9c162c9a544bb80b561ded51ad353ca53bcaea0d2c85a94c1693e42eff2773",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/35837"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "7231038c1fc4d5f19c5fc7d35855c729d2ff1a5c6150387d38f8e5564625ce16",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/34184",
+        "material/35740"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "76da655edf1d2d1a61d851e760ad96cdcf8ec85eed5ad5a0ba98386f255535b2",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37609"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "778dccc39efd12e674c340b138c2077f3b4f82b29a92f73154e5fb0e03319caa",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37519"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "7d09c3f5f7b068ef4edd02ea464e5a6bcad9f792b34d4bc1cce740aa9c5aa95e",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2221,15 +4768,57 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "7dc6bf02f53bca940cb03b397a6c9b98d4c870cb0033464265160e1cb8bbd2e4",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31751"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "7e50c632aeae9cf9b42f0bbb32e274e60933d07bd9b5b9f126b4719d66968112",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37517"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "7f468cb72ae5613ff9bc1e68240389e1df5d7e105e56ef838ef3b4aa54ac2287",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
         "material/25001"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "80ff1c42858adb451585c95c1375216cd831424d7029fbd633963d682f7f2bc6",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/1017"
       ],
       "in_preparation_profile": true,
       "hlsl_emitted": true,
@@ -2243,6 +4832,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2255,11 +4846,66 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "855a736f4c192f316a03cd641e6fc8b7c600b32564b7c7be285bcb9433b66a03",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37265"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "885f7717589cff15acd714d345b3aef1a934aa27fece7f9ca58439657b9ea15a",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/4341"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "8b9d0216251cba42dabe9fbe49c8797399d947fcb7cc4635e9e13ea652adc754",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/565"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "8de38264a7b12eecc19a900c459b2e8a4f3de2ba63d945faee42a13e606c2eff",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/34324",
+        "material/35734"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "8ebb680749cdb4f2029b9024d403b56d5d13c7ae12feb55e6f7b35121b0a2a9c",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2277,10 +4923,27 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
         "material/2517"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "94f33190a79e479225ef7488fe99b7e988116ea27e22664accf5b9170c384901",
+      "observed_in": [
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/2649"
       ],
       "in_preparation_profile": true,
       "hlsl_emitted": true,
@@ -2294,6 +4957,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2306,11 +4971,27 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "9e261ce4bddd4996dcc7db6802b1e78f9b5303b33ffe159f3b50831f0bc44b7f",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/32160",
+        "material/35434"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "9eb99abe417bdac249de42852aeaf09e0d8d13fa394173e8082d93ea9f4ec3eb",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2323,11 +5004,26 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "a22356bd2909d7b162858ac9e51c108b03873f6247676c3fffad5353ff75cc24",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/1140"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "a3b9680ebb893cd7b8cc230f74b2caaa769670e8407e658678d325e3a3de7b8e",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2345,6 +5041,8 @@
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Startup through Wake Up",
         "Verified menu"
       ],
@@ -2358,11 +5056,55 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "a9e447ede1384ad2b365a738938fe9559bc1b01df0d4cf98f1a66fa1ef640f3a",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/4937",
+        "material/33972",
+        "material/37732",
+        "material/38136"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "ac1e4e85f3b4fd947a7e5506b2e5b16da11e85355d6fdef7c52d1e7d435fd9b7",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/37479"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "ac8320fbfb0d77060c59297c3136da2eb12431c1561e48bddcfbe5e1541ffda1",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/6168"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "ad7c782808619b6bda283dd194b2c3dad374680337a726ed8816947877d1ea99",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2375,11 +5117,149 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "adc47e859afa8404122176313abc33dad66ab68f58b9912c271e6acc022cb6c4",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/929"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "b0884e802ac8727c6a796cfcb5db0a5e1b2fe2d6be4a492c8562737caf63c71e",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/18"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "b16bc16bd99e22eea93c993ba6241f027570c9acad3775a86df0e156791a82c0",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/4234"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "b1d8495550c7188e0578774b9a0a6d4fe1edffafc626f98b9381b98f5fe8fa4f",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/2458"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "b45e753e960ba89bf6041b3ea326413b2580fb9ae66da4542ae5709e305f8873",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/5400",
+        "material/5437"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "b49157aa26036bb464391e30bb27629cd6392b1f48351953fcb6227962058581",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/35558"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "ba47aa89011ea50a03ec143db02dbb96151f78d43c473d2e3fffeddfae8261bc",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/4904",
+        "material/33913",
+        "material/37693",
+        "material/38097"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "bb751396a2a91f21bab21f49c4d2bc4085224ff3874c039303ee81c5e5abbdb3",
+      "observed_in": [
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "global/3515"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "bc048adf04c358084485150c37e042e39dcf2244a5730f4d76795de3e7fbbb50",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/177"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "bf5fdb97c4d6c5a8e0ec9d9f788e3517cc59a5fa0917da4ec9f4db6ec4f25b12",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/581"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "bfaddd82aa9b671fea6f10bcffdd283d50c5aa8e87f8745bcada62cbb3b01110",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2392,11 +5272,134 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "bfee6e102ab504ca659652189db6ad1d4e0790971745c3919dc2111076ef35cd",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31788"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "c1b03224606fee12ebdf5b7a2b0a55a8a6c885859f776643c01be098e13693c7",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/6129"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "c277f9eb91c654b20666ec64a4e98a1705521e0b6e72bd2812c00e89217e07c0",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/1011"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "c31904739338d7124730689ca456611a59af6fbc4650a2cdcb08fd23b1a77714",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/33280"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "c56f37e5e15937bedbe07862a4fdb40d7b2a0968360835ebe475a3ae5999d40c",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/33367"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "d02a784b49e4c31c8e53f7f5aa83bec9b292b69faf4fd9d1f3f2a043b631ffaa",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/34199",
+        "material/35669"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "d12deaa9f783584494880c0ed179d4f0aa3d999cb3aeddadea2a28fe8f494703",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/5322"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "d3bed2a7efbe0fb4c18c31e43ae013e39f9e2309e2d251f9c584a5e479b09750",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31738"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "d48925f454a2d08a96044e06d267792a7d144bd51e4f0e0d1be9945a61ec84cb",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/34334",
+        "material/35632"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "d5217748fe737c966f5253f22d65be8e7fc2dc83e7607fa3a622cef121d59099",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2409,11 +5412,26 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "d7836127a3c1c63b4a21ded7c065830bed7dc13f58839eb01bb66253dd26db54",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/33249"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "dc11c8e0853a2aebe69fde68acb68c4d185b5723edbd0ef138e9caaacfed39b0",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2426,11 +5444,39 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "dc66dd81e1580ca1a0d68eecdb870a78de3cbf5f68baf6edc996227e9b5ece36",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/33321"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "e0769da1ae5c740850e6b5b8f1b9c286368fd499659f46fab53802b8cf172b63",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31773"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "e1a4282159cf2592d5b283e9e790d3c8668f13d31cb9013585f9cd887b8ebeb4",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2443,11 +5489,27 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "e7be933f7f7b1352aabe3c4bea88f8bccf87127dcccfcf601202153abc2036e2",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/34326",
+        "material/35680"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "e7f7fed9881e6173963402dbfb09eb0e40c82d49baa9f8c3af819c3822577337",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2460,11 +5522,26 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "ea04920cee6765445b0801f97fc66d741d3d141b09b3389dec78ffab7609e260",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/35538"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "eaa1b28a6a892b8db8fa45017d0bac422e8a50bb5f8167a28874286116fc59d1",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2477,11 +5554,55 @@
     },
     {
       "stage": "Vertex",
+      "source_sha256": "ed814559946aacd28052c3a0936d73c430a869f56b0e687cda647c974e354150",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/31727"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "ee2d79d61177dba37cf7c45076ff01a9491a3c1c3ab21950d4be459f6d1e9b06",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/32178",
+        "material/35424"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "ef27cbd3d8b7ce4366f1ffa5512fc57c3c270444117d56db756ab9ff462f3c80",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/4941",
+        "material/33966",
+        "material/37827"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
       "source_sha256": "f098dbdd214359e69414b6e0b52e2ec13f7b31ae4fe2e6d562d1d84ccbfc6103",
       "observed_in": [
         "Bloom menu",
         "Desktop menu",
         "Reduced-effects menu",
+        "Start Chase after film-grain fix",
+        "Start Chase with runtime shader linking",
         "Verified menu"
       ],
       "archive_entries": [
@@ -2491,6 +5612,47 @@
       "hlsl_emitted": true,
       "standalone_dxil_validated": true,
       "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "f16c511b4731bd72f0b0160909a125f2b6cc94be4e6da1193d071890961d3773",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/6139"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "f24ac6e5e375afa7a4fb3452be82092817146ea79ce932d8c3d47a25c3e23abb",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/5404",
+        "material/5459"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "fcffb62c143516cd42f2d151d71147c222f590576d88993edb9bdf07ef2d1e01",
+      "observed_in": [
+        "Start Chase with runtime shader linking"
+      ],
+      "archive_entries": [
+        "material/34295",
+        "material/35779"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
     }
   ]
 }

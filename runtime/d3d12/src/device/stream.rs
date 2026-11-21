@@ -115,7 +115,8 @@ unsafe fn create(
                     };
                     fields[(tag - 1) as usize] = Some(ptr::from_mut(shader));
                     let compiled = shader_cache::prepared(code);
-                    original[(tag - 1) as usize] = Some((code, compiled.is_some()));
+                    original[(tag - 1) as usize] =
+                        Some((code, compiled.as_ref().map(|_| stages.len())));
                     if let Some(compiled) = compiled {
                         shader.pShaderBytecode = compiled.as_ptr().cast();
                         shader.BytecodeLength = compiled.len();
@@ -158,7 +159,7 @@ unsafe fn create(
     // only matters when the desktop driver rejects the ordinary stage pair.
     let hashes = original.map(|stage| {
         stage.and_then(|(code, prepared)| {
-            shader_cache::source_digest(code).map(|hash| (hash, prepared))
+            shader_cache::source_digest(code).map(|hash| (hash, prepared.is_some()))
         })
     });
     // Pixel inputs come from the last active raster stage. Geometry outputs
@@ -168,11 +169,28 @@ unsafe fn create(
     if direct
         && let (Some(field), Some((source, _)), Some((pixel, _))) =
             (fields[producer], &hashes[producer], &hashes[1])
-        && let Some(linked) = if producer == 4 {
+        && let Some(linked) = (if producer == 4 {
             shader_cache::linked_geometry(source, pixel)
         } else {
             shader_cache::linked_vertex(source, pixel)
-        }
+        })
+        .or_else(|| {
+            if status != E_INVALIDARG {
+                return None;
+            }
+            let (producer_code, Some(i)) = original[producer]? else {
+                return None;
+            };
+            let (pixel_code, Some(j)) = original[1]? else {
+                return None;
+            };
+            shader_cache::link_on_demand(
+                (source, producer_code),
+                (pixel, pixel_code),
+                &stages[i],
+                &stages[j],
+            )
+        })
     {
         // Use this producer only for this exact consumer. It retains the
         // semantics of the original raster producer with a compatible output signature.

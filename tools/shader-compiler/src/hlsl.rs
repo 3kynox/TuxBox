@@ -22,8 +22,10 @@ use std::fmt::Write as _;
 mod compare;
 mod exec_group;
 mod hair_cluster;
+mod int16;
 mod particle_sort;
 mod lds_tile;
+mod lds_order;
 mod ps09_classify;
 mod subsurface_setup;
 mod packed_root;
@@ -2379,6 +2381,12 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         }
 
         let insns = self.insns.clone();
+        let group_size = compute_group(self.ex).into_iter().fold(1u32, u32::saturating_mul);
+        let lds_waits = if self.is_cs && back.is_empty() && (2..=64).contains(&group_size) {
+            lds_order::exchange_waits(&insns)
+        } else {
+            BTreeSet::new()
+        };
         let mut open = false;
         let mut cur: Vec<usize> = vec![];
         for (i, ins) in insns.iter().enumerate() {
@@ -2434,6 +2442,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             for o in ins.src.iter().chain(ins.dst.iter()) {
                 self.touch(o);
+            }
+            if lds_waits.contains(&i) {
+                self.line("GroupMemoryBarrierWithGroupSync();");
             }
             if self.packed.as_ref().is_some_and(|p| p.device_sync_before.contains(&i)) {
                 // Publish every coarse luminance texel before this group takes its ticket.
@@ -3341,7 +3352,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             Enc::Ds if self.is_gs && matches!(m, "ds_read_b32" | "ds_read2_b32" | "ds_write_b32" | "ds_write2_b32") => {
                 self.emit_gs_lds(ins)
             }
-            Enc::Ds if self.is_cs && matches!(m, "ds_read_b64" | "ds_write_b128" | "ds_write_b64" | "ds_write2_b64") => {
+            Enc::Ds if self.is_cs && matches!(m, "ds_read_b64" | "ds_read2_b64" | "ds_read2st64_b64" | "ds_write_b128" | "ds_write_b64" | "ds_write2_b64") => {
                 if ins.raw[0] & (1 << 17) != 0 { return Err("GDS is unsupported".into()); }
                 self.uses_lds = true;
                 let t = self.tmp;
@@ -3349,17 +3360,25 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 // Snapshot the address before any destination word can overwrite its VGPR.
                 self.line(&format!("uint t{t}addr = {};", r(&s[0])?));
                 let offset = ins.aux.imm as u32;
-                let read = m == "ds_read_b64";
+                let read = m.starts_with("ds_read");
+                let paired = matches!(m, "ds_read2_b64" | "ds_read2st64_b64" | "ds_write2_b64");
+                let stride = if m == "ds_read2st64_b64" { 512 } else { 8 };
                 let count = if matches!(m, "ds_read_b64" | "ds_write_b64") { 2 } else { 4 };
                 for word in 0..count {
-                    let (base, k, byte) = if m == "ds_write2_b64" {
-                        (s[1 + (word / 2) as usize], word % 2, ((offset >> (8 * (word / 2))) & 255) * 8)
+                    let (base, k) = if read {
+                        (ins.dst[0], word)
+                    } else if paired {
+                        (s[1 + (word / 2) as usize], word % 2)
                     } else {
-                        (if read { ins.dst[0] } else { s[1] }, word, offset)
+                        (s[1], word)
                     };
                     let Opnd::Vgpr(v) = base else { return Err("expected consecutive LDS VGPRs".into()) };
                     let reg = Opnd::Vgpr(v.checked_add(k).ok_or("LDS register span exceeds v255")?);
-                    let byte = byte + u32::from(k) * 4;
+                    let byte = if paired {
+                        ((offset >> (8 * (word / 2))) & 255) * stride + u32::from(word % 2) * 4
+                    } else {
+                        offset + u32::from(word) * 4
+                    };
                     let location = format!("tb_lds[((t{t}addr + {byte}u) >> 2) & 8191u]");
                     if read {
                         self.wv(&reg, &location)?;
@@ -3804,27 +3823,17 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             };
             return self.wv(&d, &format!("tb_dot4_i8({}, {rhs}, {})", r(&s[0])?, r(acc)?));
         }
-        if matches!(m.as_str(), "v_pk_add_u16" | "v_pk_sub_u16" | "v_pack_b32_f16") {
+        if let Some(result) = int16::expression(ins)? {
+            return self.wv(&d, &result);
+        }
+        if m == "v_pack_b32_f16" {
             let (w0, w1) = (ins.raw[0], ins.raw[1]);
-            if w0 & 0x8700 != 0 || w1 >> 29 != 0 || s[..2].iter().any(|x| matches!(x, Opnd::ConstF32(_))) {
+            if w0 & 0x8700 != 0 || w1 >> 27 != 0 || s[..2].iter().any(|x| matches!(x, Opnd::ConstF32(_))) {
                 return Err("unsupported packed 16-bit modifiers or inline float".into());
             }
-            let half = |i: usize, select: u32| -> Result<String, String> {
-                let shift = 16 * ((select >> i) & 1);
-                Ok(format!("(({} >> {shift}) & 65535u)", r(&s[i])?))
-            };
-            let sel = w0 >> 11;
-            let (lo, high) = if m == "v_pack_b32_f16" {
-                if w1 >> 27 != 0 { return Err("unsupported pack output modifier".into()); }
-                (half(0, sel)?, half(1, sel)?)
-            } else {
-                let op = if m == "v_pk_add_u16" { "+" } else { "-" };
-                let lane = |sel| -> Result<String, String> {
-                    Ok(format!("({} {op} {})", half(0, sel)?, half(1, sel)?))
-                };
-                (lane(sel)?, lane(w1 >> 27)?)
-            };
-            return self.wv(&d, &format!("(({lo} & 65535u) | ({high} << 16))"));
+            let lo = int16::half(&s[0], (w0 >> 11) & 1)?;
+            let high = int16::half(&s[1], (w0 >> 12) & 1)?;
+            return self.wv(&d, &format!("({lo} | ({high} << 16))"));
         }
         if m == "v_pk_fmac_f16" {
             if ins.enc != Enc::Vop2 || ins.aux.sdwa.is_some() || matches!(s[0], Opnd::ConstF32(_)) {
@@ -5580,6 +5589,35 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 .ok_or_else(|| format!("MRT export {target} has no SV_Target output element"))?;
             assigns.push((ei, "xyzw"[..sig_type(&osig[ei]).1].to_string()));
         } else if (12..=15).contains(&target) {
+            // Clip distances follow POS0 when there is no miscellaneous position
+            // export (point size, layer, viewport, etc.). The hardware mask is
+            // in plane order, independent of the D3D output register number.
+            if target == 13 && self.ex.stage == Stage::Vertex && !compr
+                && osig.iter().any(|e| e.sysval == 1)
+                && !osig.iter().any(|e| e.name.eq_ignore_ascii_case("PSIZE"))
+            {
+                let mut extra = osig.iter().enumerate().filter(|(_, e)| !matches!(e.sysval, 0 | 1));
+                if let Some((ei, clip)) = extra.next() {
+                    if clip.sysval == 2 && clip.index == 0 && clip.comp_type == 3
+                        && clip.mask == en && matches!(en, 1 | 3 | 7 | 15) && extra.next().is_none()
+                    {
+                        let swizzle = &"xyzw"[..en.count_ones() as usize];
+                        self.line(&format!("if (exec_lo & 1u) o.o{ei} = {v4}.{swizzle};"));
+                        return Ok(());
+                    }
+                }
+            }
+            // RDNA2's miscellaneous position export packs the render-target
+            // array index into POS1.z[10:0]. Output-signature packing describes
+            // D3D registers, not the component used by the hardware export.
+            if target == 13 && self.ex.stage == Stage::Vertex && !compr && en & 4 != 0
+                && osig.iter().all(|e| matches!(e.sysval, 0 | 1 | 4))
+            {
+                if let Some(ei) = osig.iter().position(|e| e.sysval == 4 && e.comp_type == 1) {
+                    self.line(&format!("if (exec_lo & 1u) o.o{ei} = {} & 0x7ffu;", r(&ins.src[2])?));
+                    return Ok(());
+                }
+            }
             if target != 12 {
                 return Err(format!("position export {target} unsupported"));
             }
@@ -5946,14 +5984,13 @@ void main(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {{");
             init.push_str("    s3 = 1u;\n");
         }
         // ES-GS puts five GS parameters before the ordinary four VS input registers.
-        // Both shipped variants call a fetch shader: s12 for merged, s4 for standalone.
+        // A standalone VS receives vertex and instance IDs even when it pulls its
+        // own buffers and never calls a hardware fetch shader.
         let merged_fetch = merged_count && self.insns.iter().take(16).any(|ins| {
             ins.mnemonic == "s_swappc_b64" && ins.dst == [Opnd::Sgpr(12)] && ins.src == [Opnd::Sgpr(12)]
         });
-        let standalone_fetch = ex.stage == Stage::Vertex && !merged_count && self.insns.iter().take(16).any(|ins| {
-            ins.mnemonic == "s_swappc_b64" && ins.dst == [Opnd::Sgpr(4)] && ins.src == [Opnd::Sgpr(4)]
-        });
-        if merged_fetch || standalone_fetch {
+        let standalone_vs = ex.stage == Stage::Vertex && !merged_count;
+        if merged_fetch || standalone_vs {
             for (i, elem) in ex.input_sig.iter().enumerate() {
                 let reg = match (elem.sysval, merged_fetch) {
                     (6, false) => "v0", // SV_VertexID
@@ -5962,7 +5999,7 @@ void main(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {{");
                     (8, true) => "v8",
                     _ => continue,
                 };
-                if standalone_fetch && !self.live.iter().any(|r| r == reg) {
+                if standalone_vs && !self.live.iter().any(|r| r == reg) {
                     continue;
                 }
                 self.regs.insert(reg.to_string());

@@ -86,7 +86,7 @@
     <circle cx="48" cy="17" r="4.5" fill="#2ecc71" />
     <text x="68" y="22" fill="#6fc7d4" font-size="14" text-anchor="start" font-weight="normal">~/evidence/matrix-awakens/shader-inventory.json</text>
     <text x="18" y="70" fill="#e2bc8c" font-size="25" text-anchor="start" font-weight="bold">Frosty shader coverage</text>
-    <text x="954" y="68" fill="#a0a0b1" font-size="14" text-anchor="end" font-weight="normal">43,407 shipped entries · 206 in profile · 6 linked variants</text>
+    <text x="954" y="68" fill="#a0a0b1" font-size="14" text-anchor="end" font-weight="normal">43,407 shipped entries · 206 in profile · 7 linked variants</text>
     <text x="18" y="97" fill="#a0a0b1" font-size="14" text-anchor="start" font-weight="normal">HLSL counts unique source programs the translator can read and emit as desktop shader code.</text>
     <text x="18" y="118" fill="#a0a0b1" font-size="14" text-anchor="start" font-weight="normal">Requests are distinct programs seen in captured title runs. A pipeline can request a shader before drawing.</text>
     <text x="18" y="151" fill="#6fc7d4" font-size="14" text-anchor="start" font-weight="normal">Stage</text>
@@ -98,11 +98,11 @@
     <text x="18" y="181" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Vertex</text>
     <text x="263" y="181" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">21,230</text>
     <rect x="299" y="172" width="98" height="7" fill="#272733" />
-    <rect x="299" y="172" width="97.81532036263624" height="7" fill="#e2bc8c" />
-    <text x="561" y="181" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">19,597 / 19,634</text>
+    <rect x="299" y="172" width="98.0" height="7" fill="#2ecc71" />
+    <text x="561" y="181" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">19,634 / 19,634</text>
     <rect x="722" y="172" width="94" height="7" fill="#272733" />
-    <rect x="722" y="172" width="94.0" height="7" fill="#2ecc71" />
-    <text x="954" y="181" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">29 / 29</text>
+    <rect x="722" y="172" width="32.38655462184874" height="7" fill="#e2bc8c" />
+    <text x="954" y="181" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">41 / 119</text>
     <text x="694" y="181" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">41</text>
     <rect x="18" y="188" width="936" height="1" fill="#272733" />
     <text x="18" y="208" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Mesh</text>
@@ -118,8 +118,8 @@
     <rect x="299" y="226" width="97.5847119224187" height="7" fill="#e2bc8c" />
     <text x="561" y="235" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">12,219 / 12,271</text>
     <rect x="722" y="226" width="94" height="7" fill="#272733" />
-    <rect x="722" y="226" width="94.0" height="7" fill="#2ecc71" />
-    <text x="954" y="235" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">65 / 65</text>
+    <rect x="722" y="226" width="47.262569832402235" height="7" fill="#e2bc8c" />
+    <text x="954" y="235" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">90 / 179</text>
     <text x="694" y="235" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">91</text>
     <rect x="18" y="242" width="936" height="1" fill="#272733" />
     <text x="18" y="262" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Geometry</text>
@@ -129,17 +129,17 @@
     <text x="561" y="262" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">112 / 112</text>
     <rect x="722" y="253" width="94" height="7" fill="#272733" />
     <rect x="722" y="253" width="94.0" height="7" fill="#2ecc71" />
-    <text x="954" y="262" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">1 / 1</text>
+    <text x="954" y="262" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">2 / 2</text>
     <text x="694" y="262" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">2</text>
     <rect x="18" y="269" width="936" height="1" fill="#272733" />
     <text x="18" y="289" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Compute</text>
     <text x="263" y="289" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">3,242</text>
     <rect x="299" y="280" width="98" height="7" fill="#272733" />
-    <rect x="299" y="280" width="80.75224249922672" height="7" fill="#e2bc8c" />
-    <text x="561" y="289" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">2,664 / 3,233</text>
+    <rect x="299" y="280" width="83.60160841323848" height="7" fill="#e2bc8c" />
+    <text x="561" y="289" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">2,758 / 3,233</text>
     <rect x="722" y="280" width="94" height="7" fill="#272733" />
-    <rect x="722" y="280" width="58.432432432432435" height="7" fill="#e2bc8c" />
-    <text x="954" y="289" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">23 / 37</text>
+    <rect x="722" y="280" width="51.795918367346935" height="7" fill="#e2bc8c" />
+    <text x="954" y="289" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">27 / 49</text>
     <text x="694" y="289" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">72</text>
     <rect x="18" y="296" width="936" height="1" fill="#272733" />
     <text x="18" y="316" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Ray generation</text>
@@ -159,7 +159,7 @@
     <text x="561" y="370" fill="#a0a0b1" font-size="15" text-anchor="end" font-weight="normal">—</text>
     <text x="954" y="370" fill="#a0a0b1" font-size="15" text-anchor="end" font-weight="normal">—</text>
     <text x="694" y="370" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">0</text>
-    <text x="18" y="397" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Standalone DXIL passed for 132/132 tested programs among 132 distinct title requests.</text>
+    <text x="18" y="397" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Standalone DXIL passed for 349/349 tested programs among 349 distinct title requests.</text>
     <text x="18" y="418" fill="#a0a0b1" font-size="14" text-anchor="start" font-weight="normal">Ray-tracing entries contain serialized state objects. Their translation has a separate path.</text>
   </g>
   <g transform="translate(14 997)">

@@ -186,6 +186,10 @@ pub fn vop3(op: u32) -> Option<&'static str> {
         0x420 => "v_fma_mix_f32", // VOP3P opcode 0x20 (see rdna2.rs: VOP3P opcodes are offset by 0x400)
         0x362 => "v_ldexp_f32", 0x365 => "v_mbcnt_lo_u32_b32", 0x366 => "v_mbcnt_hi_u32_b32",
         0x2ff => "v_lshlrev_b64", 0x300 => "v_lshrrev_b64", 0x301 => "v_ashrrev_i64",
+        0x303 => "v_add_nc_u16", 0x307 => "v_lshrrev_b16", 0x308 => "v_ashrrev_i16",
+        0x30a => "v_max_i16", 0x30c => "v_min_i16", 0x314 => "v_lshlrev_b16",
+        0x401 => "v_pk_mul_lo_u16", 0x403 => "v_pk_sub_i16", 0x404 => "v_pk_lshlrev_b16",
+        0x405 => "v_pk_lshrrev_b16", 0x406 => "v_pk_ashrrev_i16",
         _ => return None,
     })
 }
@@ -344,6 +348,7 @@ pub fn lookup(enc: Enc, op: u32) -> Option<&'static str> {
             0x0d => Some("ds_write_b32"),
             0x0e => Some("ds_write2_b32"),
             0x36 => Some("ds_read_b32"), 0x76 => Some("ds_read_b64"),
+            0x77 => Some("ds_read2_b64"), 0x78 => Some("ds_read2st64_b64"),
             0xdf => Some("ds_write_b128"),
             0x37 => Some("ds_read2_b32"),
             0x38 => Some("ds_read2st64_b32"),

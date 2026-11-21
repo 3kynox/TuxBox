@@ -32,51 +32,7 @@ fn fourcc_at(b: &[u8], off: usize) -> Result<[u8; 4], String> {
         .ok_or_else(|| format!("fourcc read out of bounds at {off:#x}"))
 }
 
-/// A DXBC container chunk.
-#[derive(Debug, Clone)]
-pub struct Chunk {
-    pub fourcc: [u8; 4],
-    pub offset: usize,
-    pub size: usize,
-}
-
-/// Parsed DXBC container (the outer wrapper used by both PC and Xbox shaders).
-#[derive(Debug, Clone)]
-pub struct Dxbc {
-    pub digest: [u8; 16],
-    pub total_size: u32,
-    pub chunks: Vec<Chunk>,
-}
-
-impl Dxbc {
-    pub fn parse(b: &[u8]) -> Result<Dxbc, String> {
-        if fourcc_at(b, 0)? != *b"DXBC" {
-            return Err("not a DXBC container (bad magic)".into());
-        }
-        let mut digest = [0u8; 16];
-        digest.copy_from_slice(b.get(4..20).ok_or("truncated digest")?);
-        let _version = u32_at(b, 20)?;
-        let total_size = u32_at(b, 24)?;
-        let nchunks = u32_at(b, 28)? as usize;
-        if nchunks > 64 {
-            return Err(format!("implausible chunk count {nchunks}"));
-        }
-        let mut chunks = Vec::with_capacity(nchunks);
-        for i in 0..nchunks {
-            let off = u32_at(b, 32 + i * 4)? as usize;
-            let size = u32_at(b, off + 4)? as usize;
-            if off + 8 + size > b.len() {
-                return Err(format!("chunk {i} at {off:#x} size {size} exceeds blob"));
-            }
-            chunks.push(Chunk { fourcc: fourcc_at(b, off)?, offset: off + 8, size });
-        }
-        Ok(Dxbc { digest, total_size, chunks })
-    }
-
-    pub fn chunk(&self, fourcc: &[u8; 4]) -> Option<&Chunk> {
-        self.chunks.iter().find(|c| c.fourcc == *fourcc)
-    }
-}
+pub use tuxbox_dxbc::{Chunk, Dxbc};
 
 /// Program type from the DXIL program header (D3D12_SHADER_VERSION_TYPE).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,16 +197,23 @@ fn extract_dxil(body: &[u8]) -> Result<NativeProgram, String> {
     // A shader can carry several FSSM programs (observed on vertex shaders: one variant
     // that leaves through `s_setpc_b64` — a hardware-pipeline continuation form using LDS
     // and a barrier — and one standalone program ending in `s_endpgm`). The standalone
-    // variant is the one that maps onto a PC pipeline stage, so take the first FSSM whose
-    // ISA section contains `s_endpgm`.
+    // Some ES programs also end with `s_endpgm` after passing vertices through LDS.
+    // The vertex emitter handles fetch-shader chains and explicit vertex exports.
+    // When an ES variant uses neither form, prefer a standalone vertex program.
     let variants = find_and_inflate_fssm(xdat)?;
     let mut chosen = None;
     let mut last_err = String::from("no FSSM program found");
+    let multiple_vertex_programs = stage == Stage::Vertex && variants.len() > 1;
     for v in variants {
         match locate_isa(&v) {
             Ok((isa, off)) => {
-                chosen = Some((v, isa, off));
-                break;
+                if !multiple_vertex_programs || has_vertex_outputs(&isa) {
+                    chosen = Some((v, isa, off));
+                    break;
+                }
+                if chosen.is_none() {
+                    chosen = Some((v, isa, off));
+                }
             }
             Err(e) => last_err = e,
         }
@@ -279,6 +242,17 @@ fn extract_dxil(body: &[u8]) -> Result<NativeProgram, String> {
     };
     Ok(NativeProgram {
         stage, sm, bitcode_stripped, fssm, isa, isa_off, isa_preamble, isa_data, fspx_config: None,
+    })
+}
+
+fn has_vertex_outputs(isa: &[u8]) -> bool {
+    use rdna2::{Enc, Opnd};
+
+    rdna2::instructions(isa).enumerate().any(|(i, ins)| {
+        // The merged fetch ABI writes its output registers to LDS for the GS.
+        let fetch = i < 16 && ins.mnemonic == "s_swappc_b64"
+            && ins.dst == [Opnd::Sgpr(12)] && ins.src == [Opnd::Sgpr(12)];
+        fetch || (ins.enc == Enc::Exp && (ins.aux.imm == 12 || (32..64).contains(&ins.aux.imm)))
     })
 }
 

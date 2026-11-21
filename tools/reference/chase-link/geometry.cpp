@@ -15,7 +15,9 @@ std::vector<char> read(const char *name) {
 }
 
 int wmain(int argc, wchar_t **argv) {
-  if (argc != 2)
+  const bool offline = argc == 3 && wcscmp(argv[2], L"offline") == 0;
+  const bool dynamic = argc == 3 && wcscmp(argv[2], L"dynamic") == 0;
+  if (argc != 2 && !offline && !dynamic)
     return 2;
   try {
     // All cache mutations in this control are confined to the trial.
@@ -27,7 +29,8 @@ int wmain(int argc, wchar_t **argv) {
       throw std::runtime_error("private TMP");
     const fs::path cache = local / "tuxbox_shader_cache";
     fs::create_directory(cache);
-    fs::copy("by_source", cache / "by_source", fs::copy_options::recursive);
+    if (!fs::exists(cache / "by_source"))
+      fs::copy("by_source", cache / "by_source", fs::copy_options::recursive);
     DXGI_ADAPTER_DESC1 adapter{};
     std::array<UINT, 18> profile{0x20004, 0, ~0u, 0, 0, 0, ~0u, ~0u, 0, 1};
     auto device = create_device(argv[1], adapter, profile.data());
@@ -69,28 +72,33 @@ int wmain(int argc, wchar_t **argv) {
       if (bool(result) != expected || (FAILED(hr) == expected))
         throw std::runtime_error("unexpected pipeline result");
     };
-    const fs::path variants =
-        fs::temp_directory_path() / "tuxbox_shader_cache" / "by_gs_ps";
-    fs::create_directories(variants);
-    auto path = [&](const char *key) {
-      return variants / (std::string("4566ef26d1185681caa1cf06ae1a4df41db01a5eb"
-                                     "9c3f161a109438879555f33_") +
-                         key + ".cso");
-    };
-    auto p0 = path(
-        "bfc8310727d73a1e98ac4d4d406173b8ccfcdfda2e355b21fb4fe8e96cbed830");
-    auto p1 = path(
-        "dbb0ca9c58d6b9baa842fce81b1d81a8f02d74c316124ccb7efff5baeaefaccc");
-    if (fs::exists(p0) || fs::exists(p1))
-      throw std::runtime_error("control requires private empty pair cache");
-    probe("pixel0.dxbc", false);
-    fs::copy_file("linked0.cso", p0);
-    probe("pixel1.dxbc", false);
-    probe("pixel0.dxbc", true);
-    fs::copy_file("wrong-stage.cso", p1);
-    probe("pixel1.dxbc", false);
-    fs::copy_file("linked1.cso", p1, fs::copy_options::overwrite_existing);
-    probe("pixel1.dxbc", true);
+    if (offline || dynamic) {
+      probe("pixel0.dxbc", dynamic);
+      probe("vertex.dxbc", false);
+    } else {
+      const fs::path variants =
+          fs::temp_directory_path() / "tuxbox_shader_cache" / "by_gs_ps";
+      fs::create_directories(variants);
+      auto path = [&](const char *key) {
+        return variants / (std::string("4566ef26d1185681caa1cf06ae1a4df41db01a5eb"
+                                       "9c3f161a109438879555f33_") +
+                           key + ".cso");
+      };
+      auto p0 = path(
+          "bfc8310727d73a1e98ac4d4d406173b8ccfcdfda2e355b21fb4fe8e96cbed830");
+      auto p1 = path(
+          "dbb0ca9c58d6b9baa842fce81b1d81a8f02d74c316124ccb7efff5baeaefaccc");
+      if (fs::exists(p0) || fs::exists(p1))
+        throw std::runtime_error("control requires private empty pair cache");
+      probe("pixel0.dxbc", false);
+      fs::copy_file("linked0.cso", p0);
+      probe("pixel1.dxbc", false);
+      probe("pixel0.dxbc", true);
+      fs::copy_file("wrong-stage.cso", p1);
+      probe("pixel1.dxbc", false);
+      fs::copy_file("linked1.cso", p1, fs::copy_options::overwrite_existing);
+      probe("pixel1.dxbc", true);
+    }
     const bool frame_seven = fs::exists("vertex7.dxbc");
     if (frame_seven) {
       auto vertex = read("vertex7.dxbc");
@@ -109,27 +117,36 @@ int wmain(int argc, wchar_t **argv) {
                                   DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
                                   DXGI_FORMAT_B8G8R8A8_UNORM};
       std::copy(std::begin(targets), std::end(targets), stream.formats.payload.RTFormats);
-      const auto vs_pairs = cache / "by_vs_ps";
-      fs::create_directory(vs_pairs);
-      auto vs_key = read("vertex7.key"), wrong = read("other-consumer.key");
-      const auto correct = vs_pairs / std::string(vs_key.begin(), vs_key.end());
-      probe("pixel7.dxbc", false);
-      fs::copy_file("linked7.cso", vs_pairs / std::string(wrong.begin(), wrong.end()));
-      probe("pixel7.dxbc", false);
-      fs::copy_file("wrong-vertex-stage.cso", correct);
-      probe("pixel7.dxbc", false);
-      fs::copy_file("linked7.cso", correct, fs::copy_options::overwrite_existing);
-      probe("pixel7.dxbc", true);
+      if (offline || dynamic) {
+        probe("pixel7.dxbc", dynamic);
+      } else {
+        const auto vs_pairs = cache / "by_vs_ps";
+        fs::create_directory(vs_pairs);
+        auto vs_key = read("vertex7.key"), wrong = read("other-consumer.key");
+        const auto correct = vs_pairs / std::string(vs_key.begin(), vs_key.end());
+        probe("pixel7.dxbc", false);
+        fs::copy_file("linked7.cso", vs_pairs / std::string(wrong.begin(), wrong.end()));
+        probe("pixel7.dxbc", false);
+        fs::copy_file("wrong-vertex-stage.cso", correct);
+        probe("pixel7.dxbc", false);
+        fs::copy_file("linked7.cso", correct, fs::copy_options::overwrite_existing);
+        probe("pixel7.dxbc", true);
+      }
     }
     FILE *f = nullptr;
     if (fopen_s(&f, "result.txt", "wb"))
       throw std::runtime_error("write result");
-    std::fprintf(
-        f,
-        "pci=%04x:%04x\nlinked=2\nabsent=1\nwrong_consumer=1\nwrong_stage=1\n",
-        adapter.VendorId, adapter.DeviceId);
-    if (frame_seven)
-      std::fputs("vertex_linked=1\nvertex_absent=1\nvertex_wrong_consumer=1\nvertex_wrong_stage=1\n", f);
+    if (offline || dynamic) {
+      std::fprintf(f, "pci=%04x:%04x\ngeometry=%d\nvertex=%d\nwrong_pixel=0\n",
+                   adapter.VendorId, adapter.DeviceId, int(dynamic), int(frame_seven && dynamic));
+    } else {
+      std::fprintf(
+          f,
+          "pci=%04x:%04x\nlinked=2\nabsent=1\nwrong_consumer=1\nwrong_stage=1\n",
+          adapter.VendorId, adapter.DeviceId);
+      if (frame_seven)
+        std::fputs("vertex_linked=1\nvertex_absent=1\nvertex_wrong_consumer=1\nvertex_wrong_stage=1\n", f);
+    }
     if (fclose(f))
       throw std::runtime_error("close result");
     return 0;

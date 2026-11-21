@@ -65,9 +65,14 @@ dependencies = [
 name = "tuxbox-d3d12"
 version = "0.1.0"
 dependencies = [
+ "tuxbox-dxbc",
  "tuxbox-xg-layout",
  "windows",
 ]
+
+[[package]]
+name = "tuxbox-dxbc"
+version = "0.1.0"
 
 [[package]]
 name = "tuxbox-frontpanel"

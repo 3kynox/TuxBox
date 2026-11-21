@@ -171,6 +171,23 @@ pub(super) fn linked_geometry(geometry: &str, pixel: &str) -> Option<Vec<u8>> {
     read_portable("by_gs_ps", &format!("{geometry}_{pixel}"), Stage::Geometry)
 }
 
+pub(super) fn link_on_demand(
+    producer: (&str, &[u8]),
+    pixel: (&str, &[u8]),
+    producer_dxil: &[u8],
+    pixel_dxil: &[u8],
+) -> Option<Vec<u8>> {
+    if !tuxbox_dxbc::has_packing_mismatch(producer_dxil, pixel_dxil) {
+        return None;
+    }
+    let (stage @ (Stage::Vertex | Stage::Geometry), ShaderCode::Portable) =
+        shader_code(producer_dxil)?
+    else {
+        return None;
+    };
+    compile::linked(producer, pixel, pixel_dxil, stage)
+}
+
 pub(super) fn prepared(shader: &[u8]) -> Option<Vec<u8>> {
     let (stage, ShaderCode::Xbox) = shader_code(shader)? else {
         return None;
