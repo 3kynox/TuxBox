@@ -7,6 +7,8 @@
 #define XMEM_ORDINARY_ATTRIBUTES 0x0480009eULL
 #define XMEM_PLACEMENT_ATTRIBUTES 0x30804000ULL
 
+__declspec(dllimport) void *WINAPI XMemAlloc(SIZE_T bytes, UINT64 attributes);
+__declspec(dllimport) void WINAPI XMemFree(void *memory, UINT64 attributes);
 __declspec(dllimport) void *WINAPI XMemAllocDefault(SIZE_T bytes, UINT64 attributes);
 __declspec(dllimport) void WINAPI XMemFreeDefault(void *memory, UINT64 attributes);
 

@@ -2,6 +2,8 @@
 #define NOMINMAX
 #include <windows.h>
 #include <mfapi.h>
+#include <shlwapi.h>
+#include <wininet.h>
 #include <mferror.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
@@ -95,6 +97,33 @@ void verify_samples(IMFSourceReader* r, const std::vector<BYTE>& pcm, DWORD fram
     }
 }
 
+void check_urls(const std::vector<BYTE>& bytes, const std::vector<BYTE>& pcm) {
+    struct File {
+        wchar_t path[MAX_PATH]{};
+        ~File() { if (*path) DeleteFileW(path); }
+    } file;
+    wchar_t temp[MAX_PATH]{};
+    DWORD len = GetTempPathW(MAX_PATH, temp);
+    require(len && len < MAX_PATH && GetTempFileNameW(temp, L"T B", 0, file.path), "temporary WAVE file");
+    FILE* f{};
+    require(!_wfopen_s(&f, file.path, L"wb"), "open temporary WAVE");
+    const size_t written = std::fwrite(bytes.data(), 1, bytes.size(), f);
+    require(!std::fclose(f) && written == bytes.size(), "write temporary WAVE");
+    wchar_t url[INTERNET_MAX_URL_LENGTH]{};
+    DWORD capacity = ARRAYSIZE(url);
+    check(UrlCreateFromPathW(file.path, url, &capacity, 0), "file URL");
+    require(wcsstr(url, L"%20") != nullptr, "escaped space in file URL");
+    for (const wchar_t* input : {file.path, url}) {
+        ComPtr<IMFSourceReader> r;
+        check(MFCreateSourceReaderFromURL(input, nullptr, &r), "open URL as PCM");
+        verify_samples(r.Get(), pcm, 0);
+    }
+    require(DeleteFileW(file.path) != 0, "release file handles");
+    IMFSourceReader* missing = reinterpret_cast<IMFSourceReader*>(1);
+    require(FAILED(MFCreateSourceReaderFromURL(url, nullptr, &missing)) && !missing, "missing file");
+    file.path[0] = L'\0';
+}
+
 void test() {
     // Wine may prefer its built-in MFReadWrite, so verify the loaded module path.
     wchar_t path[MAX_PATH], dir[MAX_PATH];
@@ -104,10 +133,13 @@ void test() {
             !_wcsicmp(path, dir), "not using the app-local provider");
     require(GetProcAddress(module, MAKEINTRESOURCEA(5)) == GetProcAddress(module, "MFCreateSourceReaderFromByteStream"),
             "missing Xbox source-reader ordinal");
+    require(GetProcAddress(module, MAKEINTRESOURCEA(7)) == GetProcAddress(module, "MFCreateSourceReaderFromURL"),
+            "missing Xbox URL-reader ordinal");
 
     std::vector<BYTE> pcm(frames * block);
     for (size_t i = 0; i < pcm.size(); ++i) pcm[i] = static_cast<BYTE>(i * 53 + i / 11);
     auto bytes = wave(pcm);
+    check_urls(bytes, pcm);
     auto stream = byte_stream(bytes);
     ComPtr<IMFSourceReader> reader;
     check(MFCreateSourceReaderFromByteStream(stream.Get(), nullptr, &reader), "open WAVE");
@@ -162,7 +194,7 @@ int wmain(int argc, wchar_t** argv) {
         test();
         check(MFShutdown(), "MFShutdown");
         CoUninitialize();
-        std::fprintf(report, "mfreadwrite PASS pcm=48000/2/16 frames=2501 bytes=10004 seek=1200 eos=2 invalid=2\n");
+        std::fprintf(report, "mfreadwrite PASS pcm=48000/2/16 frames=2501 bytes=10004 seek=1200 eos=2 invalid=2 file-inputs=2\n");
     } catch (const std::exception& e) {
         std::fprintf(report, "mfreadwrite failed: %s\n", e.what());
         exit_code = 1;

@@ -2,6 +2,7 @@
 
 mod commands;
 mod device;
+mod guids;
 mod present;
 mod proxy;
 
@@ -18,11 +19,6 @@ use core::ptr;
 use windows::Win32::Foundation::{E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER};
 use windows::Win32::Graphics::Direct3D12::ID3D12Device;
 use windows::core::{GUID, HRESULT, Interface};
-
-/// Data export imported by retail titles. Windows GUID fields use native
-/// layout, including little-endian storage of the first three integers.
-#[unsafe(export_name = "IID_ID3D12Device")]
-pub static DEVICE_IID: GUID = ID3D12Device::IID;
 
 // Release/default values of the two dynamic fields at the audited Fortnite
 // call site. No other version or flag combination has been exercised.
@@ -72,7 +68,7 @@ pub unsafe extern "system" fn create_device(
     // SAFETY: The caller supplies a readable GUID. Compare Windows GUID fields
     // without casting guest storage to an aligned Rust reference.
     let requested = unsafe { iid.read_unaligned() };
-    if requested != DEVICE_IID {
+    if requested != ID3D12Device::IID {
         return E_NOINTERFACE;
     }
     if params.is_null() {

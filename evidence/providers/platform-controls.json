@@ -14,12 +14,13 @@
         "file_version": "10.0.19041.7032",
         "sha256": "28562599eaba50711d5225e4b05478f8a83a9438f5501bf9068283eb71a4f33f"
       },
-      "tuxbox_sha256": "17d969c848e5609e6971c26ded7fa4b0041ed1302d12e42bdeb9f3bcd5eaa6cb",
+      "tuxbox_sha256": "20f03f2405f714cd5f1f014de1027df221e60abc2adfd3011c5106905ce74363",
       "guest": "gameconfig-query.exe",
       "guest_source": "runtime/gameconfig/guest.c",
-      "guest_sha256": "18631102e6cec9c6478e55754903f2be9ba629ecfb468adde8649c9241b58644",
+      "guest_sha256": "cd57966419dd0a6ab2ef47dbdeb91705bdffeb5178cb4ffa30f32383053b37a7",
       "guest_imports": {
         "13": "GetRegistryPathForPackage",
+        "15": "OpenGameConfigForGameCore",
         "17": "OpenGameConfigKeyForPackage"
       },
       "runs": [
@@ -27,13 +28,13 @@
           "provider": "1789159601 experimental-11.0-20260910b-x86_64",
           "control_exit_code": 0,
           "tuxbox_exit_code": 0,
-          "matching_receipt": "gameconfig-query PASS paths=7 hives=2 missing-key=1"
+          "matching_receipt": "gameconfig-query PASS paths=7 hives=2 missing-key=1 gamecore-readonly=1"
         },
         {
           "provider": "1792432585 GE-Proton11-11",
           "control_exit_code": 0,
           "tuxbox_exit_code": 0,
-          "matching_receipt": "gameconfig-query PASS paths=7 hives=2 missing-key=1"
+          "matching_receipt": "gameconfig-query PASS paths=7 hives=2 missing-key=1 gamecore-readonly=1"
         }
       ]
     },
@@ -44,10 +45,10 @@
         "file_version": "2106.4.0.0",
         "sha256": "35ecdfbea3a9f4d004b638d8b1070dcded9cb05f76514a4184b5a5832f4afb87"
       },
-      "tuxbox_sha256": "62807cdc859d055b871fdc1a07d5a06f3d469858586f8d28e50eb8425fbce309",
+      "tuxbox_sha256": "c6086ab13911a8a68fcd1daf5e536d343676d9ee0f7b5f2032204a1e70699507",
       "guest": "gamechat-session.exe",
       "guest_source": "runtime/gamechat/guest.c",
-      "guest_sha256": "814ede525793f052279b74573a416e99086047324681848be40565204cb58a1a",
+      "guest_sha256": "1b7443a72093980f6bb7025fe874b8932ef693e734d611e7bcfaa3f3daa5958e",
       "guest_imports": {
         "2": "ChatManagerAddRemoteUser",
         "3": "ChatManagerCleanup",
@@ -56,20 +57,23 @@
         "16": "ChatManagerInitialize",
         "18": "ChatManagerRemoveUser",
         "19": "ChatManagerSetAudioEncodingBitrate",
-        "31": "ChatUserGetIsLocal"
+        "29": "ChatUserGetCustomUserContext",
+        "31": "ChatUserGetIsLocal",
+        "36": "ChatUserGetXboxUserId",
+        "40": "ChatUserSetCustomUserContext"
       },
       "runs": [
         {
           "provider": "1789159601 experimental-11.0-20260910b-x86_64",
           "control_exit_code": 0,
           "tuxbox_exit_code": 0,
-          "matching_receipt": "gamechat-session PASS sessions=2 remote-users=3 bitrate-settings=3 stale-handles=1"
+          "matching_receipt": "gamechat-session PASS sessions=2 remote-users=3 bitrate-settings=3 stale-handles=1 xuids=2 contexts=2"
         },
         {
           "provider": "1792432585 GE-Proton11-11",
           "control_exit_code": 0,
           "tuxbox_exit_code": 0,
-          "matching_receipt": "gamechat-session PASS sessions=2 remote-users=3 bitrate-settings=3 stale-handles=1"
+          "matching_receipt": "gamechat-session PASS sessions=2 remote-users=3 bitrate-settings=3 stale-handles=1 xuids=2 contexts=2"
         }
       ]
     }

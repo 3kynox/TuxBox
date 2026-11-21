@@ -1,8 +1,8 @@
 {
   "console_dll": "XAudio2_9.dll",
   "console_sha256": "8d49f4c47a6ee01f344c45375b5a022045ad8ff7dd9f4b61e6554186c1e87c02",
-  "tuxbox_sha256": "7cda971c84956100d3712cd4432472df90d06405f44d2a70ca537070ba9838e4",
-  "guest_sha256": "5fa8a1e1d8cc05115654eccecad07a8358482f182ecb39ddcba8afbad37c2ea5",
+  "tuxbox_sha256": "439f27dd265b141d416b8f4ec2d8afb08d24cc50aad586f328df0166ebd8c327",
+  "guest_sha256": "bb984a54e1bb96557e4c2a1085755e5794065ea7a0cc8be6b634c6b56d30e66c",
   "frosty_sha256": "ae39eb1e92fa806df189c768c1478a53dfb54a2cc9769a9f2301ca7921e3eb04",
   "frosty_ordinal_imports": [
     1,
@@ -18,6 +18,7 @@
     4,
     5,
     6,
+    8,
     9
   ],
   "console_exports": {
@@ -39,13 +40,14 @@
     "5": "X3DAudioCalculate",
     "6": "X3DAudioInitialize",
     "1": "XAudio2Create",
+    "8": "XAudio2CreateV2_9",
     "9": "XAudio2CreateWithVersionInfo"
   },
   "checks": [
-    "Engines from ordinary and versioned factories.",
+    "Three engine factories at Xbox ordinals 1, 8 and 9. Both supplied ordinals 1 and 8 address the same entry point.",
     "Reverb, volume meter, and EQ effect creation and rejection of an unknown effect.",
     "3D source selection on left and right.",
-    "Mono PCM at 0.25 amplitude routed first left, then right. Measured peak and RMS within 0.015 on the active channel, under 0.001 on the other; samples played > 0; final speaker path muted."
+    "Ordinal 8 and ordinal 9 engines each routed mono PCM at 0.25 amplitude first left, then right. Measured peak and RMS within 0.015 on the active channel, under 0.001 on the other. Samples played increased with the final speaker path muted."
   ],
   "runs": [
     {
@@ -54,7 +56,7 @@
       "loader": "default Proton selection; guest checked its adjacent DLL; trace also loaded system32 XAudio2 for TuxBox",
       "desktop_xaudio_sha256": "73c749bff7a235a4fa2a0bf6d2aaaedc04f2d8de54ccf185bd13bdc5cfc40021",
       "desktop_versioned_factory_ordinal": 7,
-      "matching_guest_receipt": "xaudio PASS factories=1,9 effects=3 spatial=2/2 mix=2/2"
+      "matching_guest_receipt": "xaudio PASS factories=1,8,9 effects=3 spatial=2/2 mix=4/4"
     },
     {
       "host": "1792432585 GE-Proton11-11",
@@ -62,7 +64,7 @@
       "loader": "default Proton selection; guest checked its adjacent DLL; trace also loaded system32 XAudio2 for TuxBox",
       "desktop_xaudio_sha256": "d095ef9a57d5def1abca8b9c9f23ea2a0e019ba847b2af66397576a0c8c0943d",
       "desktop_versioned_factory_ordinal": 7,
-      "matching_guest_receipt": "xaudio PASS factories=1,9 effects=3 spatial=2/2 mix=2/2"
+      "matching_guest_receipt": "xaudio PASS factories=1,8,9 effects=3 spatial=2/2 mix=4/4"
     }
   ]
 }

@@ -16,6 +16,41 @@ def digest(path):
     return result.hexdigest()
 
 
+def export_table(path):
+    """Return reference ordinals, their aliases and the slots containing data."""
+    with closing(pefile.PE(str(path), fast_load=True)) as pe:
+        if pe.FILE_HEADER.Machine != 0x8664 or pe.OPTIONAL_HEADER.Magic != 0x20b:
+            raise ValueError(f"{path.name} must be a Windows x64 PE")
+        pe.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_EXPORT"]])
+        directory = getattr(pe, "DIRECTORY_ENTRY_EXPORT", None)
+        if directory is None:
+            raise ValueError(f"{path.name} has no export table")
+        table = directory.struct
+        first = pe.OPTIONAL_HEADER.DATA_DIRECTORY[0].VirtualAddress
+        end = first + pe.OPTIONAL_HEADER.DATA_DIRECTORY[0].Size
+        slots = {}
+        data = set()
+        for offset in range(table.NumberOfFunctions):
+            address = pe.get_dword_at_rva(table.AddressOfFunctions + 4 * offset)
+            if address is None:
+                raise ValueError(f"{path.name} has an unreadable export table")
+            if address == 0:
+                continue
+            ordinal = table.Base + offset
+            slots[ordinal] = set()
+            if first <= address < end:  # PE forwarder string
+                continue
+            section = pe.get_section_by_rva(address)
+            if section is None:
+                raise ValueError(f"{path.name} has an unmapped export at ordinal {ordinal}")
+            if not section.Characteristics & 0x20000000:  # IMAGE_SCN_MEM_EXECUTE
+                data.add(ordinal)
+        for entry in directory.symbols:
+            if entry.name and entry.ordinal in slots:
+                slots[entry.ordinal].add(entry.name.decode("ascii"))
+        return slots, data
+
+
 def import_symbol(entry):
     if entry.import_by_ordinal:
         return f"#{entry.ordinal}"

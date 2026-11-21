@@ -15,7 +15,7 @@ from .inspect import digest, image, launch_target
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build"
 BASE_SUITES = ("cpu", "xmem", "graphics", "graphics-abi", "guest-frame", "present", "lanes",
-               "cpu-benchmark", "xg-provider", "gameconfig", "gamechat", "mfreadwrite", "xaudio")
+               "cpu-benchmark", "d3d12-guids", "d3d12-signatures", "xg-provider", "gameconfig", "gamechat", "mfreadwrite", "xaudio")
 OPTIONAL_PROVIDERS = {"dxc-utils": "dxc-utils/dxcompiler.dll", "xg": "xg/xg_xs.dll"}
 SUITES = (*BASE_SUITES, *OPTIONAL_PROVIDERS)
 
@@ -26,6 +26,12 @@ def cpu_model():
             if line.startswith("model name") and ":" in line:
                 return line.partition(":")[2].strip()
     return platform.processor() or platform.machine()
+
+
+def guid_receipt(imports):
+    symbols = next((module["symbols"] for module in imports if module["module"].lower() == "d3d12_xs.dll"), ())
+    count = sum(name.startswith(("IID_", "WKPDID_")) for name in symbols)
+    return f"d3d12-guids PASS identifiers={count} bytes={16 * count}"
 
 
 def verify(host, output, adapter, selected=None, samples=1):
@@ -60,6 +66,8 @@ def verify(host, output, adapter, selected=None, samples=1):
                 exe = stage(binary, folder)
                 if providers:
                     modules = image(exe)["imports"]
+                    if callable(match):
+                        match = match(modules)
                     if guest_factory:
                         from_desktop = any(entry["module"].lower() == "d3d12.dll"
                                            for entry in modules)
@@ -104,41 +112,63 @@ def verify(host, output, adapter, selected=None, samples=1):
                   r"dxc-utils PASS bytes=257 source-freed=1 writable=257 retained=1",
                   providers={"dxc-utils/dxcompiler_xs.dll": ("DxcCreateInstance",)},
                   dependencies=("dxc-utils/dxcompiler.dll",))
+            check("dxc-allocator", "dxc-utils/dxc-utils.exe", ["--allocator", "--report"],
+                  r"dxc-allocator PASS ordinals=3,4 custom=1 retained=1 balanced=1",
+                  providers={"dxc-utils/dxcompiler_xs.dll": ("DxcCreateInstance2",)},
+                  dependencies=("dxc-utils/dxcompiler.dll",))
         xg_addresses = r"xg-texture PASS layouts=13 traced-descriptors=4 element-addresses=273263"
+        if "d3d12-signatures" in selected:
+            check("d3d12-signatures", "d3d12-smoke/d3d12-signatures.exe", ["--report"],
+                  r"d3d12-signatures PASS versions=1.0,1.1 ranges=1 invalid=2",
+                  providers={"d3d12-smoke/d3d12_xs.dll": ("D3D12SerializeVersionedRootSignature",
+                             "D3D12CreateRootSignatureDeserializer", "D3D12CreateVersionedRootSignatureDeserializer")})
+        if "d3d12-guids" in selected:
+            check("d3d12-guids", "d3d12-smoke/d3d12-guids.exe", ["--report"],
+                  guid_receipt,
+                  providers={"d3d12-smoke/d3d12_xs.dll": ("IID_ID3D12Device",)})
         if "xg" in selected:
             check("xg-native-layout", "xg/xg-texture.exe", ["--report"],
                   r"xg-texture PASS descriptors=4 layout-queries=8 plane-records=4 releases=4",
                   providers={"xg/xg_xs.dll": ("XGCreateTextureComputer",)},
                   dependencies=("xmem-smoke/xmem.dll",))
-            check("xg-native-addresses", "xg/xg-texture.exe", ["--addresses", "--report"], xg_addresses,
-                  providers={"xg/xg_xs.dll": ("XGCreateTextureComputer",)},
-                  dependencies=("xmem-smoke/xmem.dll",))
-        if "xg-provider" in selected:
-            check("xg-addresses", "xg-provider/xg-texture.exe", ["--addresses", "--report"], xg_addresses,
-                  providers={"xg-provider/xg_xs.dll": ("XGCreateTextureComputer",)})
+        for suite, addresses_gate, formats_gate, deps in (
+            ("xg", "xg-native-addresses", "xg-native-formats", ("xmem-smoke/xmem.dll",)),
+            ("xg-provider", "xg-addresses", "xg-formats", ()),
+        ):
+            if suite in selected:
+                provider = {f"{suite}/xg_xs.dll": ("XGCreateTextureComputer",)}
+                check(addresses_gate, f"{suite}/xg-texture.exe", ["--addresses", "--report"], xg_addresses,
+                      providers=provider, dependencies=deps)
+                check(formats_gate, f"{suite}/xg-texture.exe", ["--formats", "--report"],
+                      r"xg-formats PASS formats=41 layouts=82 element-addresses=6231134",
+                      providers=provider, dependencies=deps)
         if "gameconfig" in selected:
             check("gameconfig-query", "gameconfig/gameconfig-query.exe", ["--report"],
-                  r"gameconfig-query PASS paths=7 hives=2 missing-key=1",
+                  r"gameconfig-query PASS paths=7 hives=2 missing-key=1 gamecore-readonly=1",
                   providers={"gameconfig/gameconfighelper.dll":
-                             ("GetRegistryPathForPackage", "OpenGameConfigKeyForPackage")})
+                             ("GetRegistryPathForPackage", "OpenGameConfigForGameCore", "OpenGameConfigKeyForPackage")})
         if "gamechat" in selected:
             check("gamechat-roster", "gamechat/gamechat-session.exe", ["--report"],
-                  r"gamechat-session PASS sessions=2 remote-users=3 bitrate-settings=3 stale-handles=1",
+                  r"gamechat-session PASS sessions=2 remote-users=3 bitrate-settings=3 stale-handles=1 xuids=2 contexts=2",
                   providers={"gamechat/GameChat2.dll": ("ChatManagerInitialize", "ChatManagerCleanup",
                              "ChatManagerAddRemoteUser", "ChatManagerGetChatUsers", "ChatManagerRemoveUser",
                              "ChatUserGetIsLocal", "ChatManagerSetAudioEncodingBitrate",
-                             "ChatManagerGetAudioEncodingBitrate")})
+                             "ChatManagerGetAudioEncodingBitrate", "ChatUserGetXboxUserId",
+                             "ChatUserGetCustomUserContext", "ChatUserSetCustomUserContext")})
         if "mfreadwrite" in selected:
             check("mfreadwrite-pcm", "mfreadwrite/mfreadwrite-smoke.exe", ["--report"],
-                  r"mfreadwrite PASS pcm=48000/2/16 frames=2501 bytes=10004 seek=1200 eos=2 invalid=2",
-                  providers={"mfreadwrite/mfreadwrite.dll": ("MFCreateSourceReaderFromByteStream",)})
+                  r"mfreadwrite PASS pcm=48000/2/16 frames=2501 bytes=10004 seek=1200 eos=2 invalid=2 file-inputs=2",
+                  providers={"mfreadwrite/mfreadwrite.dll": ("MFCreateSourceReaderFromByteStream", "MFCreateSourceReaderFromURL")})
         if "xaudio" in selected:
             check("xaudio-mix", "xaudio/xaudio.exe", ["--report"],
-                  r"xaudio PASS factories=1,9 effects=3 spatial=2/2 mix=2/2",
-                  providers={"xaudio/XAudio2_9.dll": ("#1", "#2", "#3", "#4", "#5", "#6", "#9")})
+                  r"xaudio PASS factories=1,8,9 effects=3 spatial=2/2 mix=4/4",
+                  providers={"xaudio/XAudio2_9.dll": ("#1", "#2", "#3", "#4", "#5", "#6", "#8", "#9")})
         if "xmem" in selected:
             check("xmem-default", "xmem-smoke/xmem-smoke.exe", ["--report"],
-                  re.escape("xmem-default: PASS (ordinary and 64 KiB allocations, host working set v2, virtual reserve/commit)"), providers={"xmem-smoke/xmem.dll": memory_symbols})
+                  re.escape("xmem-default: PASS (allocator pairs 1/6 and 2/7, ordinary and 64 KiB allocations, "
+                            "host working set v2, virtual reserve/commit)"),
+                  providers={"xmem-smoke/xmem.dll": (*memory_symbols, "XMemAlloc", "XMemFree",
+                                                     "XMemGetWorkingSetStatistics", "XMemVirtualAlloc")})
         if "graphics" in selected:
             check("desktop-clear", "graphics/desktop-clear.exe", [*gpu_args, "--report"],
                   rf"desktop-clear PASS adapter=.+ pci={pci} pixels=481/481 row_bytes=148 row_pitch=[1-9][0-9]*")
@@ -197,13 +227,18 @@ def verify(host, output, adapter, selected=None, samples=1):
 GATE_LABELS = {
     "route-RRRRDD": "Upper route and guest output", "route-LDDRRRR": "Lower route and collision",
     "invalid-route": "Invalid input exit status", "xmem-default": "Xbox memory allocation, working set and CPU pages",
+    "d3d12-signatures": "Root signature 1.0 and 1.1 serialization, deserialization and errors",
+    "d3d12-guids": "D3D12 and DXGI identifier data by name and ordinal",
     "xg-native-layout": "Native Scarlett XG texture layouts with Rust XMem",
     "xg-native-addresses": "Supplied XG texture layouts and element addresses",
+    "xg-native-formats": "Supplied XG layouts and addresses across 41 formats",
+    "xg-formats": "TuxBox XG layouts and addresses across 41 formats",
     "xg-addresses": "TuxBox XG texture layouts and element addresses",
     "gameconfig-query": "Package registry paths and configuration keys",
     "gamechat-roster": "Game-chat session, remote roster and bitrate settings",
     "mfreadwrite-pcm": "PCM source reading, seeking and end of stream",
     "xaudio-mix": "Xbox audio ordinals, spatial routing and stereo mix",
+    "dxc-allocator": "Xbox DXC caller allocator and factory ordinals",
     "dxc-create-blob": "Xbox DXC utilities and binary blob lifetime",
     "desktop-clear": "Desktop D3D12 pixel readback", "root-signature": "Xbox root-signature import and compute readback",
     "guest-command-list": "Xbox command-list clear and ordered copy readback",

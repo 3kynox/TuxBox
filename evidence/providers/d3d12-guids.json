@@ -1,0 +1,51 @@
+{
+  "reference": "EmbeddedXvd/Windows/System32/d3d12_xs.dll",
+  "reference_sha256": "e8279440c6980eba9ba42de1e189870407c7665cf2b3fc1fb683ac07cf07f780",
+  "provider_sha256": "9d90d60b064ebd16a6a45dec36abfbb97167310d9a5a6dc5b4276658342d33fa",
+  "sdk_guest_sha256": "2c3505854c35015af8063ccfa547fc3e777ee6b52436d4b74077629ce6716d84",
+  "reference_data_exports": 32,
+  "compared_data_exports": 30,
+  "method": "Compared the PE ordinal and 16 data bytes of each identifier with the supplied console DLL. An independently compiled SDK guest checks its imported data address by name, by ordinal and against the Windows SDK value.",
+  "guids_sha256_in_ascending_ordinal_order": "908d40e0f1e4201ea7c19a90f62ffc53fceed6fd545182a8ba72a5a889f8709c",
+  "remaining_data_exports": [
+    "IID_ID3D12XboxDmaCommandList",
+    "IID_IGraphicsUnknown"
+  ],
+  "runs": [
+    {
+      "provider": "1789159601 experimental-11.0-20260910b-x86_64",
+      "checks": [
+        {
+          "gate": "d3d12-guids",
+          "passed": true,
+          "exit_code": 0,
+          "receipt": "d3d12-guids PASS identifiers=30 bytes=480"
+        }
+      ]
+    },
+    {
+      "provider": "1792432585 GE-Proton11-11",
+      "checks": [
+        {
+          "gate": "d3d12-guids",
+          "passed": true,
+          "exit_code": 0,
+          "receipt": "d3d12-guids PASS identifiers=30 bytes=480"
+        }
+      ]
+    }
+  ],
+  "companion_ordinal_test": {
+    "reference": "EmbeddedXvd/Windows/System32/d3d12_x.dll",
+    "reference_sha256": "fafdfb277c36f654a0043241edcf9bb8eefee6c1092c09090b4913e917f8c469",
+    "reference_exports": 53,
+    "provider_sha256": "c3d2dbd015d4b98d123e718202dd1516a26c91aae89992064de143fcd9a6f84f",
+    "guest_sha256": "b81803b65849cf107cbf2285ea68ea4e6933b1b59240027e1db541dd6b2a9dfd",
+    "ordinals_matched": 34,
+    "verified_guid_values": 29,
+    "absent_optional_identifier": "WKPDID_D3DDebugObjectNameW",
+    "host": "1789159601 experimental-11.0-20260910b-x86_64",
+    "receipt": "d3d12-guids PASS identifiers=29 bytes=464",
+    "scope": "Companion DLL used as an ordinal and GUID control only."
+  }
+}

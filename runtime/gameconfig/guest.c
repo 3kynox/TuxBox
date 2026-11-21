@@ -1,4 +1,4 @@
-// Desktop-host control for two GameConfigHelper exports. Compile once and run
+// Desktop-host control for GameConfigHelper exports. Compile once and run
 // the same executable beside either DLL in separate directories.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <wchar.h>
 
+__declspec(dllimport) HRESULT WINAPI OpenGameConfigForGameCore(REGSAM, HKEY *);
 __declspec(dllimport) HRESULT WINAPI GetRegistryPathForPackage(PCWSTR, PCWSTR, HSTRING *);
 __declspec(dllimport) HRESULT WINAPI OpenGameConfigKeyForPackage(PCWSTR, REGSAM, PCWSTR, HKEY *);
 
@@ -22,6 +23,7 @@ static BOOL local_provider(void) {
     if (!exe_name || !dll_name || _wcsicmp(dll_name + 1, L"gameconfighelper.dll")) return FALSE;
     *exe_name = *dll_name = L'\0';
     return !_wcsicmp(exe, dll)
+        && GetProcAddress(module, "OpenGameConfigForGameCore") == GetProcAddress(module, MAKEINTRESOURCEA(15))
         && GetProcAddress(module, "GetRegistryPathForPackage") == GetProcAddress(module, MAKEINTRESOURCEA(13))
         && GetProcAddress(module, "OpenGameConfigKeyForPackage") == GetProcAddress(module, MAKEINTRESOURCEA(17));
 }
@@ -93,6 +95,24 @@ static BOOL open_marker(PCWSTR user, DWORD expected) {
         && marker == expected;
 }
 
+static BOOL gamecore(HKEY machine) {
+    HKEY key = NULL;
+    if (OpenGameConfigForGameCore(KEY_QUERY_VALUE, &key) != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
+        || key != NULL) return FALSE;
+    if (RegCreateKeyExW(machine, L"GAMECONFIG", 0, NULL, REG_OPTION_VOLATILE,
+                        KEY_SET_VALUE, NULL, &key, NULL)) return FALSE;
+    const DWORD marker = 0x3127;
+    LSTATUS status = RegSetValueExW(key, L"Title", 0, REG_DWORD, (const BYTE *)&marker, sizeof(marker));
+    RegCloseKey(key);
+    if (status || FAILED(OpenGameConfigForGameCore(KEY_QUERY_VALUE, &key))) return FALSE;
+    DWORD actual = 0, type = 0, size = sizeof(actual);
+    status = RegQueryValueExW(key, L"Title", NULL, &type, (BYTE *)&actual, &size);
+    BOOL ok = status == ERROR_SUCCESS && type == REG_DWORD && size == sizeof(marker) && actual == marker;
+    status = RegSetValueExW(key, L"Title", 0, REG_DWORD, (const BYTE *)&marker, sizeof(marker));
+    RegCloseKey(key);
+    return ok && status == ERROR_ACCESS_DENIED;
+}
+
 static BOOL registry(void) {
     // Override both predefined roots in this process so the DLL can only open
     // synthetic keys. Every write is scoped to a temporary current-user key.
@@ -110,7 +130,7 @@ static BOOL registry(void) {
     machine_override = TRUE;
     if (RegOverridePredefKey(HKEY_USERS, users)) goto cleanup;
     users_override = TRUE;
-    result = open_marker(NULL, 0x1234) && open_marker(L"UnusedOnDesktop", 0x5678)
+    result = gamecore(machine) && open_marker(NULL, 0x1234) && open_marker(L"UnusedOnDesktop", 0x5678)
         && OpenGameConfigKeyForPackage(L"NoSuchPackage", KEY_QUERY_VALUE, NULL, &missing)
             == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
 cleanup:
@@ -129,7 +149,7 @@ int wmain(int argc, wchar_t **argv) {
     if (!local_provider()) { fputs("Expected the app-local GameConfigHelper DLL and its ordinals\n", stderr); return 1; }
     if (!strings()) { fputs("GameConfig registry string comparison failed\n", stderr); return 1; }
     if (!registry()) { fputs("GameConfig registry key comparison failed\n", stderr); return 1; }
-    const char *receipt = "gameconfig-query PASS paths=7 hives=2 missing-key=1";
+    const char *receipt = "gameconfig-query PASS paths=7 hives=2 missing-key=1 gamecore-readonly=1";
     if (argc == 3) {
         FILE *report;
         if (_wfopen_s(&report, argv[2], L"wb")) return 1;

@@ -83,8 +83,10 @@ const _: () = {
 impl Plane {
     pub(crate) fn compute(desc: &Desc) -> Result<Self, i32> {
         let (block, element_bytes, tile_side): (u32, u32, u32) = match desc.format {
-            28 | 87 | 90 => (1, 4, 32),  // RGBA8 UNORM, BGRA8 UNORM/TYPELESS
-            76 | 83 | 98 => (4, 16, 16), // BC3 TYPELESS, BC5 UNORM, BC7 UNORM
+            // Packed RGB, RGBA8, RG16, R32 (color), and BGR(A/X)8.
+            23..=39 | 41..=43 | 87 | 88 | 90..=93 => (1, 4, 32),
+            // BC2/3/5/6H/7 each store a 4x4 block in 16 bytes.
+            73..=78 | 82..=84 | 94..=99 => (4, 16, 16),
             _ => return Err(E_NOTIMPL),
         };
         if desc.dimension != 3

@@ -1,8 +1,14 @@
 # Xbox-facing D3D12
 
-The app-local `d3d12_xs.dll` provides device creation for one Xbox caller profile and forwards root-signature serialization to desktop D3D12. Three original x64 guest executables exercise these paths on a selected hardware adapter.
+The app-local `d3d12_xs.dll` provides device creation for one Xbox caller profile and routes the four root-signature serialization and deserialization exports to desktop D3D12. The SDK guests exercise both paths on a selected hardware adapter.
 
-The Rust device factory validates the guest creation record and exports the device GUID as data. Each guest COM object holds its native D3D12 interface. The command queue translates guest objects to native handles and presents through DXGI. [Device and resource slots](src/device.rs) · [Queue and command list](src/commands.rs) · [Presentation](src/present.rs)
+The Rust device factory validates the guest creation record. Each guest COM object holds its native D3D12 interface. The command queue translates guest objects to native handles and presents through DXGI. [Device and resource slots](src/device.rs) · [Queue and command list](src/commands.rs) · [Presentation](src/present.rs)
+
+## Exported identifiers
+
+Games can import 29 D3D12 and DXGI interface IDs plus the wide debug-object name key as read-only data. A guest compares all 480 bytes with the Windows SDK and checks that the import table, name lookup and ordinal lookup resolve to the same address. Interface method coverage is tracked separately. [Rust exports](src/guids.rs) · [Guest](guid_guest.cpp) · [Console comparison](../../evidence/providers/d3d12-guids.json)
+
+The default export ordinals match the reviewed 54-export Scarlett DLL. Other builds can assign different ordinals to the same names. Use `python build.py d3d12 --d3d12-reference /path/to/d3d12_xs.dll` to take the ordinal assignments from a supplied library, then run `python tuxbox.py verify --only d3d12-guids --output build/d3d12-identifiers.json`. The device factory still supports the 64-byte creation record described below.
 
 ## Guest devices and frames
 
@@ -20,7 +26,9 @@ The same guest binaries exercised the Rust provider and its C++ predecessor on L
 
 ## Root-signature serialization
 
-The `graphics-abi` suite runs `d3d12-root-smoke.exe`. Its `D3D12SerializeRootSignature` import resolves through a PE forwarder in `d3d12_xs.dll`. The fixture supplies four root constants at `b5, space2` and a root UAV at `u3, space4`. A desktop deserializer checks the version 1.0 descriptor layout and bindings. The guest uses desktop device and command-list interfaces to dispatch an original DXIL compute shader twice. It checks 48 output words and 16 guards. [Shader](affine.hlsl) · [Microsoft serialization contract](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-d3d12serializerootsignature) · [Scarlett import inventory](https://github.com/brcly/TomBox/blob/ca6cf6a6b44e36d3ca4420db55a660a7bc6d6d5a/tools/progress/progress.json)
+The `graphics-abi` suite runs `d3d12-root-smoke.exe`. Its `D3D12SerializeRootSignature` import resolves through a PE forwarder in `d3d12_xs.dll`. The fixture supplies four root constants at `b5, space2` and a root UAV at `u3, space4`. The Xbox-facing deserializer checks the version 1.0 descriptor layout and bindings. The guest uses desktop device and command-list interfaces to dispatch an original DXIL compute shader twice. It checks 48 output words and 16 guards. [Shader](affine.hlsl) · [Microsoft serialization contract](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-d3d12serializerootsignature) · [Reviewed library exports](../../docs/LIBRARIES.md)
+
+The `d3d12-signatures` suite calls the versioned serializer with 1.0 root constants and a 1.1 descriptor table. It checks both deserializers after releasing their source blobs, including shader registers, descriptor flags and truncated-input errors. The original console DLL on Proton returns `E_NOINTERFACE` at the first serialization call in this standalone guest. [Signature results](../../evidence/providers/d3d12-signatures.json)
 
 ## Build and verify
 

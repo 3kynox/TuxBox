@@ -17,6 +17,7 @@ using Microsoft::WRL::ComPtr;
 
 extern "C" {
 __declspec(dllimport) HRESULT WINAPI GuestCreate(IXAudio2**, UINT32, XAUDIO2_PROCESSOR);
+__declspec(dllimport) HRESULT WINAPI GuestCreateV29(IXAudio2**, UINT32, XAUDIO2_PROCESSOR);
 __declspec(dllimport) HRESULT WINAPI GuestVersioned(IXAudio2**, UINT32, XAUDIO2_PROCESSOR, UINT32);
 __declspec(dllimport) HRESULT WINAPI GuestReverb(IUnknown**);
 __declspec(dllimport) HRESULT WINAPI GuestMeter(IUnknown**);
@@ -124,8 +125,9 @@ int wmain(int argc, wchar_t** argv) {
                 "expected app-local Xbox provider");
         check(CoInitializeEx(nullptr, COINIT_MULTITHREADED), "initialize COM");
         {
-            ComPtr<IXAudio2> ordinary, versioned;
+            ComPtr<IXAudio2> ordinary, v29, versioned;
             check(GuestCreate(&ordinary, 0, XAUDIO2_DEFAULT_PROCESSOR), "ordinal 1 factory");
+            check(GuestCreateV29(&v29, 0, XAUDIO2_DEFAULT_PROCESSOR), "ordinal 8 factory");
             check(GuestVersioned(&versioned, 0, XAUDIO2_DEFAULT_PROCESSOR, 0x0a000007), "ordinal 9 factory");
             ComPtr<IUnknown> reverb, meter, eq;
             check(GuestReverb(&reverb), "reverb");
@@ -136,10 +138,11 @@ int wmain(int argc, wchar_t** argv) {
             require(FAILED(GuestEffect(unknown, &missing, nullptr, 0)) && !missing,
                     "unknown effect must fail");
             check_spatial();
+            check_mix(v29.Get(), meter.Get());
             check_mix(versioned.Get(), meter.Get());
         }
         CoUninitialize();
-        fputs("xaudio PASS factories=1,9 effects=3 spatial=2/2 mix=2/2", out);
+        fputs("xaudio PASS factories=1,8,9 effects=3 spatial=2/2 mix=4/4", out);
         fclose(out);
         return 0;
     } catch (const std::exception& error) {

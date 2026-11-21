@@ -7,4 +7,7 @@ EXPORTS
     ChatManagerInitialize @16
     ChatManagerRemoveUser @18
     ChatManagerSetAudioEncodingBitrate @19
+    ChatUserGetCustomUserContext @29
     ChatUserGetIsLocal @31
+    ChatUserGetXboxUserId @36
+    ChatUserSetCustomUserContext @40

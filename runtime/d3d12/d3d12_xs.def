@@ -1,5 +1,37 @@
 LIBRARY d3d12_xs
 EXPORTS
-    D3D12SerializeRootSignature=d3d12.D3D12SerializeRootSignature
-    D3D12XboxCreateDevice
-    IID_ID3D12Device DATA
+    D3D12CreateRootSignatureDeserializer=d3d12.D3D12CreateRootSignatureDeserializer @7
+    D3D12CreateVersionedRootSignatureDeserializer=d3d12.D3D12CreateVersionedRootSignatureDeserializer @8
+    D3D12SerializeRootSignature=d3d12.D3D12SerializeRootSignature @10
+    D3D12SerializeVersionedRootSignature=d3d12.D3D12SerializeVersionedRootSignature @11
+    D3D12XboxCreateDevice @13
+    IID_ID3D12CommandAllocator @22 DATA
+    IID_ID3D12CommandList @23 DATA
+    IID_ID3D12CommandQueue @24 DATA
+    IID_ID3D12Debug @25 DATA
+    IID_ID3D12DescriptorHeap @26 DATA
+    IID_ID3D12Device @27 DATA
+    IID_ID3D12DeviceChild @28 DATA
+    IID_ID3D12Fence @29 DATA
+    IID_ID3D12GraphicsCommandList @30 DATA
+    IID_ID3D12Heap @31 DATA
+    IID_ID3D12Object @32 DATA
+    IID_ID3D12Pageable @33 DATA
+    IID_ID3D12PipelineState @34 DATA
+    IID_ID3D12Resource @35 DATA
+    IID_ID3D12RootSignature @36 DATA
+    IID_ID3D12RootSignatureDeserializer @37 DATA
+    IID_IDXGIAdapter @39 DATA
+    IID_IDXGIAdapter1 @40 DATA
+    IID_IDXGIAdapter2 @41 DATA
+    IID_IDXGIDevice @42 DATA
+    IID_IDXGIDevice1 @43 DATA
+    IID_IDXGIDevice2 @44 DATA
+    IID_IDXGIDeviceSubObject @45 DATA
+    IID_IDXGIFactory @46 DATA
+    IID_IDXGIFactory1 @47 DATA
+    IID_IDXGIFactory2 @48 DATA
+    IID_IDXGIObject @49 DATA
+    IID_IDXGISwapChain @50 DATA
+    IID_IDXGISwapChain1 @51 DATA
+    WKPDID_D3DDebugObjectNameW @54 DATA

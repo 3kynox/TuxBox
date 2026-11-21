@@ -6,4 +6,5 @@ EXPORTS
     GuestEffect @4 NONAME
     GuestCalculate @5 NONAME
     GuestInitialize @6 NONAME
+    GuestCreateV29 @8 NONAME
     GuestVersioned @9 NONAME

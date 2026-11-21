@@ -91,7 +91,45 @@ def find_dxc(override):
     raise ValueError("Install DirectX Shader Compiler (dxc), set DXC, or pass --dxc PATH")
 
 
-def build_target(tools, target, dxc):
+def d3d12_exports(src, out, reference):
+    """Select Xbox ordinals independently of the in-process device creation profile."""
+    definition = src / "d3d12_xs.def"
+    lines = definition.read_text().splitlines()
+    if reference is not None:
+        import pefile
+        from project_tuxbox.inspect import export_table
+        try:
+            slots, data = export_table(reference)
+        except pefile.PEFormatError as error:
+            raise ValueError(f"{reference.name}: {error}") from error
+        ordinals = {name: ordinal for ordinal, names in slots.items() for name in names}
+    entries, identifiers = [], []
+    for line in lines[2:]:
+        symbol, ordinal, *flags = line.split()
+        name = symbol.partition("=")[0]
+        if reference is not None:
+            slot = ordinals.get(name)
+            if slot is None:
+                # The frame ABI guest imports the device IID. Additional SDK IDs
+                # vary with the GDK build and are optional in both DLL and guest.
+                if flags == ["DATA"] and name != "IID_ID3D12Device":
+                    continue
+                raise ValueError(f"{reference.name} lacks {name}, required by the D3D12 guests")
+            if ("DATA" in flags) != (slot in data):
+                raise ValueError(f"{reference.name} has an incompatible export type for {name}")
+            ordinal = f"@{slot}"
+        entries.append("    " + " ".join([symbol, ordinal, *flags]))
+        if "DATA" in flags:
+            expected = f"__uuidof({name[4:]})" if name.startswith("IID_") else name
+            identifiers.append(f"GUID_EXPORT({name}, {expected}, {ordinal[1:]})")
+    (out / "guid-exports.inc").write_text("\n".join(identifiers) + "\n")
+    if reference is not None:
+        definition = out / "d3d12-reference.def"
+        definition.write_text("\n".join(lines[:2] + entries) + "\n")
+    return definition
+
+
+def build_target(tools, target, dxc, d3d12_reference=None):
     if target == "route":
         obj = tools.compile(ROOT / "fixtures/route_game.c", OUTPUT, "/W4", "/WX")
         tools.link(OUTPUT / "route-game.exe", obj, "kernel32.lib")
@@ -136,7 +174,7 @@ def build_target(tools, target, dxc):
                        *RUST_STD_LIBS, exports=src / "mfreadwrite.def")
             guest = tools.compile(src / "guest.cpp", out, "/W4", "/WX")
             tools.link(out / "mfreadwrite-smoke.exe", guest, "mfreadwrite.lib", "mfplat.lib",
-                       "mfuuid.lib", "ole32.lib", "kernel32.lib")
+                       "mfuuid.lib", "ole32.lib", "shlwapi.lib", "kernel32.lib")
         elif target == "xaudio":
             tools.link(out / "XAudio2_9.dll", archive, *RUST_STD_LIBS, exports=src / "xaudio.def")
             guest = tools.compile(src / "guest.cpp", out, "/W4", "/WX")
@@ -161,7 +199,11 @@ def build_target(tools, target, dxc):
         out.mkdir(parents=True, exist_ok=True)
         provider = tools.rust_library("tuxbox-d3d12")
         tools.link(out / "d3d12_xs.dll", provider, "dxgi.lib", "d3d12.lib", "user32.lib",
-                   *RUST_STD_LIBS, exports=src / "d3d12_xs.def")
+                   *RUST_STD_LIBS, exports=d3d12_exports(src, out, d3d12_reference))
+        signature = tools.compile(src / "signature_guest.cpp", out, "/W4", "/WX")
+        tools.link(out / "d3d12-signatures.exe", signature, "d3d12_xs.lib", "kernel32.lib")
+        ids = tools.compile(src / "guid_guest.cpp", out, "/W4", "/WX", f"/I{out}")
+        tools.link(out / "d3d12-guids.exe", ids, "d3d12_xs.lib", "dxguid.lib", "kernel32.lib")
         frame = tools.compile(src / "frame_guest.cpp", out, "/W4", "/WX")
         display = tools.compile(src / "frame_present.cpp", out, "/W4", "/WX")
         tools.link(out / "xbox-frame.exe", frame, display, "d3d12_xs.lib", "dxgi.lib",
@@ -196,6 +238,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("target", nargs="?", default="all", choices=("all", *TARGETS))
     parser.add_argument("--dxc", metavar="PATH", help="DXC executable to compile the D3D12 guest shader")
+    parser.add_argument("--d3d12-reference", type=Path, metavar="DLL",
+                        help="use export ordinals from this supplied x64 D3D12 Xbox DLL")
     args = parser.parse_args()
     try:
         # Preserve the standalone MinGW route build on hosts without an xwin SDK.
@@ -217,7 +261,7 @@ def main():
         dxc = find_dxc(args.dxc) if "d3d12" in targets else None
         tools = Toolchain()
         for target in targets:
-            build_target(tools, target, dxc)
+            build_target(tools, target, dxc, args.d3d12_reference)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"Build failed: {error}\n")
     return 0

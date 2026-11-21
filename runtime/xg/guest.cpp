@@ -114,12 +114,13 @@ struct AddressCase {
     UINT layout;
     UINT64 layout_hash, address_hash;
 };
+constexpr AddressCase pixel_tiled{261, 183, 5, DXGI_FORMAT_B8G8R8A8_UNORM, 261, 0x245daf2aa8688834, 0xac277f5a5410c3ea};
+constexpr AddressCase block_linear{128, 128, 5, DXGI_FORMAT_BC7_UNORM, 256, 0xcb6161b60b4aaca3, 0x86e3e5ec57eee485};
+constexpr AddressCase block_tiled{65, 33, 5, DXGI_FORMAT_BC7_UNORM, 261, 0x8a0097d72947a2da, 0x6e056f26dbe773ba};
+constexpr AddressCase pixel_linear{513, 257, 5, DXGI_FORMAT_R8G8B8A8_UNORM, 256, 0xa21aa988236a8804, 0x0fb6d256e228228b};
 constexpr AddressCase address_cases[]{
     {1, 29, 5, DXGI_FORMAT_R8G8B8A8_UNORM, 261, 0x5fb8b9b2e388ec41, 0xfed8254ff0c5da20},
-    {261, 183, 5, DXGI_FORMAT_B8G8R8A8_UNORM, 261, 0x245daf2aa8688834, 0xac277f5a5410c3ea},
-    {128, 128, 5, DXGI_FORMAT_BC7_UNORM, 256, 0xcb6161b60b4aaca3, 0x86e3e5ec57eee485},
-    {65, 33, 5, DXGI_FORMAT_BC7_UNORM, 261, 0x8a0097d72947a2da, 0x6e056f26dbe773ba},
-    {513, 257, 5, DXGI_FORMAT_R8G8B8A8_UNORM, 256, 0xa21aa988236a8804, 0x0fb6d256e228228b},
+    pixel_tiled, block_linear, block_tiled, pixel_linear,
     // Shape fields recorded during Frosty's startup (one sample with quality zero).
     {32, 32, 6, DXGI_FORMAT_B8G8R8A8_TYPELESS, 261, 0xba76c744255a51ae, 0xf62c0a92129835b4},
     {843, 5, 1, DXGI_FORMAT_B8G8R8A8_TYPELESS, 261, 0x3d34d55e54e1d625, 0x7f4f57f937403266},
@@ -150,8 +151,8 @@ bool verify_addresses(const AddressCase& test, UINT& checked) {
     ok = SUCCEEDED(c->methods->get_layout(c, &output.layout)) && guards_intact(output) &&
          hash_bytes(seed, &output.layout, sizeof(output.layout)) == test.layout_hash && ok;
     UINT64 hash = seed;
-    const bool compressed = test.format == DXGI_FORMAT_BC7_UNORM || test.format == DXGI_FORMAT_BC3_TYPELESS ||
-                            test.format == DXGI_FORMAT_BC5_UNORM;
+    const bool compressed = (test.format >= DXGI_FORMAT_BC1_TYPELESS && test.format <= DXGI_FORMAT_BC5_SNORM) ||
+                            (test.format >= DXGI_FORMAT_BC6H_TYPELESS && test.format <= DXGI_FORMAT_BC7_UNORM_SRGB);
     const UINT block = compressed ? 4 : 1;
     for (UINT mip = 0; mip < desc.mips; ++mip) {
         UINT w = test.width >> mip, h = test.height >> mip;
@@ -170,13 +171,68 @@ bool verify_addresses(const AddressCase& test, UINT& checked) {
                           test.width, test.height, static_cast<unsigned>(test.format), test.layout);
     return ok;
 }
+// Exercise both layouts for each color interpretation against independently captured layouts
+// and element addresses for the corresponding storage size.
+bool verify_formats(UINT& formats, UINT& addresses) {
+    constexpr DXGI_FORMAT pixels[]{
+        DXGI_FORMAT_R10G10B10A2_TYPELESS, DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R10G10B10A2_UINT,
+        DXGI_FORMAT_R11G11B10_FLOAT, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM,
+        DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_R8G8B8A8_UINT, DXGI_FORMAT_R8G8B8A8_SNORM,
+        DXGI_FORMAT_R8G8B8A8_SINT, DXGI_FORMAT_R16G16_TYPELESS, DXGI_FORMAT_R16G16_FLOAT,
+        DXGI_FORMAT_R16G16_UNORM, DXGI_FORMAT_R16G16_UINT, DXGI_FORMAT_R16G16_SNORM, DXGI_FORMAT_R16G16_SINT,
+        DXGI_FORMAT_R32_TYPELESS, DXGI_FORMAT_R32_FLOAT, DXGI_FORMAT_R32_UINT, DXGI_FORMAT_R32_SINT,
+        DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8X8_UNORM, DXGI_FORMAT_B8G8R8A8_TYPELESS,
+        DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, DXGI_FORMAT_B8G8R8X8_TYPELESS, DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+    };
+    constexpr DXGI_FORMAT blocks[]{
+        DXGI_FORMAT_BC2_TYPELESS, DXGI_FORMAT_BC2_UNORM, DXGI_FORMAT_BC2_UNORM_SRGB,
+        DXGI_FORMAT_BC3_TYPELESS, DXGI_FORMAT_BC3_UNORM, DXGI_FORMAT_BC3_UNORM_SRGB,
+        DXGI_FORMAT_BC5_TYPELESS, DXGI_FORMAT_BC5_UNORM, DXGI_FORMAT_BC5_SNORM,
+        DXGI_FORMAT_BC6H_TYPELESS, DXGI_FORMAT_BC6H_UF16, DXGI_FORMAT_BC6H_SF16,
+        DXGI_FORMAT_BC7_TYPELESS, DXGI_FORMAT_BC7_UNORM, DXGI_FORMAT_BC7_UNORM_SRGB,
+    };
+    auto check_pair = [&](DXGI_FORMAT format, AddressCase linear, AddressCase tiled) {
+        linear.format = tiled.format = format;
+        ++formats;
+        return verify_addresses(linear, addresses) && verify_addresses(tiled, addresses);
+    };
+    for (auto format : pixels) if (!check_pair(format, pixel_linear, pixel_tiled)) return false;
+    for (auto format : blocks) if (!check_pair(format, block_linear, block_tiled)) return false;
+    return true;
+}
+
+// Time the same checked workload inside the guest after one warm-up. Process
+// startup and report I/O stay outside the timed region.
+bool benchmark_formats(FILE* output) {
+    UINT formats = 0, addresses = 0;
+    if (!verify_formats(formats, addresses)) return false;
+    LARGE_INTEGER hz;
+    if (!QueryPerformanceFrequency(&hz)) return false;
+    for (UINT iteration = 0; iteration < 7; ++iteration) {
+        formats = addresses = 0;
+        LARGE_INTEGER start, end;
+        if (!QueryPerformanceCounter(&start) || !verify_formats(formats, addresses) ||
+            !QueryPerformanceCounter(&end)) return false;
+        if (std::fprintf(output, "formats=%u addresses=%u ticks=%lld frequency=%lld\n",
+                         formats, addresses, end.QuadPart - start.QuadPart, hz.QuadPart) < 0) return false;
+    }
+    return true;
+}
+
 }
 
 int wmain(int argc, wchar_t** argv) {
+    if (argc == 3 && !std::wcscmp(argv[1], L"--bench-formats") && *argv[2]) {
+        FILE* file;
+        if (_wfopen_s(&file, argv[2], L"wb")) return 1;
+        const bool ok = benchmark_formats(file);
+        return std::fclose(file) == 0 && ok ? 0 : 1;
+    }
     const bool addresses = argc > 1 && std::wcscmp(argv[1], L"--addresses") == 0;
-    const int next = addresses ? 2 : 1;
+    const bool formats = argc > 1 && std::wcscmp(argv[1], L"--formats") == 0;
+    const int next = (addresses || formats) ? 2 : 1;
     if (argc != next && (argc != next+2 || std::wcscmp(argv[next], L"--report") || !*argv[next+1])) {
-        std::fputs("usage: xg-texture.exe [--addresses] [--report FILE]\n", stderr);
+        std::fputs("usage: xg-texture.exe [--addresses|--formats] [--report FILE] or --bench-formats FILE\n", stderr);
         return 2;
     }
     for (const auto& sample : samples) if (!verify(sample)) return 1;
@@ -186,6 +242,12 @@ int wmain(int argc, wchar_t** argv) {
         UINT checked = 0;
         for (const auto& test : address_cases) if (!verify_addresses(test, checked)) return 1;
         std::snprintf(extended, sizeof(extended), "xg-texture PASS layouts=13 traced-descriptors=4 element-addresses=%u", checked);
+        receipt = extended;
+    }
+    if (formats) {
+        UINT count = 0, offsets = 0;
+        if (!verify_formats(count, offsets)) return 1;
+        std::snprintf(extended, sizeof(extended), "xg-formats PASS formats=%u layouts=%u element-addresses=%u", count, count*2, offsets);
         receipt = extended;
     }
     if (argc == next+2) {

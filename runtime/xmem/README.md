@@ -1,6 +1,6 @@
 # Xbox memory provider
 
-The [Rust provider](src/lib.rs) implements two CPU allocation forms. `XMemAlloc` and `XMemFree` (ordinals 1 and 6) use the default allocation path when no hooks are installed. The default exports retain ordinals 2 and 7. Custom allocator hooks and GPU-visible mappings are pending. [Console PE export inventory](https://github.com/brcly/TomBox/blob/ca6cf6a6b44e36d3ca4420db55a660a7bc6d6d5a/analysis/syslib/xmem.dll.json)
+The [Rust provider](src/lib.rs) implements two CPU allocation forms. `XMemAlloc` and `XMemFree` (ordinals 1 and 6) use the default allocation path when no hooks are installed. The default exports retain ordinals 2 and 7. Both pairs passed the alignment, write and release checks on Proton Experimental and GE-Proton. Custom allocator hooks and GPU-visible mappings are pending. [Console export inventory](../../evidence/library-status.json) · [Valve test](../../evidence/providers/xmem-valve.json) · [GE test](../../evidence/providers/xmem-ge.json)
 
 | Attributes | Guest request | CPU backing | Verified alignment |
 | --- | ---: | --- | ---: |
@@ -38,4 +38,4 @@ WINEPREFIX="$HOME/.local/share/project-tuxbox/xmem-prefix" \
 PROTONPATH="/path/to/proton-directory" umu-run "$PWD/xmem-smoke.exe" --report xmem-result.txt
 ```
 
-A passing guest exits zero and writes `xmem-default: PASS (ordinary and 64 KiB allocations, host working set v2, virtual reserve/commit)` to both stdout and the optional result file. To audit the binary boundary, run `llvm-readobj --coff-imports xmem-smoke.exe` and `llvm-readobj --coff-exports xmem.dll` in the same directory. Record native Windows and individual Proton providers separately. [UMU launch variables](https://github.com/Open-Wine-Components/umu-launcher#usage)
+A passing guest exits zero and writes `xmem-default: PASS (allocator pairs 1/6 and 2/7, ordinary and 64 KiB allocations, host working set v2, virtual reserve/commit)` to both stdout and the optional result file. To audit the binary boundary, run `llvm-readobj --coff-imports xmem-smoke.exe` and `llvm-readobj --coff-exports xmem.dll` in the same directory. Record native Windows and individual Proton providers separately. [UMU launch variables](https://github.com/Open-Wine-Components/umu-launcher#usage)

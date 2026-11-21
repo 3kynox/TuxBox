@@ -1,0 +1,88 @@
+{
+  "title_sha256": "ae39eb1e92fa806df189c768c1478a53dfb54a2cc9769a9f2301ca7921e3eb04",
+  "observation": "Black",
+  "verified": false,
+  "expected": "Animated green Matrix code behind the menu controls, as reported by the player.",
+  "source_trial": "evidence/matrix-awakens-launch.json, trials.menu-video-audio",
+  "provider": "1793301796 experimental-11.0-20261027b-x86_64",
+  "gpu": "NVIDIA GeForce RTX 4070 Ti SUPER",
+  "graphics_provider_sha256": "dbad134999f615f4f18708037249457f838bf1b5ec55b6f71dd4610fb542b380",
+  "config_sha256": "3487955fcbdb92d9ffb1610e02d0231b6fbb1b59340575e291112868df91bb85",
+  "capture_sha256": "ce4e970f75b5260715c134d109043945b8487167383bdacaac600deb092a45bf",
+  "capture_size": [
+    1280,
+    720
+  ],
+  "fps": 12,
+  "start_seconds": 40,
+  "frames": 180,
+  "regions": [
+    {
+      "region": "left background",
+      "x": 48,
+      "y": 216,
+      "width": 72,
+      "height": 320,
+      "exact_black_frames": 180,
+      "distinct_frames": 1,
+      "black_rgb24_sha256": "a8fd2e78a831e046e548454d1f0863dd7c3f29bc8e5db3cfe1b1d3536a292462"
+    },
+    {
+      "region": "background below buttons",
+      "x": 160,
+      "y": 510,
+      "width": 300,
+      "height": 64,
+      "exact_black_frames": 180,
+      "distinct_frames": 1,
+      "black_rgb24_sha256": "c72274a22cba2dcef62e0f62834446ee39b0cd95ad0faa27a89b3b49f48aa390"
+    },
+    {
+      "region": "movie preview",
+      "x": 680,
+      "y": 300,
+      "width": 320,
+      "height": 160,
+      "exact_black_frames": 37,
+      "distinct_frames": 144,
+      "black_rgb24_sha256": "0c5cc90b079d0d9c1ded1376357d23a9782a704a83e01731f50ccd162e246492"
+    }
+  ],
+  "method": "For each rectangle run ffmpeg -ss 40 -i display.mkv -map 0:v:0 -vf crop=W:H:X:Y:exact=1,format=rgb24 -frames:v 180 -f framemd5 -hash sha256 -. Count the distinct frame hashes and matches to the SHA-256 of W × H × 3 zero bytes.",
+  "package_index_sha256": "1d39ac0eca08ff2bfde38c5fc4ed966d21cece7b5aca981fc95ed4198b341355",
+  "cooked_packages": [
+    {
+      "package": "Frosty/Content/Blueprint/UI/MainMenu/BP_MainMenu.uasset",
+      "uncompressed_sha256": "3886b2d5561b4608ba5cd2bb2d2d6aa18e4d993811a551c313a163c559f759fa",
+      "package_names_in_header": [
+        "/Game/Effect/UI/MatrixCodeUI/Materials/MPC_MatrixCodeUI",
+        "/Game/UI/UI_Art/Menu/MainMenu/M_ChaseVideo"
+      ]
+    },
+    {
+      "package": "Frosty/Content/Blueprint/UI/BP_FrostyUI.uasset",
+      "uncompressed_sha256": "1b025c28578b2fdf1cf3ab35800cbf1a00a1cc709512fe6e205fb7cc2dd6cab1",
+      "package_names_in_header": [
+        "/Game/Effect/UI/MatrixCodeUI/BP_PPV_MatrixCodeUI",
+        "/Game/Effect/UI/MatrixCodeUI/Textures/T_DigitalRain_Flipbook_01_SubPixelEdge"
+      ]
+    },
+    {
+      "package": "Frosty/Content/Effect/UI/MatrixCodeUI/BP_PPV_MatrixCodeUI.uasset",
+      "uncompressed_sha256": "50d8f1c071f71c2eded98ca16088d9fd4f2ee3d57e5084254f423fdf728eea18",
+      "package_names_in_header": [
+        "/Game/Effect/UI/MatrixCodeUI/Materials/PPM_MatrixCodeUIFilter",
+        "/Game/Effect/UI/MatrixCodeUI/Textures/T_BloomKernel_MatrixCode_Upward"
+      ]
+    },
+    {
+      "package": "Frosty/Content/Effect/UI/MatrixCodeUI/Materials/M_MatrixCode_UI.uasset",
+      "uncompressed_sha256": "ab7e74e59d930e78ac2fa0a3012721e0f781ea97263e25ad1eba74a6c5d4cd7c",
+      "package_names_in_header": [
+        "/Game/Effect/UI/MatrixCodeUI/Materials/MPC_MatrixCodeUI",
+        "/Game/Effect/UI/MatrixCodeUI/Textures/T_DigitalRain_Flipbook_01_SubPixelEdge"
+      ]
+    }
+  ],
+  "interpretation": "The moving preview and the Matrix UI effect have separate resources. The captured profile explicitly set r.BloomQuality=0. Its configuration predates the Niagara overrides. A failing draw, shader or post-process pass has yet to be isolated."
+}

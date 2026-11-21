@@ -11,30 +11,112 @@
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox Rust D3D12 provider. The retail run uses patched TomBox.",
-      "scope": "TuxBox creates a device for profile 0x20002 and submits two guest command lists with verified output. The reference path accepts Frosty's 0x20004 profile and renders the menu and movies.",
+      "scope": "TuxBox creates a device for profile 0x20002 and submits command lists with verified GPU output. Four exports handle standard 1.0 and 1.1 root signatures. The reference path accepts Frosty's 0x20004 profile and renders the menu controls and movies.",
       "remaining": "More device profiles, shader and resource operations, and correct real-time chase rendering.",
       "evidence": [
         "runtime/d3d12/README.md",
-        "evidence/matrix-awakens/retail-chase-cinematic.json"
-      ]
+        "evidence/matrix-awakens/retail-chase-cinematic.json",
+        "evidence/d3d12-rust-comparison.json",
+        "evidence/providers/d3d12-guids.json",
+        "evidence/providers/d3d12-signatures.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/d3d12_xs.dll",
+        "binary_sha256": "e8279440c6980eba9ba42de1e189870407c7665cf2b3fc1fb683ac07cf07f780",
+        "total": 54,
+        "data_exports": [
+          "IID_ID3D12CommandAllocator",
+          "IID_ID3D12CommandList",
+          "IID_ID3D12CommandQueue",
+          "IID_ID3D12Debug",
+          "IID_ID3D12DescriptorHeap",
+          "IID_ID3D12Device",
+          "IID_ID3D12DeviceChild",
+          "IID_ID3D12Fence",
+          "IID_ID3D12GraphicsCommandList",
+          "IID_ID3D12Heap",
+          "IID_ID3D12Object",
+          "IID_ID3D12Pageable",
+          "IID_ID3D12PipelineState",
+          "IID_ID3D12Resource",
+          "IID_ID3D12RootSignature",
+          "IID_ID3D12RootSignatureDeserializer",
+          "IID_ID3D12XboxDmaCommandList",
+          "IID_IDXGIAdapter",
+          "IID_IDXGIAdapter1",
+          "IID_IDXGIAdapter2",
+          "IID_IDXGIDevice",
+          "IID_IDXGIDevice1",
+          "IID_IDXGIDevice2",
+          "IID_IDXGIDeviceSubObject",
+          "IID_IDXGIFactory",
+          "IID_IDXGIFactory1",
+          "IID_IDXGIFactory2",
+          "IID_IDXGIObject",
+          "IID_IDXGISwapChain",
+          "IID_IDXGISwapChain1",
+          "IID_IGraphicsUnknown",
+          "WKPDID_D3DDebugObjectNameW"
+        ],
+        "verified": [
+          "D3D12CreateRootSignatureDeserializer",
+          "D3D12CreateVersionedRootSignatureDeserializer",
+          "D3D12SerializeRootSignature",
+          "D3D12SerializeVersionedRootSignature",
+          "D3D12XboxCreateDevice",
+          "IID_ID3D12CommandAllocator",
+          "IID_ID3D12CommandList",
+          "IID_ID3D12CommandQueue",
+          "IID_ID3D12Debug",
+          "IID_ID3D12DescriptorHeap",
+          "IID_ID3D12Device",
+          "IID_ID3D12DeviceChild",
+          "IID_ID3D12Fence",
+          "IID_ID3D12GraphicsCommandList",
+          "IID_ID3D12Heap",
+          "IID_ID3D12Object",
+          "IID_ID3D12Pageable",
+          "IID_ID3D12PipelineState",
+          "IID_ID3D12Resource",
+          "IID_ID3D12RootSignature",
+          "IID_ID3D12RootSignatureDeserializer",
+          "IID_IDXGIAdapter",
+          "IID_IDXGIAdapter1",
+          "IID_IDXGIAdapter2",
+          "IID_IDXGIDevice",
+          "IID_IDXGIDevice1",
+          "IID_IDXGIDevice2",
+          "IID_IDXGIDeviceSubObject",
+          "IID_IDXGIFactory",
+          "IID_IDXGIFactory1",
+          "IID_IDXGIFactory2",
+          "IID_IDXGIObject",
+          "IID_IDXGISwapChain",
+          "IID_IDXGISwapChain1",
+          "WKPDID_D3DDebugObjectNameW"
+        ],
+        "notes": "Five functions and 30 read-only GUIDs were exercised. The 30 identifiers match the Windows SDK, original PE data and original ordinal table."
+      }
     },
     {
       "name": "dxcompiler_xs.dll",
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox PE forwarder to desktop DXC.",
-      "scope": "DxcCreateInstance supplies a working IDxcUtils factory. A 257-byte blob retained its contents and lifetime across interface releases on Valve and GE-Proton.",
-      "remaining": "The reviewed console DLL also exports DxcCreateInstance2, CreateXdxrCompiler and CreateXdxrCompiler2.",
+      "scope": "Both SDK factories create a desktop DXC utility object through the Xbox DLL. Tests check blob contents, lifetime and use of a caller-supplied allocator.",
+      "remaining": "The console ray-tracing factories CreateXdxrCompiler and CreateXdxrCompiler2 remain unimplemented.",
       "evidence": [
         "runtime/dxc/dxcompiler_xs.def",
         "evidence/matrix-awakens/valve-dxc-utils.json",
-        "evidence/matrix-awakens/ge-dxc-utils.json"
+        "evidence/matrix-awakens/ge-dxc-utils.json",
+        "evidence/providers/dxc-allocator.json"
       ],
-      "console_exports": {
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/dxcompiler_xs.dll",
         "binary_sha256": "40c0d27a4c8e580975b64b386a5decee083aa1465317d4f62bc16445f63681db",
-        "names": [
-          "CreateXdxrCompiler",
-          "CreateXdxrCompiler2",
+        "total": 4,
+        "data_exports": [],
+        "verified": [
           "DxcCreateInstance",
           "DxcCreateInstance2"
         ]
@@ -50,23 +132,51 @@
       "evidence": [
         "runtime/xmem/xmem.def",
         "runtime/xmem/README.md",
-        "evidence/valve-nvidia.json"
-      ]
+        "evidence/valve-nvidia.json",
+        "evidence/providers/xmem-valve.json",
+        "evidence/providers/xmem-ge.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xmem.dll",
+        "binary_sha256": "adc182acae5340b0618a3d57a239ed2e8deb305dbefc49439cb8a2d06c7ce812",
+        "total": 32,
+        "data_exports": [
+          "XMemHistoryData"
+        ],
+        "verified": [
+          "XMemAlloc",
+          "XMemAllocDefault",
+          "XMemFree",
+          "XMemFreeDefault",
+          "XMemGetWorkingSetStatistics",
+          "XMemVirtualAlloc"
+        ]
+      }
     },
     {
       "name": "xg_xs.dll",
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox texture address computer.",
-      "scope": "Computes linear and 4 KiB tiled layouts for single-slice 2D textures in six formats. The same guest matched the supplied library on 13 layouts and 273,263 texel or compressed-block addresses, including four shapes from Frosty's placed-resource trace.",
+      "scope": "Computes linear and 4 KiB tiled layouts for single-slice 2D textures in 41 formats. The supplied library and TuxBox matched on 6,231,134 texel or compressed-block addresses. A separate guest checked four texture shapes from the Frosty trace.",
       "remaining": "Arrays, additional formats and tiling modes, multisampling and subresource copies. Calling an unimplemented texture computer method terminates the guest.",
       "evidence": [
         "runtime/xg/src/layout.rs",
         "evidence/providers/xg-control.json",
         "evidence/providers/xg-frosty-shapes.json",
         "evidence/providers/valve.json",
-        "evidence/providers/ge.json"
-      ]
+        "evidence/providers/ge.json",
+        "evidence/providers/xg-formats.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xg_xs.dll",
+        "binary_sha256": "fee85ef80b6fe47edaa083270933c08a37f9e27e7541f86f731daecf7ead1493",
+        "total": 21,
+        "data_exports": [],
+        "verified": [
+          "XGCreateTextureComputer"
+        ]
+      }
     },
     {
       "name": "xgameruntime.dll",
@@ -78,7 +188,15 @@
       "evidence": [
         "evidence/matrix-awakens/reference-runtime.json",
         "evidence/matrix-awakens/runtime-wrappers.csv"
-      ]
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xgameruntime.dll",
+        "binary_sha256": "07872dfae601115a1c4bbe060d4f1e9689fe24afd4154a8d98b110a49e33b729",
+        "total": 5,
+        "data_exports": [],
+        "verified": [],
+        "notes": "The retail path uses a reference provider and its task-queue patch."
+      }
     },
     {
       "name": "xcrdapi.dll",
@@ -89,21 +207,40 @@
       "remaining": "Console-specific storage controls and additional request paths.",
       "evidence": [
         "evidence/matrix-awakens/reference-runtime.json"
-      ]
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xcrdapi.dll",
+        "binary_sha256": "7405df41b6aa6e4ac90052ba0a1d38c6498c6d9ac57807153a4ca318285574bc",
+        "total": 118,
+        "data_exports": [],
+        "verified": [],
+        "notes": "The tested storage factory is provided by the reference bridge."
+      }
     },
     {
       "name": "gameconfighelper.dll",
       "group": "Platform and storage",
       "status": "partial",
       "provider": "TuxBox package registry helper using Win32 and WinRT.",
-      "scope": "Implements two of the 24 exports in the reviewed Windows Game Runtime helper. The guest obtains an owned UTF-16 package path and opens configuration keys in both supported registry hives. Boundary lengths, Unicode and missing keys matched the supplied helper.",
+      "scope": "Implements three of the 24 exports in the reviewed Windows Game Runtime helper. The guest obtains an owned UTF-16 package path and opens configuration keys in both supported registry hives, including the GameCore machine key. Boundary lengths, Unicode and missing keys matched the supplied helper.",
       "remaining": "The embedded runtime's GetCurrentPackageGameConfig call and the remaining configuration and package-identity queries.",
       "evidence": [
         "runtime/gameconfig/guest.c",
         "evidence/providers/platform-controls.json",
         "evidence/providers/valve.json",
         "evidence/providers/ge.json"
-      ]
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/gameconfighelper.dll",
+        "binary_sha256": "28562599eaba50711d5225e4b05478f8a83a9438f5501bf9068283eb71a4f33f",
+        "total": 24,
+        "data_exports": [],
+        "verified": [
+          "GetRegistryPathForPackage",
+          "OpenGameConfigKeyForPackage",
+          "OpenGameConfigForGameCore"
+        ]
+      }
     },
     {
       "name": "GameInput.dll",
@@ -115,7 +252,15 @@
       "evidence": [
         "evidence/matrix-awakens/retail-mixed-input.json",
         "evidence/matrix-awakens/xinput-desktop.json"
-      ]
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/GameInput.dll",
+        "binary_sha256": "25ee044071bbba405a026eaad7e1bf106b72a4f2f0b968f6855ecee5e390f6e9",
+        "total": 1,
+        "data_exports": [],
+        "verified": [],
+        "notes": "TuxBox mouse and keyboard mappings run behind an external GameInputCreate implementation."
+      }
     },
     {
       "name": "AcpHal.dll",
@@ -127,35 +272,78 @@
       "evidence": [
         "evidence/matrix-awakens/frosty-engine-control.json",
         "evidence/matrix-awakens-launch.json"
-      ]
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/AcpHal.dll",
+        "binary_sha256": "a8fe520eafe38784249d6fca38b0a185006bcc18cd3962405b8b92be1f758123",
+        "total": 10,
+        "data_exports": [],
+        "verified": [],
+        "notes": "The retail mixer control uses the reference provider."
+      }
     },
     {
       "name": "XAudio2_9.dll",
       "group": "Input and audio",
       "status": "partial",
       "provider": "TuxBox Xbox ordinal exports backed by system XAudio2.",
-      "scope": "Seven exports cover all five static imports in Frosty. The guest creates engines through both factory ordinals, instantiates three effects, pans a source and measures the signal on each stereo channel.",
-      "remaining": "Console ordinals 7, 8 and 10, XMA playback and a retail mixer run with the replacement.",
+      "scope": "Eight exports cover all five static imports in Frosty. The guest creates engines through all three tested factory ordinals, instantiates three effects, pans a source and measures the signal on each stereo channel.",
+      "remaining": "Console ordinals 7 and 10, XMA playback and a retail mixer run with the replacement.",
       "evidence": [
         "runtime/xaudio/xaudio.def",
         "evidence/providers/xaudio-control.json",
         "evidence/providers/valve.json",
         "evidence/providers/ge.json"
-      ]
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/XAudio2_9.dll",
+        "binary_sha256": "8d49f4c47a6ee01f344c45375b5a022045ad8ff7dd9f4b61e6554186c1e87c02",
+        "total": 10,
+        "data_exports": [],
+        "verified": [
+          "XAudio2Create",
+          "CreateAudioReverb",
+          "CreateAudioVolumeMeter",
+          "CreateFX",
+          "X3DAudioCalculate",
+          "X3DAudioInitialize",
+          "XAudio2CreateWithVersionInfo",
+          "XAudio2CreateV2_9"
+        ]
+      }
     },
     {
       "name": "GameChat2.dll",
       "group": "Input and audio",
       "status": "partial",
       "provider": "TuxBox in-process chat manager.",
-      "scope": "Eight exports implement session setup and cleanup, a remote-user roster, locality and encoding bitrate. Seven are among Frosty's 15 delay imports. The guest checks duplicates, capacity, removal and stale handles against the supplied DLL.",
+      "scope": "Eleven exports implement session setup and cleanup, a remote-user roster, locality, per-user identity and context, and encoding bitrate. Seven are among Frosty's 15 delay imports. The guest checks duplicates, capacity, removal and stale handles against the supplied DLL.",
       "remaining": "Local users, microphone capture, audio encoding and network transport.",
       "evidence": [
         "runtime/gamechat/guest.c",
         "evidence/providers/platform-controls.json",
         "evidence/providers/valve.json",
         "evidence/providers/ge.json"
-      ]
+      ],
+      "export_coverage": {
+        "reference": "Mount/Frosty/Binaries/XSX/GameChat2.dll",
+        "binary_sha256": "35ecdfbea3a9f4d004b638d8b1070dcded9cb05f76514a4184b5a5832f4afb87",
+        "total": 70,
+        "data_exports": [],
+        "verified": [
+          "ChatManagerAddRemoteUser",
+          "ChatManagerCleanup",
+          "ChatManagerGetAudioEncodingBitrate",
+          "ChatManagerGetChatUsers",
+          "ChatManagerInitialize",
+          "ChatManagerRemoveUser",
+          "ChatManagerSetAudioEncodingBitrate",
+          "ChatUserGetIsLocal",
+          "ChatUserGetXboxUserId",
+          "ChatUserGetCustomUserContext",
+          "ChatUserSetCustomUserContext"
+        ]
+      }
     },
     {
       "name": "mfplat.dll",
@@ -167,7 +355,17 @@
       "evidence": [
         "evidence/matrix-awakens/media-valve.json",
         "evidence/matrix-awakens/retail-chase-cinematic.json"
-      ]
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/mfplat.dll",
+        "binary_sha256": "0b29c4da03055c34fb6c6f3fbbac426cb3693ac25c419c4c6699897405966a44",
+        "total": 140,
+        "data_exports": [],
+        "verified": [
+          "MFResetDXGIDeviceManagerX"
+        ],
+        "notes": "The tested reset function belongs to the TuxBox bridge. Its other forwards use host and reference libraries."
+      }
     },
     {
       "name": "mfhevcdec.dll",
@@ -179,7 +377,15 @@
       "evidence": [
         "evidence/matrix-awakens/hevc-valve.json",
         "evidence/matrix-awakens/wake-hevc-valve.json"
-      ]
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/mfhevcdec.dll",
+        "binary_sha256": "fecc135bf0387f68c304542af3cb2c4aaed1267a06027f5198223f585678cd0d",
+        "total": 5,
+        "data_exports": [],
+        "verified": [],
+        "notes": "The adapter registers a separate HEVC class ID. It activates the original console class in the packaged DLL."
+      }
     },
     {
       "name": "mfh264dec.dll",
@@ -190,20 +396,41 @@
       "remaining": "The supplied codec and additional output formats and transform modes.",
       "evidence": [
         "evidence/matrix-awakens/h264-valve.json"
-      ]
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/mfh264dec.dll",
+        "binary_sha256": "9db2936779eec00c69c9a549e7ec4ab2af717b64b95454065e80dfa5c5a439ac",
+        "total": 1,
+        "data_exports": [],
+        "verified": [
+          "DllGetClassObject"
+        ],
+        "notes": "The TuxBox class factory accepts the original H.264 class ID and uses the packaged codec to decode frames."
+      }
     },
     {
       "name": "mfreadwrite.dll",
       "group": "Media",
       "status": "partial",
       "provider": "TuxBox synchronous PCM source reader.",
-      "scope": "Console ordinal 5 opens a seekable RIFF/WAVE byte stream. The guest compares 2,501 stereo frames and checks stream selection, seeking, timestamps, end of stream and invalid inputs.",
+      "scope": "Opens seekable PCM RIFF/WAVE streams, Windows file paths and escaped file URLs. The guest compares 2,501 stereo frames and checks stream selection, seeking, timestamps, end of stream and invalid inputs.",
       "remaining": "Compressed audio, MP4 video, asynchronous source reading and sink writing.",
       "evidence": [
         "runtime/mfreadwrite/guest.cpp",
         "evidence/providers/valve.json",
-        "evidence/providers/ge.json"
-      ]
+        "evidence/providers/ge.json",
+        "evidence/providers/mfreadwrite-url-control.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/mfreadwrite.dll",
+        "binary_sha256": "e697c5620b6f685a80c6ed56c5cd5e25af4d46ebf15d9afa1bd7670d1ad84982",
+        "total": 7,
+        "data_exports": [],
+        "verified": [
+          "MFCreateSourceReaderFromByteStream",
+          "MFCreateSourceReaderFromURL"
+        ]
+      }
     },
     {
       "name": "MSAudDecMFT.dll",
@@ -217,7 +444,25 @@
         "evidence/providers/aac-ge.json",
         "evidence/providers/aac-frosty-ge.json",
         "evidence/providers/aac-valve.json"
-      ]
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/MSAudDecMFT.dll",
+        "binary_sha256": "810c007551ec389a2c7dd0f0066747e453b5c3d1efb3cdc62cc1f22a76c5b454",
+        "total": 2,
+        "data_exports": [],
+        "verified": [
+          "DllCanUnloadNow",
+          "DllGetClassObject"
+        ],
+        "notes": "The class factory and unload query passed on GE-Proton. The host codec performs AAC decoding."
+      }
     }
-  ]
+  ],
+  "export_measurement": {
+    "build": "The Matrix Awakens 1.20.1831.3754, title and embedded system DLLs.",
+    "total": "Occupied PE export ordinals, including forwarded symbols and data. Two names for one ordinal count once. Separate ordinals count separately even when they share an address.",
+    "verified": "Each listed export has tested behavior through a TuxBox implementation or an explicit TuxBox adapter. Name or ordinal lookup must reach the tested entry. External-only implementations receive no credit. A function may support only part of its inputs.",
+    "data_exports": "Exports resolving to non-executable sections, excluding forwarders. The denominator also includes these data slots.",
+    "interfaces": "COM vtable methods, supported data formats and feature completeness are described in each library record. They have no export-table denominator."
+  }
 }

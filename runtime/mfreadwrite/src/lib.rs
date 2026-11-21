@@ -7,7 +7,7 @@ use wave::Wave;
 use windows::Win32::Foundation::{E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER};
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::{Com::StructuredStorage::PROPVARIANT, Variant::VT_I8};
-use windows::core::{BOOL, GUID, HRESULT, Interface, OutRef, Ref, Result, implement};
+use windows::core::{BOOL, GUID, HRESULT, Interface, OutRef, PCWSTR, Ref, Result, implement};
 
 struct Cursor {
     stream: IMFByteStream,
@@ -242,6 +242,44 @@ impl IMFSourceReader_Impl for Reader_Impl {
     }
 }
 
+fn open_reader(stream: IMFByteStream, attrs: Option<&IMFAttributes>) -> Result<IMFSourceReader> {
+    if let Some(attrs) = attrs
+        && unsafe { attrs.GetCount()? } != 0
+    {
+        return Err(E_NOTIMPL.into());
+    }
+    let needed = MFBYTESTREAM_IS_SEEKABLE | MFBYTESTREAM_IS_READABLE;
+    if unsafe { stream.GetCapabilities()? } & needed != needed {
+        return Err(MF_E_BYTESTREAM_NOT_SEEKABLE.into());
+    }
+    let position = unsafe { stream.GetCurrentPosition()? };
+    let wave = Wave::open(&stream);
+    // Leave input position intact if probing fails or a reader is never used.
+    unsafe { stream.SetCurrentPosition(position)? };
+    Ok(Reader {
+        wave: wave?,
+        cursor: Mutex::new(Cursor {
+            stream,
+            frame: 0,
+            selected: true,
+        }),
+    }
+    .into())
+}
+
+unsafe fn return_reader(
+    out: *mut *mut c_void,
+    create: impl FnOnce() -> Result<IMFSourceReader>,
+) -> HRESULT {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    unsafe { out.write(ptr::null_mut()) };
+    create()
+        .map(|reader| unsafe { out.write(reader.into_raw()) })
+        .into()
+}
+
 /// Opens one synchronous PCM audio stream. Empty or absent reader attributes select defaults.
 ///
 /// # Safety
@@ -252,38 +290,45 @@ pub unsafe extern "system" fn from_stream(
     attrs: *mut c_void,
     out: *mut *mut c_void,
 ) -> HRESULT {
-    if out.is_null() {
-        return E_POINTER;
-    }
     unsafe {
-        out.write(ptr::null_mut());
+        return_reader(out, || {
+            let stream = IMFByteStream::from_raw_borrowed(&input).ok_or(E_POINTER)?;
+            open_reader(stream.clone(), IMFAttributes::from_raw_borrowed(&attrs))
+        })
     }
-    let create = || -> Result<IMFSourceReader> {
-        let input = unsafe { IMFByteStream::from_raw_borrowed(&input) }.ok_or(E_POINTER)?;
-        if let Some(attrs) = unsafe { IMFAttributes::from_raw_borrowed(&attrs) }
-            && unsafe { attrs.GetCount()? } != 0
-        {
-            return Err(E_NOTIMPL.into());
-        }
-        let needed = MFBYTESTREAM_IS_SEEKABLE | MFBYTESTREAM_IS_READABLE;
-        if unsafe { input.GetCapabilities()? } & needed != needed {
-            return Err(MF_E_BYTESTREAM_NOT_SEEKABLE.into());
-        }
-        let position = unsafe { input.GetCurrentPosition()? };
-        let wave = Wave::open(input);
-        // Leave input position intact if probing fails or a reader is never used.
-        unsafe { input.SetCurrentPosition(position)? };
-        Ok(Reader {
-            wave: wave?,
-            cursor: Mutex::new(Cursor {
-                stream: input.clone(),
-                frame: 0,
-                selected: true,
-            }),
-        }
-        .into())
-    };
-    create()
-        .map(|reader| unsafe { out.write(reader.into_raw()) })
-        .into()
+}
+
+/// Opens a URL as a byte stream, using the same format and seek rules as the stream factory.
+///
+/// # Safety
+/// The URL must be a NUL-terminated UTF-16 string, non-null attributes must be a
+/// live IMFAttributes, and a non-null output must be writable.
+#[unsafe(export_name = "MFCreateSourceReaderFromURL")]
+pub unsafe extern "system" fn from_url(
+    url: PCWSTR,
+    attrs: *mut c_void,
+    out: *mut *mut c_void,
+) -> HRESULT {
+    unsafe {
+        return_reader(out, || {
+            if url.is_null() {
+                return Err(E_POINTER.into());
+            }
+            let resolver = MFCreateSourceResolver()?;
+            let mut kind = MF_OBJECT_INVALID;
+            let mut object = None;
+            resolver.CreateObjectFromURL(
+                url,
+                (MF_RESOLUTION_BYTESTREAM.0 | MF_RESOLUTION_READ.0) as u32,
+                None,
+                &mut kind,
+                &mut object,
+            )?;
+            if kind != MF_OBJECT_BYTESTREAM {
+                return Err(MF_E_UNSUPPORTED_BYTESTREAM_TYPE.into());
+            }
+            let stream = object.ok_or(E_NOINTERFACE)?.cast()?;
+            open_reader(stream, IMFAttributes::from_raw_borrowed(&attrs))
+        })
+    }
 }

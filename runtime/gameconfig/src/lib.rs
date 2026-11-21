@@ -88,3 +88,24 @@ pub unsafe extern "system" fn open_game_config_key_for_package(
     // checks the access mask and transfers the resulting key handle to the caller.
     hresult_from_win32(unsafe { RegOpenKeyExW(hive, path.as_ptr(), 0, access, out) })
 }
+
+/// Opens the machine-wide GameCore configuration with the caller's access mask.
+///
+/// # Safety
+/// A non-null output must be writable for one HKEY. The caller owns the
+/// successful result and releases it with RegCloseKey.
+#[unsafe(export_name = "OpenGameConfigForGameCore")]
+pub unsafe extern "system" fn open_game_config_for_game_core(
+    access: u32,
+    out: *mut HKEY,
+) -> HRESULT {
+    hresult_from_win32(unsafe {
+        RegOpenKeyExW(
+            HKEY_LOCAL_MACHINE,
+            windows_sys::w!("GAMECONFIG"),
+            0,
+            access,
+            out,
+        )
+    })
+}

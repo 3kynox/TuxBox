@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from xml.etree import ElementTree as ET
 
-from project_tuxbox.progress_map import render_map, write_map
+from project_tuxbox.progress_map import export_progress, library_table, render_map, write_map
 
 
 class ProgressMapTests(unittest.TestCase):
@@ -34,7 +34,44 @@ class ProgressMapTests(unittest.TestCase):
                           "1 of 2 passed across 2 host configurations"]:
                 self.assertIn(label, labels)
             descriptions = [e.text for e in svg.findall(".//{*}title")]
-            self.assertIn("example<&>.dll · Complete · Host Pad input", descriptions)
+            self.assertTrue(any("example<&>.dll · Complete" in d and "Host Pad input" in d for d in descriptions))
+
+    def test_export_bars_use_reviewed_totals_and_verified_exports(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = []
+            for name, total, verified in [("factory.dll", 1, ["Create"]), ("memory.dll", 15, ["#10", "Free"]),
+                                          ("external.dll", 12, []), ("pending.dll", None, ["Initialize"])]:
+                rows.append({"name": name, "status": "partial", "group": "Test", "provider": "Test provider",
+                             "scope": "One tested operation", "export_coverage": {"total": total, "verified": verified}})
+            rows[1]["export_coverage"]["data_exports"] = ["#10", "IID_Device", "IID_Queue"]
+            (root / "library-status.json").write_text(json.dumps({"libraries": rows}))
+            svg = ET.fromstring(render_map(root))
+            table = library_table(root)
+            for name, tally, pct in [("factory.dll", "1/1", "100%"), ("memory.dll", "2/15", "13.3%"),
+                                      ("external.dll", "0/12", "0%"), ("pending.dll", "1/?", "Unmeasured")]:
+                cell = next(g for g in svg.findall(".//{*}g") if any(t.text == name for t in g.findall("{*}text")))
+                labels = [t.text for t in cell.findall("{*}text")]
+                self.assertEqual(labels[:3], [name, tally, pct])
+                if name == "memory.dll":
+                    self.assertIn("1/12 functions, 1/3 data", labels)
+                    self.assertIn("1/12 functions, 1/3 data", table)
+                row = next(line for line in table.splitlines() if line.startswith(name))
+                self.assertEqual(row.rsplit(maxsplit=3)[-3:], [tally, pct, "Partial"])
+                self.assertIn("[", row)
+                widths = [float(r.get("width")) for r in cell.findall("{*}rect")]
+                if pct == "Unmeasured":
+                    self.assertIsNotNone(cell.find("{*}line"))
+                elif pct == "0%":
+                    self.assertEqual(len(widths), 1)
+                else:
+                    numerator, denominator = map(int, tally.split("/"))
+                    self.assertAlmostEqual(widths[1] / widths[0], numerator/denominator, places=5)
+
+    def test_inconsistent_export_counts_are_rejected_instead_of_plotted(self):
+        for total, verified in [(1, ["One", "Two"]), (2, ["One", "One"]), (-1, []), (2, "fn")]:
+            with self.subTest(total=total, verified=verified), self.assertRaisesRegex(ValueError, "sample.dll"):
+                export_progress({"name": "sample.dll", "export_coverage": {"total": total, "verified": verified}})
 
     def test_current_trial_takes_precedence_over_later_observations(self):
         with TemporaryDirectory() as directory:
@@ -81,8 +118,17 @@ class ProgressMapTests(unittest.TestCase):
             file = root / "replay.json"
             file.write_text(json.dumps({"desktop_extended_trial": receipt}))
             self.assertNotIn("Near-black", render_map(root))
+            (root / "matrix-awakens").mkdir()
+            menu = root / "matrix-awakens/menu-background.json"
+            menu.write_text(json.dumps({"title_sha256": "other", "verified": False, "observation": "Black"}))
             receipt["title_sha256"] = "title1"
             file.write_text(json.dumps({"desktop_extended_trial": receipt}))
             graphic = render_map(root)
             self.assertIn("Near-black", graphic)
             self.assertIn("Unverified", graphic)
+            self.assertNotIn("Menu code background", graphic)
+            menu.write_text(json.dumps({"title_sha256": "title1", "verified": False, "observation": "Black"}))
+            self.assertIn("Menu code background", render_map(root))
+            file.unlink()
+            self.assertIn("Menu code background", render_map(root))
+            self.assertNotIn("Near-black", render_map(root))

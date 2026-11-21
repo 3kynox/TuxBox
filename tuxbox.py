@@ -15,7 +15,7 @@ except ImportError:
 
 from project_tuxbox.host import Host
 from project_tuxbox.inspect import image, launch_target, package
-from project_tuxbox.progress_map import write_map
+from project_tuxbox.progress_map import library_table, write_map
 from project_tuxbox.shader_prep import prepare_for_launch
 from project_tuxbox.verify import SUITES, verify, status
 
@@ -43,11 +43,16 @@ def main():
         cmd.add_argument("--proton", help="installed Valve or GE-Proton directory")
         cmd.add_argument("--prefix", type=Path, help="Linux prefix directory for this provider")
     show = subs.add_parser("status", help="show recorded milestone evidence by host")
-    show.add_argument("--svg", type=Path, metavar="PATH", help="write the visual progress map")
+    status_format = show.add_mutually_exclusive_group()
+    status_format.add_argument("--svg", type=Path, metavar="PATH", help="write the visual progress map")
+    status_format.add_argument("--libraries", action="store_true", help="list verified exports per Xbox DLL")
     args = parser.parse_args()
     if args.command == "status":
+        evidence = Path(__file__).resolve().parent / "evidence"
         if args.svg:
-            write_map(Path(__file__).resolve().parent / "evidence", args.svg)
+            write_map(evidence, args.svg)
+        elif args.libraries:
+            print(library_table(evidence))
         else:
             print(status())
         return 0

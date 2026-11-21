@@ -17,6 +17,31 @@ unsafe extern "C" {
 struct User {
     xuid: u64,
     endpoint: u64,
+    context: usize,
+    // The public string is created on first access. Its elements have stable
+    // addresses even if the roster grows or another user is removed.
+    xuid_string: Vec<u16>,
+}
+
+impl User {
+    fn xuid_string(&mut self) -> Result<*const u16, HRESULT> {
+        if self.xuid_string.is_empty() {
+            let mut digits = [0u16; 21];
+            let mut start = digits.len() - 1;
+            let mut value = self.xuid;
+            while value != 0 {
+                start -= 1;
+                digits[start] = u16::from(b'0') + (value % 10) as u16;
+                value /= 10;
+            }
+            let text = &digits[start..];
+            self.xuid_string
+                .try_reserve_exact(text.len())
+                .map_err(|_| E_OUTOFMEMORY)?;
+            self.xuid_string.extend_from_slice(text);
+        }
+        Ok(self.xuid_string.as_ptr())
+    }
 }
 
 struct Session {
@@ -27,6 +52,13 @@ struct Session {
     // Parallel indices give the guest the dense array of handles required by
     // GetChatUsers. A handle is an opaque value, never a Rust object pointer.
     handles: Vec<usize>,
+}
+
+impl Session {
+    fn user_index(&self, handle: usize) -> Result<usize, HRESULT> {
+        // Handles increase monotonically. Removals preserve their ordering.
+        self.handles.binary_search(&handle).map_err(|_| NOT_FOUND)
+    }
 }
 
 struct Manager {
@@ -153,7 +185,12 @@ pub unsafe extern "system" fn add_remote(
             return E_OUTOFMEMORY;
         };
         *next_handle = next;
-        session.users.push(User { xuid, endpoint });
+        session.users.push(User {
+            xuid,
+            endpoint,
+            context: 0,
+            xuid_string: Vec::new(),
+        });
         session.handles.push(handle);
         unsafe { out.write(handle) };
         S_OK
@@ -172,7 +209,7 @@ pub extern "system" fn remove_user(handle: usize) -> HRESULT {
     let Some(session) = &mut manager.session else {
         return INVALID_STATE;
     };
-    let Some(index) = session.handles.iter().position(|&h| h == handle) else {
+    let Ok(index) = session.user_index(handle) else {
         return NOT_FOUND;
     };
     let user = session.users.remove(index);
@@ -225,9 +262,58 @@ pub unsafe extern "system" fn is_local(handle: usize, out: *mut u8) -> HRESULT {
     let Some(session) = &manager.session else {
         return INVALID_STATE;
     };
-    if session.handles.contains(&handle) {
-        S_OK
-    } else {
-        NOT_FOUND
+    session.user_index(handle).map_or_else(|hr| hr, |_| S_OK)
+}
+
+/// Returns a borrowed, NUL-terminated, canonical decimal XUID until user removal or cleanup.
+///
+/// # Safety
+/// A non-null output must be writable for one pointer. Callers must synchronize
+/// reads of the string with removal of its user and manager cleanup.
+#[unsafe(export_name = "ChatUserGetXboxUserId")]
+pub unsafe extern "system" fn xbox_user_id(handle: usize, out: *mut *const u16) -> HRESULT {
+    let mut manager = manager();
+    let Some(session) = &mut manager.session else {
+        return INVALID_STATE;
+    };
+    if out.is_null() {
+        return E_POINTER;
     }
+    let result = session
+        .user_index(handle)
+        .and_then(|i| session.users[i].xuid_string());
+    unsafe { out.write(result.unwrap_or(ptr::null())) };
+    result.map_or_else(|hr| hr, |_| S_OK)
+}
+
+/// Associates a caller-owned, pointer-sized value with the user.
+#[unsafe(export_name = "ChatUserSetCustomUserContext")]
+pub extern "system" fn set_context(handle: usize, value: usize) -> HRESULT {
+    let mut manager = manager();
+    let Some(session) = &mut manager.session else {
+        return INVALID_STATE;
+    };
+    let Ok(index) = session.user_index(handle) else {
+        return NOT_FOUND;
+    };
+    session.users[index].context = value;
+    S_OK
+}
+
+/// # Safety
+/// A non-null output must be writable for one pointer-sized value.
+#[unsafe(export_name = "ChatUserGetCustomUserContext")]
+pub unsafe extern "system" fn get_context(handle: usize, out: *mut usize) -> HRESULT {
+    let manager = manager();
+    let Some(session) = &manager.session else {
+        return INVALID_STATE;
+    };
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let Ok(index) = session.user_index(handle) else {
+        return NOT_FOUND;
+    };
+    unsafe { out.write(session.users[index].context) };
+    S_OK
 }

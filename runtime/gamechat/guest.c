@@ -7,6 +7,9 @@
 #include <wchar.h>
 
 typedef uintptr_t User;
+__declspec(dllimport) HRESULT WINAPI ChatUserGetXboxUserId(User, PCWSTR *);
+__declspec(dllimport) HRESULT WINAPI ChatUserGetCustomUserContext(User, void **);
+__declspec(dllimport) HRESULT WINAPI ChatUserSetCustomUserContext(User, void *);
 __declspec(dllimport) HRESULT WINAPI ChatManagerInitialize(UINT, float, UINT, UINT, UINT, UINT);
 __declspec(dllimport) HRESULT WINAPI ChatManagerCleanup(void);
 __declspec(dllimport) HRESULT WINAPI ChatManagerSetAudioEncodingBitrate(UINT);
@@ -38,7 +41,12 @@ static BOOL exercise(void) {
     User first, second, third, duplicate = sentinel;
     UINT count = 47, bitrate = 97;
     BYTE local = 1;
+    PCWSTR first_id = (PCWSTR)1, second_id = NULL, again_id = NULL;
+    void *context = &first;
     CHECK(local_provider());
+    CHECK(ChatUserGetXboxUserId(sentinel, &first_id) == no_session && first_id == (PCWSTR)1);
+    CHECK(ChatUserGetCustomUserContext(sentinel, &context) == no_session && context == &first);
+    CHECK(ChatUserSetCustomUserContext(sentinel, &second) == no_session);
     CHECK(ChatManagerGetAudioEncodingBitrate(&bitrate) == no_session && bitrate == 97);
     CHECK(ChatManagerGetChatUsers(&count, &users) == no_session && !count && !users);
     CHECK(ChatManagerInitialize(2, 1.f, 0, 0, 0, 0) == S_OK);
@@ -50,15 +58,31 @@ static BOOL exercise(void) {
     }
     CHECK(ChatManagerGetChatUsers(&count, &users) == S_OK && count == 0);
     CHECK(ChatManagerAddRemoteUser(L"invalid", 3, &duplicate) == invalid_xuid && duplicate == sentinel);
-    CHECK(ChatManagerAddRemoteUser(L"70001", 3, &first) == S_OK && first);
+    CHECK(ChatManagerAddRemoteUser(L"0070001", 3, &first) == S_OK && first);
     CHECK(ChatManagerAddRemoteUser(L"0070001", 3, &duplicate) == S_OK && duplicate == first);
-    CHECK(ChatManagerAddRemoteUser(L"70002", 3, &second) == S_OK && second && second != first);
+    CHECK(ChatManagerAddRemoteUser(L"18446744073709551614", 3, &second) == S_OK && second && second != first);
+    CHECK(ChatUserGetCustomUserContext(first, &context) == S_OK && !context);
+    CHECK(ChatUserSetCustomUserContext(first, &first) == S_OK);
+    CHECK(ChatUserGetCustomUserContext(duplicate, &context) == S_OK && context == &first);
+    CHECK(ChatUserGetXboxUserId(first, &first_id) == S_OK && first_id && !wcscmp(first_id,L"70001"));
+    CHECK(ChatUserGetXboxUserId(duplicate, &again_id) == S_OK && again_id == first_id);
+    CHECK(ChatUserGetCustomUserContext(second, &context) == S_OK && !context);
+    CHECK(ChatUserSetCustomUserContext(second, &second) == S_OK);
+    CHECK(ChatUserGetXboxUserId(second, &second_id) == S_OK && second_id && !wcscmp(second_id,L"18446744073709551614"));
     CHECK(ChatManagerGetChatUsers(&count, &users) == S_OK && count == 2 && users);
     CHECK((users[0] == first && users[1] == second) || (users[0] == second && users[1] == first));
     CHECK(ChatUserGetIsLocal(first, &local) == S_OK && local == 0);
     third = sentinel;
     CHECK(ChatManagerAddRemoteUser(L"70003", 3, &third) == roster_full && third == sentinel);
     CHECK(ChatManagerRemoveUser(first) == S_OK);
+    context = &first;
+    CHECK(ChatUserGetXboxUserId(first, &again_id) == HRESULT_FROM_WIN32(ERROR_NOT_FOUND) && !again_id);
+    CHECK(ChatUserGetCustomUserContext(first, &context) == HRESULT_FROM_WIN32(ERROR_NOT_FOUND) && context == &first);
+    CHECK(ChatUserSetCustomUserContext(first, &second) == HRESULT_FROM_WIN32(ERROR_NOT_FOUND));
+    CHECK(ChatUserGetXboxUserId(second, &again_id) == S_OK && again_id == second_id && !wcscmp(second_id,L"18446744073709551614"));
+    CHECK(ChatUserGetCustomUserContext(second, &context) == S_OK && context == &second);
+    CHECK(ChatUserSetCustomUserContext(second, NULL) == S_OK);
+    CHECK(ChatUserGetCustomUserContext(second, &context) == S_OK && !context);
     local = 1;
     CHECK(ChatUserGetIsLocal(first, &local) == HRESULT_FROM_WIN32(ERROR_NOT_FOUND) && local == 0);
     CHECK(ChatManagerRemoveUser(first) == HRESULT_FROM_WIN32(ERROR_NOT_FOUND));
@@ -77,7 +101,7 @@ static BOOL exercise(void) {
 int wmain(int argc, wchar_t **argv) {
     if (argc != 1 && (argc != 3 || wcscmp(argv[1], L"--report") || !*argv[2])) return 2;
     if (!exercise()) return 1;
-    const char *line = "gamechat-session PASS sessions=2 remote-users=3 bitrate-settings=3 stale-handles=1";
+    const char *line = "gamechat-session PASS sessions=2 remote-users=3 bitrate-settings=3 stale-handles=1 xuids=2 contexts=2";
     if (argc == 3) {
         FILE *file;
         if (_wfopen_s(&file, argv[2], L"wb")) return 1;

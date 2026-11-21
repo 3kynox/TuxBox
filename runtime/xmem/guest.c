@@ -108,19 +108,14 @@ static int virtual_reserve_commit(void)
     return 0;
 }
 
-int wmain(int argc, wchar_t **argv)
+typedef void *(WINAPI *Allocation)(SIZE_T, UINT64);
+typedef void (WINAPI *Release)(void *, UINT64);
+
+static int allocation_pair(Allocation allocate, Release release)
 {
-    if (!(argc == 1 || (argc == 3 && wcscmp(argv[1], L"--report") == 0))) {
-        fputs("usage: xmem-smoke.exe [--report FILE]\n", stderr);
-        return 2;
-    }
-    if (argc == 3 && _wfopen_s(&report, argv[2], L"wb") != 0) return 2;
-    REQUIRE(app_local_provider());
-    REQUIRE(!working_set());
-    REQUIRE(!virtual_reserve_commit());
     enum { small_size = 12, placed_size = 65536 };
-    volatile BYTE *small = XMemAllocDefault(small_size, XMEM_ORDINARY_ATTRIBUTES);
-    volatile BYTE *placed = XMemAllocDefault(placed_size, XMEM_PLACEMENT_ATTRIBUTES);
+    volatile BYTE *small = allocate(small_size, XMEM_ORDINARY_ATTRIBUTES);
+    volatile BYTE *placed = allocate(placed_size, XMEM_PLACEMENT_ATTRIBUTES);
     REQUIRE(small && placed);
     REQUIRE(((UINT_PTR)small & 15) == 0 && ((UINT_PTR)placed & 65535) == 0);
     REQUIRE(HeapValidate(GetProcessHeap(), 0, (void *)small));
@@ -133,15 +128,36 @@ int wmain(int argc, wchar_t **argv)
     for (unsigned i = 0; i < small_size; ++i) REQUIRE(small[i] == (BYTE)(0xb1u + i));
     for (unsigned i = 0; i < placed_size; ++i) REQUIRE(placed[i] == (BYTE)(i ^ (i >> 8)));
 
-    XMemFreeDefault((void *)small, XMEM_ORDINARY_ATTRIBUTES);
+    release((void *)small, XMEM_ORDINARY_ATTRIBUTES);
     REQUIRE(!HeapValidate(GetProcessHeap(), 0, (void *)small));
-    XMemFreeDefault((void *)placed, XMEM_PLACEMENT_ATTRIBUTES);
+    release((void *)placed, XMEM_PLACEMENT_ATTRIBUTES);
     REQUIRE(VirtualQuery((void *)placed, &area, sizeof area) == sizeof area && area.State == MEM_FREE);
-    REQUIRE(!XMemAllocDefault(0, XMEM_ORDINARY_ATTRIBUTES));
-    REQUIRE(!XMemAllocDefault(1, 0) && GetLastError() == ERROR_NOT_SUPPORTED);
-    XMemFreeDefault(NULL, XMEM_ORDINARY_ATTRIBUTES);
+    REQUIRE(!allocate(0, XMEM_ORDINARY_ATTRIBUTES));
+    REQUIRE(!allocate(1, 0) && GetLastError() == ERROR_NOT_SUPPORTED);
+    release(NULL, XMEM_ORDINARY_ATTRIBUTES);
 
-    const char result[] = "xmem-default: PASS (ordinary and 64 KiB allocations, host working set v2, virtual reserve/commit)\n";
+    return 0;
+}
+
+int wmain(int argc, wchar_t **argv)
+{
+    if (!(argc == 1 || (argc == 3 && wcscmp(argv[1], L"--report") == 0))) {
+        fputs("usage: xmem-smoke.exe [--report FILE]\n", stderr);
+        return 2;
+    }
+    if (argc == 3 && _wfopen_s(&report, argv[2], L"wb") != 0) return 2;
+    REQUIRE(app_local_provider());
+    REQUIRE(!working_set());
+    REQUIRE(!virtual_reserve_commit());
+    HMODULE module = GetModuleHandleW(L"xmem.dll");
+    REQUIRE(GetProcAddress(module, "XMemAlloc") == GetProcAddress(module, MAKEINTRESOURCEA(1)));
+    REQUIRE(GetProcAddress(module, "XMemFree") == GetProcAddress(module, MAKEINTRESOURCEA(6)));
+    REQUIRE(GetProcAddress(module, "XMemAllocDefault") == GetProcAddress(module, MAKEINTRESOURCEA(2)));
+    REQUIRE(GetProcAddress(module, "XMemFreeDefault") == GetProcAddress(module, MAKEINTRESOURCEA(7)));
+    REQUIRE(!allocation_pair(XMemAlloc, XMemFree));
+    REQUIRE(!allocation_pair(XMemAllocDefault, XMemFreeDefault));
+
+    const char result[] = "xmem-default: PASS (allocator pairs 1/6 and 2/7, ordinary and 64 KiB allocations, host working set v2, virtual reserve/commit)\n";
     if (report) {
         int wrote = fputs(result, report);
         if (fclose(report) || wrote == EOF) return 2;
