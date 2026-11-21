@@ -73,6 +73,35 @@ class ProgressMapTests(unittest.TestCase):
             with self.subTest(total=total, verified=verified), self.assertRaisesRegex(ValueError, "sample.dll"):
                 export_progress({"name": "sample.dll", "export_coverage": {"total": total, "verified": verified}})
 
+    def test_frosty_imports_match_export_slots_and_reviewed_build(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = [{"name": name, "status": "partial", "group": "Test", "scope": "", "provider": "Test",
+                     "export_coverage": {"total": 3, "verified": ["First", "#2"], "binary_sha256": digest}}
+                    for name, digest in [("Sample.dll", "reviewed"), ("Other.dll", "previous")]]
+            entries = [{"ordinal": 1, "names": ["First", "AlsoFirst"], "rva": "0x1000"},
+                       {"ordinal": 2, "names": ["Second"], "rva": "0x2000"},
+                       {"ordinal": 3, "names": ["Third"], "rva": "0x2000"}]
+            inventory = {
+                "title": {"imports": [
+                    {"module": "sample.DLL", "table": "imports", "symbols": ["AlsoFirst", "#1", "Second"]},
+                    {"module": "SAMPLE.dll", "table": "delay_imports", "symbols": ["First", "#3"]},
+                    {"module": "Other.dll", "table": "imports", "symbols": ["First"]}]},
+                "libraries": [{"name": name, "sha256": digest, "exports": {"entries": entries}}
+                              for name, digest in [("sample.dll", "reviewed"), ("Other.dll", "current")]]}
+            (root / "library-status.json").write_text(json.dumps({"libraries": rows}))
+            (root / "frosty-xbox-library-inventory.json").write_text(json.dumps(inventory))
+            table = library_table(root)
+            self.assertRegex(table, r"Sample\.dll[^\n]*direct\s+2/3")
+            self.assertRegex(table, r"Other\.dll[^\n]*direct\s+Unmeasured")
+            self.assertIn("verified 2/3 distinct Frosty imports", table)
+            self.assertIn("covers 1 of 2 directly imported tracked DLLs", table)
+            svg = ET.fromstring(render_map(root))
+            tips = [node.text for node in svg.findall(".//{*}title")]
+            self.assertTrue(any("Frosty direct imports verified 2/3" in tip and
+                                "Verified (AlsoFirst, Second). Unverified (#3)." in tip for tip in tips))
+            self.assertTrue(any("Other.dll" in tip and "Unmeasured" in tip for tip in tips))
+
     def test_current_trial_takes_precedence_over_later_observations(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -132,3 +161,19 @@ class ProgressMapTests(unittest.TestCase):
             file.unlink()
             self.assertIn("Menu code background", render_map(root))
             self.assertNotIn("Near-black", render_map(root))
+
+    def test_independent_menu_uses_the_matching_background_measurement(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence = root / "matrix-awakens"
+            evidence.mkdir()
+            (root / "matrix-awakens-launch.json").write_text(json.dumps({"sha256": "game", "trials": {"trial": {}}}))
+            (evidence / "independent-menu.json").write_text(json.dumps({
+                "executable_sha256": "game", "captures": {"independent-menu.webp": "capture"}}))
+            background = evidence / "menu-background.json"
+            background.write_text(json.dumps({"title_sha256": "different", "verified": True}))
+            self.assertNotIn(">Animated<", render_map(root))
+            background.write_text(json.dumps({"title_sha256": "game", "verified": True}))
+            graphic = render_map(root)
+            self.assertIn(">Animated<", graphic)
+            self.assertIn("Retail launch with TuxBox providers", graphic)

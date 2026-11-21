@@ -4,7 +4,7 @@ Record the source revision, observed guest build, hardware and experiment whenev
 
 | Source | How it informs this project |
 |---|---|
-| [TomBox fork, ca6cf6a](https://github.com/brcly/TomBox/tree/ca6cf6a6b44e36d3ca4420db55a660a7bc6d6d5a) | Provides the reference runtime, D3D12.x call profiles by GDK edition, and shader translation used for the Frosty experiments. The tested fork also included working-tree changes after this commit. |
+| [TomBox fork, ca6cf6a](https://github.com/brcly/TomBox/tree/ca6cf6a6b44e36d3ca4420db55a660a7bc6d6d5a) | Earlier Frosty comparisons used this runtime, its GDK-specific D3D12.x call profiles and its shader translator. The tested fork included changes after this commit. The current launcher builds the compiler and providers in this checkout. |
 | [6Stars](https://github.com/Ahmet-Dedeler/6Stars/tree/a16d99bb180eb7cf86632bf99df3174ec8ef11f5) | Research the RAGE-specific asset and PSO layouts. Select a particular archive record, hash the input and compare a known output. Other engines may have different packaging. Its [source license](https://github.com/Ahmet-Dedeler/6Stars/blob/a16d99bb180eb7cf86632bf99df3174ec8ef11f5/LICENSE) has custom redistribution terms. |
 | [ScarlettX](https://github.com/Freminet/ScarlettX/tree/bda18b4d3dab501dd0f372e5d1921f462c6bd457) | Compare published Windows HLE results and limitations for Concept Destruction. The reported delay in exposing CPU-written texture data suggests a regression test with two distinct uploads and submissions in one frame. |
 | [Xodus](https://github.com/xodus-gaming/xodus/tree/49453a4a458f8d9d0e8c93de6319d60b4291fa59) and [its Gaming Runtime](https://github.com/xodus-gaming/xgameruntime) | Use PC GDK package and runtime behavior as a comparison for configuration, storage and user APIs. Verify console imports and GPU interfaces separately. The projects publish GPL and LGPL terms respectively. |
@@ -14,6 +14,10 @@ Record the source revision, observed guest build, hardware and experiment whenev
 | [AMD RDNA2 instruction set](https://www.amd.com/content/dam/amd/en/documents/radeon-tech-docs/instruction-set-architectures/rdna2-shader-instruction-set-architecture.pdf) | Define expected wave, EXEC, VCC, memory and floating-point behavior. Differential tests on a real RDNA2 device can disambiguate shader inputs and instructions. |
 | [Wine](https://gitlab.winehq.org/wine/wine), [Valve Proton](https://github.com/ValveSoftware/Proton) and [vkd3d-proton](https://github.com/HansKristian-Work/vkd3d-proton) | Let the host handle PE loading and Win32. On Linux, submit translated desktop D3D12 to the selected provider's graphics implementation. Valve Proton uses vkd3d-proton for D3D12. Record provider and driver separately. |
 | [GE-Proton](https://github.com/GloriousEggroll/proton-ge-custom) and [UMU](https://github.com/Open-Wine-Components/umu-launcher) | Use an installed distribution through UMU outside Steam. Run Valve and GE in separate prefixes so a provider-specific fix is visible. |
+
+## Shader compiler attribution
+
+The Linux shader compiler is built from the Rust source in this checkout. Its container parser, RDNA2 decoder and HLSL translation are derived from the forked TomBox translator and include the Frosty shader fixes and linked-stage support. The upstream license and modification notice accompany the source. [Shader compiler notice](../tools/shader-compiler/NOTICE) · [Apache License, Version 2.0](licenses/tombox/Apache-2.0.txt)
 
 ## Source attribution for runtime patches
 

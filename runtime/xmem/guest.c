@@ -1,6 +1,7 @@
 #include "xmem.h"
 #include <stdio.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 #include <psapi.h>
 #include <wchar.h>
@@ -102,6 +103,21 @@ static int virtual_reserve_commit(void)
     REQUIRE(area.State == MEM_COMMIT && area.AllocationBase == direct && area.Protect == PAGE_READWRITE);
     REQUIRE(VirtualFree(direct, 0, MEM_RELEASE));
     REQUIRE(!XMemVirtualAlloc(NULL, page, MEM_RESERVE, 2, PAGE_NOACCESS) && GetLastError() == ERROR_NOT_SUPPORTED);
+    const DWORD protections[] = {0x2404, 0x10404};
+    const SIZE_T page64k = 65536;
+    for (size_t i = 0; i < sizeof protections / sizeof protections[0]; ++i) {
+        BYTE *aperture = XMemVirtualAlloc(NULL, 2 * page64k, MEM_RESERVE | 0x20400000u, 3, protections[i]);
+        REQUIRE(aperture && VirtualQuery(aperture, &area, sizeof area) == sizeof area);
+        REQUIRE(area.State == MEM_RESERVE && area.RegionSize >= 2 * page64k);
+        BYTE *committed = XMemVirtualAlloc(aperture + page64k, page64k, MEM_COMMIT | 0x20400000u, 3, protections[i]);
+        REQUIRE(committed == aperture + page64k);
+        REQUIRE(VirtualQuery(committed, &area, sizeof area) == sizeof area && area.Protect == PAGE_READWRITE);
+        committed[0] = 0x69;
+        committed[page64k - 1] = 0x17;
+        REQUIRE(committed[0] == 0x69 && committed[page64k - 1] == 0x17);
+        REQUIRE(VirtualQuery(aperture, &area, sizeof area) == sizeof area && area.State == MEM_RESERVE);
+        REQUIRE(VirtualFree(aperture, 0, MEM_RELEASE));
+    }
     // The console interprets this flag pair as a larger page mode.
     REQUIRE(!XMemVirtualAlloc(NULL, page, MEM_COMMIT | 0x20400000u, 1, PAGE_READWRITE) &&
             GetLastError() == ERROR_NOT_SUPPORTED);
@@ -113,6 +129,16 @@ typedef void (WINAPI *Release)(void *, UINT64);
 
 static int allocation_pair(Allocation allocate, Release release)
 {
+    const UINT64 heap_attributes[] = {0x04800092, 0x04800040, 0x04800078, 0x04820000};
+    for (size_t i = 0; i < sizeof heap_attributes / sizeof heap_attributes[0]; ++i) {
+        BYTE *memory = allocate(257, heap_attributes[i]);
+        REQUIRE(memory && ((UINT_PTR)memory & 15) == 0);
+        REQUIRE(HeapValidate(GetProcessHeap(), 0, memory));
+        memset(memory, 0xa5, 257);
+        REQUIRE(memory[0] == 0xa5 && memory[256] == 0xa5);
+        release(memory, heap_attributes[i]);
+        REQUIRE(!HeapValidate(GetProcessHeap(), 0, memory));
+    }
     enum { small_size = 12, placed_size = 65536 };
     volatile BYTE *small = allocate(small_size, XMEM_ORDINARY_ATTRIBUTES);
     volatile BYTE *placed = allocate(placed_size, XMEM_PLACEMENT_ATTRIBUTES);
@@ -139,14 +165,83 @@ static int allocation_pair(Allocation allocate, Release release)
     return 0;
 }
 
+static BOOL page_state(BYTE *at, DWORD state)
+{
+    MEMORY_BASIC_INFORMATION info;
+    return VirtualQuery(at, &info, sizeof info) == sizeof info && info.State == state;
+}
+
+static int physical_pages(void)
+{
+    enum { page = 65536 };
+    const UINT64 flags = 0x20400000ULL, guard = 0xbfc3711234ULL;
+    UINT64 storage[4] = {guard, 0, 0, guard}, *tokens = &storage[1];
+    SIZE_T count = 2;
+    HMODULE dll = GetModuleHandleW(L"xmem.dll");
+    REQUIRE(GetProcAddress(dll, "XMemAllocatePhysicalPages") == GetProcAddress(dll, MAKEINTRESOURCEA(3)));
+    REQUIRE(GetProcAddress(dll, "XMemMapPhysicalPages") == GetProcAddress(dll, MAKEINTRESOURCEA(21)));
+    REQUIRE(GetProcAddress(dll, "XMemFreePhysicalPages") == GetProcAddress(dll, MAKEINTRESOURCEA(8)));
+    if (!XMemAllocatePhysicalPages(flags, &count, tokens)) {
+        DWORD error = GetLastError();
+        if (report) fprintf(report, "XMemAllocatePhysicalPages failed error=%lu returned_pages=%zu\n", error, count);
+        return failure(__LINE__, "allocate two physical pages");
+    }
+    REQUIRE(count == 2 && tokens[0] != tokens[1] && storage[0] == guard && storage[3] == guard);
+    BYTE *base = VirtualAlloc(NULL, page * 4, MEM_RESERVE, PAGE_NOACCESS);
+    REQUIRE(base && XMemMapPhysicalPages(base + page, count, tokens) == base + page);
+    REQUIRE(page_state(base, MEM_RESERVE) && page_state(base + 3 * page, MEM_RESERVE));
+    REQUIRE(!XMemFreePhysicalPages(count, tokens) && GetLastError() == ERROR_BUSY);
+    for (UINT i = 0; i < page; ++i) {
+        base[page + i] = (BYTE)(i ^ (i >> 8));
+        base[2 * page + i] = (BYTE)~(i ^ (i >> 8));
+    }
+    REQUIRE(!XMemMapPhysicalPages(base, 2, NULL));
+    REQUIRE(page_state(base + page, MEM_COMMIT));
+    REQUIRE(XMemMapPhysicalPages(base + page, count, NULL) == base + page);
+    REQUIRE(page_state(base + page, MEM_RESERVE) && page_state(base + page * 2, MEM_RESERVE));
+    UINT64 reversed[] = {tokens[1], tokens[0]}, duplicate[] = {tokens[0], tokens[0]};
+    UINT64 invalid[] = {tokens[0], UINT64_MAX};
+    REQUIRE(!XMemFreePhysicalPages(2, invalid));
+    REQUIRE(!XMemFreePhysicalPages(2, duplicate));
+    REQUIRE(!XMemMapPhysicalPages(base, 2, duplicate) && page_state(base, MEM_RESERVE));
+    REQUIRE(!XMemMapPhysicalPages(base + 1, 1, tokens));
+    REQUIRE(XMemMapPhysicalPages(base, count, reversed) == base);
+    for (UINT i = 0; i < page; ++i) {
+        REQUIRE(base[i] == (BYTE)~(i ^ (i >> 8)));
+        REQUIRE(base[page + i] == (BYTE)(i ^ (i >> 8)));
+    }
+    REQUIRE(XMemMapPhysicalPages(base, 1, NULL) == base);
+    REQUIRE(XMemFreePhysicalPages(1, &reversed[0]));
+    REQUIRE(!XMemMapPhysicalPages(base + 2 * page, 1, &reversed[0]));
+    REQUIRE(!XMemFreePhysicalPages(1, &reversed[0]));
+    REQUIRE(page_state(base + page, MEM_COMMIT));
+    REQUIRE(XMemMapPhysicalPages(base + page, 1, NULL) == base + page);
+    REQUIRE(XMemFreePhysicalPages(1, &reversed[1]));
+    REQUIRE(VirtualAlloc(base, page, MEM_COMMIT, PAGE_READWRITE) == base);
+    REQUIRE(!XMemMapPhysicalPages(base, 1, NULL) && page_state(base, MEM_COMMIT));
+    REQUIRE(VirtualFree(base, 0, MEM_RELEASE) && page_state(base, MEM_FREE));
+    REQUIRE(storage[0] == guard && storage[3] == guard);
+    REQUIRE(!XMemAllocatePhysicalPages(0x20000000, &count, tokens) && !count && GetLastError() == ERROR_NOT_SUPPORTED);
+    return 0;
+}
+
 int wmain(int argc, wchar_t **argv)
 {
+    BOOL pages_only = argc >= 2 && !wcscmp(argv[1], L"--pages");
+    if (pages_only) { --argc; ++argv; }
     if (!(argc == 1 || (argc == 3 && wcscmp(argv[1], L"--report") == 0))) {
-        fputs("usage: xmem-smoke.exe [--report FILE]\n", stderr);
+        fputs("usage: xmem-smoke.exe [--pages] [--report FILE]\n", stderr);
         return 2;
     }
     if (argc == 3 && _wfopen_s(&report, argv[2], L"wb") != 0) return 2;
     REQUIRE(app_local_provider());
+    if (pages_only) {
+        REQUIRE(!physical_pages());
+        const char result[] = "xmem-pages PASS cpu-pages=2 remapped-bytes=131072 stale-and-foreign-rejected=1\n";
+        if (report && (fputs(result, report) == EOF || fclose(report))) return 2;
+        fputs(result, stdout);
+        return 0;
+    }
     REQUIRE(!working_set());
     REQUIRE(!virtual_reserve_commit());
     HMODULE module = GetModuleHandleW(L"xmem.dll");

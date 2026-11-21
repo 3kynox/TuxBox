@@ -21,9 +21,13 @@ from project_tuxbox.inspect import digest
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("provider", "parent-provider", "proton", "prefix", "work", "output"):
+    for name in ("provider", "proton", "prefix", "work", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--parent-provider", type=Path, help="unmodified provider for the reference comparison")
+    parser.add_argument("--tuxbox", action="store_true", help="copy a native decoder NV12 surface to TuxBox guest resources")
     args = parser.parse_args()
+    if not args.tuxbox and not args.parent_provider:
+        parser.error("--parent-provider is required for the reference comparison")
     work, distribution = args.work.resolve(), args.proton.resolve()
     work.mkdir(parents=True, exist_ok=True)
     host_files = distribution / "files"
@@ -45,7 +49,7 @@ def main():
                             f"/I{ROOT / 'runtime/d3d12'}")
         exe = trial / "copy_probe.exe"
         tools.link(exe, obj, "d3d12.lib", "dxgi.lib", "kernel32.lib")
-        command = ["bwrap", "--die-with-parent", "--unshare-net", "--ro-bind", "/", "/", "--dev-bind", "/dev",
+        command = ["bwrap", "--die-with-parent", "--unshare-pid", "--unshare-net", "--ro-bind", "/", "/", "--dev-bind", "/dev",
                    "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--bind", str(trial), str(trial),
                    "--unsetenv", "WAYLAND_DISPLAY", "--chdir", str(trial)]
         env = dict(WINEPREFIX=prefix, WINESERVER=host_files / "bin/wineserver", WINEDEBUG="-all", VKD3D_DEBUG="warn",
@@ -54,16 +58,17 @@ def main():
         for key, value in env.items():
             command.extend(["--setenv", key, str(value)])
         command.extend(["--", "xvfb-run", "-a", "timeout", "-k", "2s", "45s",
-                        str(host_files / "bin/wine"), str(exe)])
+                        str(host_files / "bin/wine"), str(exe), *(["--tuxbox"] if args.tuxbox else [])])
         with (work / "probe.log").open("wb") as log:
             run = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=60)
         raw = trial / "result.txt"
         observed = dict(row.split("=", 1) for row in raw.read_text().splitlines()) if raw.exists() else {}
         if run.returncode or observed.get("plane_0_matching") != "3572" or observed.get("plane_1_matching") != "1786":
             raise ValueError(f"Copy readback did not pass: {run.returncode}, {observed}. See {work / 'probe.log'}")
+        if args.tuxbox and any(observed.get(key) != "1" for key in ("foreign_guest_rejected", "stale_decoder_rejected")):
+            raise ValueError("Missing foreign-resource or stale-frame rejection")
         result = dict(host=(distribution / "version").read_text().strip(), adapter_pci=observed["adapter"],
-                      provider_sha256=digest(args.provider), parent_provider_sha256=digest(args.parent_provider),
-                      guest_sha256=digest(exe), patch_sha256=digest(ROOT / "tools/reference/tombox-media-copy.patch"),
+                      provider_sha256=digest(args.provider), guest_sha256=digest(exe),
                       copy_iid="30bc77b9-8379-4b25-95de-b8588c42275d",
                       scope="Standalone two-plane NV12 split using the retail method sequence, real GPU execution and readback",
                       type=3, device_create_slot=73, device_placement_slot=44,
@@ -73,6 +78,13 @@ def main():
                       luma_bytes_expected=3572, luma_bytes_matched=int(observed["plane_0_matching"]),
                       chroma_bytes_expected=1786, chroma_bytes_matched=int(observed["plane_1_matching"]),
                       caller_released_source_and_alias_before_submission=True)
+        if args.tuxbox:
+            result.update(source="Native ID3D12Resource created by the independent decoder-side device",
+                          destinations="TuxBox guest resources", foreign_guest_rejected=True, stale_decoder_rejected=True,
+                          foreign_decoder_adapter_rejected=observed.get("foreign_decoder_rejected"))
+        else:
+            result.update(parent_provider_sha256=digest(args.parent_provider),
+                          patch_sha256=digest(ROOT / "tools/reference/tombox-media-copy.patch"))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
 

@@ -7,9 +7,8 @@ out="${1:-$repo/build/frosty-cbv-layer}"
 include=()
 if [[ -n "${VULKAN_HEADERS_INCLUDE:-}" ]]; then
     include=(-I "$VULKAN_HEADERS_INCLUDE")
-elif [[ ! -f /usr/include/vulkan/vk_layer.h &&
-        -f "$repo/build/frosty-signature/chase-vertex/vkd3d-proton/khronos/Vulkan-Headers/include/vulkan/vk_layer.h" ]]; then
-    include=(-I "$repo/build/frosty-signature/chase-vertex/vkd3d-proton/khronos/Vulkan-Headers/include")
+elif [[ ! -f /usr/include/vulkan/vk_layer.h && -f "$repo/build/vulkan-headers/usr/include/vulkan/vk_layer.h" ]]; then
+    include=(-I "$repo/build/vulkan-headers/usr/include")
 fi
 mkdir -p -- "$out"
 stage=$(mktemp -d -- "$out/.build.XXXXXXXX")

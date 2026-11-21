@@ -6,7 +6,6 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -17,29 +16,28 @@ from project_tuxbox.inspect import digest
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for option in ("tombox", "proton", "prefix", "work", "output"):
+    parser.add_argument("--provider", type=Path, help="GameInput.dll to test (default: build/gameinput/GameInput.dll)")
+    for option in ("proton", "prefix", "work", "output"):
         parser.add_argument("--" + option, required=True, type=Path)
     args = parser.parse_args()
     work = args.work.resolve()
     work.mkdir(exist_ok=True, parents=True)
-    patch = ROOT / "tools/reference/tombox-keyboard-gamepad.patch"
     tools = Toolchain()
     provider = work / "GameInput.dll"
-    with TemporaryDirectory(dir=work) as temp:
-        checkout = Path(temp)
-        source = checkout / "crates/compat/gameinput"
-        shutil.copytree(args.tombox / "crates/compat/gameinput", source)
-        subprocess.run(["patch", "--batch", "-p1", "-i", patch], cwd=checkout, check=True)
-        obj = tools.compile(source / "gameinput.cpp", work, "/DNOMINMAX", "/D_WIN32_WINNT=0x0A00")
-        tools.link(provider, obj, "user32.lib", "xinput.lib", "kernel32.lib", "/timestamp:0", exports=source / "GameInput.def")
+    source = (args.provider or ROOT / "build/gameinput/GameInput.dll").resolve()
+    if source != provider:
+        shutil.copy2(source, provider)
+    imports = ROOT / "runtime/gameinput/guest-imports.def"
+    subprocess.run([tools.linker, "/lib", "/nologo", "/machine:x64",
+                    f"/def:{imports}", "/out:GameInput.lib"], cwd=work, check=True)
     exe = work / "keyboard_guest.exe"
     obj = tools.compile(ROOT / "tools/reference/menu-input/guest.cpp", work, "/W4", "/WX")
-    tools.link(exe, obj, "GameInput.lib", "user32.lib", "kernel32.lib", "/subsystem:windows", "/entry:wmainCRTStartup")
+    tools.link(exe, obj, "GameInput.lib", "user32.lib", "xinput.lib", "kernel32.lib", "/subsystem:windows", "/entry:wmainCRTStartup")
     host = Host("proton", args.proton, args.prefix)
     env = dict(host.env, UMU_RUNTIME_UPDATE="0", WINEDLLOVERRIDES="gameinput=n,b")
     env.pop("WAYLAND_DISPLAY", None)
     result = dict(host=host.version, provider_sha256=digest(provider), guest_sha256=digest(exe),
-                  patch_sha256=digest(patch), runs={})
+                  runs={})
     for mode in ("on", "off"):
         if mode == "on":
             env["TUXBOX_KEYBOARD_GAMEPAD"] = "1"

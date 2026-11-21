@@ -46,7 +46,8 @@ using Clear = void (WINAPI*)(ID3D12GraphicsCommandList*, D3D12_CPU_DESCRIPTOR_HA
 using Copy = void (WINAPI*)(ID3D12GraphicsCommandList*, const D3D12_TEXTURE_COPY_LOCATION*,
                             UINT, UINT, UINT, const D3D12_TEXTURE_COPY_LOCATION*, const D3D12_BOX*, UINT);
 
-inline ComPtr<ID3D12Device> create_device(const wchar_t* requested, DXGI_ADAPTER_DESC1& selected) {
+inline ComPtr<ID3D12Device> create_device(const wchar_t* requested, DXGI_ADAPTER_DESC1& selected,
+                                          const UINT* creation = profile.data()) {
     ComPtr<IDXGIFactory1> factory;
     check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "CreateDXGIFactory1");
     for (UINT i = 0; ; ++i) {
@@ -60,7 +61,7 @@ inline ComPtr<ID3D12Device> create_device(const wchar_t* requested, DXGI_ADAPTER
         std::swprintf(id, 16, L"%04x:%04x", selected.VendorId, selected.DeviceId);
         if (requested && _wcsicmp(requested, id)) continue;
         ComPtr<ID3D12Device> device;
-        hr = D3D12XboxCreateDevice(adapter.Get(), profile.data(), IID_PPV_ARGS(&device));
+        hr = D3D12XboxCreateDevice(adapter.Get(), creation, IID_PPV_ARGS(&device));
         if (SUCCEEDED(hr) && device) return device;
         if (requested) check(FAILED(hr) ? hr : E_FAIL, "D3D12XboxCreateDevice");
     }

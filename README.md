@@ -4,8 +4,8 @@ TuxBox is an experimental project for running Xbox Series X|S games on PC. Most 
 
 ## What runs today?
 
-- **Lanes** is a small game included with TuxBox. Collect coins and dodge barriers using a keyboard, mouse or Xbox controller.
-- **The Matrix Awakens (Frosty)** opens its menu and plays the opening chase cutscenes on Linux. It needs the original game files and extra libraries. The green Matrix code behind the menu is missing, and the 3D chase scenes are still almost black. We haven’t confirmed that driving or shooting works yet. [Setup and test results](docs/MATRIX_AWAKENS.md)
+- **Lanes** is a small game that uses TuxBox’s Xbox graphics, memory and input libraries. Collect coins and dodge barriers using a keyboard, mouse or Xbox controller.
+- **The Matrix Awakens (Frosty)** shows the falling green code behind the menu, opens Settings and plays the beginning of the chase cinematic on Linux. You supply the game, its matching Xbox system files and Proton. Driving and shooting remain unverified. [Menu animation](evidence/matrix-awakens/menu-rain-animation.webp) · [Setup and test results](docs/MATRIX_AWAKENS.md)
 
 ## Try Lanes
 
@@ -19,8 +19,20 @@ python tuxbox.py run --app-id Lanes build/lanes
 
 Press Left or Right to change lanes, or Space to take a turn in your current lane. R restarts the game and Escape quits.
 
+## Game logs
+
+`tuxbox.py run` shows game output in the terminal as it arrives. The first line gives the path to a saved copy. On Linux, logs go in `~/.local/state/project-tuxbox/logs/` (or under `XDG_STATE_HOME`). On Windows, they go in `%LOCALAPPDATA%\TuxBox\logs\`.
+
+To choose a file, pass `--log-file` before the game path. Each run appends to that file.
+
+```sh
+python tuxbox.py run --log-file build/lanes.log --app-id Lanes build/lanes
+```
+
+Run `python tuxbox.py inspect /path/to/game` to see the executable TuxBox will launch and what it found in the package’s `.bin` files. For Frosty, its shipping symbols can also turn addresses from the log into function names. [Symbol lookup example](docs/MATRIX_AWAKENS.md#what-carries-over-to-projectscarlett)
+
 ## Compatibility
 
-[![TuxBox progress, including game tests and Xbox library support](docs/progress.svg)](docs/progress.svg)
+[![TuxBox progress, including game tests, shader coverage and Xbox libraries](docs/progress.svg)](docs/progress.svg)
 
-[Xbox library support](docs/LIBRARIES.md) · [Results by system](docs/RESULTS.md) · [How TuxBox works](docs/ARCHITECTURE.md) · [Project credits and references](docs/REFERENCES.md)
+[Xbox library support](docs/LIBRARIES.md) · [Shader coverage](docs/SHADERS.md) · [Results by system](docs/RESULTS.md) · [How TuxBox works](docs/ARCHITECTURE.md) · [Project credits and references](docs/REFERENCES.md)

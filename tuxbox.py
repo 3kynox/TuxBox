@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Project TuxBox development CLI."""
 import argparse
+from contextlib import redirect_stderr
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+from time import monotonic
 from xml.etree import ElementTree
 
 try:
@@ -13,21 +15,63 @@ try:
 except ImportError:
     sys.exit("Install the inspection dependency with python -m pip install -r requirements.txt")
 
+from project_tuxbox.backend_log import check_log_path
+from project_tuxbox.game_log import game_log
 from project_tuxbox.host import Host
-from project_tuxbox.inspect import image, launch_target, package
-from project_tuxbox.progress_map import library_table, write_map
+from project_tuxbox.inspect import binary_file, image, launch_target, package
+from project_tuxbox.progress_map import library_table, shader_table, write_map
 from project_tuxbox.shader_prep import prepare_for_launch
+from project_tuxbox.symbols import lookup_symbols
 from project_tuxbox.verify import SUITES, verify, status
+
+
+def launch_game(args):
+    exe = launch_target(args.target.expanduser(), args.app_id)
+    host = Host(args.backend, args.proton, args.prefix)
+    if args.log_file:
+        check_log_path(host.backend, host.env, exe.parent, args.log_file.expanduser().resolve())
+    with game_log(exe, args.log_file) as log:
+        log.status(f"{exe.name} on {host.backend} ({host.version})")
+        log.status(f"Executable: {exe}")
+        if host.backend in ("wine", "proton"):
+            log.status(f"Prefix: {host.env['WINEPREFIX']}")
+        try:
+            if args.prepare_only or (not args.no_shader_prep and os.environ.get("TUXBOX_SHADER_PREP") != "0"
+                                     and "-nullrhi" not in (arg.lower() for arg in args.arguments)):
+                try:
+                    with redirect_stderr(log):
+                        supported = prepare_for_launch(exe, host)
+                except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                    if args.prepare_only:
+                        raise
+                    log.status(f"Shader preparation incomplete: {exc}. Starting the game.")
+                else:
+                    if args.prepare_only:
+                        log.status("Shader preparation complete." if supported else
+                                   "No matching shader preparation profile for this title and provider.")
+                        return 0 if supported else 1
+            log.status("Starting game")
+            start = monotonic()
+            code = host.run_game(exe, args.arguments, log).returncode
+        except KeyboardInterrupt:
+            log.status("Launch interrupted")
+            return 130
+        result = f"exit code {code}" if code >= 0 else f"signal {-code}"
+        log.status(f"Game exited with {result} after {monotonic() - start:.1f}s")
+        return code if code >= 0 else 128 - code
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     subs = parser.add_subparsers(required=True, dest="command")
-    inspect = subs.add_parser("inspect", help="inventory a local package or PE, including ordinary and delay imports")
+    inspect = subs.add_parser("inspect", help="inspect a local package, PE image or .bin file")
     inspect.add_argument("path", type=Path)
     inspect.add_argument("--json", action="store_true", help="include full symbol tables and file hashes")
+    inspect.add_argument("--rva", action="append", type=lambda value: int(value, 0), metavar="ADDRESS",
+                         help="look up a PE-relative address in an Unreal Symbols .bin (repeatable)")
     run = subs.add_parser("run", help="launch a prepared x64 executable or manifest entry")
     run.add_argument("--app-id", help="select a manifest entry by its Id")
+    run.add_argument("--log-file", type=Path, metavar="PATH", help="append the live game log to this file")
     preparation = run.add_mutually_exclusive_group()
     preparation.add_argument("--prepare-only", action="store_true", help="prepare supported shader caches and exit")
     preparation.add_argument("--no-shader-prep", action="store_true", help="skip shader preparation for this launch")
@@ -46,6 +90,7 @@ def main():
     status_format = show.add_mutually_exclusive_group()
     status_format.add_argument("--svg", type=Path, metavar="PATH", help="write the visual progress map")
     status_format.add_argument("--libraries", action="store_true", help="list verified exports per Xbox DLL")
+    status_format.add_argument("--shaders", action="store_true", help="show packaged and requested shaders by stage")
     args = parser.parse_args()
     if args.command == "status":
         evidence = Path(__file__).resolve().parent / "evidence"
@@ -53,11 +98,15 @@ def main():
             write_map(evidence, args.svg)
         elif args.libraries:
             print(library_table(evidence))
+        elif args.shaders:
+            print(shader_table(evidence))
         else:
             print(status())
         return 0
     if args.command == "inspect":
         path = args.path.expanduser().resolve()
+        if args.rva and (path.is_dir() or path.suffix.casefold() != ".bin"):
+            parser.error("--rva needs an Unreal symbol database .bin file")
         if path.is_dir():
             data = package(path)
             if not args.json:
@@ -66,8 +115,28 @@ def main():
                     present = "present" if entry["present"] else "missing"
                     print(f"{entry['id']}  {entry['target']}  {entry['path']}  {present}")
                 print(f"{len(data['libraries'])} DLLs inventoried; {sum('error' in lib for lib in data['libraries'])} unreadable")
+                for binary in data["binary_files"]:
+                    print(f"{binary['path']}  {binary.get('error') or binary['kind']}")
                 print("Files by extension:", json.dumps(data["files_by_extension"]))
                 return 0
+        elif path.suffix.casefold() == ".bin":
+            data = lookup_symbols(path, args.rva) if args.rva else binary_file(path)
+            unresolved = any(item["status"] != "matched" for item in data.get("lookups", ()))
+            if not args.json:
+                print(f"{path.name}  {data['kind']}  {data['size_bytes']} bytes")
+                for key, value in data.items():
+                    if key not in ("kind", "size_bytes", "lookups"):
+                        print(f"{key}  {json.dumps(value, ensure_ascii=False)}")
+                for row in data.get("lookups", ()):
+                    if row["status"] == "matched":
+                        label = row["function"]
+                        label = label if label.isprintable() else ascii(label)
+                        print(f"{row['rva']}  {label} + {row['offset']}  (start {row['function_rva']})")
+                    else:
+                        print(f"{row['rva']}  {row['status']}")
+            else:
+                print(json.dumps(data, indent=2))
+            return int("error" in data or unresolved)
         else:
             data = image(path)
             if not args.json:
@@ -77,24 +146,9 @@ def main():
                         print(f"{kind}  {desc['module']}  {len(desc['symbols'])} symbols")
                 return 0
         print(json.dumps(data, indent=2))
-        return 0
+        return 1 if "error" in data else 0
     if args.command == "run":
-        exe = launch_target(args.target.expanduser(), args.app_id)
-        host = Host(args.backend, args.proton, args.prefix)
-        if args.prepare_only or (not args.no_shader_prep and os.environ.get("TUXBOX_SHADER_PREP") != "0"
-                                 and "-nullrhi" not in (arg.lower() for arg in args.arguments)):
-            try:
-                supported = prepare_for_launch(exe, host)
-            except (OSError, ValueError, subprocess.SubprocessError) as exc:
-                if args.prepare_only:
-                    raise
-                print(f"Shader preparation incomplete: {exc}. Starting the game.", file=sys.stderr)
-            else:
-                if args.prepare_only:
-                    if not supported:
-                        print("No matching shader preparation profile for this title and provider.", file=sys.stderr)
-                    return 0 if supported else 1
-        return host.run(exe, args.arguments).returncode
+        return launch_game(args)
     host = Host(args.backend, args.proton, args.prefix)
     return verify(host, args.output, args.adapter, args.only, args.benchmark_samples)
 

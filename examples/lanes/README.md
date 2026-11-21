@@ -19,13 +19,17 @@ python build.py lanes
 python tuxbox.py run --app-id Lanes build/lanes
 ```
 
-The package in `build/lanes` contains the executable, two project-built DLLs, and a synthetic `MicrosoftGame.config`. The launcher defaults to Proton on x86-64 Linux and native execution on x64 Windows. Add `--backend`, `--prefix` and `--proton` to the launcher before the package path when selecting a different Linux setup. An optional guest argument `--adapter VVVV:DDDD` selects a hardware GPU by PCI IDs.
+The package in `build/lanes` contains the game, three TuxBox providers and a local Scarlett manifest. The launcher defaults to Proton on x86-64 Linux and native execution on x64 Windows. Add `--backend`, `--prefix` and `--proton` to the launcher before the package path when selecting a different Linux setup. An optional guest argument `--adapter VVVV:DDDD` selects a hardware GPU by PCI IDs.
 
 ## What the game exercises
 
-- The guest allocates the game state and its course with `xmem.dll!XMemAllocDefault` and frees it with `XMemFreeDefault`.
-- At startup, an original GPU compute shader places the coin and hazard on each turn. The guest obtains its root signature through the static import `d3d12_xs.dll!D3D12SerializeRootSignature`. It binds a seed and row count and reads the resulting course into the XMem allocation. Playing further turns requires no GPU readback.
-- The window uses Win32 mouse and keyboard events, XInput gamepad polling, and GDI drawing. The D3D12 device, compute command list and shader bytecode use the desktop ABI. The manifest describes a synthetic local fixture. It has no assigned commercial title identity or console certification.
+| Game operation | Xbox library |
+| --- | --- |
+| Allocate and release the game state and course | `xmem.dll` |
+| Create the guest device, dispatch the course shader, upload the board and display it with `PresentX` | `d3d12_xs.dll` |
+| Read keyboard, mouse and controller state | `GameInput.dll`, through the same factory ordinal Frosty imports |
+
+The game also imports Windows core API sets for services such as files, timing and synchronization. The providers handle desktop graphics, the window, and host input. The game draws its mouse cursor from GameInput movement deltas. [GDK mouse readings](https://learn.microsoft.com/en-us/gaming/gdk/docs/reference/input/gameinput/structs/gameinputmousestate)
 
 ## Deterministic replay
 
@@ -33,6 +37,8 @@ The package in `build/lanes` contains the executable, two project-built DLLs, an
 python tuxbox.py run --app-id Lanes build/lanes --replay --report replay.txt
 ```
 
-The report is written in the guest directory. The replay pins the seed and checks all 16 GPU-generated rows against a fixed reference. It checks held buttons across connection and release, overlapping D-pad and A presses, and left-stick jitter. It uses the same movement function as the interactive window to collect every coin, step on an empty lane, and hit a barrier. It checks that further movement after a win or collision leaves the state unchanged, then releases the board.
+The replay checks all 16 GPU-generated rows, a win, a missed coin and a collision. It uploads two 520 × 640 boards through the Xbox command list, reads both textures back, and checks every pixel plus the lane and player colors. The replay runs without opening a window. During interactive play, the same textures are presented through the Xbox command queue.
 
-A separate Linux run compared window pixels for equivalent mouse clicks, keyboard presses and XInput samples from an Xbox-style uinput controller. [Desktop input results](../../evidence/lanes-desktop-input.json)
+Run `python tuxbox.py verify --only lanes` to check the replay and audit both the regular and delay-load import tables. The verifier requires all three Xbox libraries and rejects direct desktop graphics, drawing or input imports. [Proton Experimental](../../evidence/providers/lanes-xbox-valve.json) · [GE-Proton](../../evidence/providers/lanes-xbox-ge.json) · [Radeon replay](../../evidence/providers/lanes-xbox-radeon.json)
+
+An interactive run compared the displayed board after keyboard presses, mouse clicks, and input from a hot-plugged virtual Xbox controller. It also checked the three DLLs loaded from the package. [Input and loader results](../../evidence/lanes-xbox-input.json) · [Captured board](../../evidence/lanes-xbox-board.png)

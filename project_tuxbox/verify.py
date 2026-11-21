@@ -14,8 +14,10 @@ from .inspect import digest, image, launch_target
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build"
-BASE_SUITES = ("cpu", "xmem", "graphics", "graphics-abi", "guest-frame", "present", "lanes",
-               "cpu-benchmark", "d3d12-guids", "d3d12-signatures", "xg-provider", "gameconfig", "gamechat", "mfreadwrite", "xaudio")
+BASE_SUITES = ("cpu", "xmem", "xgameruntime", "xcrdapi", "graphics", "graphics-abi", "guest-frame", "present", "lanes",
+               "cpu-benchmark", "d3d12-exports", "d3d12-features", "d3d12-indirect", "d3d12-queries", "d3d12-queues", "d3d12-tables",
+               "d3d12-heaps", "d3d12-placement", "d3d12-draw", "d3d12-stream", "d3d12-frame-events",
+               "d3d12-guids", "d3d12-signatures", "xg-provider", "frontpanel", "gameconfig", "gamechat", "mfreadwrite", "xaudio")
 OPTIONAL_PROVIDERS = {"dxc-utils": "dxc-utils/dxcompiler.dll", "xg": "xg/xg_xs.dll"}
 SUITES = (*BASE_SUITES, *OPTIONAL_PROVIDERS)
 
@@ -32,6 +34,17 @@ def guid_receipt(imports):
     symbols = next((module["symbols"] for module in imports if module["module"].lower() == "d3d12_xs.dll"), ())
     count = sum(name.startswith(("IID_", "WKPDID_")) for name in symbols)
     return f"d3d12-guids PASS identifiers={count} bytes={16 * count}"
+
+
+def lanes_imports(pe):
+    """Check the title boundary, including imports that are resolved on first use."""
+    modules = sorted({entry["module"].lower() for key in ("imports", "delay_imports") for entry in pe[key]})
+    providers = {"d3d12_xs.dll", "gameinput.dll", "xmem.dll"}
+    unexpected = [name for name in modules if name not in providers and not (
+        name.startswith(("api-ms-win-core-", "api-ms-win-crt-")) and name.endswith(".dll"))]
+    if unexpected:
+        raise ValueError(f"Lanes imports a library outside its Xbox title profile: {', '.join(unexpected)}")
+    return modules
 
 
 def verify(host, output, adapter, selected=None, samples=1):
@@ -56,7 +69,7 @@ def verify(host, output, adapter, selected=None, samples=1):
                 builds[relative] = digest(dest)
             return dest
 
-        def check(name, binary, arguments, match, expected_code=0, providers=None, config=None, guest_factory=False, dependencies=()):
+        def check(name, binary, arguments, match, expected_code=0, providers=None, config=None, device_factory=None, dependencies=()):
             row = {"gate": name, "passed": False}
             cases.append(row)
             folder = work / str(len(cases))
@@ -65,14 +78,20 @@ def verify(host, output, adapter, selected=None, samples=1):
             try:
                 exe = stage(binary, folder)
                 if providers:
-                    modules = image(exe)["imports"]
+                    pe = image(exe)
+                    modules = pe["imports"]
+                    if config:
+                        row["guest_import_modules"] = lanes_imports(pe)
                     if callable(match):
                         match = match(modules)
-                    if guest_factory:
-                        from_desktop = any(entry["module"].lower() == "d3d12.dll"
-                                           for entry in modules)
-                        if from_desktop:
+                    if device_factory is not None:
+                        desktop = next((entry["symbols"] for entry in modules
+                                        if entry["module"].lower() == "d3d12.dll"), ())
+                        if device_factory == "xbox" and desktop:
                             raise ValueError("Frame fixture imports desktop D3D12 directly")
+                        # The Windows SDK import library selects this function by ordinal.
+                        if device_factory == "desktop" and not {"D3D12CreateDevice", "#101"}.intersection(desktop):
+                            raise ValueError("Expected device creation from desktop d3d12.dll")
                     for dll, symbols in providers.items():
                         provider = stage(dll, folder)
                         found = {symbol for mod in modules if mod["module"].lower() == provider.name.lower()
@@ -108,15 +127,23 @@ def verify(host, output, adapter, selected=None, samples=1):
         memory_symbols = ("XMemAllocDefault", "XMemFreeDefault")
         graphics_symbols = ("D3D12SerializeRootSignature",)
         if "dxc-utils" in selected:
-            check("dxc-create-blob", "dxc-utils/dxc-utils.exe", ["--report"],
-                  r"dxc-utils PASS bytes=257 source-freed=1 writable=257 retained=1",
-                  providers={"dxc-utils/dxcompiler_xs.dll": ("DxcCreateInstance",)},
-                  dependencies=("dxc-utils/dxcompiler.dll",))
-            check("dxc-allocator", "dxc-utils/dxc-utils.exe", ["--allocator", "--report"],
-                  r"dxc-allocator PASS ordinals=3,4 custom=1 retained=1 balanced=1",
-                  providers={"dxc-utils/dxcompiler_xs.dll": ("DxcCreateInstance2",)},
-                  dependencies=("dxc-utils/dxcompiler.dll",))
-        xg_addresses = r"xg-texture PASS layouts=13 traced-descriptors=4 element-addresses=273263"
+            for family, exe, dll, ordinals in (
+                ("dxc", "dxc-utils.exe", "dxcompiler_xs.dll", "3,4"),
+                ("dxc-x", "dxc-x.exe", "dxcompiler_x.dll", "1,2"),
+            ):
+                binary = f"dxc-utils/{exe}"
+                provider = f"dxc-utils/{dll}"
+                dependencies = ("dxc-utils/dxcompiler.dll",)
+                check(f"{family}-create-blob", binary, ["--report"],
+                      r"dxc-utils PASS bytes=257 source-freed=1 writable=257 retained=1",
+                      providers={provider: ("DxcCreateInstance",)}, dependencies=dependencies)
+                check(f"{family}-allocator", binary, ["--allocator", "--report"],
+                      f"dxc-allocator PASS ordinals={ordinals} custom=1 retained=1 balanced=1",
+                      providers={provider: ("DxcCreateInstance2",)}, dependencies=dependencies)
+                check(f"{family}-compile", binary, ["--compile", "--report"],
+                      r"dxc-compiler PASS profile=cs_6_0 dxil=1 invalid-entry=1 diagnostics=1",
+                      providers={provider: ("DxcCreateInstance",)}, dependencies=dependencies)
+        xg_addresses = r"xg-texture PASS layouts=18 traced-descriptors=8 element-addresses=872759"
         if "d3d12-signatures" in selected:
             check("d3d12-signatures", "d3d12-smoke/d3d12-signatures.exe", ["--report"],
                   r"d3d12-signatures PASS versions=1.0,1.1 ranges=1 invalid=2",
@@ -140,8 +167,18 @@ def verify(host, output, adapter, selected=None, samples=1):
                 check(addresses_gate, f"{suite}/xg-texture.exe", ["--addresses", "--report"], xg_addresses,
                       providers=provider, dependencies=deps)
                 check(formats_gate, f"{suite}/xg-texture.exe", ["--formats", "--report"],
-                      r"xg-formats PASS formats=41 layouts=82 element-addresses=6231134",
+                      r"xg-formats PASS formats=78 layouts=156 element-addresses=9231018",
                       providers=provider, dependencies=deps)
+        if "frontpanel" in selected:
+            panel = {"frontpanel/xfrontpaneldisplay.dll": (
+                "XFrontPanelGetButtonStates", "XFrontPanelGetLightStates", "XFrontPanelGetScreenDimensions",
+                "XFrontPanelGetScreenPixelFormat", "XFrontPanelIsSupported", "XFrontPanelPresentBuffer",
+                "XFrontPanelSetDisplayName", "XFrontPanelSetLightStates")}
+            check("frontpanel-absent", "frontpanel/frontpanel.exe", ["--report"],
+                  "frontpanel PASS no-panel exports=8", providers=panel)
+            check("frontpanel-connected", "frontpanel/frontpanel.exe", ["--connected", "--report"],
+                  "frontpanel PASS connected led-masks=32 pixels=16384 errors=8", providers=panel,
+                  dependencies=("frontpanel/fixture/xfp_gc.dll",))
         if "gameconfig" in selected:
             check("gameconfig-query", "gameconfig/gameconfig-query.exe", ["--report"],
                   r"gameconfig-query PASS paths=7 hives=2 missing-key=1 gamecore-readonly=1",
@@ -149,12 +186,13 @@ def verify(host, output, adapter, selected=None, samples=1):
                              ("GetRegistryPathForPackage", "OpenGameConfigForGameCore", "OpenGameConfigKeyForPackage")})
         if "gamechat" in selected:
             check("gamechat-roster", "gamechat/gamechat-session.exe", ["--report"],
-                  r"gamechat-session PASS sessions=2 remote-users=3 bitrate-settings=3 stale-handles=1 xuids=2 contexts=2",
+                  r"gamechat-session PASS sessions=2 remote-users=5 bitrate-settings=3 stale-handles=1 xuids=2 contexts=2 frame-batches=4",
                   providers={"gamechat/GameChat2.dll": ("ChatManagerInitialize", "ChatManagerCleanup",
                              "ChatManagerAddRemoteUser", "ChatManagerGetChatUsers", "ChatManagerRemoveUser",
                              "ChatUserGetIsLocal", "ChatManagerSetAudioEncodingBitrate",
                              "ChatManagerGetAudioEncodingBitrate", "ChatUserGetXboxUserId",
-                             "ChatUserGetCustomUserContext", "ChatUserSetCustomUserContext")})
+                             "ChatUserGetCustomUserContext", "ChatUserSetCustomUserContext",
+                             "ChatManagerStartProcessingDataFrames", "ChatManagerFinishProcessingDataFrames")})
         if "mfreadwrite" in selected:
             check("mfreadwrite-pcm", "mfreadwrite/mfreadwrite-smoke.exe", ["--report"],
                   r"mfreadwrite PASS pcm=48000/2/16 frames=2501 bytes=10004 seek=1200 eos=2 invalid=2 file-inputs=2",
@@ -163,12 +201,25 @@ def verify(host, output, adapter, selected=None, samples=1):
             check("xaudio-mix", "xaudio/xaudio.exe", ["--report"],
                   r"xaudio PASS factories=1,8,9 effects=3 spatial=2/2 mix=4/4",
                   providers={"xaudio/XAudio2_9.dll": ("#1", "#2", "#3", "#4", "#5", "#6", "#8", "#9")})
+        if "xgameruntime" in selected:
+            check("xgameruntime", "xgameruntime/runtime-control.exe", [],
+                  r"xgameruntime PASS init=balanced interfaces=checked manual=ordered termination=canceled automatic=3 stale=rejected",
+                  providers={"xgameruntime/xgameruntime.dll": ("InitializeApiImpl", "InitializeApiImplEx",
+                                                               "UninitializeApiImpl", "QueryApiImpl")})
+        if "xcrdapi" in selected:
+            check("xcrdapi", "xcrdapi/xcrdapi-read.exe", [],
+                  r"raw=16 zlib=16 guards=2 errors=2 cancellation=1 autosubmit=64 PASS",
+                  providers={"xcrdapi/xcrdapi.dll": ("DStorageGetFactory",)})
         if "xmem" in selected:
             check("xmem-default", "xmem-smoke/xmem-smoke.exe", ["--report"],
                   re.escape("xmem-default: PASS (allocator pairs 1/6 and 2/7, ordinary and 64 KiB allocations, "
                             "host working set v2, virtual reserve/commit)"),
                   providers={"xmem-smoke/xmem.dll": (*memory_symbols, "XMemAlloc", "XMemFree",
                                                      "XMemGetWorkingSetStatistics", "XMemVirtualAlloc")})
+            check("xmem-pages", "xmem-smoke/xmem-smoke.exe", ["--pages", "--report"],
+                  r"xmem-pages PASS cpu-pages=2 remapped-bytes=131072 stale-and-foreign-rejected=1",
+                  providers={"xmem-smoke/xmem.dll": ("XMemAllocatePhysicalPages", "XMemMapPhysicalPages",
+                                                     "XMemFreePhysicalPages")})
         if "graphics" in selected:
             check("desktop-clear", "graphics/desktop-clear.exe", [*gpu_args, "--report"],
                   rf"desktop-clear PASS adapter=.+ pci={pci} pixels=481/481 row_bytes=148 row_pitch=[1-9][0-9]*")
@@ -176,24 +227,65 @@ def verify(host, output, adapter, selected=None, samples=1):
             check("root-signature", "d3d12-smoke/d3d12-root-smoke.exe", [*gpu_args, "--report"],
                   rf"d3d12-root-smoke PASS import=D3D12SerializeRootSignature pci={pci} "
                   r"constant=b5/space2 uav=u3/space4 dispatches=2 words=64/64 guards=16",
-                  providers={"d3d12-smoke/d3d12_xs.dll": graphics_symbols})
+                  providers={"d3d12-smoke/d3d12_xs.dll": (*graphics_symbols, "D3D12CreateRootSignatureDeserializer")},
+                  device_factory="desktop")
         frame_match = (rf"xbox-frame PASS pci={pci} submissions=2 snapshots=2 pixels=962/962 "
                        r"inset=208 guards=3 fence=2 compute_fence=7")
         frame_provider = {"d3d12-smoke/d3d12_xs.dll": ("D3D12XboxCreateDevice",)}
+        if "d3d12-exports" in selected:
+            check("d3d12-exports", "d3d12-smoke/d3d12-exports.exe", ["--report"],
+                  r"d3d12-exports PASS debug=1 blob=1 dxgix=4",
+                  providers={"d3d12-smoke/d3d12_xs.dll": ("D3D10CreateBlob", "D3D12XboxGetProcessDebugFlags",
+                             "D3D12XboxSetProcessDebugFlags")})
+        for suite, expected in (
+            ("features", r"queries=7 binding=[1-3] heap=[12] root=1 dxr=0 allocations=4 footprints=4"),
+            ("heaps", r"heap=32MiB offsets=0,65536 words=256/256 invalid=4 display=3840x2160/RGB10A2 pixel=c00ffc00 volume=45/45"),
+            ("placement", r"slot=44 VA-offsets=0,4096,0 passes=2 BC1-blocks=522 cube-blocks=16404 R8-texels=262144 rejected=3"),
+            ("draw", r"red=36 blue=220"),
+            ("frame-events", r"slots=78,79,80,81 tokens=2 timeout=S_FALSE flip=1 detached=1 stats=2"),
+            ("tables", r"words=16/16 guards=4 heaps=2 rejected=3 placed-srv=16/16 range-copies=4 descriptor-mode=1"),
+            ("queues", r"queues=3 bytes=64 wait=1 signal-x=2"),
+            ("queries", r"timestamps=2 occlusion=0 guards=2 heaps=6 rejected=3"),
+            ("indirect", r"sdk=0x20004 device=41 list=59 words=64/64 counts=direct,one,zero flush=global,range mesh=0x[0-9a-f]{8} rays=0x[0-9a-f]{8}"),
+        ):
+            name = f"d3d12-{suite}"
+            if name in selected:
+                check(name, f"d3d12-smoke/{name}.exe", [*gpu_args, "--report"],
+                      rf"{name} PASS pci={pci} {expected}", providers=frame_provider, device_factory="xbox")
+        if "d3d12-stream" in selected:
+            check("d3d12-stream", "d3d12-smoke/d3d12-draw.exe", ["--stream", *gpu_args, "--report"],
+                  rf"d3d12-stream PASS pci={pci} slot=86 bytes=712 indices=16,32 half-red-blue=18 magenta=18 blue=220 rejected=4",
+                  providers=frame_provider, device_factory="xbox")
         if "guest-frame" in selected:
+            check("guest-factories", "d3d12-smoke/d3d12-factory.exe", [*gpu_args, "--report"],
+                  rf"xbox-factory PASS pci={pci} adapter={'selected' if adapter else 'default'} "
+                  r"profile=0x20004 queues=2 fences=2 flag-masks=4 dxgi=2",
+                  providers={"d3d12-smoke/d3d12_xs.dll": ("D3D12XboxCreateDevice", "D3D12CreateDevice",
+                             "D3D12XboxSetProcessDebugFlags", "D3D12XboxGetProcessDebugFlags")}, device_factory="xbox")
             check("guest-command-list", "d3d12-smoke/xbox-frame.exe", [*gpu_args, "--report"],
-                  frame_match, providers=frame_provider, guest_factory=True)
+                  frame_match, providers=frame_provider, device_factory="xbox")
+            check("guest-frame-rgb10", "d3d12-smoke/xbox-frame-rgb10.exe", [*gpu_args, "--report"],
+                  frame_match + r" format=rgb10a2", providers=frame_provider, device_factory="xbox")
             check("guest-command-errors", "d3d12-smoke/xbox-frame-negative.exe", [*gpu_args, "--report"],
                   rf"xbox-frame-negative PASS pci={pci} foreign-parents=2 copy-errors=2 recovered=1 rejected-batches=3 compute-present-rejected=1",
-                  providers=frame_provider, guest_factory=True)
+                  providers=frame_provider, device_factory="xbox")
         if "present" in selected:
             check("guest-present", "d3d12-smoke/xbox-frame.exe", [*gpu_args, "--present", "--report"],
-                  frame_match + r" displayed=2/2", providers=frame_provider, guest_factory=True)
+                  frame_match + r" displayed=2/2", providers=frame_provider, device_factory="xbox")
+            check("guest-present-rgb10", "d3d12-smoke/xbox-frame-rgb10.exe", [*gpu_args, "--present", "--report"],
+                  frame_match + r" format=rgb10a2 displayed=2/2", providers=frame_provider, device_factory="xbox")
+            for mode in ("owned", "oversized", "fit"):
+                check(f"guest-present-4k-{mode}", "d3d12-smoke/xbox-frame-4k.exe",
+                      [mode, *gpu_args, "--present", "--report"],
+                      rf"xbox-frame PASS pci={pci} submissions=2 snapshots=2 pixels=16588800/16588800 "
+                      r"inset=921600 guards=3 fence=2 compute_fence=7 format=rgb10a2 displayed=2/2 "
+                      r"client=\d+x\d+ origin=-?\d+,-?\d+ monitor=\d+x\d+", providers=frame_provider, device_factory="xbox")
         if "lanes" in selected:
-            check("lanes-package-replay", "lanes/lanes.exe", ["--replay", *gpu_args, "--report"],
-                  rf"lanes-replay PASS pci={pci} course=16/16 win=16/16 safe-miss=1 collision=1",
-                  providers={"lanes/xmem.dll": memory_symbols, "lanes/d3d12_xs.dll": graphics_symbols},
-                  config="lanes/MicrosoftGame.config")
+            check("lanes-xbox-replay", "lanes/lanes.exe", ["--replay", *gpu_args, "--report"],
+                  rf"lanes-replay PASS pci={pci} course=16/16 win=16/16 safe-miss=1 collision=1 frames=2 input=gameinput",
+                  providers={"lanes/xmem.dll": memory_symbols, "lanes/GameInput.dll": ("#1",),
+                             "lanes/d3d12_xs.dll": (*graphics_symbols, "D3D12XboxCreateDevice")},
+                  config="lanes/MicrosoftGame.config", device_factory="xbox")
         if "cpu-benchmark" in selected:
             readings = []
             for _ in range(samples):
@@ -225,26 +317,53 @@ def verify(host, output, adapter, selected=None, samples=1):
 
 
 GATE_LABELS = {
+    "xgameruntime": "Game Runtime initialization, task delivery and cancellation",
+    "xcrdapi": "Xbox storage file reads, zlib and queue completion",
+    "guest-factories": "Xbox 0x20004 and default factories, compute queues and process debug flags",
     "route-RRRRDD": "Upper route and guest output", "route-LDDRRRR": "Lower route and collision",
-    "invalid-route": "Invalid input exit status", "xmem-default": "Xbox memory allocation, working set and CPU pages",
+    "xmem-pages": "CPU page allocation, remapping and release",
+    "invalid-route": "Invalid input exit status", "xmem-default": "Xbox memory allocation and working set",
     "d3d12-signatures": "Root signature 1.0 and 1.1 serialization, deserialization and errors",
+    "d3d12-exports": "Blob, debug interface and four DXGIX entry points",
+    "d3d12-features": "Xbox capability records compared with the selected adapter",
+    "d3d12-indirect": "Indirect dispatch and texture cache flushes between compute writes",
+    "guest-frame-rgb10": "RGB10A2 display allocation and two guarded GPU readbacks",
+    "guest-present-4k-owned": "4K RGB10 display scaled to a TuxBox window",
+    "guest-present-4k-oversized": "4K RGB10 display fitted to the title window’s monitor",
+    "guest-present-4k-fit": "4K RGB10 display scaled inside a smaller title window",
+    "guest-present-rgb10": "Two RGB10A2 frames sampled from the desktop window",
+    "d3d12-frame-events": "Frame origins, timeout tokens, completed presentation events and display statistics",
+    "d3d12-heaps": "Placed resources and allocation offsets in a shared memory heap",
+    "d3d12-placement": "Virtual-address BC1 cubes and R8 textures across page changes",
+    "d3d12-draw": "Scissored triangle through Xbox graphics pipeline and draw slots",
+    "d3d12-stream": "Xbox Device2 graphics pipeline stream, ownership and masked draw",
+    "d3d12-tables": "Shader reads and writes through tables, including a late-copied texture view",
+    "d3d12-queues": "Direct, compute and copy queue synchronization",
+    "d3d12-queries": "GPU timestamps, occlusion readback and descriptor heap handles",
     "d3d12-guids": "D3D12 and DXGI identifier data by name and ordinal",
     "xg-native-layout": "Native Scarlett XG texture layouts with Rust XMem",
     "xg-native-addresses": "Supplied XG texture layouts and element addresses",
-    "xg-native-formats": "Supplied XG layouts and addresses across 41 formats",
-    "xg-formats": "TuxBox XG layouts and addresses across 41 formats",
+    "xg-native-formats": "Supplied XG layouts and addresses across 78 formats",
+    "xg-formats": "TuxBox XG layouts and addresses across 78 formats",
     "xg-addresses": "TuxBox XG texture layouts and element addresses",
+    "frontpanel-absent": "Front panel queries on a host without a panel",
+    "frontpanel-connected": "Front panel buttons, lights, frames and transport errors",
     "gameconfig-query": "Package registry paths and configuration keys",
-    "gamechat-roster": "Game-chat session, remote roster and bitrate settings",
+    "gamechat-roster": "Game-chat session, remote roster, bitrate and outgoing frames",
     "mfreadwrite-pcm": "PCM source reading, seeking and end of stream",
     "xaudio-mix": "Xbox audio ordinals, spatial routing and stereo mix",
     "dxc-allocator": "Xbox DXC caller allocator and factory ordinals",
     "dxc-create-blob": "Xbox DXC utilities and binary blob lifetime",
+    "dxc-compile": "Scarlett DXC compute shader and compiler diagnostics",
+    "dxc-x-allocator": "Xbox One DXC caller allocator and factory ordinals",
+    "dxc-x-create-blob": "Xbox One DXC utilities and binary blob lifetime",
+    "dxc-x-compile": "Xbox One DXC compute shader and compiler diagnostics",
     "desktop-clear": "Desktop D3D12 pixel readback", "root-signature": "Xbox root-signature import and compute readback",
     "guest-command-list": "Xbox command-list clear and ordered copy readback",
     "guest-command-errors": "Guest command rejection, fence isolation and list recovery",
     "guest-present": "Xbox PresentX and two screen-verified frames",
-    "lanes-package-replay": "Lanes package launch and gameplay replay", "cpu-replay": "8,388,608-move CPU replay",
+    "lanes-xbox-replay": "Lanes Xbox imports, course, board readback and gameplay replay",
+    "lanes-package-replay": "Lanes gameplay replay (earlier guest with desktop graphics)", "cpu-replay": "8,388,608-move CPU replay",
 }
 
 
@@ -280,5 +399,5 @@ def status():
         lines.append("| " + " | ".join([GATE_LABELS.get(gate, gate), *cells]) + " |")
     lines += ["", "Rebuild this table from the repository root with "
               "`python tuxbox.py status > docs/RESULTS.md`. A dash means that the gate was omitted from that run. "
-              "[Xbox DLL checks](LIBRARIES.md#run-the-provider-checks) · [Milestones and retail evidence](PROGRESS.md)"]
+              "[Current Lanes replay](../examples/lanes/README.md#deterministic-replay) · [Xbox DLL checks](LIBRARIES.md#run-the-provider-checks) · [Milestones and retail evidence](PROGRESS.md)"]
     return "\n".join(lines)

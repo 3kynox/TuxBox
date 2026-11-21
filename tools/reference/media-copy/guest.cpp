@@ -60,7 +60,9 @@ static D3D12_RESOURCE_BARRIER transition(ID3D12Resource* r, UINT sub, D3D12_RESO
     v.Transition = {r, sub, a, b};
     return v;
 }
-int main() {
+int main(int argc, char** argv) {
+    const bool tuxbox = argc == 2 && std::strcmp(argv[1], "--tuxbox") == 0;
+    if (argc != 1 && !tuxbox) return 2;
     FILE* result{};
     if (fopen_s(&result, "result.txt", "wb"))
         return 2;
@@ -78,7 +80,10 @@ int main() {
         ComPtr<ID3D12CommandAllocator> alloc;
         check(guest->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COPY, IID_PPV_ARGS(&alloc)), "copy allocator");
         ComPtr<ID3D12Device> dev;
-        check(alloc->GetDevice(IID_PPV_ARGS(&dev)), "native device");
+        if (tuxbox)
+            check(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&dev)), "decoder device");
+        else
+            check(alloc->GetDevice(IID_PPV_ARGS(&dev)), "native device");
         ComPtr<IDXGIFactory4> fac;
         ComPtr<IDXGIAdapter1> adapter;
         DXGI_ADAPTER_DESC1 gd{};
@@ -89,17 +94,21 @@ int main() {
         D3D12_COMMAND_QUEUE_DESC qd{};
         qd.Type = D3D12_COMMAND_LIST_TYPE_COPY;
         ComPtr<ID3D12CommandQueue> q;
-        check(method<frame_abi::CreateQueue>(guest.Get(), 48)(guest.Get(), &qd, IID_PPV_ARGS(&q)),
-              "guest copy queue");
+        if (tuxbox)
+            check(guest->CreateCommandQueue(&qd, IID_PPV_ARGS(&q)), "guest copy queue");
+        else
+            check(method<frame_abi::CreateQueue>(guest.Get(), 48)(guest.Get(), &qd, IID_PPV_ARGS(&q)),
+                  "guest copy queue");
+        auto* game_device = tuxbox ? guest.Get() : dev.Get();
         auto nv = resource(dev.Get(), DXGI_FORMAT_NV12, width, height, D3D12_HEAP_TYPE_DEFAULT,
                            D3D12_RESOURCE_STATE_COMMON);
-        auto y = resource(dev.Get(), DXGI_FORMAT_R8_UNORM, width, height, D3D12_HEAP_TYPE_DEFAULT,
+        auto y = resource(game_device, DXGI_FORMAT_R8_UNORM, width, height, D3D12_HEAP_TYPE_DEFAULT,
                           D3D12_RESOURCE_STATE_COMMON);
-        auto uv = resource(dev.Get(), DXGI_FORMAT_R8G8_UNORM, width / 2, height / 2, D3D12_HEAP_TYPE_DEFAULT,
+        auto uv = resource(game_device, DXGI_FORMAT_R8G8_UNORM, width / 2, height / 2, D3D12_HEAP_TYPE_DEFAULT,
                            D3D12_RESOURCE_STATE_COMMON);
         auto up = resource(dev.Get(), DXGI_FORMAT_UNKNOWN, pitch * height * 3 / 2, 1, D3D12_HEAP_TYPE_UPLOAD,
                            D3D12_RESOURCE_STATE_GENERIC_READ);
-        auto back = resource(dev.Get(), DXGI_FORMAT_UNKNOWN, pitch * height * 3 / 2, 1, D3D12_HEAP_TYPE_READBACK,
+        auto back = resource(game_device, DXGI_FORMAT_UNKNOWN, pitch * height * 3 / 2, 1, D3D12_HEAP_TYPE_READBACK,
                              D3D12_RESOURCE_STATE_COPY_DEST);
         void* data{};
         D3D12_RANGE empty{};
@@ -118,12 +127,23 @@ int main() {
             native->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
         }
         check(native->Close(), "close upload");
-        submit(dev.Get(), q.Get(), native.Get());
+        ComPtr<ID3D12CommandQueue> decoder_queue;
+        check(dev->CreateCommandQueue(&qd, IID_PPV_ARGS(&decoder_queue)), "decoder upload queue");
+        submit(dev.Get(), decoder_queue.Get(), native.Get());
         UINT params[4] = {3, 0, 1, 0};
+        if (tuxbox) {
+            ComPtr<IUnknown> explicit_node;
+            check(method<frame_abi::CreateList>(guest.Get(), 73)(guest.Get(), params, alloc.Get(), nullptr, compact,
+                                                                 reinterpret_cast<void**>(explicit_node.GetAddressOf())),
+                  "explicit DMA node");
+            // Electra uses the all-zero tail on its first actual decoder frame.
+            params[2] = 0;
+        }
         ComPtr<IUnknown> list;
         check(method<frame_abi::CreateList>(guest.Get(), 73)(guest.Get(), params, alloc.Get(), nullptr, compact,
                                                              reinterpret_cast<void**>(list.GetAddressOf())),
               "create compact copy list");
+        params[2] = 1; // The subsequent ordinary readback list uses explicit node one.
         ComPtr<IUnknown> same;
         check(list->QueryInterface(compact, reinterpret_cast<void**>(same.GetAddressOf())),
               "query compact identity");
@@ -148,6 +168,41 @@ int main() {
         auto copy = method<Copy>(list.Get(), 12);
         auto luma = plane(nv.Get()), destY = plane(y.Get());
         D3D12_BOX rect{0, 0, 0, width, height, 1};
+        if (tuxbox) {
+            ComPtr<ID3D12Device> other;
+            check(spawn(nullptr, profile.data(), IID_PPV_ARGS(&other)), "second guest device");
+            auto wrong = resource(other.Get(), DXGI_FORMAT_R8_UNORM, width, height, D3D12_HEAP_TYPE_DEFAULT,
+                                  D3D12_RESOURCE_STATE_COMMON);
+            auto destination = plane(wrong.Get());
+            copy(list.Get(), &destination, 0, 0, 0, &luma, &rect);
+            if (close(list.Get()) != E_INVALIDARG) throw std::runtime_error("foreign guest resource accepted");
+            check(method<Reset>(list.Get(), 10)(list.Get(), alloc.Get(), nullptr), "recover compact list");
+            for (UINT i = 0; ; ++i) {
+                ComPtr<IDXGIAdapter1> alternate;
+                const HRESULT enumerated = fac->EnumAdapters1(i, &alternate);
+                if (enumerated == DXGI_ERROR_NOT_FOUND) break;
+                check(enumerated, "enumerate alternative adapters");
+                DXGI_ADAPTER_DESC1 hardware{};
+                check(alternate->GetDesc1(&hardware), "alternative adapter");
+                if (hardware.Flags & DXGI_ADAPTER_FLAG_SOFTWARE ||
+                    (hardware.AdapterLuid.LowPart == gd.AdapterLuid.LowPart &&
+                     hardware.AdapterLuid.HighPart == gd.AdapterLuid.HighPart))
+                    continue;
+                ComPtr<ID3D12Device> foreign_device;
+                if (FAILED(D3D12CreateDevice(alternate.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&foreign_device))))
+                    continue;
+                auto foreign_nv12 = resource(foreign_device.Get(), DXGI_FORMAT_NV12, width, height,
+                                             D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON);
+                auto foreign_source = plane(foreign_nv12.Get());
+                copy(list.Get(), &destY, 0, 0, 0, &foreign_source, &rect);
+                if (close(list.Get()) != E_INVALIDARG) throw std::runtime_error("foreign decoder resource accepted");
+                check(method<Reset>(list.Get(), 10)(list.Get(), alloc.Get(), nullptr), "recover foreign decoder list");
+                std::fprintf(result, "foreign_decoder_rejected=%04x:%04x\n", hardware.VendorId, hardware.DeviceId);
+                break;
+            }
+            barriers(list.Get(), 3, before);
+            std::fputs("foreign_guest_rejected=1\n", result);
+        }
         copy(list.Get(), &destY, 0, 0, 0, &luma, &rect);
         using Placed =
             HRESULT(WINAPI*)(ID3D12Device*, UINT64, const D3D12_RESOURCE_DESC*, UINT, const void*, REFIID, void**);
@@ -158,25 +213,46 @@ int main() {
                                               0x800, nullptr, IID_PPV_ARGS(&alias)),
               "console chroma alias");
         auto srcUV = plane(alias.Get()), dstUV = plane(uv.Get());
-        rect.right /= 2;
-        rect.bottom /= 2;
-        copy(list.Get(), &dstUV, 0, 0, 0, &srcUV, &rect);
+        const D3D12_BOX chroma_rect{0, 0, 0, width / 2, height / 2, 1};
+        if (tuxbox) {
+            // Discard the luma recording. The alias token by itself cannot
+            // identify a decoded frame in the next command list recording.
+            check(close(list.Get()), "close discarded luma");
+            check(method<Reset>(list.Get(), 10)(list.Get(), alloc.Get(), nullptr), "discard previous luma");
+            copy(list.Get(), &dstUV, 0, 0, 0, &srcUV, &chroma_rect);
+            if (close(list.Get()) != E_INVALIDARG) throw std::runtime_error("stale decoder frame accepted");
+            check(method<Reset>(list.Get(), 10)(list.Get(), alloc.Get(), nullptr), "recover stale media list");
+            barriers(list.Get(), 3, before);
+            copy(list.Get(), &destY, 0, 0, 0, &luma, &rect);
+            std::fputs("stale_decoder_rejected=1\n", result);
+        }
+        copy(list.Get(), &dstUV, 0, 0, 0, &srcUV, &chroma_rect);
         alias.Reset();
         for (auto& b : before)
             std::swap(b.Transition.StateBefore, b.Transition.StateAfter);
         barriers(list.Get(), 3, before);
         check(close(list.Get()), "close recorded");
         nv.Reset(); // The recording allocator must retain the actual source until the GPU finishes.
-        submit(dev.Get(), q.Get(), reinterpret_cast<ID3D12CommandList*>(list.Get()));
+        submit(game_device, q.Get(), reinterpret_cast<ID3D12CommandList*>(list.Get()));
         check(alloc->Reset(), "release completed recording");
-        check(prep->Reset(), "reset prep allocator");
-        check(native->Reset(prep.Get(), nullptr), "readback list");
+        ComPtr<ID3D12GraphicsCommandList> reader;
+        if (tuxbox) {
+            check(method<frame_abi::CreateList>(guest.Get(), 73)(guest.Get(), params, alloc.Get(), nullptr,
+                        IID_PPV_ARGS(&reader)), "guest readback list");
+        } else {
+            check(prep->Reset(), "reset prep allocator");
+            check(native->Reset(prep.Get(), nullptr), "readback list");
+            reader = native;
+        }
         for (UINT p = 0; p < 2; p++) {
             auto src = plane(p ? uv.Get() : y.Get()), dst = footprint(back.Get(), p);
-            native->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+            if (tuxbox)
+                method<frame_abi::Copy>(reader.Get(), 83)(reader.Get(), &dst, 0, 0, 0, &src, nullptr, 0);
+            else
+                reader->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
         }
-        check(native->Close(), "close readback");
-        submit(dev.Get(), q.Get(), native.Get());
+        check(reader->Close(), "close readback");
+        submit(game_device, q.Get(), reader.Get());
         check(back->Map(0, nullptr, &data), "read both planes");
         for (UINT p = 0; p < 2; p++) {
             UINT match = 0;

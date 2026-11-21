@@ -19,6 +19,7 @@ from check_frame_profile import rip
 from check_frosty_profile import BUILD
 from check_frosty_shaders import GLOBAL_SHA, containers, decompress, global_archive, require
 from project_tuxbox.host import Host
+from project_tuxbox.shader_prep import shader_compiler
 from project_tuxbox.inspect import digest
 
 SHADERS = {2989: "6a68ec901fb2697f60bf3cfbda888e7c3653d28ef94b6961e552b05e6231fb7e",
@@ -66,11 +67,12 @@ def check_psv(cooked):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mount", type=Path)
-    parser.add_argument("--xshader", required=True, type=Path)
+    parser.add_argument("--xshader", type=Path)
     parser.add_argument("--proton", type=Path)
     parser.add_argument("--prefix", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
+    xshader = args.xshader.resolve() if args.xshader else shader_compiler()
     allocation = visibility_format(args.mount)
     host = Host(None, args.proton, args.prefix)
     source = ROOT / "tools/reference/visibility"
@@ -89,7 +91,7 @@ def main():
             dxbc.write_bytes(cooked)
             check_psv(cooked)
             require(digest(dxbc) == fingerprint, f"Unexpected capture at global archive index {index}")
-            subprocess.run([args.xshader.resolve(), dxbc, "--hlsl-out", hlsl], check=True, stdout=subprocess.DEVNULL)
+            subprocess.run([xshader, dxbc, "--hlsl-out", hlsl], check=True, stdout=subprocess.DEVNULL)
             for stage, text, profile in [("vs", source / "vertex.hlsl", "vs_6_0"), ("ps", hlsl, "ps_6_6")]:
                 dxil = work / f"{stage}{index}.dxil"
                 defines = ["-DMESH_INPUT=1"] if stage == "vs" and index == 2853 else []

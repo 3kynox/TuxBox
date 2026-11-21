@@ -1,0 +1,8 @@
+LIBRARY xfp_gc
+EXPORTS
+    XfpTryConnect
+    XfpGetKeyState
+    XfpGetLEDState
+    XfpSetLEDState
+    XfpSetDisplayBuffer
+    FixtureFailNext

@@ -7,6 +7,9 @@ import shutil
 import subprocess
 import sys
 
+from .backend_log import game_diagnostics
+from .runtime_shaders import runtime_shader_compiler
+
 
 def proton_installation(selection):
     if selection:
@@ -70,3 +73,11 @@ class Host:
         options = {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT} if capture else {}
         return subprocess.run([*self.command, str(executable), *arguments], cwd=executable.parent,
                               env=self.env, timeout=timeout, **options)
+
+    def run_game(self, executable, arguments, log):
+        env = self.env.copy()
+        env.setdefault("TUXBOX_LOG", "stderr" if self.backend == "native" else "1")
+        with runtime_shader_compiler(self.backend, env, executable, log.status), \
+             game_diagnostics(self.backend, env, executable.parent, log.stderr_bytes, log_path=log.path) as stderr:
+            return log.run([*self.command, str(executable), *arguments], cwd=executable.parent, env=env,
+                           stderr_bytes=stderr)

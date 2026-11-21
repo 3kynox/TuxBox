@@ -1,33 +1,11 @@
-#include "frame_abi.h"
+#include "frame_stream.h"
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <vector>
 using frame_abi::check;
 using frame_abi::ComPtr;
 
-template <typename T> struct alignas(void *) Part {
-  UINT tag;
-  T payload;
-};
-struct Stream {
-  Part<UINT> flags{20, 0};
-  Part<ID3D12RootSignature *> root{0, nullptr};
-  Part<D3D12_INPUT_LAYOUT_DESC> layout{12, {}};
-  Part<UINT> strip{13, 0}, topology{14, D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE};
-  Part<D3D12_SHADER_BYTECODE> vs{1, {}}, gs{5, {}}, ps{2, {}};
-  Part<D3D12_BLEND_DESC> blend{8, {}};
-  Part<D3D12_DEPTH_STENCIL_DESC1> depth{21, {}};
-  Part<DXGI_FORMAT> dsv{16, DXGI_FORMAT_D32_FLOAT};
-  Part<D3D12_RASTERIZER_DESC> raster{10, {}};
-  Part<D3D12_RT_FORMAT_ARRAY> formats{15, {}};
-  Part<DXGI_SAMPLE_DESC> samples{17, {1, 0}};
-  Part<UINT> mask{9, ~0u};
-  Part<D3D12_CACHED_PIPELINE_STATE> cached{19, {}};
-  UINT extension = 26;
-  BYTE stencil[28]{};
-};
-static_assert(offsetof(Stream, vs) == 0x40 &&
-              offsetof(Stream, extension) == 0x2a8 && sizeof(Stream) == 0x2c8);
 static std::vector<char> read(const char *name) {
   std::ifstream file(name, std::ios::binary);
   if (!file)
@@ -127,6 +105,12 @@ static UINT draw(ID3D12Device *dev, ID3D12PipelineState *pso,
   return changed;
 }
 static void run(FILE *file) {
+  namespace fs = std::filesystem;
+  const auto cache = fs::absolute("temp") / "tuxbox_shader_cache";
+  const bool tuxbox = fs::is_directory(cache / "by_source");
+  if (tuxbox && (!SetEnvironmentVariableW(L"TMP", cache.parent_path().c_str()) ||
+                 !SetEnvironmentVariableW(L"TEMP", cache.parent_path().c_str())))
+    throw std::runtime_error("configure guest cache");
   auto dll = LoadLibraryW(L"d3d12_xs.dll");
   using Create = HRESULT(WINAPI *)(IUnknown *, const void *, REFIID, void **);
   auto create = dll ? reinterpret_cast<Create>(
@@ -144,9 +128,21 @@ static void run(FILE *file) {
                                       IID_PPV_ARGS(&root)),
         "title root");
   ComPtr<ID3D12Device2> owner;
-  check(root->GetDevice(IID_PPV_ARGS(&owner)), "native owner");
+  ComPtr<ID3D12RootSignature> desktop_root = root;
+  if (tuxbox) {
+    // The depth oracle uses the desktop ABI through the same adapter.
+    ComPtr<IDXGIDevice> dxgi;
+    ComPtr<IDXGIAdapter> adapter;
+    check(provider.As(&dxgi), "guest DXGI device");
+    check(dxgi->GetAdapter(&adapter), "guest DXGI adapter");
+    check(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&owner)), "desktop device");
+    desktop_root.Reset();
+    check(owner->CreateRootSignature(0, original.data(), original.size(), IID_PPV_ARGS(&desktop_root)), "desktop root");
+  } else {
+    check(root->GetDevice(IID_PPV_ARGS(&owner)), "native owner");
+  }
   for (UINT i = 0; i < 2; ++i) {
-    Stream s;
+    frame_abi::RasterPipelineStream s;
     s.root.payload = root.Get();
     s.depth.payload.DepthEnable = TRUE;
     s.depth.payload.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
@@ -174,20 +170,43 @@ static void run(FILE *file) {
     auto make = frame_abi::method<CreatePSO>(provider.Get(), 86);
     D3D12_PIPELINE_STATE_STREAM_DESC xbox{sizeof(s), &s};
     ComPtr<ID3D12PipelineState> native;
+    if (tuxbox) {
+      auto pair_bytes = read(i ? "key1.txt" : "key0.txt");
+      const auto pair_name = std::string(pair_bytes.begin(), pair_bytes.end()) + ".cso";
+      const auto path = cache / "by_vs_ps" / pair_name;
+      const auto other_bytes = read(i ? "key0.txt" : "key1.txt");
+      const auto consumer = pair_name.find('_') + 1;
+      const auto other_name = std::string(other_bytes.begin(), other_bytes.end());
+      const auto wrong_path = path.parent_path() /
+                              (pair_name.substr(0, consumer) + other_name.substr(consumer) + ".cso");
+      const auto linked = i ? "linked1.cso" : "linked0.cso";
+      auto reject = [&] {
+        if (make(provider.Get(), &xbox, IID_PPV_ARGS(&native)) != E_INVALIDARG || native)
+          throw std::runtime_error("unlinked pipeline was accepted");
+      };
+      reject();
+      fs::copy_file(linked, wrong_path);
+      reject();
+      fs::copy_file(i ? "43ba45d6b7d30fbd.cso" : "b75039a494495b07.cso", path);
+      reject();
+      fs::copy_file(linked, path, fs::copy_options::overwrite_existing);
+      std::fprintf(file, "pair_%u_rejections=3\n", i);
+    }
     check(make(provider.Get(), &xbox, IID_PPV_ARGS(&native)),
           "slot 86 cooked PSO");
     std::fprintf(file, "pair_%u_slot_86=passed\n", i);
     std::fflush(file);
     auto producer = read(i ? "control1.cso" : "control0.cso");
     auto pixel = read(i ? "43ba45d6b7d30fbd.cso" : "b75039a494495b07.cso");
+    s.root.payload = desktop_root.Get();
     s.vs.payload = {producer.data(), producer.size()};
     s.ps.payload = {pixel.data(), pixel.size()};
     s.layout.payload = {};
-    D3D12_PIPELINE_STATE_STREAM_DESC pc{offsetof(Stream, extension), &s};
+    D3D12_PIPELINE_STATE_STREAM_DESC pc{offsetof(frame_abi::RasterPipelineStream, extension), &s};
     ComPtr<ID3D12PipelineState> control;
     check(owner->CreatePipelineState(&pc, IID_PPV_ARGS(&control)),
           "controlled triangle PSO");
-    UINT written = draw(owner.Get(), control.Get(), root.Get());
+    UINT written = draw(owner.Get(), control.Get(), desktop_root.Get());
     std::fprintf(file, "pair_%u_depth_written=%u\n", i, written);
     if (written != (i ? 64u : 0u))
       throw std::runtime_error("independent pixel depth mismatch");

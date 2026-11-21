@@ -2,6 +2,8 @@
 
 mod commands;
 mod device;
+mod diagnostics;
+mod exports;
 mod guids;
 mod present;
 mod proxy;
@@ -16,13 +18,13 @@ pub(crate) use slot;
 
 use core::ffi::c_void;
 use core::ptr;
+use std::sync::atomic::{AtomicU32, Ordering};
 use windows::Win32::Foundation::{E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER};
-use windows::Win32::Graphics::Direct3D12::ID3D12Device;
+use windows::Win32::Graphics::Direct3D12::{ID3D12Device, ID3D12Device1, ID3D12Device2};
 use windows::core::{GUID, HRESULT, Interface};
 
-// Release/default values of the two dynamic fields at the audited Fortnite
-// call site. No other version or flag combination has been exercised.
-const PROFILE: [u32; 16] = [
+// Release/default record supplied by the 0x20002 caller.
+const PROFILE_20002: [u32; 16] = [
     0x20002,
     0,
     u32::MAX,
@@ -40,6 +42,46 @@ const PROFILE: [u32; 16] = [
     0,
     0,
 ];
+// The 0x20004 wrapper sets the SDK version and three default-size fields.
+// Frosty's direct Xbox factory call also sets word 9 to one.
+const PROFILE_20004_DEFAULT: [u32; 18] = [
+    0x20004,
+    0,
+    u32::MAX,
+    0,
+    0,
+    0,
+    u32::MAX,
+    u32::MAX,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+];
+const PROCESS_DEBUG_FLAGS_MASK: u32 = 0x83f0_0001;
+static PROCESS_DEBUG_FLAGS: AtomicU32 = AtomicU32::new(0);
+
+/// Set the masked Xbox D3D12 process debug flags.
+///
+/// The reference implementation stores only bits in `0x83f00001` and returns
+/// success. The host provider retains that process-local value for its getter.
+#[unsafe(export_name = "D3D12XboxSetProcessDebugFlags")]
+pub extern "system" fn set_process_debug_flags(flags: u32) -> HRESULT {
+    PROCESS_DEBUG_FLAGS.store(flags & PROCESS_DEBUG_FLAGS_MASK, Ordering::Relaxed);
+    HRESULT(0)
+}
+
+/// Read the masked Xbox D3D12 process debug flags.
+#[unsafe(export_name = "D3D12XboxGetProcessDebugFlags")]
+pub extern "system" fn get_process_debug_flags() -> u32 {
+    PROCESS_DEBUG_FLAGS.load(Ordering::Relaxed)
+}
 
 /// Creates the supported guest device, returning one owned COM reference.
 ///
@@ -47,8 +89,8 @@ const PROFILE: [u32; 16] = [
 /// A non-null adapter must be a live DXGI adapter. Non-null IID and output
 /// pointers must denote a readable GUID and writable pointer respectively.
 /// A non-null parameter record must have a readable version DWORD. Version
-/// 0x20002 requires 64 readable bytes. Inputs must remain valid throughout
-/// the call and must not overlap the output pointer.
+/// 0x20002 requires 64 readable bytes and 0x20004 requires 72. Inputs must
+/// remain valid throughout the call and must not overlap the output pointer.
 #[unsafe(export_name = "D3D12XboxCreateDevice")]
 pub unsafe extern "system" fn create_device(
     adapter: *mut c_void,
@@ -68,21 +110,46 @@ pub unsafe extern "system" fn create_device(
     // SAFETY: The caller supplies a readable GUID. Compare Windows GUID fields
     // without casting guest storage to an aligned Rust reference.
     let requested = unsafe { iid.read_unaligned() };
-    if requested != ID3D12Device::IID {
+    if ![ID3D12Device::IID, ID3D12Device1::IID, ID3D12Device2::IID].contains(&requested) {
         return E_NOINTERFACE;
     }
     if params.is_null() {
         return E_INVALIDARG;
     }
     // SAFETY: Only the version DWORD is guaranteed readable for unknown records.
-    if unsafe { params.cast::<u32>().read_unaligned() } != PROFILE[0] {
-        return E_NOTIMPL;
-    }
-    // SAFETY: This version defines a 16-DWORD record, which need not be aligned.
-    if unsafe { params.cast::<[u32; 16]>().read_unaligned() } != PROFILE {
+    let supported = match unsafe { params.cast::<u32>().read_unaligned() } {
+        // SAFETY: The caller provides a complete record for the selected version.
+        0x20002 => (unsafe { params.cast::<[u32; 16]>().read_unaligned() }) == PROFILE_20002,
+        0x20004 => {
+            // SAFETY: This version defines an 18-DWORD record.
+            let mut record = unsafe { params.cast::<[u32; 18]>().read_unaligned() };
+            let mode = record[9];
+            record[9] = 0;
+            mode <= 1 && record == PROFILE_20004_DEFAULT
+        }
+        _ => false,
+    };
+    if !supported {
         return E_NOTIMPL;
     }
     // SAFETY: The host helper accepts a null or borrowed adapter and writes
     // a single owned guest device reference to the caller's cleared output.
-    unsafe { device::create(adapter, out) }
+    unsafe { device::create(adapter, requested, out) }
+}
+
+/// The console's standard-named factory selects its default Xbox record.
+///
+/// # Safety
+/// Adapter, interface ID and output follow the contract of [`create_device`].
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn tuxbox_create_device(
+    adapter: *mut c_void,
+    _minimum_feature_level: u32,
+    iid: *const GUID,
+    out: *mut *mut c_void,
+) -> HRESULT {
+    let mut params = PROFILE_20004_DEFAULT;
+    params[1] = get_process_debug_flags();
+    // SAFETY: The local profile remains live until the factory returns.
+    unsafe { create_device(adapter, params.as_ptr().cast(), iid, out) }
 }

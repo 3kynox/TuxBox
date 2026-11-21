@@ -1,0 +1,2496 @@
+{
+  "title": "Frosty",
+  "executable_sha256": "ae39eb1e92fa806df189c768c1478a53dfb54a2cc9769a9f2301ca7921e3eb04",
+  "archives": {
+    "global": {
+      "member_sha256": "afab84fa891e491d64f1c2a9bdf26a66afc2054aef2cd9110e358402473b4fb2",
+      "entries": 4576
+    },
+    "material": {
+      "member_sha256": "9de0439f815138c89fd414e69f4f5f3497fd523ac4dd2321c5207f7fd67eb2e1",
+      "entries": 38831
+    }
+  },
+  "compiler_sha256": "907a3dd60c71b8a5766f0419a78839a905368ba2193487132da4eb589d61963a",
+  "desktop_tools": {
+    "dxc_sha256": "3dfc856b76291ffc7e45e21fd37ab80e85b34101de76a03253df6608785c92a0",
+    "dxv_sha256": "33778294d67143d9f81526f4759c66d5a67a95ea9873448ef3595650a643cbd3"
+  },
+  "traces": {
+    "Reduced-effects menu": {
+      "log_sha256": "b710f6a2a003000bcbbfed8acb3d2c966bbe473720ac155fe398ab6d22c58e85",
+      "trace": "per-source",
+      "unique_sources": 118
+    },
+    "Bloom menu": {
+      "log_sha256": "41f6cbf535153db3947b332f55c6acfac03a8bc32efc3c1e4087ab4998f39e23",
+      "trace": "per-source",
+      "unique_sources": 131
+    },
+    "Startup through Wake Up": {
+      "log_sha256": "6be7079154014dea5643f02cc7cab4c5e646598f12dec99e0a674593e3672cd3",
+      "trace": "first hits and misses",
+      "unique_sources": 5
+    },
+    "Verified menu": {
+      "log_sha256": "f339bf63806cf23dd9c78da30c5306a525ce362b1438a1f5c402b53bd91c5de9",
+      "trace": "per-source",
+      "unique_sources": 118
+    },
+    "Desktop menu": {
+      "log_sha256": "7ab4803ac77e9d505eb1d0ef38d5b38d8db91c0d1deff16f1bc85137036e3115",
+      "trace": "per-source",
+      "unique_sources": 118
+    }
+  },
+  "stages": [
+    {
+      "stage": "Vertex",
+      "global": 199,
+      "material": 21031,
+      "unique_dxbc": 19634,
+      "profiled_dxbc": 41,
+      "hlsl_emitted": 19597,
+      "requested_dxbc": 29,
+      "requested_in_profile": 29
+    },
+    {
+      "stage": "Mesh",
+      "global": 192,
+      "material": 0,
+      "unique_dxbc": 192,
+      "profiled_dxbc": 0,
+      "hlsl_emitted": 0,
+      "requested_dxbc": 0,
+      "requested_in_profile": 0
+    },
+    {
+      "stage": "Pixel",
+      "global": 1369,
+      "material": 10982,
+      "unique_dxbc": 12271,
+      "profiled_dxbc": 91,
+      "hlsl_emitted": 12219,
+      "requested_dxbc": 65,
+      "requested_in_profile": 65
+    },
+    {
+      "stage": "Geometry",
+      "global": 3,
+      "material": 109,
+      "unique_dxbc": 112,
+      "profiled_dxbc": 2,
+      "hlsl_emitted": 112,
+      "requested_dxbc": 1,
+      "requested_in_profile": 1
+    },
+    {
+      "stage": "Compute",
+      "global": 2508,
+      "material": 734,
+      "unique_dxbc": 3233,
+      "profiled_dxbc": 72,
+      "hlsl_emitted": 2664,
+      "requested_dxbc": 37,
+      "requested_in_profile": 23
+    },
+    {
+      "stage": "Ray generation",
+      "global": 289,
+      "material": 0,
+      "unique_dxbc": 0,
+      "profiled_dxbc": 0,
+      "hlsl_emitted": null,
+      "requested_dxbc": 0,
+      "requested_in_profile": 0
+    },
+    {
+      "stage": "Ray miss",
+      "global": 6,
+      "material": 0,
+      "unique_dxbc": 0,
+      "profiled_dxbc": 0,
+      "hlsl_emitted": null,
+      "requested_dxbc": 0,
+      "requested_in_profile": 0
+    },
+    {
+      "stage": "Ray hit group",
+      "global": 10,
+      "material": 5975,
+      "unique_dxbc": 0,
+      "profiled_dxbc": 0,
+      "hlsl_emitted": null,
+      "requested_dxbc": 0,
+      "requested_in_profile": 0
+    }
+  ],
+  "linked_variants": 6,
+  "menu_materials": [
+    {
+      "asset": "Frosty/Content/Effect/UI/MatrixCodeUI/Materials/M_MatrixCode_UI.uasset",
+      "map": 136,
+      "shader_map_sha1": "4c82a79adc660960d8098cc0592af797ed382cca",
+      "members": [
+        {
+          "entry": 2,
+          "stage": "Vertex",
+          "source_sha256": "e1a4282159cf2592d5b283e9e790d3c8668f13d31cb9013585f9cd887b8ebeb4",
+          "in_preparation_profile": true,
+          "hlsl_emitted": true,
+          "observed_in": [
+            "Bloom menu",
+            "Desktop menu",
+            "Reduced-effects menu",
+            "Verified menu"
+          ]
+        },
+        {
+          "entry": 19,
+          "stage": "Compute",
+          "source_sha256": "6edbd6362634b5b9fe6cf7baa20fa501718e8d7d709ee4ce4f18deefc6a5ab83",
+          "in_preparation_profile": false,
+          "hlsl_emitted": true,
+          "observed_in": []
+        },
+        {
+          "entry": 3528,
+          "stage": "Ray hit group",
+          "source_sha256": null,
+          "in_preparation_profile": false,
+          "hlsl_emitted": null,
+          "observed_in": []
+        },
+        {
+          "entry": 3529,
+          "stage": "Ray hit group",
+          "source_sha256": null,
+          "in_preparation_profile": false,
+          "hlsl_emitted": null,
+          "observed_in": []
+        },
+        {
+          "entry": 3530,
+          "stage": "Pixel",
+          "source_sha256": "66582875b1cc75c3429a6fa0efcf878affb89d5ca52fbc33e68aa0690e018c99",
+          "in_preparation_profile": true,
+          "hlsl_emitted": true,
+          "observed_in": [
+            "Bloom menu",
+            "Desktop menu",
+            "Reduced-effects menu",
+            "Verified menu"
+          ]
+        },
+        {
+          "entry": 3531,
+          "stage": "Pixel",
+          "source_sha256": "98b72406078b9e142ee1628bcc2306af54a3fcabb9b400baa9be983113558ded",
+          "in_preparation_profile": false,
+          "hlsl_emitted": true,
+          "observed_in": []
+        },
+        {
+          "entry": 3532,
+          "stage": "Ray hit group",
+          "source_sha256": null,
+          "in_preparation_profile": false,
+          "hlsl_emitted": null,
+          "observed_in": []
+        }
+      ]
+    },
+    {
+      "asset": "Frosty/Content/Effect/UI/MatrixCodeUI/Materials/PPM_MatrixCodeUIFilter.uasset",
+      "map": 66,
+      "shader_map_sha1": "2624287577f2fd34db9e098e8d92a0ebf01b4326",
+      "members": [
+        {
+          "entry": 2,
+          "stage": "Vertex",
+          "source_sha256": "e1a4282159cf2592d5b283e9e790d3c8668f13d31cb9013585f9cd887b8ebeb4",
+          "in_preparation_profile": true,
+          "hlsl_emitted": true,
+          "observed_in": [
+            "Bloom menu",
+            "Desktop menu",
+            "Reduced-effects menu",
+            "Verified menu"
+          ]
+        },
+        {
+          "entry": 19,
+          "stage": "Compute",
+          "source_sha256": "6edbd6362634b5b9fe6cf7baa20fa501718e8d7d709ee4ce4f18deefc6a5ab83",
+          "in_preparation_profile": false,
+          "hlsl_emitted": true,
+          "observed_in": []
+        },
+        {
+          "entry": 748,
+          "stage": "Ray hit group",
+          "source_sha256": null,
+          "in_preparation_profile": false,
+          "hlsl_emitted": null,
+          "observed_in": []
+        },
+        {
+          "entry": 1279,
+          "stage": "Vertex",
+          "source_sha256": "2c15f29c2ad02a4216ce96ab626d14ec9b626aaacb3e5b906f06d1a66743a62b",
+          "in_preparation_profile": true,
+          "hlsl_emitted": true,
+          "observed_in": [
+            "Bloom menu",
+            "Desktop menu",
+            "Reduced-effects menu",
+            "Verified menu"
+          ]
+        },
+        {
+          "entry": 1459,
+          "stage": "Ray hit group",
+          "source_sha256": null,
+          "in_preparation_profile": false,
+          "hlsl_emitted": null,
+          "observed_in": []
+        },
+        {
+          "entry": 1460,
+          "stage": "Ray hit group",
+          "source_sha256": null,
+          "in_preparation_profile": false,
+          "hlsl_emitted": null,
+          "observed_in": []
+        },
+        {
+          "entry": 1461,
+          "stage": "Pixel",
+          "source_sha256": "0c41d2ba5d0309dda44666503dc5b50c27c8a3a840cdad9a81a25d238eae0f08",
+          "in_preparation_profile": true,
+          "hlsl_emitted": true,
+          "observed_in": [
+            "Bloom menu",
+            "Desktop menu",
+            "Reduced-effects menu",
+            "Verified menu"
+          ]
+        },
+        {
+          "entry": 1462,
+          "stage": "Pixel",
+          "source_sha256": "8a7dd92fdff86c0f7d4f3007b788f27a077b0e9afdc3f200647b05f9bd1d129d",
+          "in_preparation_profile": false,
+          "hlsl_emitted": true,
+          "observed_in": []
+        },
+        {
+          "entry": 1463,
+          "stage": "Pixel",
+          "source_sha256": "f4ae3d082d9a2f5e6b0d74d115d766b067cdfb6fb28fdf88a0cc6b6300adeaa0",
+          "in_preparation_profile": false,
+          "hlsl_emitted": true,
+          "observed_in": []
+        }
+      ]
+    }
+  ],
+  "requested": [
+    {
+      "stage": "Compute",
+      "source_sha256": "0c9ee329b71780a29dbdd8f608f43bc303a9da0b478bde3c70bfb6c176574c25",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/3906"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "19a409921782bec0dd6e2342f3591d6852fa0fa5e347807bfeb86b02cd39ee6c",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/339"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "258d6092c4c345ba4b7953975a410a3c488b84e8ec26478d160f5810e01a26ea",
+      "observed_in": [
+        "Bloom menu"
+      ],
+      "archive_entries": [
+        "global/2208"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "3055a1ce9f606b79ff0383f67865f9c9a823cae367ba215e367c4ead2e6d4533",
+      "observed_in": [
+        "Bloom menu"
+      ],
+      "archive_entries": [
+        "global/2633"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "362a1d76620147f7beab785c70b134a68a6ec5c995c611e22bfbf19748c6d39d",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/2544"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "37399ddb0859075eca883b249982ba57a67054045c09aba6eb9b89f9df7b0602",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/3660"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "389a42c32fd0b952bf1420b9d85cc819e15d0c9881da1967715afac985ac1de2",
+      "observed_in": [
+        "Bloom menu"
+      ],
+      "archive_entries": [
+        "global/1300"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "4409088a7bc3ee6830856436f5f67bccc631b4045f7a35749989cda8dc76d727",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/3655"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "46dc8c6c941cee2e290a5cc9953083bb1d89be893a21b4206ecdfd22259fe490",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/369"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "47fed5ea7e15d16c1e0dbeadbaa64e7efd922ac381479232deca02f7115df6a6",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/2545"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "52a14a3153cc47e6cb6102c3705965230b4151fefcf725319a4c9e45f4ae79d0",
+      "observed_in": [
+        "Bloom menu"
+      ],
+      "archive_entries": [
+        "global/2427"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "57966dfcc6f37f7ada1338f226766593475242039f41f87b398092d707d3fa3e",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Startup through Wake Up",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/402"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "5ab8c9d977989bd8092b36e2e3127aab5ecbb463d7d33e483fe37bf2fcdd10e4",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/3880",
+        "global/3885"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "5e6891b6d41f48e8912be7df9de033dede36425e3db534b5ad6b32d62c1f0ab5",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/2430"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "5ee232804ac9d010bf948657122f63097901943c9542d1c05fab9ceb1e20387b",
+      "observed_in": [
+        "Startup through Wake Up"
+      ],
+      "archive_entries": [
+        "global/1062"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "6f11d6dca919fc549840903f908a47520a58be5aa681082055c1681a9d660d1f",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/379"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "708a27ac71ba47031771da69dc79bbef3acf80f656e4cd657960153874d08057",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/3261"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "892307c01daffd7b77239061ebca40c3348e8c29dcd2a84b139a2e83c18e3214",
+      "observed_in": [
+        "Bloom menu"
+      ],
+      "archive_entries": [
+        "global/2183"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "893b2d64e780e051b9a4d681cb0ee8cb27e68d96d766ffcdbcc564ce20df69fd",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/414"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "8e11c3a2bc8cba1092cfcc3f2ee5918c015f83d1c70c66f1885811b3b2908303",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/3498"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "942c771aed713166e2c8c7b4551f0ece55d47a272517e6425233e029dc9604cd",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/2662"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "97d90c9074d69e14ea67c2a5a0a85fcf90359b2aad661849525a5e804c17eb0c",
+      "observed_in": [
+        "Bloom menu"
+      ],
+      "archive_entries": [
+        "global/1777"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "98c99ffbb5cb0cdb066bcbf333331e9c04edbda29c80d0881e73eb54bc136815",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/388"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "98e02d75a4daec17354269988eaaa5e2718a7bc915de2cd24c9a2954b0db13d9",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/332"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "9b1bd08dd30b0fe7f8a4d2b9e3d3e1b5caca450f8fc72348b0e5c432d391fde9",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/2552"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "9f1bdd2dfd0960e5e4b7f0b6899ffa69e3125e77a5029daad04d11ac60029173",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/1320"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "a7be44c4e65620c9f4efb8ac1dad2c79665ee4c00aa8892d9de0c1ed1574fc2b",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/3687"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "a85f39abca7bc23c2634b36e5393ec361254fb515d5c0a5e3aa2dd35b9dcd704",
+      "observed_in": [
+        "Bloom menu"
+      ],
+      "archive_entries": [
+        "global/1868"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "b158fde9d0854c6feaf893e69860424beba13e79029796ea45bf2eac77649bb9",
+      "observed_in": [
+        "Bloom menu"
+      ],
+      "archive_entries": [
+        "global/2210"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "c6863d033ce04b471c9bdb1b4cccb71b7d4a41d9c3776b1b1cda6d61f7c47037",
+      "observed_in": [
+        "Bloom menu"
+      ],
+      "archive_entries": [
+        "global/3352"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "c7c6d525dce0149c96524778168183967d008215631842d2b18a28a34e06be0c",
+      "observed_in": [
+        "Bloom menu"
+      ],
+      "archive_entries": [
+        "global/1301"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "cfb59458a9212f959730876a4e3c3bf9378dc6fa375777e4b1954d1bc166e978",
+      "observed_in": [
+        "Bloom menu"
+      ],
+      "archive_entries": [
+        "global/2187"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "d7f20d1948c7417d74f298a17eea6d78b64b05280cf9a8234b65faa19ecbe640",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/3499"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "e1665d19d2ff94d1295b7a78490bfc93a48039eb2aa87fe2e73e75fee8a86c75",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/761"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "e2fc662e8853fcbf342ea7cc576485a24ae4837286b13e8ac13ec7e4e59ff1bd",
+      "observed_in": [
+        "Bloom menu"
+      ],
+      "archive_entries": [
+        "global/3489"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "ebc3b7140bca183fcd7cbda19f4d20448f9be0356cf60c62acd37c7e24857d16",
+      "observed_in": [
+        "Bloom menu"
+      ],
+      "archive_entries": [
+        "global/2223"
+      ],
+      "in_preparation_profile": false,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true
+    },
+    {
+      "stage": "Compute",
+      "source_sha256": "fe7adadd002e364935ab1cbb7155a49f595cff93eb9a36303a880dccc50fb927",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/3882",
+        "global/3907"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "cs_6_0"
+    },
+    {
+      "stage": "Geometry",
+      "source_sha256": "4566ef26d1185681caa1cf06ae1a4df41db01a5eb9c3f161a109438879555f33",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Startup through Wake Up",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/2420"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "gs_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "03cb85e5d235348c9a2c69b9ada38f39bef2706bb7cfb071a0316bd799f739e8",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/2071"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "05196c45243b54f3c24cb1b3efa053fb9c314e4611c1d79ab3c1edc2cd689962",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/18611"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "09edf95b7ffd639fa094c8dd77d3ba5640c55c8df0518bcab67e7720ebe3e8fd",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/1030"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "0ba0f4e51fdcf6f5c726fdcad820aabb0ce4005c42a650047861d0c9ae8fc908",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/1838"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "0c41d2ba5d0309dda44666503dc5b50c27c8a3a840cdad9a81a25d238eae0f08",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/1461"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "0e96489778ac82f57f691ddafb4c901606812031555de7f4d4b082c249a4459e",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Startup through Wake Up",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/792"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "1393a2a537f0cd70b2bf4c8523f1c58b25d2ddac733fc989d11c2a63f0fd6897",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/2092"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "186dfd012776189050a075817e735813dc0d208176e2f087c444586c9bc8fa9a",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/25040"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "1d9b3bd080eff2bb120225d53c40fab810afe82ccf79008b46fada56d46bc0b6",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/18875"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "1d9e2c4b5b4ad5b780b08e1a766151cab1013bae0cc8c5f7844c477b2e7b6e8f",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/2815"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "33cee61a7152691b24886ebc24d1171cbad4590adbbf7c52c11fc7da81ef21c4",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/18985"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "378ae09da94460648c803a12e222681f4aa758f2f2b81fe634f5fe9e1897e4a6",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/3555"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "3806672b7906fc3eac650a4ddf68700ed0863ac734c3908d7d6a0a077b0a4b19",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/14234"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "3f54352fc24aeb880667eef418bab165502dc5b488aa7dbf584e8c25cbabb990",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/1959"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "401495a0618c4598e61a4e7c47f1d995e45d5cf9ce08e2fbed4ffce5233fb62f",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/325"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "4054851945e7d15f2a25a994667d8b5f1460423231b85f10687bb7f3ac518dc5",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/2590"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "41940c49800efefb0dc9412603e91ddd286f73f011a60c761267e5881c132ed2",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/1326"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "436c6b9c4c6b7625f2e3f8f69e3f85b4c8f4bb1b416686e31bf1d2e29f4c116f",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/3647"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "4584d686c1a12cf2f009892d84be19c59454f0d97ef87eeb75f1461d4a291596",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/2439"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "45996fdeab31e9635f698a97d608db1ec2abcce2ea1d4dcb809cc289c1e59d86",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/19003"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "461da683aa628bda36eba788f419dc2e085343396b2859c4fc414cbe3582a759",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/2213"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "4646f9c098fa6e5e99ae12d12bb1c01e6ab7cc46a1cedc3de0c602040e3c4110",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/2133"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "480e692c9b508088253ca4ae4f591bc9f055f9f175f13c9b0dec3bc2fe653edb",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/738"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "555bd233a3ac7772ad83644b38a925075bd384656628e8f175962bfef6f93b5d",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/30994"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "55a1a6156b812b4890c161b1719d48b7925f009f47d0386c97a46849be2a1aaf",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/2112"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "58cea28d160f22f0263cf665d3444c093260d19ee503b94ed88fa50122ee7989",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/2545"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "5c89c4a1821fd930725c023754808b78879f186a651747e6492fdfe217f127f4",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/736"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "5d67e0ed46811a7682ae84ff0fbffe3718cd1444fb06eb395024bf8c203ccbb1",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/3916"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "61860fa935b89bd5057821a52722a237aa77f07717630bde161dd50fc505267e",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/2640"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "6474fdf58beb7747c89002c1cdbe46139e04ecf8190222587763bbffb93ff70b",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/2660"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "66582875b1cc75c3429a6fa0efcf878affb89d5ca52fbc33e68aa0690e018c99",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/3530"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "665a2f8a998146f34a0f62704affa8c414c3766200b31d15d73fab31e058a8f0",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/5285"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "6c8f888d1cd2d19e51fbcde77966f9d95e5ca6c277d47b3b447b57ecbc39662a",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/2056"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "6dc0207cffec0a9ee2fd6c029a5211319cd0b38516d98758769fd65f205ae24e",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/3566"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "6f8cf40f571ca49c025ba185629acd3b1db121bb72244acd458e66fa2ed67e7c",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/2603"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "6fb3711dc707319aa1a64cf15b8ff7a14127ef82b3b59f6a86b874dedd482fcd",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/18674"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "794bf442ef32ca4fc53573ff1749b7021011c3614a5a13be8c3b3f6914076d86",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/1031"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "898ff2f215addced17fbbd1e46324eaf9177c7a7b3b578758e9c717dc87ac9bf",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/1028"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "940b254ca2c07e927e796952be6e8caab01f7e2a9c8cff961b4c036f6eb74976",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/14259"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "980313e9d96a0f363c41005ec40848ff2ee950c5848f9b3a30f00b0c7641acfa",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/1037"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "a59f0704de8672dc2693ae12a76b29c1c64c5fe5e64e1d4d6e01cec46c429f4c",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/2423"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "a6b2b0aacbb5e06b37d630754eeaf96bddb701e33d57fe40e9848619b6f9786d",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/1182"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "b25fb0d6556e17c29e577456c132d295dcc09346d7c9833777b4b6a12d48c3c6",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/1034"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "b26394504f46dff233d8c86ab4865a5dd638a3763c8640dab1fbed6f8d64cafe",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/1866"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "b5c0e7b6e0328f06f321d61a95b4d3185dbb1a84c69f26958204311a6d84f8bc",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/18975"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "b811e3ebb7870c0b5837091717706b3af9855f72b77ec653a5407a21170d44dc",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/192",
+        "material/1373"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "bf851dbaac9b5fdefdbf6fe01ed5b58e3a6e78a6fb1d3177249d9425f691ba9f",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/3850"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "bfc8310727d73a1e98ac4d4d406173b8ccfcdfda2e355b21fb4fe8e96cbed830",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/2421"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "c3785d227cfea6e2556882c59efb1340a3e8222fd9968fe36a4bbaa7b2850e73",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/14278"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "c3d04b309ccbe65b5c657122e5bfe5c92d3a693fdb2200266ca3afc8dc50eb95",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/2522"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "c4a6ecfeb794bb245fa614011069136d91115da409cd1dc8934a49ace8380a6d",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/1342"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "c7d2894d573fa0f68481d4525a90218aeb232ec51467e17b8cff25f1f73b0e86",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/1950"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "c9a1a1012b9bf3cac8f0cf7ecc9a30f5d3e53aa128dd1b6a262661c1fac9b770",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/4073"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "cbb9305e308983e9291da2dd3a50df3c7b32704ed93e6da64eba08c7e89a531f",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/790"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "cfc56b9198c243b207b63228930ef275fcd2ce4220f8a91bb848199ee3c4a1da",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/38213"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "d1214e5986ebd60bd8eac7cb3d558d8c88cec28741fa89f819f24a3620cb588f",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/566"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "dba77272c0759b672fea3651c15f0f1a88f5a2ac9bac97a882c8baa3702315e4",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/1042"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "dbb0ca9c58d6b9baa842fce81b1d81a8f02d74c316124ccb7efff5baeaefaccc",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/687"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "df212b4f9989e25ef6a02d4dbb1dcf866a3586d7c4440ac246c294eb3b1b7148",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/2639"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "e003301b28ba2279408d514c7ab827498ac03dede4bba6653e87e01142f09be5",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/16"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "e54a417897c986336b9eef4f7248b4a456b04f31167a7b7459811df02e98e0e3",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/975"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "e62b37833f215f7d9680cb442df5d3843c8b5c4fe970ea56d51bdab55dddf183",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/739"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "ebfabb54fe45c769034a6e6d60bc3e9cb2c4e8d7ec950a29080d3f75ef5e4dd4",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/3865"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_0"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "ee88f1048770d72114cc7600f7b48ec42df225493b1745c2c62d7a48e86b62d0",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/785"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Pixel",
+      "source_sha256": "eec9bd86b9426dd4aa9b281faf4922e31d86472a86d6dcfd7fb84e3f0a7453c2",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/1033"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "ps_6_1"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "0094dca2596d68a15a3e8b6f14b846fe56e5ec66bde7caf863c55dc7778216c6",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/97"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "0a363e21d0be113572ae6b5836bbbd2d9622403ea8e16b50e3f51eae5928247b",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/187"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "1df591af1347edfe047b5569db7db44df8162a8193c427bb42a5f4a958dfd64a",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/1978"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "2071c8d1544f03373e9e05049d462ca3019ab8fa0c7ad9a7347b89ecdc36fe79",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/2648"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "2567c7e73444c884deefc8f81fd6b9d7e468c2957441d5f92680b613b24f56c4",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/3738"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "2c15f29c2ad02a4216ce96ab626d14ec9b626aaacb3e5b906f06d1a66743a62b",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/1279"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "3c34d41ce3572589a10844ec483c7e1de79970f1a20fb4d957d492c0f39ab092",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/979"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "3ee2c9cd5d2ea180e634282c1c33c778f30e5d4c37d75b23e0d72ae623f4a802",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/3511",
+        "material/690"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "3f6dc6ca65464ea288475f5d2834bcbb7d82fef1b4a70662883fed3a20c905cc",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/675"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "4d6f9f263fc79575a9de22349ccb4c376913596b7491615c7d08b9d459b34761",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/1007"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "54dac3a1f96f8b2aafe9e906f59936dca7ae0d45529262db80859c62f6b2dd1b",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/740"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "55f202b0466ffd84710c548d909681b2f6e906501f57fbaa5709c88d82683401",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/4115"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "7d09c3f5f7b068ef4edd02ea464e5a6bcad9f792b34d4bc1cce740aa9c5aa95e",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/2646"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "7f468cb72ae5613ff9bc1e68240389e1df5d7e105e56ef838ef3b4aa54ac2287",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/25001"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "83bfd12ac34c11ff4ea3db9b892e12b2781a3e3e1e8c44bb1f61b5dcb7c9bed4",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/737"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "8ebb680749cdb4f2029b9024d403b56d5d13c7ae12feb55e6f7b35121b0a2a9c",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/2751"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "90440178d04cc59388fc4ccfbb1e531654c95e342f6805a90fcb624af496fb98",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/2517"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "9970469fc36cf06a73283f3986765106bd4d440cf61ee1a8d3cfa19147b4ec92",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/1012"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "9eb99abe417bdac249de42852aeaf09e0d8d13fa394173e8082d93ea9f4ec3eb",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/1143"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "a3b9680ebb893cd7b8cc230f74b2caaa769670e8407e658678d325e3a3de7b8e",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/2423"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "a6a07f696416504069eb3a7a4e77026b6e851f0ab0bf143f3bec14a9f8b6ae30",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Startup through Wake Up",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/3643"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "ad7c782808619b6bda283dd194b2c3dad374680337a726ed8816947877d1ea99",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/25043"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "bfaddd82aa9b671fea6f10bcffdd283d50c5aa8e87f8745bcada62cbb3b01110",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/3875"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "d5217748fe737c966f5253f22d65be8e7fc2dc83e7607fa3a622cef121d59099",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/51"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "dc11c8e0853a2aebe69fde68acb68c4d185b5723edbd0ef138e9caaacfed39b0",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/923"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "e1a4282159cf2592d5b283e9e790d3c8668f13d31cb9013585f9cd887b8ebeb4",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "material/2"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "e7f7fed9881e6173963402dbfb09eb0e40c82d49baa9f8c3af819c3822577337",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/2661"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "eaa1b28a6a892b8db8fa45017d0bac422e8a50bb5f8167a28874286116fc59d1",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/2739"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    },
+    {
+      "stage": "Vertex",
+      "source_sha256": "f098dbdd214359e69414b6e0b52e2ec13f7b31ae4fe2e6d562d1d84ccbfc6103",
+      "observed_in": [
+        "Bloom menu",
+        "Desktop menu",
+        "Reduced-effects menu",
+        "Verified menu"
+      ],
+      "archive_entries": [
+        "global/2450"
+      ],
+      "in_preparation_profile": true,
+      "hlsl_emitted": true,
+      "standalone_dxil_validated": true,
+      "profile": "vs_6_0"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+LIBRARY dxcompiler_x
+EXPORTS
+    DxcCreateInstance=dxcompiler.DxcCreateInstance @1
+    DxcCreateInstance2=dxcompiler.DxcCreateInstance2 @2

@@ -9,13 +9,13 @@ Each column represents one run on its named host, provider and hardware. Each re
 | Invalid input exit status | Pass | Pass | Pass | Pass | Pending |
 | Xbox DXC utilities and binary blob lifetime | Pass | Pass | Pass | Pass | Pending |
 | Native Scarlett XG texture layouts with Rust XMem | Pass | Pass | Pass | Pass | Pending |
-| Xbox memory allocation, working set and CPU pages | Pass | Pass | Pass | Pass | Pending |
+| Xbox memory allocation and working set | Pass | Pass | Pass | Pass | Pending |
 | Desktop D3D12 pixel readback | Pass | Pass | Pass | Pass | Pending |
 | Xbox root-signature import and compute readback | Pass | Pass | Pass | Pass | Pending |
 | Xbox command-list clear and ordered copy readback | Pass | Pass | Pass | Fail | Pending |
 | Guest command rejection, fence isolation and list recovery | Pass | Pass | Pass | Fail | Pending |
 | Xbox PresentX and two screen-verified frames | Fail | Fail | Pass | Fail | Pending |
-| Lanes package launch and gameplay replay | Pass | Pass | Pass | Pass | Pending |
+| Lanes gameplay replay (earlier guest with desktop graphics) | Pass | Pass | Pass | Pass | Pending |
 | 8,388,608-move CPU replay | Pass | Pass | Pass | Pass | Pending |
 
-Rebuild this table from the repository root with `python tuxbox.py status > docs/RESULTS.md`. A dash means that the gate was omitted from that run. [Xbox DLL checks](LIBRARIES.md#run-the-provider-checks) · [Milestones and retail evidence](PROGRESS.md)
+Rebuild this table from the repository root with `python tuxbox.py status > docs/RESULTS.md`. A dash means that the gate was omitted from that run. [Current Lanes replay](../examples/lanes/README.md#deterministic-replay) · [Xbox DLL checks](LIBRARIES.md#run-the-provider-checks) · [Milestones and retail evidence](PROGRESS.md)

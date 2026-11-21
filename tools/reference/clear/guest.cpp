@@ -1,6 +1,12 @@
 // Execute the actual cached Frosty ClearCS DXIL using its cooked descriptor tables.
 #include "../compute_buffers.h"
+#ifdef TUXBOX_CACHE_CONTROL
+#include "frame_abi.h"
+#include <filesystem>
+#include <fstream>
+#else
 #include "clear_blobs.h"
+#endif
 #include <algorithm>
 #include <cstring>
 #include <vector>
@@ -30,8 +36,14 @@ static void run(ID3D12Device* device, ID3D12RootSignature* root, ID3D12PipelineS
                                     D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0};
     ComPtr<ID3D12DescriptorHeap> heap;
     check(device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&heap)), "CreateDescriptorHeap");
+#ifdef TUXBOX_CACHE_CONTROL
+    using GpuHandle = UINT64 (WINAPI*)(ID3D12DescriptorHeap*);
+    D3D12_CPU_DESCRIPTOR_HANDLE cpu{frame_abi::method<frame_abi::CpuHandle>(heap.Get(), 9)(heap.Get())};
+    D3D12_GPU_DESCRIPTOR_HANDLE gpu{frame_abi::method<GpuHandle>(heap.Get(), 10)(heap.Get())};
+#else
     auto cpu = heap->GetCPUDescriptorHandleForHeapStart();
     auto gpu = heap->GetGPUDescriptorHandleForHeapStart();
+#endif
     UINT stride = device->GetDescriptorHandleIncrementSize(desc.Type);
     D3D12_CONSTANT_BUFFER_VIEW_DESC cbv{params->GetGPUVirtualAddress(), 256};
     device->CreateConstantBufferView(&cbv, cpu);
@@ -47,15 +59,31 @@ static void run(ID3D12Device* device, ID3D12RootSignature* root, ID3D12PipelineS
     ComPtr<ID3D12GraphicsCommandList> list;
     check(device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&queue)), "CreateCommandQueue");
     check(device->CreateCommandAllocator(queue_desc.Type, IID_PPV_ARGS(&allocator)), "CreateCommandAllocator");
-    check(device->CreateCommandList(0, queue_desc.Type, allocator.Get(), pso, IID_PPV_ARGS(&list)),
-          "CreateCommandList");
+#ifdef TUXBOX_CACHE_CONTROL
+    const UINT list_desc[]{D3D12_COMMAND_LIST_TYPE_DIRECT, 0, 1, 0};
+    check(frame_abi::method<frame_abi::CreateList>(device, 73)(device, list_desc, allocator.Get(), pso,
+          IID_PPV_ARGS(&list)), "create guest command list");
+#else
+    check(device->CreateCommandList(0, queue_desc.Type, allocator.Get(), pso, IID_PPV_ARGS(&list)), "CreateCommandList");
+#endif
     list->CopyBufferRegion(output.Get(), 0, initial.Get(), 0, bytes);
     transition(list.Get(), output.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ID3D12DescriptorHeap* heaps[] = {heap.Get()};
+#ifdef TUXBOX_CACHE_CONTROL
+    using Bind = void (WINAPI*)(ID3D12GraphicsCommandList*, UINT, ID3D12DescriptorHeap* const*);
+    using Root = void (WINAPI*)(ID3D12GraphicsCommandList*, ID3D12RootSignature*);
+    using Table = void (WINAPI*)(ID3D12GraphicsCommandList*, UINT, D3D12_GPU_DESCRIPTOR_HANDLE);
+    frame_abi::method<Bind>(list.Get(), 32)(list.Get(), 1, heaps);
+    frame_abi::method<Root>(list.Get(), 33)(list.Get(), root);
+    auto table = frame_abi::method<Table>(list.Get(), 35);
+    table(list.Get(), 1, gpu);
+    table(list.Get(), 3, {gpu.ptr + 16 * stride});
+#else
     list->SetDescriptorHeaps(1, heaps);
     list->SetComputeRootSignature(root);
     list->SetComputeRootDescriptorTable(1, gpu);
     list->SetComputeRootDescriptorTable(3, {gpu.ptr + 16 * stride});
+#endif
     list->Dispatch(2, 1, 1);
     transition(list.Get(), output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
     list->CopyBufferRegion(readback.Get(), 0, output.Get(), 0, bytes);
@@ -84,6 +112,20 @@ int main() {
         return 2;
     int status = 0;
     try {
+#ifdef TUXBOX_CACHE_CONTROL
+        auto work = std::filesystem::absolute("temp");
+        if (!SetEnvironmentVariableW(L"TMP", work.c_str()) || !SetEnvironmentVariableW(L"TEMP", work.c_str()))
+            throw std::runtime_error("set local shader cache directory");
+        std::ifstream source("source.dxbc", std::ios::binary);
+        std::vector<BYTE> shader{std::istreambuf_iterator<char>(source), std::istreambuf_iterator<char>()};
+        std::ifstream signature("root.dxbc", std::ios::binary);
+        std::vector<BYTE> cooked_root{std::istreambuf_iterator<char>(signature), std::istreambuf_iterator<char>()};
+        if (shader.empty() || cooked_root.empty()) throw std::runtime_error("missing shader or root signature");
+        constexpr std::array<UINT, 18> creation{
+            0x20004, 0, UINT_MAX, 0, 0, 0, UINT_MAX, UINT_MAX, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0};
+        DXGI_ADAPTER_DESC1 gpu{};
+        auto device = frame_abi::create_device(nullptr, gpu, creation.data());
+#else
         ComPtr<ID3D12Device> device;
         check(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&device)), "D3D12CreateDevice");
         ComPtr<IDXGIFactory4> factory;
@@ -92,8 +134,22 @@ int main() {
         check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "CreateDXGIFactory1");
         check(factory->EnumAdapterByLuid(device->GetAdapterLuid(), IID_PPV_ARGS(&adapter)), "EnumAdapterByLuid");
         check(adapter->GetDesc1(&gpu), "GetDesc1");
+#endif
         std::fprintf(receipt, "adapter=%04x:%04x\n", gpu.VendorId, gpu.DeviceId);
         ComPtr<ID3D12RootSignature> root;
+#ifdef TUXBOX_CACHE_CONTROL
+        check(device->CreateRootSignature(0, cooked_root.data(), cooked_root.size(), IID_PPV_ARGS(&root)), "create cooked root");
+        D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+        desc.pRootSignature = root.Get();
+        desc.CS = {shader.data(), shader.size()};
+        ComPtr<ID3D12PipelineState> pso;
+        using Pipeline = HRESULT (WINAPI*)(ID3D12Device*, const D3D12_COMPUTE_PIPELINE_STATE_DESC*,
+                                           UINT, const void*, REFIID, void**);
+        const auto hr = frame_abi::method<Pipeline>(device.Get(), 62)(device.Get(), &desc, 0, nullptr,
+                                                                      IID_PPV_ARGS(&pso));
+        std::fprintf(receipt, "pipeline_hr=0x%08lx\n", static_cast<unsigned long>(hr));
+        check(hr, "create cooked compute pipeline");
+#else
         check(device->CreateRootSignature(0, cooked_shader, sizeof(cooked_shader), IID_PPV_ARGS(&root)),
               "CreateRootSignature");
         D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
@@ -101,6 +157,7 @@ int main() {
         desc.CS = {desktop_shader, sizeof(desktop_shader)};
         ComPtr<ID3D12PipelineState> pso;
         check(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&pso)), "CreateComputePipelineState");
+#endif
         run(device.Get(), root.Get(), pso.Get(), 4, false, receipt);
         run(device.Get(), root.Get(), pso.Get(), 1, false, receipt);
         // The cached shader declares a float UAV. Measure the unsigned view separately

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Build Frosty's Media Foundation reset bridge and verify its graphics-device association.
 
-Supply TomBox's mfplat.dll, the Proton distribution and a dedicated prefix.
---video adds a first-frame byte comparison to host FFmpeg's NV12 decode.
-The three DLLs in --work can also be staged beside the title executable.
+Supply the packaged system image, the Proton distribution and a dedicated prefix.
+--video also compares a decoded NV12 frame with FFmpeg. Stage mfplat.dll and
+mfplat_sys.dll from --work beside the title executable.
 """
 import argparse
 import hashlib
@@ -14,50 +14,18 @@ import subprocess
 import sys
 import tempfile
 
-import pefile
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from build import Toolchain
 from project_tuxbox.host import Host
 from project_tuxbox.inspect import digest
+from project_tuxbox.media import build_bridge
 
 
-def named_exports(path):
-    image = pefile.PE(str(path), fast_load=True)
-    try:
-        image.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_EXPORT"]])
-        return {item.name.decode("ascii"): item.ordinal for item in image.DIRECTORY_ENTRY_EXPORT.symbols if item.name}
-    finally:
-        image.close()
-
-
-def build(work, tombox, system, *, hevc_surface=False):
+def build(work, packaged_os, proton):
+    build_bridge(work, packaged_os, proton)
     source = ROOT / "tools/reference/media"
-    work.mkdir(parents=True, exist_ok=True)
-    proxy = work / "mfplat_tombox.dll"
-    desktop = work / "mfplat_sys.dll"
-    shutil.copyfile(tombox, proxy)
-    shutil.copyfile(system, desktop)
-    exports = named_exports(proxy)
-    reset = "MFResetDXGIDeviceManagerX"
-    if reset not in exports:
-        raise ValueError("The TomBox proxy must export MFResetDXGIDeviceManagerX")
-    # Preserve TomBox's ordinals. Wine MF components also delay-load additional
-    # named exports (including MFAllocateWorkQueue) from the app-local MFPlat.
-    rows = [f"    {name} @{ordinal}" if name == reset else f"    {name}=mfplat_tombox.{name} @{ordinal}"
-            for name, ordinal in sorted(exports.items(), key=lambda item: item[1])]
-    extra = sorted(named_exports(desktop).keys() - exports.keys())
-    rows.extend(f"    {name}=mfplat_sys.{name} @{i}" for i, name in enumerate(extra, max(exports.values()) + 1))
-    if hevc_surface:
-        # The bundled decoder's four calls pass the standard surface IID, resource,
-        # subresource, bottom-up flag and output used by MFCreateDXGISurfaceBuffer.
-        rows.append("    MFCreateDXGISurfaceBufferX=mfplat_sys.MFCreateDXGISurfaceBuffer")
-    definition = work / "mfplat.def"
-    definition.write_text("LIBRARY mfplat\nEXPORTS\n" + "\n".join(rows) + "\n")
     tools = Toolchain()
-    obj = tools.compile(source / "reset.cpp", work, "/W4", "/WX")
-    tools.link(work / "mfplat.dll", obj, "d3d11.lib", "kernel32.lib", exports=definition)
     for name, extra_libs in (("sample", ("d3d11.lib",)), ("read_video", ("mfreadwrite.lib",))):
         obj = tools.compile(source / f"{name}.cpp", work, "/W4", "/WX", f"/I{ROOT / 'runtime/d3d12'}")
         tools.link(work / f"{name}.exe", obj, "mfplat.lib", "mfuuid.lib", "ole32.lib", "d3d12.lib", "kernel32.lib",
@@ -77,22 +45,31 @@ def invoke(host, exe, args, report):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tombox-mfplat", required=True, type=Path)
+    parser.add_argument("--packaged-os", required=True, type=Path, help="path to the packaged EmbeddedXvd directory")
     parser.add_argument("--proton", required=True, type=Path)
     parser.add_argument("--prefix", required=True, type=Path)
     parser.add_argument("--work", required=True, type=Path, help="dedicated output directory for the bridge and guests")
+    parser.add_argument("--provider", type=Path, help="also check the Xbox device from this d3d12_xs.dll")
     parser.add_argument("--video", action="append", type=Path, default=[])
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     work = args.work.resolve()
-    build(work, args.tombox_mfplat, args.proton / "files/lib/wine/x86_64-windows/mfplat.dll")
+    build(work, args.packaged_os, args.proton)
     host = Host("proton", args.proton, args.prefix)
     # Cover the full launcher process group when a media provider stalls during teardown.
     host.command = ["timeout", "--kill-after=3s", "25s", *host.command]
     sample = invoke(host, work / "sample.exe", [], work / "sample.txt")
-    result = {"host": host.version, "dll_sha256": {p.name: digest(p) for p in sorted(work.glob("mfplat*.dll"))},
+    result = {"host": host.version, "dll_sha256": {name: digest(work / name) for name in ("mfplat.dll", "mfplat_sys.dll")},
               "sample": sample, "videos": []}
     success = not sample["exit"] and sample.get("verified_pixel_words") == "4"
+    if args.provider:
+        staged = work / "d3d12_xs.dll"
+        if args.provider.resolve() != staged:
+            shutil.copyfile(args.provider, staged)
+        wrapped = invoke(host, work / "sample.exe", ["--xbox"], work / "sample.txt")
+        result.update(provider_sha256=digest(staged), xbox_device=wrapped)
+        success &= (not wrapped["exit"] and wrapped.get("verified_pixel_words") == "4"
+                    and wrapped.get("wrong_token_hr") == "0x80070057")
     for video in args.video:
         oracle = subprocess.run(["ffmpeg", "-v", "error", "-i", str(video), "-frames:v", "1", "-pix_fmt", "nv12",
                                  "-f", "rawvideo", "pipe:1"], stdout=subprocess.PIPE, check=True).stdout

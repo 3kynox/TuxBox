@@ -1,10 +1,9 @@
 //! The x64 texture address computer used by XGCreateTextureComputer.
-mod layout;
 
 use core::ptr;
 use core::sync::atomic::{AtomicU32, Ordering};
-use layout::{Desc, Layout, Plane};
 use std::alloc::{Layout as Allocation, alloc};
+use tuxbox_xg_layout::{Desc, Layout, Plane};
 use windows_sys::Win32::Foundation::{E_INVALIDARG, E_OUTOFMEMORY, E_POINTER, S_OK};
 
 #[repr(C)]
@@ -84,10 +83,12 @@ unsafe extern "system" fn element_offset(
         // All supported formats address whole bytes.
         unsafe { bit.write(0) };
     }
-    if plane != 0 || slice != 0 || sample != 0 {
+    if plane != 0 || sample != 0 {
         return u64::MAX;
     }
-    this.plane.element_offset(mip, x, y).unwrap_or(u64::MAX)
+    this.plane
+        .element_offset_in_slice(slice, mip, x, y)
+        .unwrap_or(u64::MAX)
 }
 
 /// Returns an owned texture computer for a supported single-plane descriptor.

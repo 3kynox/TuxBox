@@ -102,23 +102,30 @@ int main(int argc, char** argv) {
         UINT pk = 0;
         UINT64 pos{};
         DWORD frames = 0;
-        for (UINT i = 0; fscanf_s(index, "%u,%llu", &pk, &pos) == 2; i++) {
-            std::vector<BYTE> bytes(pk);
-            if (fread(bytes.data(), 1, pk, bits) != pk)
-                throw std::runtime_error("input truncated");
-            auto in = sample(pk, bytes.data());
-            check(in->SetSampleTime(i * 10000000LL * denominator / rate), "timestamp");
-            check(in->SetSampleDuration(10000000LL * denominator / rate), "duration");
-            if (!i)
-                check(in->SetUINT32(MFSampleExtension_CleanPoint, TRUE), "keyframe");
-            HRESULT hr = decoder->ProcessInput(0, in.Get(), 0);
-            check(hr, "input");
+        for (UINT i = 0;; ++i) {
+            const int fields = fscanf_s(index, "%u,%llu", &pk, &pos);
+            if (fields == EOF) {
+                check(decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0), "end of stream");
+                check(decoder->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0), "drain decoder");
+            } else {
+                if (fields != 2)
+                    throw std::runtime_error("invalid packet index");
+                std::vector<BYTE> bytes(pk);
+                if (fread(bytes.data(), 1, pk, bits) != pk)
+                    throw std::runtime_error("input truncated");
+                auto in = sample(pk, bytes.data());
+                check(in->SetSampleTime(i * 10000000LL * denominator / rate), "timestamp");
+                check(in->SetSampleDuration(10000000LL * denominator / rate), "duration");
+                if (!i)
+                    check(in->SetUINT32(MFSampleExtension_CleanPoint, TRUE), "keyframe");
+                check(decoder->ProcessInput(0, in.Get(), 0), "input");
+            }
             for (;;) {
                 ComPtr<IMFSample> provided =
                     (info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES) ? nullptr : sample(info.cbSize, nullptr);
                 MFT_OUTPUT_DATA_BUFFER output{0, provided.Get(), 0, nullptr};
                 DWORD status{};
-                hr = decoder->ProcessOutput(0, 1, &output, &status);
+                HRESULT hr = decoder->ProcessOutput(0, 1, &output, &status);
                 if (output.pEvents)
                     output.pEvents->Release();
                 if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT)
@@ -163,6 +170,10 @@ int main(int argc, char** argv) {
                     fclose(f);
                     return 0;
                 }
+            }
+            if (fields == EOF) {
+                fprintf(f, "packets=%u decoded=%lu\n", i, frames);
+                break;
             }
         }
         throw std::runtime_error("insufficient output");

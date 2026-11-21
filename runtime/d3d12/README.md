@@ -1,28 +1,73 @@
 # Xbox-facing D3D12
 
-The app-local `d3d12_xs.dll` provides device creation for one Xbox caller profile and routes the four root-signature serialization and deserialization exports to desktop D3D12. The SDK guests exercise both paths on a selected hardware adapter.
+The app-local `d3d12_xs.dll` creates guest devices for two Xbox release profiles and routes the four root-signature serialization and deserialization exports to desktop D3D12. The SDK guests exercise both paths on a selected hardware adapter.
 
 The Rust device factory validates the guest creation record. Each guest COM object holds its native D3D12 interface. The command queue translates guest objects to native handles and presents through DXGI. [Device and resource slots](src/device.rs) · [Queue and command list](src/commands.rs) · [Presentation](src/present.rs)
 
-## Exported identifiers
+The packaged `D3D12CreateDevice` constructs a 72-byte Xbox record and calls `D3D12XboxCreateDevice`. TuxBox takes the same route, preserving the guest device’s queue layout. Games can set and read the process debug flags with the reference mask `0x83f00001`. Device creation currently supports release flags and AutoHDR off. [Packaged factory and flag routines](../../evidence/matrix-awakens/d3d12-process-debug-flags.json) · [Frosty device trial](../../evidence/matrix-awakens/tuxbox-device-factory.json)
 
-Games can import 29 D3D12 and DXGI interface IDs plus the wide debug-object name key as read-only data. A guest compares all 480 bytes with the Windows SDK and checks that the import table, name lookup and ordinal lookup resolve to the same address. Interface method coverage is tracked separately. [Rust exports](src/guids.rs) · [Guest](guid_guest.cpp) · [Console comparison](../../evidence/providers/d3d12-guids.json)
+## Library functions and identifiers
 
-The default export ordinals match the reviewed 54-export Scarlett DLL. Other builds can assign different ordinals to the same names. Use `python build.py d3d12 --d3d12-reference /path/to/d3d12_xs.dll` to take the ordinal assignments from a supplied library, then run `python tuxbox.py verify --only d3d12-guids --output build/d3d12-identifiers.json`. The device factory still supports the 64-byte creation record described below.
+Games can import all 32 data symbols in the Scarlett DLL, including the Xbox DMA command-list and graphics-unknown interface IDs. The guest checks all 512 bytes and resolves each symbol by import, name and ordinal. [Rust exports](src/guids.rs) · [Console comparison](../../evidence/providers/d3d12-guids.json)
+
+The Xbox debug interface can set process flags. Games can read them back through `D3D12XboxGetProcessDebugFlags`. `D3D10CreateBlob` provides writable shader storage. The four legacy `DXGIX` entry points return `DXGI_ERROR_UNSUPPORTED`, matching both packaged DLLs. The `d3d12-exports` check exercises these calls on Linux. [Guest](exports_guest.cpp) · [Original and translated results](../../evidence/providers/d3d12-exports.json)
+
+The default export ordinals match the reviewed 54-export Scarlett DLL. Other builds can assign different ordinals to the same names. Use `python build.py d3d12 --d3d12-reference /path/to/d3d12_xs.dll` to take the ordinal assignments from a supplied library, then run `python tuxbox.py verify --only d3d12-guids --output build/d3d12-identifiers.json`.
+
+## What runs on the GPU
+
+Frosty displays the menu and video preview through this provider on Linux. With checkout-built platform and media adapters, keyboard input opens Settings and starts the Wake Up sequence. The graphics trace records a 712-byte pipeline stream at Xbox device slot 86, direct queue submissions and a 3840 × 2160 display buffer. [Independent run](../../evidence/matrix-awakens/independent-menu.json) · [Graphics trace](../../evidence/matrix-awakens/tuxbox-menu-startup.json)
+
+| Guest check | Measured result |
+|---|---|
+| Graphics pipeline and draw | A vertex shader and pixel shader draw a triangle through Xbox slots. A 6 × 6 scissor changes 36 pixels and leaves the other 220 blue. |
+| Device2 graphics pipeline stream | A 712-byte Xbox stream creates a pipeline for indexed triangles. Two draws bind 16-bit and 32-bit index views and fetch positions from a vertex buffer. The blend factor changes the red channel from 128 to 255 between draws. Each covers 18 pixels and the other 220 stay blue. [NVIDIA](../../evidence/providers/d3d12-stream-valve.json) · [Radeon](../../evidence/providers/d3d12-stream-radeon.json) |
+| Linked retail shaders | Two geometry/pixel pairs and three vertex/pixel pairs create Xbox pipelines on NVIDIA and AMD. The checks cover Frosty’s five-target material pipeline and reject missing, misfiled and wrong-stage translations. [Shader pairs and controls](../../evidence/matrix-awakens/tuxbox-linked-materials.json) |
+| Indirect compute | A GPU argument buffer controls dispatch. Counts of one and zero produce the expected writes and untouched words. For both texture-cache flush forms, dependent dispatches preserve the expected values across a 64-word readback. |
+| Descriptor tables | A compute shader reads a constant buffer, buffer view and sampled texture, then writes a storage buffer. Both a null texture and a placed texture whose view was copied after command-list recording produced 16 correct outputs and four intact guard words. |
+| Memory and copies | Two placed buffers share a 32 MiB heap at distinct offsets. The guest checks all 256 words after a GPU copy and a 3840 × 2160 RGB10A2 display allocation returns the expected green pixel. |
+| Guest-backed textures | Slot 44 reads the Xbox mip and slice layout at the title’s virtual address. GPU readbacks cover neighboring textures, aliases, a six-face BC1 cube and 262,144 R8 texels. Replacing the backing after recording changes the next submission’s result. |
+| Depth and stencil | A compute shader changes the depth plane through an R32 UAV. The committed and placed tests verify every depth and stencil value. [Depth readbacks](../../evidence/matrix-awakens/tuxbox-depth-stencil.json) |
+| Movie surface copies | The compact Xbox copy list splits native NV12 into guest luma and chroma textures. Tests check both planes and reject stale frames and foreign resources. [NV12 readbacks](../../evidence/matrix-awakens/tuxbox-media-copy.json) |
+| Frame pacing and presentation | Frame origins issue tokens. A completed host present signals a duplicated caller event. Two RGB10A2 frames passed readback and the display color check. Frosty's 10% late-frame threshold uses synchronized presentation. |
+| Timing and queues | Timestamp and occlusion results resolve to a guarded readback buffer. A direct queue releases a fence that permits a separate copy queue to transfer 64 bytes. |
+| Device queries | Seven Xbox feature records, batched allocation sizes and mip upload footprints are checked against the selected adapter and the packaged driver's record layouts. |
+
+A byte at offset `0x18` in the guest device tells the title to copy descriptors through the device API. TuxBox copies valid ranges using single-descriptor host calls, including mixed range sizes. Frosty uses this path to bind UAVs during its compute clears. [Descriptor GPU checks](../../evidence/providers/d3d12-placement-valve.json)
+
+The slot 25 allocation call passes its result buffer before the guest device. TuxBox translates that argument order and asks the host adapter to calculate sizes and alignments. Texture uploads use separate arrays for subresource footprints, row counts and unpadded row sizes. [Allocation ABI](src/device/allocation.rs) · [Desktop allocation contract](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device-getresourceallocationinfo%28uint_uint_constd3d12_resource_desc%29)
+
+Frosty supplies some compute, vertex and pixel shaders with the portable bitcode stripped. At first boot, the launcher prepares known translations from local game files. The provider looks up the incoming shader by stage and SHA-256 when it creates a pipeline. Three Frosty compute clears passed GPU readback with distinct cache keys. Missing or broken translations preserve the host’s failure result. [Clear shader controls](../../evidence/matrix-awakens/tuxbox-compute-cache.json) · [Graphics pipeline creation](../../evidence/matrix-awakens/tuxbox-menu-startup.json)
+
+Guest-backed texture placement currently supports single-sample, read-only 2D textures and arrays. On submission TuxBox snapshots readable subresources, uploads changed contents using the shared XG layout and orders the copy against GPU readers. For the two texture-cache flushes observed in Frosty, command-list slot 67 issues a global memory barrier on hosts with enhanced barrier support. Writable placement at guest-selected virtual addresses remains open. [Placement on NVIDIA](../../evidence/providers/d3d12-placement-valve.json) · [Placement on Radeon](../../evidence/providers/d3d12-placement-radeon.json)
+
+To repeat the graphics checks on one adapter, run the following from the repository root. Add `--adapter VVVV:DDDD` to select a specific GPU.
+
+```sh
+python build.py lanes
+python tuxbox.py verify --only d3d12-features --only d3d12-queries --only d3d12-queues \
+  --only d3d12-tables --only d3d12-placement --only d3d12-heaps --only d3d12-indirect --only d3d12-draw --only d3d12-stream \
+  --only d3d12-guids --only d3d12-exports --only d3d12-frame-events --only guest-frame --only lanes
+```
 
 ## Guest devices and frames
 
 A retail executable imports `D3D12XboxCreateDevice` and passes a 64-byte creation record with SDK value `0x20002`. Its call sites select device slot 8 for a non-compute queue, slot 48 for a compute queue and slot 73 for a graphics command list. The fixture sets the two title-dependent creation fields to zero and supplies a DXGI adapter explicitly so each run can verify the selected GPU. The recorded retail factory call supplies a null adapter. Other SDK versions and option combinations need their own evidence. [Static call sites and executable hash](../../evidence/fortnite-device.json)
 
+Frosty passes a 72-byte `0x20004` record and the default adapter. The factory accepts both this release record and the default used by the standard-named factory in the packaged DLL. A guest checks the Xbox compute queue at slot 48, the device returned by that queue, GPU fence completion and four debug-flag transitions. It also obtains the adapter from the guest’s DXGI interface, checks its identity and retrieves its parent factory. [Microsoft’s DXGI adapter contract](https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgidevice-getadapter) · [Frosty call sites](../../evidence/frosty-device.json) · [Proton Experimental](../../evidence/providers/d3d12-factories-valve.json) · [GE-Proton](../../evidence/providers/d3d12-factories-ge.json) · [Radeon 610M with RADV](../../evidence/providers/d3d12-factories-radeon.json)
+
 | Suite | What the guest checks |
 |---|---|
+| `guest-frame` | `d3d12-factory.exe` exercises the default and explicit `0x20004` factories, process debug flags and compute queue fences. |
 | `guest-frame` | `xbox-frame.exe` requests a direct queue at slot 8 and a compute queue at slot 48. It signals and waits on a separate compute fence. On the direct queue it clears one 37 × 13 RGBA8 texture, snapshots it, then clears a 208-pixel rectangle and snapshots it again. After the second submission completes, it compares every channel of all 962 pixels and checks three guard regions. |
 | `guest-frame` | `xbox-frame-negative.exe` creates two guest devices on one adapter. It checks rejection of foreign allocators and fences, invalid copies, a mixed-device batch and an open list. A valid copy and completed fence after a failed recording verify list recovery. |
-| `present` | `xbox-frame.exe --present` also submits the texture via queue slot 30 (`PresentX`) after each clear. A single-plane RGBA8 copy feeds a double-buffered DXGI swap chain. The guest samples the corner and center of the displayed window on both frames, independently of its GPU readback. |
+| `present` | `xbox-frame.exe --present` also submits the texture via queue slot 30 (`PresentX`) after each clear. A single-plane RGBA8 copy feeds a double-buffered DXGI swap chain. The guest samples all four corners and the center of the displayed window on both frames. The 4K RGB10 test repeats this with a host-owned window, an oversized title window and a 960 × 540 title window. The client area fits the monitor and the GPU still renders all 3840 × 2160 pixels. [Window sizes and screen samples](../../evidence/matrix-awakens/tuxbox-present-sizing.json) |
 
 The guest-frame and presentation suites inspect the guest executables' PE imports before launch. Each must request the Xbox factory from the adjacent DLL and leave desktop D3D12 device creation to the provider. Passing results apply to the homebrew calls exercised on that adapter and provider. [Run results](../../docs/RESULTS.md)
 
 The same guest binaries exercised the Rust provider and its C++ predecessor on Linux. Both passed the 962-pixel readback, command-error checks and Lanes replay on NVIDIA and AMD. Both displayed two frames on NVIDIA with Proton Experimental. On the isolated Xvfb display, AMD PresentX returned `0x80070057`, and GE-Proton on NVIDIA sampled incorrect colors intermittently with both providers. [Provider hashes, exports and paired results](../../evidence/d3d12-rust-comparison.json)
+
+Lanes exercises the Xbox compute pipeline, root signature and buffer bindings to generate a course on the GPU. It uploads its board through the guest command list and presents through queue slot 30. When a title supplies no window, the provider creates one and runs its message loop. Closing that window ends presentation with `DXGI_ERROR_ACCESS_LOST`. [Lanes guest and checks](../../examples/lanes/README.md)
 
 ## Root-signature serialization
 

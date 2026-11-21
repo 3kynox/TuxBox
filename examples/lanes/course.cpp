@@ -1,45 +1,75 @@
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#include <d3d12.h>
-#include <dxgi1_4.h>
-#include <wrl/client.h>
-#include <cstdio>
 #include <cstring>
-#include <stdexcept>
 #include "course.h"
+#include "gpu.h"
 #include "course_shader.h"
 
 using Microsoft::WRL::ComPtr;
+using frame_abi::check;
+using frame_abi::method;
 
 namespace {
-void check(HRESULT hr, const char* operation) {
-    if (FAILED(hr)) {
-        char code[16];
-        std::snprintf(code, sizeof(code), "0x%08lx", static_cast<unsigned long>(hr));
-        throw std::runtime_error(std::string(operation) + " failed with " + code);
-    }
+// Release device creation record used by Frosty with AutoHDR off.
+constexpr std::array<UINT, 18> device_profile{
+    0x20004, 0, UINT_MAX, 0, 0, 0, UINT_MAX, UINT_MAX, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0};
+
+bool matches_adapter(IDXGIAdapter1* adapter, const wchar_t* requested, std::string& pci) {
+    DXGI_ADAPTER_DESC1 desc{};
+    check(adapter->GetDesc1(&desc), "adapter description");
+    if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) return false;
+    wchar_t id[16];
+    std::swprintf(id, 16, L"%04x:%04x", desc.VendorId, desc.DeviceId);
+    if (requested && _wcsicmp(id, requested)) return false;
+    pci.assign(id, id + std::wcslen(id));
+    return true;
 }
 }
 
-std::string generate_course(Course& rows, std::uint32_t seed, const wchar_t* selected) {
-    ComPtr<IDXGIFactory1> factory;
-    check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "DXGI factory");
+ComPtr<ID3D12Device> create_lanes_device(const wchar_t* requested, std::string& pci) {
     ComPtr<ID3D12Device> device;
-    DXGI_ADAPTER_DESC1 gpu{};
+    check(D3D12XboxCreateDevice(nullptr, device_profile.data(), IID_PPV_ARGS(&device)), "Xbox device");
+    ComPtr<IDXGIDevice1> dxgi;
+    check(device.As(&dxgi), "Xbox device DXGI interface");
+    ComPtr<IDXGIAdapter> adapter;
+    check(dxgi->GetAdapter(&adapter), "Xbox device adapter");
+    ComPtr<IDXGIAdapter1> adapter1;
+    check(adapter.As(&adapter1), "Xbox device adapter interface");
+    if (matches_adapter(adapter1.Get(), requested, pci)) return device;
+
+    // Reach the factory through the Xbox device for an explicit adapter override.
+    ComPtr<IDXGIFactory1> factory;
+    check(adapter->GetParent(IID_PPV_ARGS(&factory)), "Xbox adapter parent");
     for (UINT n = 0; ; ++n) {
         ComPtr<IDXGIAdapter1> candidate;
         HRESULT hr = factory->EnumAdapters1(n, &candidate);
-        if (hr == DXGI_ERROR_NOT_FOUND) throw std::runtime_error("no matching D3D12 hardware adapter");
+        if (hr == DXGI_ERROR_NOT_FOUND) throw std::runtime_error("no matching Xbox D3D12 hardware adapter");
         check(hr, "adapter enumeration");
-        check(candidate->GetDesc1(&gpu), "adapter description");
-        wchar_t id[32];
-        std::swprintf(id, 32, L"%04x:%04x", gpu.VendorId, gpu.DeviceId);
-        if (gpu.Flags & DXGI_ADAPTER_FLAG_SOFTWARE || (selected && _wcsicmp(id, selected))) continue;
-        hr = D3D12CreateDevice(candidate.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device));
-        if (SUCCEEDED(hr)) break;
-        if (selected) check(hr, "desktop D3D12 device");
+        if (!matches_adapter(candidate.Get(), requested, pci)) continue;
+        ComPtr<ID3D12Device> other;
+        hr = D3D12XboxCreateDevice(candidate.Get(), device_profile.data(), IID_PPV_ARGS(&other));
+        if (SUCCEEDED(hr)) return other;
+        if (requested) check(hr, "Xbox device on selected adapter");
     }
+}
+
+ComPtr<ID3D12CommandQueue> create_lanes_queue(ID3D12Device* device, D3D12_COMMAND_LIST_TYPE type) {
+    D3D12_COMMAND_QUEUE_DESC desc{};
+    desc.Type = type;
+    ComPtr<ID3D12CommandQueue> queue;
+    const size_t slot = type == D3D12_COMMAND_LIST_TYPE_COMPUTE ? 48 : 8;
+    check(method<frame_abi::CreateQueue>(device, slot)(device, &desc, IID_PPV_ARGS(&queue)), "Xbox queue");
+    return queue;
+}
+
+ComPtr<ID3D12GraphicsCommandList> create_lanes_list(
+    ID3D12Device* device, D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator* allocator) {
+    const UINT desc[] = {static_cast<UINT>(type), 0, 1, 0};
+    ComPtr<ID3D12GraphicsCommandList> list;
+    check(method<frame_abi::CreateList>(device, 73)(device, desc, allocator, nullptr, IID_PPV_ARGS(&list)),
+          "Xbox command list");
+    return list;
+}
+
+void generate_course(ID3D12Device* device, Course& rows, std::uint32_t seed) {
     D3D12_ROOT_PARAMETER params[2]{};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     params[0].Constants = {1, 2, 2};
@@ -58,15 +88,15 @@ std::string generate_course(Course& rows, std::uint32_t seed, const wchar_t* sel
     shader.pRootSignature = root.Get();
     shader.CS = {course_dxil, sizeof(course_dxil)};
     ComPtr<ID3D12PipelineState> pipeline;
-    check(device->CreateComputePipelineState(&shader, IID_PPV_ARGS(&pipeline)), "course pipeline");
-    D3D12_COMMAND_QUEUE_DESC q{};
-    q.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
-    ComPtr<ID3D12CommandQueue> queue;
+    using CreateComputePipeline = HRESULT (WINAPI*)(ID3D12Device*, const D3D12_COMPUTE_PIPELINE_STATE_DESC*,
+                                                    UINT, const void*, REFIID, void**);
+    check(method<CreateComputePipeline>(device, 62)(device, &shader, 0, nullptr, IID_PPV_ARGS(&pipeline)),
+          "Xbox compute pipeline");
+    auto queue = create_lanes_queue(device, D3D12_COMMAND_LIST_TYPE_COMPUTE);
     ComPtr<ID3D12CommandAllocator> allocator;
-    ComPtr<ID3D12GraphicsCommandList> commands;
-    check(device->CreateCommandQueue(&q, IID_PPV_ARGS(&queue)), "course queue");
-    check(device->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&allocator)), "course allocator");
-    check(device->CreateCommandList(0, q.Type, allocator.Get(), pipeline.Get(), IID_PPV_ARGS(&commands)), "course list");
+    check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&allocator)), "course allocator");
+    auto commands = create_lanes_list(device, D3D12_COMMAND_LIST_TYPE_COMPUTE, allocator.Get());
+    check(commands->Reset(allocator.Get(), pipeline.Get()), "course list reset");
 
     D3D12_RESOURCE_DESC desc{};
     desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
@@ -86,9 +116,13 @@ std::string generate_course(Course& rows, std::uint32_t seed, const wchar_t* sel
     check(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST,
                                           nullptr, IID_PPV_ARGS(&readback)), "course readback");
     const UINT constants[] = {seed, course_length};
-    commands->SetComputeRootSignature(root.Get());
-    commands->SetComputeRoot32BitConstants(0, 2, constants, 0);
-    commands->SetComputeRootUnorderedAccessView(1, result->GetGPUVirtualAddress());
+    using SetRoot = void (WINAPI*)(ID3D12GraphicsCommandList*, ID3D12RootSignature*);
+    using SetConstants = void (WINAPI*)(ID3D12GraphicsCommandList*, UINT, UINT, const void*, UINT);
+    using SetUav = void (WINAPI*)(ID3D12GraphicsCommandList*, UINT, D3D12_GPU_VIRTUAL_ADDRESS);
+    auto* list = commands.Get();
+    method<SetRoot>(list, 33)(list, root.Get());
+    method<SetConstants>(list, 39)(list, 0, 2, constants, 0);
+    method<SetUav>(list, 45)(list, 1, result->GetGPUVirtualAddress());
     commands->Dispatch((course_length + 7) / 8, 1, 1);
     D3D12_RESOURCE_BARRIER step{};
     step.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -117,7 +151,4 @@ std::string generate_course(Course& rows, std::uint32_t seed, const wchar_t* sel
     for (auto packed : rows)
         if ((packed & 255) > 2 || (packed >> 8) > 2 || (packed & 255) == (packed >> 8))
             throw std::runtime_error("GPU generated an invalid lane pair");
-    char id[32];
-    std::snprintf(id, sizeof(id), "%04x:%04x", gpu.VendorId, gpu.DeviceId);
-    return id;
 }

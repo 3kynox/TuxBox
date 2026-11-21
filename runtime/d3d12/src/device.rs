@@ -11,11 +11,46 @@ use windows::Win32::Graphics::{Direct3D::D3D_FEATURE_LEVEL_12_0, Direct3D12::*};
 use windows::core::{GUID, HRESULT, IUnknown, Interface, InterfaceRef, Result};
 
 use crate::commands::{wrap_command_list, wrap_command_queue};
-use crate::proxy::{
-    Proxy, Slot, Slots, allocate, check_output, child_slots, object_slots, unsupported_slot, unwrap,
-};
+use crate::proxy::{Proxy, Slot, Slots, allocate, check_output, child_slots, object_slots, unwrap};
 
-type Device = Proxy<ID3D12Device>;
+mod allocation;
+pub(crate) mod compute;
+pub(crate) mod depth;
+mod descriptor_copy;
+mod dxgi;
+mod features;
+pub(crate) mod frame_events;
+mod graphics;
+mod heap;
+pub(crate) mod indirect;
+pub(crate) mod media;
+pub(crate) mod placement;
+pub(crate) mod queries;
+mod shader_cache;
+mod stream;
+mod views;
+
+type Device = Proxy<ID3D12Device, dxgi::DxgiDevice>;
+pub(crate) enum Backing {
+    Native,
+    Placed(std::sync::Arc<placement::Texture>),
+    Depth(Box<depth::Pair>),
+}
+impl Backing {
+    pub(crate) fn placed(&self) -> Option<&std::sync::Arc<placement::Texture>> {
+        match self {
+            Self::Placed(texture) => Some(texture),
+            _ => None,
+        }
+    }
+    pub(crate) fn depth(&self) -> Option<&depth::Pair> {
+        match self {
+            Self::Depth(pair) => Some(pair),
+            _ => None,
+        }
+    }
+}
+type Resource = Proxy<ID3D12Resource, Backing>;
 type Out = *mut *mut c_void;
 
 fn identity(device: &Device) -> InterfaceRef<'_, IUnknown> {
@@ -24,10 +59,11 @@ fn identity(device: &Device) -> InterfaceRef<'_, IUnknown> {
     unsafe { InterfaceRef::from_raw(NonNull::from(device).cast()) }
 }
 
-unsafe fn wrap_pageable<N: Interface>(
+unsafe fn wrap_pageable<N: Interface, S>(
     created: Result<N>,
     table: &'static [Slot],
     parent: &Device,
+    state: S,
     out: Out,
 ) -> HRESULT {
     match created {
@@ -37,7 +73,7 @@ unsafe fn wrap_pageable<N: Interface>(
                 &[ID3D12DeviceChild::IID, ID3D12Pageable::IID, N::IID],
                 native,
                 Some(&identity(parent)),
-                (),
+                state,
                 out,
             )
         },
@@ -45,19 +81,27 @@ unsafe fn wrap_pageable<N: Interface>(
     }
 }
 
-unsafe extern "system" fn reset_allocator(this: &Proxy<ID3D12CommandAllocator>) -> HRESULT {
+pub(crate) type MediaResources = std::sync::Arc<std::sync::Mutex<Vec<ID3D12Resource>>>;
+pub(crate) type Allocator = Proxy<ID3D12CommandAllocator, MediaResources>;
+
+unsafe extern "system" fn reset_allocator(this: &Allocator) -> HRESULT {
     let host = &this.native;
-    unsafe { (host.vtable().Reset)(host.as_raw()) }
+    let mut sources = this.state.lock().unwrap_or_else(|e| e.into_inner());
+    let status = unsafe { (host.vtable().Reset)(host.as_raw()) };
+    if status.is_ok() {
+        sources.clear();
+    }
+    status
 }
 
 static ALLOCATOR: Slots<16> = {
-    let mut slots = child_slots::<ID3D12CommandAllocator, (), 16>();
+    let mut slots = child_slots::<ID3D12CommandAllocator, MediaResources, 16>();
     slots[8] = crate::slot!(reset_allocator);
     slots
 };
 
 unsafe extern "system" fn map_resource(
-    this: &Proxy<ID3D12Resource>,
+    this: &Resource,
     subresource: u32,
     read: *const D3D12_RANGE,
     data: Out,
@@ -67,7 +111,7 @@ unsafe extern "system" fn map_resource(
 }
 
 unsafe extern "system" fn unmap_resource(
-    this: &Proxy<ID3D12Resource>,
+    this: &Resource,
     subresource: u32,
     written: *const D3D12_RANGE,
 ) {
@@ -76,11 +120,45 @@ unsafe extern "system" fn unmap_resource(
 }
 
 static RESOURCE: Slots<32> = {
-    let mut slots = child_slots::<ID3D12Resource, (), 32>();
+    let mut slots = child_slots::<ID3D12Resource, Backing, 32>();
     slots[8] = crate::slot!(map_resource);
     slots[9] = crate::slot!(unmap_resource);
+    slots[10] = crate::slot!(resource_desc);
+    slots[11] = crate::slot!(gpu_address);
+    slots[14] = crate::slot!(heap_properties);
     slots
 };
+
+unsafe extern "system" fn resource_desc(
+    this: &Resource,
+    out: *mut D3D12_RESOURCE_DESC,
+) -> *mut D3D12_RESOURCE_DESC {
+    unsafe {
+        out.write(match &this.state {
+            Backing::Depth(pair) => pair.guest,
+            Backing::Placed(texture) => texture.desc,
+            Backing::Native => this.native.GetDesc(),
+        })
+    };
+    out
+}
+
+unsafe extern "system" fn heap_properties(
+    this: &Resource,
+    props: *mut D3D12_HEAP_PROPERTIES,
+    flags: *mut D3D12_HEAP_FLAGS,
+) -> HRESULT {
+    let native = &this.native;
+    unsafe { (native.vtable().GetHeapProperties)(native.as_raw(), props, flags) }
+}
+
+unsafe extern "system" fn gpu_address(this: &Resource) -> u64 {
+    // SAFETY: The guest resource holds its native interface until Release.
+    this.state.placed().map_or_else(
+        || unsafe { this.native.GetGPUVirtualAddress() },
+        |p| p.address,
+    )
+}
 
 unsafe extern "system" fn completed(this: &Proxy<ID3D12Fence>) -> u64 {
     unsafe { this.native.GetCompletedValue() }
@@ -110,15 +188,43 @@ static FENCE: Slots<16> = {
 
 // Scarlett returns the address directly in RAX. The native method writes a
 // D3D12_CPU_DESCRIPTOR_HANDLE to a hidden return buffer.
-unsafe extern "system" fn cpu_handle(this: &Proxy<ID3D12DescriptorHeap>) -> usize {
+pub(crate) struct DescriptorHeapState {
+    pub(crate) desc: D3D12_DESCRIPTOR_HEAP_DESC,
+    pub(crate) placed_views: Option<placement::HeapViews>,
+}
+type DescriptorHeap = Proxy<ID3D12DescriptorHeap, DescriptorHeapState>;
+
+unsafe extern "system" fn cpu_handle(this: &DescriptorHeap) -> usize {
     unsafe { this.native.GetCPUDescriptorHandleForHeapStart().ptr }
 }
 
+unsafe extern "system" fn gpu_handle(this: &DescriptorHeap) -> u64 {
+    unsafe { this.native.GetGPUDescriptorHandleForHeapStart().ptr }
+}
+
+// FD3D12SubAllocatedOnlineHeap::AllocateBlock passes writable storage in RDX.
+unsafe extern "system" fn heap_desc(
+    this: &DescriptorHeap,
+    out: *mut D3D12_DESCRIPTOR_HEAP_DESC,
+) -> *mut D3D12_DESCRIPTOR_HEAP_DESC {
+    unsafe { out.write(this.state.desc) };
+    out
+}
+
 static HEAP: Slots<16> = {
-    let mut slots = child_slots::<ID3D12DescriptorHeap, (), 16>();
+    let mut slots = child_slots::<ID3D12DescriptorHeap, DescriptorHeapState, 16>();
+    slots[8] = crate::slot!(heap_desc);
     slots[9] = crate::slot!(cpu_handle);
+    slots[10] = crate::slot!(gpu_handle);
     slots
 };
+
+pub(crate) unsafe fn descriptor_heap<'a>(
+    object: *mut c_void,
+    device: *mut c_void,
+) -> Option<&'a DescriptorHeap> {
+    unsafe { unwrap(object, device, &HEAP) }
+}
 
 /// Borrows a native resource while the caller holds the guest object alive.
 ///
@@ -129,7 +235,14 @@ pub(crate) unsafe fn resource<'a>(
     object: *mut c_void,
     device: *mut c_void,
 ) -> Option<&'a ID3D12Resource> {
-    unsafe { unwrap::<ID3D12Resource, ()>(object, device, &RESOURCE) }.map(|proxy| &proxy.native)
+    unsafe { resource_proxy(object, device) }.map(|proxy| &proxy.native)
+}
+
+pub(crate) unsafe fn resource_proxy<'a>(
+    object: *mut c_void,
+    device: *mut c_void,
+) -> Option<&'a Resource> {
+    unsafe { unwrap(object, device, &RESOURCE) }
 }
 
 /// Borrows a native fence under the same ownership contract as [`resource`].
@@ -144,9 +257,8 @@ pub(crate) unsafe fn fence<'a>(
 pub(crate) unsafe fn allocator<'a>(
     object: *mut c_void,
     device: *mut c_void,
-) -> Option<&'a ID3D12CommandAllocator> {
-    unsafe { unwrap::<ID3D12CommandAllocator, ()>(object, device, &ALLOCATOR) }
-        .map(|proxy| &proxy.native)
+) -> Option<&'a Allocator> {
+    unsafe { unwrap(object, device, &ALLOCATOR) }
 }
 
 unsafe extern "system" fn create_allocator(
@@ -159,7 +271,7 @@ unsafe extern "system" fn create_allocator(
     if status.is_err() {
         return status;
     }
-    if kind != D3D12_COMMAND_LIST_TYPE_DIRECT {
+    if !supported_queue_kind(kind) {
         return E_NOTIMPL;
     }
     unsafe {
@@ -168,6 +280,7 @@ unsafe extern "system" fn create_allocator(
                 .CreateCommandAllocator::<ID3D12CommandAllocator>(kind),
             &ALLOCATOR,
             this,
+            MediaResources::default(),
             out,
         )
     }
@@ -189,43 +302,65 @@ unsafe extern "system" fn create_heap(
     if desc.NumDescriptors == 0 {
         return E_INVALIDARG;
     }
-    if desc.Type != D3D12_DESCRIPTOR_HEAP_TYPE_RTV
-        || desc.Flags != D3D12_DESCRIPTOR_HEAP_FLAG_NONE
-        || desc.NodeMask > 1
+    if !matches!(
+        desc.Type,
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
+            | D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER
+            | D3D12_DESCRIPTOR_HEAP_TYPE_RTV
+            | D3D12_DESCRIPTOR_HEAP_TYPE_DSV
+    ) || !matches!(
+        desc.Flags,
+        D3D12_DESCRIPTOR_HEAP_FLAG_NONE | D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE
+    ) || desc.NodeMask > 1
     {
         return E_NOTIMPL;
     }
-    unsafe {
-        wrap_pageable(
-            this.native
-                .CreateDescriptorHeap::<ID3D12DescriptorHeap>(desc),
-            &HEAP,
-            this,
-            out,
+    if desc.Flags == D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE
+        && matches!(
+            desc.Type,
+            D3D12_DESCRIPTOR_HEAP_TYPE_RTV | D3D12_DESCRIPTOR_HEAP_TYPE_DSV
         )
+    {
+        return E_INVALIDARG;
     }
+    let native = match unsafe {
+        this.native
+            .CreateDescriptorHeap::<ID3D12DescriptorHeap>(desc)
+    } {
+        Ok(native) => native,
+        Err(error) => return error.code(),
+    };
+    let placed_views = this
+        .state
+        .placements
+        .views
+        .heap(&this.native, &native, desc);
+    let state = DescriptorHeapState {
+        desc: *desc,
+        placed_views,
+    };
+    unsafe { wrap_pageable(Ok(native), &HEAP, this, state, out) }
 }
 
 unsafe extern "system" fn increment_size(this: &Device, kind: D3D12_DESCRIPTOR_HEAP_TYPE) -> u32 {
     unsafe { this.native.GetDescriptorHandleIncrementSize(kind) }
 }
 
-unsafe extern "system" fn create_rtv(
-    this: &Device,
-    object: *mut c_void,
-    desc: *const D3D12_RENDER_TARGET_VIEW_DESC,
-    handle: D3D12_CPU_DESCRIPTOR_HANDLE,
-) {
-    let Some(native) = (unsafe { resource(object, identity(this).as_raw()) }) else {
-        unsafe { unsupported_slot() }
+pub(crate) const BUFFER_READ_BITS: i32 =
+    D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER.0 | D3D12_RESOURCE_STATE_INDEX_BUFFER.0;
+
+pub(crate) fn host_state(state: D3D12_RESOURCE_STATES, texture: bool) -> D3D12_RESOURCE_STATES {
+    // Frosty's SetSRVs emits these two tagged read states, including on compute lists.
+    let bits = match state.0 {
+        0x1200_00c0 => 0xc0,
+        0x1200_0040 => 0x40,
+        other => other,
     };
-    if handle.ptr == 0 {
-        unsafe { unsupported_slot() };
-    }
-    unsafe {
-        this.native
-            .CreateRenderTargetView(native, Some(desc), handle)
-    }
+    D3D12_RESOURCE_STATES(if texture {
+        bits & !BUFFER_READ_BITS
+    } else {
+        bits
+    })
 }
 
 unsafe extern "system" fn create_resource(
@@ -245,15 +380,32 @@ unsafe extern "system" fn create_resource(
     let (Some(heap), Some(desc)) = (unsafe { (properties.as_ref(), desc.as_ref()) }) else {
         return E_INVALIDARG;
     };
-    if flags != D3D12_HEAP_FLAG_NONE
+    if !matches!(flags, D3D12_HEAP_FLAG_NONE | D3D12_HEAP_FLAG_ALLOW_DISPLAY)
         || !matches!(
             heap.Type,
-            D3D12_HEAP_TYPE_DEFAULT | D3D12_HEAP_TYPE_READBACK
+            D3D12_HEAP_TYPE_DEFAULT | D3D12_HEAP_TYPE_READBACK | D3D12_HEAP_TYPE_UPLOAD
         )
         || !matches!(
             desc.Dimension,
-            D3D12_RESOURCE_DIMENSION_TEXTURE2D | D3D12_RESOURCE_DIMENSION_BUFFER
+            D3D12_RESOURCE_DIMENSION_BUFFER
+                | D3D12_RESOURCE_DIMENSION_TEXTURE1D
+                | D3D12_RESOURCE_DIMENSION_TEXTURE2D
+                | D3D12_RESOURCE_DIMENSION_TEXTURE3D
         )
+    {
+        return E_NOTIMPL;
+    }
+    if flags == D3D12_HEAP_FLAG_ALLOW_DISPLAY
+        && (heap.Type != D3D12_HEAP_TYPE_DEFAULT
+            || desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D)
+    {
+        return E_INVALIDARG;
+    }
+    let primary = depth::primary(desc);
+    if primary.is_some()
+        && (flags != D3D12_HEAP_FLAG_NONE
+            || heap.Type != D3D12_HEAP_TYPE_DEFAULT
+            || initial.contains(D3D12_RESOURCE_STATE_UNORDERED_ACCESS))
     {
         return E_NOTIMPL;
     }
@@ -262,15 +414,15 @@ unsafe extern "system" fn create_resource(
         this.native.CreateCommittedResource::<ID3D12Resource>(
             heap,
             flags,
-            desc,
-            initial,
+            primary.as_ref().unwrap_or(desc),
+            host_state(initial, desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER),
             Some(clear),
             &mut native,
         )
     } {
         return error.code();
     }
-    unsafe { wrap_pageable(native.ok_or_else(|| E_POINTER.into()), &RESOURCE, this, out) }
+    unsafe { depth::wrap(this, heap, desc, primary.as_ref(), native, out) }
 }
 
 unsafe extern "system" fn create_fence(
@@ -292,6 +444,7 @@ unsafe extern "system" fn create_fence(
             this.native.CreateFence::<ID3D12Fence>(initial, flags),
             &FENCE,
             this,
+            (),
             out,
         )
     }
@@ -310,6 +463,25 @@ unsafe fn make_queue(this: &Device, desc: &D3D12_COMMAND_QUEUE_DESC, out: Out) -
     }
 }
 
+fn supported_queue_kind(kind: D3D12_COMMAND_LIST_TYPE) -> bool {
+    matches!(
+        kind,
+        D3D12_COMMAND_LIST_TYPE_DIRECT
+            | D3D12_COMMAND_LIST_TYPE_COMPUTE
+            | D3D12_COMMAND_LIST_TYPE_COPY
+    )
+}
+
+fn unsupported_queue(slot: u32, words: [u32; 4]) -> HRESULT {
+    use windows::Win32::System::Diagnostics::Debug::OutputDebugStringA;
+    use windows::core::PCSTR;
+    let message = format!(
+        "Project TuxBox: unsupported queue descriptor at slot {slot}, words {words:x?}\n\0"
+    );
+    unsafe { OutputDebugStringA(PCSTR(message.as_ptr())) };
+    E_NOTIMPL
+}
+
 unsafe extern "system" fn create_queue(
     this: &Device,
     desc: *const D3D12_COMMAND_QUEUE_DESC,
@@ -323,12 +495,28 @@ unsafe extern "system" fn create_queue(
     let Some(desc) = (unsafe { desc.as_ref() }) else {
         return E_INVALIDARG;
     };
-    if desc.Type != D3D12_COMMAND_LIST_TYPE_DIRECT
-        || desc.Priority != D3D12_COMMAND_QUEUE_PRIORITY_NORMAL.0
-        || desc.Flags != D3D12_COMMAND_QUEUE_FLAG_NONE
+    if !supported_queue_kind(desc.Type)
+        || !matches!(
+            D3D12_COMMAND_QUEUE_PRIORITY(desc.Priority),
+            D3D12_COMMAND_QUEUE_PRIORITY_NORMAL
+                | D3D12_COMMAND_QUEUE_PRIORITY_HIGH
+                | D3D12_COMMAND_QUEUE_PRIORITY_GLOBAL_REALTIME
+        )
+        || !matches!(
+            desc.Flags,
+            D3D12_COMMAND_QUEUE_FLAG_NONE | D3D12_COMMAND_QUEUE_FLAG_DISABLE_GPU_TIMEOUT
+        )
         || desc.NodeMask > 1
     {
-        return E_NOTIMPL;
+        return unsupported_queue(
+            8,
+            [
+                desc.Type.0 as u32,
+                desc.Priority as u32,
+                desc.Flags.0 as u32,
+                desc.NodeMask,
+            ],
+        );
     }
     unsafe { make_queue(this, desc, out) }
 }
@@ -360,7 +548,15 @@ unsafe extern "system" fn create_queue_x(
         || desc.priority_flag != 0
         || desc.reserved != 0
     {
-        return E_NOTIMPL;
+        return unsupported_queue(
+            48,
+            [
+                desc.kind.0 as u32,
+                desc.options,
+                desc.priority_flag,
+                desc.reserved,
+            ],
+        );
     }
     let native = D3D12_COMMAND_QUEUE_DESC {
         Type: D3D12_COMMAND_LIST_TYPE_COMPUTE,
@@ -387,9 +583,18 @@ unsafe extern "system" fn create_list_x(
     iid: *const GUID,
     out: Out,
 ) -> HRESULT {
-    let status = unsafe { check_output::<ID3D12GraphicsCommandList>(iid, out) };
+    let compact = unsafe { iid.as_ref() } == Some(&media::DMA_IID);
+    let host_iid = ID3D12GraphicsCommandList::IID;
+    let status = unsafe {
+        check_output::<ID3D12GraphicsCommandList>(if compact { &host_iid } else { iid }, out)
+    };
     if status.is_err() {
         return status;
+    }
+    if compact
+        && unsafe { desc.as_ref() }.is_none_or(|desc| desc.kind != D3D12_COMMAND_LIST_TYPE_COPY)
+    {
+        return windows::Win32::Foundation::E_NOINTERFACE;
     }
     let parent = identity(this);
     let (Some(desc), Some(allocator)) =
@@ -397,48 +602,76 @@ unsafe extern "system" fn create_list_x(
     else {
         return E_INVALIDARG;
     };
-    if !initial.is_null()
-        || desc.kind != D3D12_COMMAND_LIST_TYPE_DIRECT
-        || desc.reserved1 != 0
-        || desc.node_mask != 1
-        || desc.reserved3 != 0
+    // Electra's compact DMA list at RVA 0x19849c3 selects the default node
+    // with {COPY,0,0,0}. Both default and explicit node one target node zero.
+    let valid_node = desc.node_mask == 1 || (compact && desc.node_mask == 0);
+    if !supported_queue_kind(desc.kind) || desc.reserved1 != 0 || !valid_node || desc.reserved3 != 0
     {
         return E_NOTIMPL;
     }
+    // SAFETY: the caller keeps its optional pipeline alive throughout creation.
+    let initial = match unsafe { compute::pipeline(initial, parent.as_raw()) } {
+        Ok(initial) => initial,
+        Err(error) => return error,
+    };
     let list: ID3D12GraphicsCommandList = match unsafe {
         this.native
-            .CreateCommandList(desc.node_mask, desc.kind, allocator, None)
+            .CreateCommandList(desc.node_mask, desc.kind, &allocator.native, initial)
     } {
         Ok(list) => list,
         Err(error) => return error.code(),
     };
-    // Desktop CreateCommandList starts open. The Xbox caller resets its list
-    // before recording, so return it already closed.
+    // Hold an empty native recording ready for a close-first guest, releasing
+    // the allocator so reset-first callers can rewind it before their list.
     if let Err(error) = unsafe { list.Close() } {
         return error.code();
     }
-    unsafe { wrap_command_list(list, &parent, out) }
+    unsafe { wrap_command_list(list, allocator, initial, &parent, compact, out) }
 }
 
 static DEVICE: Slots<160> = {
-    let mut slots = object_slots::<ID3D12Device, (), 160>();
+    let mut slots = object_slots::<ID3D12Device, dxgi::DxgiDevice, 160>();
+    slots[0] = crate::slot!(dxgi::query);
     slots[8] = crate::slot!(create_queue);
     slots[9] = crate::slot!(create_allocator);
+    slots[13] = crate::slot!(features::query);
     slots[14] = crate::slot!(create_heap);
     slots[15] = crate::slot!(increment_size);
-    slots[20] = crate::slot!(create_rtv);
+    slots[16] = crate::slot!(compute::create_root_signature);
+    slots[17] = crate::slot!(views::cbv);
+    slots[18] = crate::slot!(views::srv);
+    slots[19] = crate::slot!(views::uav);
+    slots[20] = crate::slot!(views::rtv);
+    slots[21] = crate::slot!(views::dsv);
+    slots[22] = crate::slot!(views::sampler);
+    slots[23] = crate::slot!(descriptor_copy::ranges);
+    slots[24] = crate::slot!(descriptor_copy::simple);
+    slots[25] = crate::slot!(allocation::info);
     slots[27] = crate::slot!(create_resource);
+    slots[28] = crate::slot!(heap::create);
+    slots[29] = crate::slot!(heap::place);
     slots[36] = crate::slot!(create_fence);
+    slots[38] = crate::slot!(allocation::footprints);
+    slots[39] = crate::slot!(queries::create_heap);
+    slots[41] = crate::slot!(indirect::create_signature);
     slots[43] = crate::slot!(adapter_luid);
+    slots[44] = crate::slot!(heap::place_virtual);
     slots[48] = crate::slot!(create_queue_x);
+    slots[60] = crate::slot!(graphics::create_pipeline);
+    slots[62] = crate::slot!(compute::create_pipeline_x);
     slots[73] = crate::slot!(create_list_x);
+    slots[78] = crate::slot!(frame_events::interval);
+    slots[79] = crate::slot!(frame_events::schedule);
+    slots[80] = crate::slot!(frame_events::wait);
+    slots[81] = crate::slot!(frame_events::statistics);
+    slots[86] = crate::slot!(stream::create_pipeline);
     slots
 };
 
 /// # Safety
 /// `adapter` must be null or a borrowed DXGI adapter. The caller must supply
 /// a cleared, writable output pointer for the new guest device reference.
-pub(crate) unsafe fn create(adapter: *mut c_void, out: Out) -> HRESULT {
+pub(crate) unsafe fn create(adapter: *mut c_void, requested: GUID, out: Out) -> HRESULT {
     let mut native = None;
     // SAFETY: The public factory validated its arguments. A null adapter
     // selects D3D12's default, otherwise it remains borrowed for this call.
@@ -454,5 +687,23 @@ pub(crate) unsafe fn create(adapter: *mut c_void, out: Out) -> HRESULT {
     let Some(native) = native else {
         return E_POINTER;
     };
-    unsafe { allocate(&DEVICE, &[ID3D12Device::IID], native, None, (), out) }
+    crate::diagnostics::device_created(&native);
+    // SAFETY: the caller holds the selected adapter through factory return.
+    let pipeline_device = native.cast::<ID3D12Device2>().ok();
+    let interfaces: &'static [GUID] = if pipeline_device.is_some() {
+        &[ID3D12Device::IID, ID3D12Device1::IID, ID3D12Device2::IID]
+    } else {
+        &[ID3D12Device::IID]
+    };
+    if !interfaces.contains(&requested) {
+        return windows::Win32::Foundation::E_NOINTERFACE;
+    }
+    let state = match dxgi::DxgiDevice::new(
+        unsafe { IUnknown::from_raw_borrowed(&adapter) },
+        pipeline_device,
+    ) {
+        Ok(state) => state,
+        Err(err) => return err.code(),
+    };
+    unsafe { allocate(&DEVICE, interfaces, native, None, state, out) }
 }

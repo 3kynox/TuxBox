@@ -8,7 +8,6 @@ and llvm-objdump. Emits static facts, without paths or binary content.
 """
 import argparse
 from contextlib import closing
-import hashlib
 import json
 from pathlib import Path, PureWindowsPath
 import re
@@ -17,11 +16,14 @@ import subprocess
 import sys
 from uuid import UUID
 from xml.etree import ElementTree
-import zlib
 
 import pefile
 
 from check_frame_profile import DEVICE, QUEUE, LIST, decoded, interface, require, rip
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from project_tuxbox.inspect import digest
+from project_tuxbox.symbols import lookup_symbols
 
 
 BUILD = "ae39eb1e92fa806df189c768c1478a53dfb54a2cc9769a9f2301ca7921e3eb04"
@@ -29,6 +31,20 @@ SYMBOLS = "b886b339a77da68874a44d107e366aeb4b7c16695dd67e8bbd44d6fcbab13c2c"
 
 DXC_UTILS_CLASS = UUID("6245d6af-66e0-48fd-80b4-4d271796748c")
 DXC_UTILS_IID = UUID("4605c4cb-2019-492a-ada4-65f20bb7d67f")
+SIGNATURE_IID = UUID("c36a797c-ec80-4f0a-8985-a7b2475082d1")
+# (call, stride store, IID reference, null root, diagnostic, name, argument type, stride)
+STANDARD_SIGNATURES = (
+    (0x57682EF, 0x57682A0, 0x57682D2, 0x57682D9, 0x576831B, "DrawIndirect", 0, 16),
+    (0x576837E, 0x5768338, 0x5768361, 0x5768368, 0x57683AA, "DrawIndexedIndirect", 1, 20),
+    (0x576840D, 0x57683C7, 0x57683F0, 0x57683F7, 0x5768439, "DispatchIndirectGraphics", 2, 12),
+)
+INDIRECT_COMPUTE_CALL = 0x57876DF
+NULL_VIEW_CALLS = (0x5790412, 0x57904A8, 0x579054F)
+INITIAL_CLOSE = 0x5786909
+CREATE_HEAP, PLACE_RESOURCE = 0x57A419E, 0x57C54EC
+CREATE_DISPLAY = 0x57642C5
+VOLUME_ALLOCATION = 0x57612D4
+TEXTURE_ALLOCATOR = 0x577D610
 DXC_FACTORIES = (0x5767C54, 0x5767CAE)
 # (GDxcUtils load, input pointer -> RDX, input pointer -> RBX, CreateBlob call)
 DXC_BLOB_CALLS = ((0x5753EFB, 0x5753F0D, 0x5753F10, 0x5753F16),
@@ -46,38 +62,15 @@ def check_rows(instructions, expected):
 
 
 def symbols(path, executable_name, sites):
-    compressed = path.read_bytes()
-    require(hashlib.sha256(compressed).hexdigest() == SYMBOLS, "Unknown shipping symbol file")
-    size, packed_size = struct.unpack_from("<II", compressed)
-    require(packed_size == len(compressed) - 8, "Unexpected compressed size")
-    raw = zlib.decompress(compressed[8:])
-    require(len(raw) == size, "Unexpected symbol data size")
-    version, name_len = struct.unpack_from("<II", raw)
-    require(version == 1 and raw[8:8+name_len] == executable_name.encode() + b"\0", "Symbol image mismatch")
-    count_offset = 8 + name_len + 8
-    count, = struct.unpack_from("<I", raw, count_offset)
-    first = count_offset + 4
-    names = first + count * 12
-    require(struct.unpack_from("<I", raw, names)[0] == count, "Symbol-name count mismatch")
+    require(digest(path) == SYMBOLS, "Unknown shipping symbol file")
+    data = lookup_symbols(path, sites)
+    require(data["module"] == executable_name, "Symbol image mismatch")
     covered = {}
-    for i, (start, length, _) in enumerate(struct.iter_unpack("<III", memoryview(raw)[first:names])):
-        for site in sites:
-            if start <= site < start + length:
-                require(site not in covered, "Ambiguous symbol range")
-                covered[site] = (i, start)
-    require(set(sites) == set(covered), "Missing symbol for a call site")
-    needed = {index for index, _ in covered.values()}
-    functions = {}
-    pos = names + 4
-    for i in range(count):
-        length, = struct.unpack_from("<I", raw, pos)
-        pos += 4
-        require(length > 0 and pos + length <= len(raw) and raw[pos + length - 1] == 0, "Malformed symbol name")
-        if i in needed:
-            functions[i] = raw[pos:pos+length-1].decode("utf-8")
-        pos += length
-    require(pos == len(raw), "Unexpected bytes after symbol table")
-    return count, {site: {"function": functions[i], "function_rva": hex(start)} for site, (i, start) in covered.items()}
+    for row in data["lookups"]:
+        require(row["status"] != "ambiguous", "Ambiguous symbol range")
+        require(row["status"] == "matched", "Missing symbol for a call site")
+        covered[int(row["rva"], 16)] = {"function": row["function"], "function_rva": row["function_rva"]}
+    return data["symbol_count"], covered
 
 
 def factory_record(rows):
@@ -170,6 +163,56 @@ def command_signatures(pe, llvm, path):
     return signatures
 
 
+def standard_command_signatures(pe, llvm, path, context):
+    rows = decoded(llvm, path, pe.OPTIONAL_HEADER.ImageBase, 0x5768260, 0x576845A)
+    # The first draw argument is initialized by zeroing its entire 16-byte descriptor.
+    check_rows(rows, {0x576828E: "mov dword ptr [rbp - 0x1c], 0x1",
+                      0x5768298: "lea rax, [rbp - 0x30]", 0x576829C: "mov qword ptr [rbp - 0x18], rax",
+                      0x57682AA: "vpxor xmm0, xmm0, xmm0", 0x57682AE: "vmovups xmmword ptr [rbp - 0x30], xmm0",
+                      0x576832E: "mov dword ptr [rbp - 0x30], 0x1", 0x57683BD: "mov dword ptr [rbp - 0x30], 0x2"})
+    result = []
+    for call, size_store, iid_ref, root, log_ref, name, kind, stride in STANDARD_SIGNATURES:
+        check_rows(rows, {call: "call r10", call - 7: "mov r10, qword ptr [rax + 0x148]",
+                          size_store: f"mov dword ptr [rbp - 0x20], {stride:#x}", root: "xor r8d, r8d"})
+        interface(pe, iid_ref, b"\x4c\x8d\x0d", SIGNATURE_IID)
+        diagnostic = pe.get_string_at_rva(rip(pe, log_ref, b"\x48\x8d\x15"))
+        require((name + "CommandSignature").encode() in diagnostic, "Unexpected standard signature diagnostic")
+        result.append({**context[call], "purpose": name, "call_rva": hex(call), "device_slot": 41,
+                       "argument_type": kind, "byte_stride": stride})
+    return result
+
+
+def indirect_dispatch(pe, llvm, path, context):
+    rows = decoded(llvm, path, pe.OPTIONAL_HEADER.ImageBase, 0x5787380, INDIRECT_COMPUTE_CALL + 7)
+    check_rows(rows, {0x578739D: "xor ebx, ebx", 0x57876AE: "mov r10, qword ptr [rcx]",
+                      0x57876B8: "add rax, qword ptr [rsi + 0x100]", 0x57876C6: "mov qword ptr [rsp + 0x30], rbx",
+                      0x57876CB: "mov qword ptr [rsp + 0x28], rbx", 0x57876D0: "mov qword ptr [rsp + 0x20], rax",
+                      0x57876D5: "mov r9, qword ptr [r9 + 0x20]", 0x57876D9: "mov r8d, 0x1",
+                      INDIRECT_COMPUTE_CALL: "call qword ptr [r10 + 0x1d8]"})
+    return {**context[INDIRECT_COMPUTE_CALL], "call_rva": hex(INDIRECT_COMPUTE_CALL), "command_list_slot": 59,
+            "max_command_count": 1, "count_buffer": "null", "count_buffer_offset": 0}
+
+
+def null_views(pe, llvm, path, context):
+    rows = decoded(llvm, path, pe.OPTIONAL_HEADER.ImageBase, 0x5790337, NULL_VIEW_CALLS[-1] + 3)
+    check_rows(rows, {0x5790342: "mov r15d, 0x1", 0x579036E: "mov qword ptr [rbp - 0x51], 0x1688",
+                      0x5790376: "mov qword ptr [rbp - 0x45], r15",
+                      0x579037E: "mov dword ptr [rbp - 0x55], 0x4", 0x5790385: "mov dword ptr [rbp - 0x59], 0x57",
+                      0x5790401: "mov r10, qword ptr [rax + 0x90]", 0x579040C: "lea r8, [rbp - 0x59]",
+                      0x579041D: "mov dword ptr [rbp - 0x6d], 0x4", 0x5790424: "mov dword ptr [rbp - 0x71], 0x57",
+                      0x5790497: "mov r10, qword ptr [rax + 0xa0]", 0x57904A2: "lea r8, [rbp - 0x71]",
+                      0x57904BC: "mov dword ptr [rbp - 0x2d], 0x4", 0x57904C3: "mov dword ptr [rbp - 0x31], 0x1c",
+                      0x579053A: "mov r10, qword ptr [rdx + 0x98]", 0x5790546: "lea r9, [rbp - 0x31]",
+                      0x579054A: "xor r8d, r8d"})
+    result = []
+    for call, slot, method, fmt in zip(NULL_VIEW_CALLS, (18, 20, 19), ("SRV", "RTV", "UAV"),
+                                        ("B8G8R8A8_UNORM", "B8G8R8A8_UNORM", "R8G8B8A8_UNORM"), strict=True):
+        check_rows(rows, {call - 2: "xor edx, edx", call: "call r10"})
+        result.append({**context[call], "call_rva": hex(call), "device_slot": slot, "view": method,
+                       "dimension": "TEXTURE2D", "format": fmt, "resource": "null"})
+    return result
+
+
 def inspect(mount, llvm):
     root = ElementTree.parse(mount / "MicrosoftGame.config")
     decl, = root.findall("./{*}ExecutableList/{*}Executable")
@@ -177,10 +220,11 @@ def inspect(mount, llvm):
     relative = PureWindowsPath(decl.attrib["Name"])
     require(relative.as_posix() == "Frosty/Binaries/XSX/Frosty-XSX-Shipping.exe", "Unexpected executable declaration")
     path = mount / relative.as_posix()
-    with path.open("rb") as stream:
-        require(hashlib.file_digest(stream, "sha256").hexdigest() == BUILD, "Unsupported Frosty executable hash")
+    require(digest(path) == BUILD, "Unsupported Frosty executable hash")
     sites = [0x5752BC5, 0x5766CAB, 0x575291D, 0x575284A, 0x5786667, 0x5751C9B]
-    symbol_sites = [*sites, *DXC_FACTORIES, *(row[3] for row in DXC_BLOB_CALLS), *(row[0] for row in XG_CALLS)]
+    symbol_sites = [*sites, *DXC_FACTORIES, *(row[3] for row in DXC_BLOB_CALLS), *(row[0] for row in XG_CALLS),
+                    *(row[0] for row in STANDARD_SIGNATURES), INDIRECT_COMPUTE_CALL, *NULL_VIEW_CALLS, INITIAL_CLOSE,
+                    CREATE_HEAP, PLACE_RESOURCE, CREATE_DISPLAY, VOLUME_ALLOCATION, TEXTURE_ALLOCATOR]
     count, context = symbols(mount / "Symbols/Frosty-XSX-Shipping-Symbols.bin", path.name, symbol_sites)
     with closing(pefile.PE(str(path), fast_load=True)) as pe:
         require(pe.FILE_HEADER.Machine == 0x8664, "Expected AMD64 PE")
@@ -216,6 +260,31 @@ def inspect(mount, llvm):
             check_rows(rows, {load: f"mov r10, qword ptr [rax + {slot*8:#x}]", site: "call r10"})
             calls.append({**context[site], "call_rva": hex(site), "device_slot": slot, "requested_interface": name,
                           "iid_rva": interface(pe, ref, prefix, iid)})
+        rows = decoded(llvm, path, base, 0x578660E, INITIAL_CLOSE + 4)
+        check_rows(rows, {0x578660E: "xor r8d, r8d", 0x5786617: "mov dword ptr [rsp + 0x88], eax",
+                          0x578661E: "mov dword ptr [rsp + 0x90], edx", 0x5786625: "mov dword ptr [rsp + 0x94], r8d",
+                          0x578662D: "mov dword ptr [rsp + 0x8c], r8d", 0x5786651: "xor r9d, r9d",
+                          0x578665C: "lea rdx, [rsp + 0x88]", 0x57868FF: "mov rcx, qword ptr [rsi]",
+                          0x5786905: "mov rdx, qword ptr [rax + 0x48]", INITIAL_CLOSE: "call rdx"})
+        heap_iid = interface(pe, 0x57A4154, b"\x4c\x8d\x05", UUID("6b3b2502-6e51-45b3-90ee-9884265e8df3"))
+        resource_iid = interface(pe, 0x57C54CD, b"\x48\x8d\x05", UUID("696442be-a72e-4059-bc79-5b5c98040fad"))
+        check_rows(decoded(llvm, path, base, 0x57A4181, CREATE_HEAP + 3),
+                   {0x57A4181: "lea rdx, [rbp + 0x10]", 0x57A4197: "mov r10, qword ptr [rax + 0xe0]",
+                    CREATE_HEAP: "call r10"})
+        check_rows(decoded(llvm, path, base, 0x57C54BC, PLACE_RESOURCE + 3),
+                   {0x57C54BC: "mov r10, qword ptr [rax + 0xe8]", 0x57C54DE: "mov dword ptr [rsp + 0x20], r12d",
+                    0x57C54E3: "mov r9, rdi", 0x57C54E6: "mov r8, r11", 0x57C54E9: "mov rdx, r14",
+                    PLACE_RESOURCE: "call r10"})
+        check_rows(decoded(llvm, path, base, 0x5764176, CREATE_DISPLAY + 3),
+                   {0x5764176: "mov r11d, 0x1", 0x576417C: "mov qword ptr [rbp + 0x30], r11",
+                    0x57641EF: "mov dword ptr [rbp - 0x80], 0x3", 0x5764202: "mov dword ptr [rbp - 0x64], 0x10001",
+                    0x5764209: "mov dword ptr [rbp - 0x60], edx", 0x5764214: "mov dword ptr [rbp - 0x50], r11d",
+                    0x5764294: "mov r10, qword ptr [rax + 0xd8]", 0x57642B8: "mov r8d, 0x8",
+                    0x57642BE: "lea rdx, [rbp + 0x30]", CREATE_DISPLAY: "call r10"})
+        require(rip(pe, VOLUME_ALLOCATION, b"\xe8") == TEXTURE_ALLOCATOR, "Unexpected volume allocation target")
+        diagnostic = pe.get_string_at_rva(rip(pe, 0x5761300, b"\x48\x8d\x15"))
+        require(b"AllocateTexture(TextureDesc, ClearValuePtr, Format, Texture3D->ResourceLocation" in diagnostic,
+                "Unexpected volume allocation diagnostic")
         return {"kind": "static call sites", "package_version": root.find("./{*}Identity").attrib["Version"],
                 "executable_sha256": BUILD, "shipping_symbols_sha256": SYMBOLS, "shipping_function_records": count,
                 "graphics_imports": {mod: sorted(table) for mod, table in graphics.items()}, "xbox_factory": factory,
@@ -223,7 +292,23 @@ def inspect(mount, llvm):
                 "device_calls": calls,
                 "command_signatures": command_signatures(pe, llvm, path),
                 "dxc_utils": dxc_usage(pe, llvm, path, context, graphics["dxcompiler_xs.dll"]["DxcCreateInstance"]),
-                "xg_texture": xg_usage(pe, llvm, path, context, graphics["xg_xs.dll"]["XGCreateTextureComputer"])}
+                "xg_texture": xg_usage(pe, llvm, path, context, graphics["xg_xs.dll"]["XGCreateTextureComputer"]),
+                "standard_command_signatures": standard_command_signatures(pe, llvm, path, context),
+                "indirect_compute_dispatch": indirect_dispatch(pe, llvm, path, context),
+                "null_views": null_views(pe, llvm, path, context),
+                "command_list_initial_close": {**context[INITIAL_CLOSE], "call_rva": hex(INITIAL_CLOSE),
+                                               "command_list_slot": 9, "creation_reserved_words": [0, 0],
+                                               "initial_pipeline": "null"},
+                "memory_heap_calls": [
+                    {**context[CREATE_HEAP], "call_rva": hex(CREATE_HEAP), "device_slot": 28,
+                     "requested_interface": "ID3D12Heap", "iid_rva": heap_iid},
+                    {**context[PLACE_RESOURCE], "call_rva": hex(PLACE_RESOURCE), "device_slot": 29,
+                     "requested_interface": "ID3D12Resource", "iid_rva": resource_iid}],
+                "display_allocation": {**context[CREATE_DISPLAY], "call_rva": hex(CREATE_DISPLAY), "device_slot": 27,
+                                       "heap_type": "DEFAULT", "heap_flags": "ALLOW_DISPLAY",
+                                       "dimension": "TEXTURE2D", "format": "selected by viewport"},
+                "volume_allocation": {**context[VOLUME_ALLOCATION], "call_rva": hex(VOLUME_ALLOCATION),
+                                      "target": context[TEXTURE_ALLOCATOR]["function"]}}
 
 
 def main():

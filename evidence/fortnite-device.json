@@ -52,7 +52,16 @@
       "call_rva": "0xe8c49a",
       "device_slot": 73,
       "requested_interface": "ID3D12GraphicsCommandList",
-      "iid_rva": "0x62de250"
+      "iid_rva": "0x62de250",
+      "creation_reserved_words": [
+        0,
+        0
+      ],
+      "initial_pipeline": "null",
+      "initial_close": {
+        "command_list_slot": 9,
+        "call_rva": "0xe8c56f"
+      }
     }
   ]
 }

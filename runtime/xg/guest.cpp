@@ -113,15 +113,31 @@ struct AddressCase {
     DXGI_FORMAT format;
     UINT layout;
     UINT64 layout_hash, address_hash;
+    UINT16 slices = 1;
 };
 constexpr AddressCase pixel_tiled{261, 183, 5, DXGI_FORMAT_B8G8R8A8_UNORM, 261, 0x245daf2aa8688834, 0xac277f5a5410c3ea};
 constexpr AddressCase block_linear{128, 128, 5, DXGI_FORMAT_BC7_UNORM, 256, 0xcb6161b60b4aaca3, 0x86e3e5ec57eee485};
 constexpr AddressCase block_tiled{65, 33, 5, DXGI_FORMAT_BC7_UNORM, 261, 0x8a0097d72947a2da, 0x6e056f26dbe773ba};
 constexpr AddressCase pixel_linear{513, 257, 5, DXGI_FORMAT_R8G8B8A8_UNORM, 256, 0xa21aa988236a8804, 0x0fb6d256e228228b};
+constexpr AddressCase bc1_linear{259, 139, 8, DXGI_FORMAT_BC1_TYPELESS, 256, 0xadcd43e0eec01d8a, 0x468434553d0df774};
+constexpr AddressCase bc1_tiled{259, 139, 8, DXGI_FORMAT_BC1_TYPELESS, 261, 0xb1909691e9e1790b, 0x2a9d1b908bb36ae0};
+constexpr AddressCase byte_linear{259, 139, 8, DXGI_FORMAT_R8_UNORM, 256, 0x4649f7d0fc454209, 0x24d3c1b3f7842cac};
+constexpr AddressCase byte_tiled{259, 139, 8, DXGI_FORMAT_R8_UNORM, 261, 0xa3ced028ae416558, 0x3c722d34b146d88e};
+constexpr AddressCase rg8_linear{259, 139, 8, DXGI_FORMAT_R8G8_UNORM, 256, 0xacbb77500086091e, 0xa13eed57cdb1e079};
+constexpr AddressCase rg8_tiled{259, 139, 8, DXGI_FORMAT_R8G8_UNORM, 261, 0xad87d6cf75e6e0e1, 0x6b28338ea87c09e0};
+constexpr AddressCase rgba16_linear{259, 139, 8, DXGI_FORMAT_R16G16B16A16_FLOAT, 256, 0xa832214633c68ee1, 0x27eb3630322e38fa};
+constexpr AddressCase rgba16_tiled{259, 139, 8, DXGI_FORMAT_R16G16B16A16_FLOAT, 261, 0x20d9c8de8dcdff9a, 0x7d463f89365bf693};
+constexpr AddressCase rgba32_linear{259, 139, 8, DXGI_FORMAT_R32G32B32A32_TYPELESS, 256, 0x90dd37a05cd9c0df, 0xaa3dfe79e51a39ff};
+constexpr AddressCase rgba32_tiled{259, 139, 8, DXGI_FORMAT_R32G32B32A32_TYPELESS, 261, 0x4f010bdc22c4f087, 0x11ce489fbabf2a1b};
 constexpr AddressCase address_cases[]{
+    {136, 37, 7, DXGI_FORMAT_BC1_TYPELESS, 256, 0x1227553f1b613930, 0x89f46509c8221452, 3},
     {1, 29, 5, DXGI_FORMAT_R8G8B8A8_UNORM, 261, 0x5fb8b9b2e388ec41, 0xfed8254ff0c5da20},
     pixel_tiled, block_linear, block_tiled, pixel_linear,
     // Shape fields recorded during Frosty's startup (one sample with quality zero).
+    {128, 128, 8, DXGI_FORMAT_BC1_TYPELESS, 261, 0x85898430b4e3a3c4, 0x1d1faa841e5cb615, 6},
+    {512, 256, 1, DXGI_FORMAT_R8_UNORM, 261, 0x8c1810f5e071776d, 0xbc0482703c2efb25},
+    {256, 1792, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, 261, 0x26c5cba621281816, 0x7cd1e3b5f8f5e725},
+    {32, 32, 6, DXGI_FORMAT_BC1_TYPELESS, 261, 0xddcbfa1c56d6b488, 0x248b06defc15ebde},
     {32, 32, 6, DXGI_FORMAT_B8G8R8A8_TYPELESS, 261, 0xba76c744255a51ae, 0xf62c0a92129835b4},
     {843, 5, 1, DXGI_FORMAT_B8G8R8A8_TYPELESS, 261, 0x3d34d55e54e1d625, 0x7f4f57f937403266},
     {512, 512, 10, DXGI_FORMAT_BC3_TYPELESS, 261, 0x57dcba197e218104, 0x43df594108211cfe},
@@ -138,7 +154,8 @@ bool verify_addresses(const AddressCase& test, UINT& checked) {
     desc.width = test.width;
     desc.height = test.height;
     desc.mips = test.mips;
-    desc.slices = desc.samples = 1;
+    desc.slices = test.slices;
+    desc.samples = 1;
     desc.format = test.format;
     desc.layout = test.layout;
     Computer* c = nullptr;
@@ -158,12 +175,14 @@ bool verify_addresses(const AddressCase& test, UINT& checked) {
         UINT w = test.width >> mip, h = test.height >> mip;
         w = ((w ? w : 1) + block - 1) / block;
         h = ((h ? h : 1) + block - 1) / block;
-        for (UINT y = 0; y < h; ++y) for (UINT x = 0; x < w; ++x) {
-            UINT bit = 0xffff;
-            const auto offset = c->methods->element_offset(c, 0, mip, x, y, 0, 0, &bit);
-            ok = bit == 0 && offset < output.layout.bytes && ok;
-            hash = hash_bytes(hash, &offset, sizeof(offset));
-            ++checked;
+        for (UINT slice = 0; slice < test.slices; ++slice) {
+            for (UINT y = 0; y < h; ++y) for (UINT x = 0; x < w; ++x) {
+                UINT bit = 0xffff;
+                const auto offset = c->methods->element_offset(c, 0, mip, x, y, slice, 0, &bit);
+                ok = bit == 0 && offset < output.layout.bytes && ok;
+                hash = hash_bytes(hash, &offset, sizeof(offset));
+                ++checked;
+            }
         }
     }
     ok = (c->methods->release(c) == 0) && hash == test.address_hash && ok;
@@ -184,6 +203,10 @@ bool verify_formats(UINT& formats, UINT& addresses) {
         DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8X8_UNORM, DXGI_FORMAT_B8G8R8A8_TYPELESS,
         DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, DXGI_FORMAT_B8G8R8X8_TYPELESS, DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
     };
+    constexpr DXGI_FORMAT small_blocks[]{
+        DXGI_FORMAT_BC1_TYPELESS, DXGI_FORMAT_BC1_UNORM, DXGI_FORMAT_BC1_UNORM_SRGB,
+        DXGI_FORMAT_BC4_TYPELESS, DXGI_FORMAT_BC4_UNORM, DXGI_FORMAT_BC4_SNORM,
+    };
     constexpr DXGI_FORMAT blocks[]{
         DXGI_FORMAT_BC2_TYPELESS, DXGI_FORMAT_BC2_UNORM, DXGI_FORMAT_BC2_UNORM_SRGB,
         DXGI_FORMAT_BC3_TYPELESS, DXGI_FORMAT_BC3_UNORM, DXGI_FORMAT_BC3_UNORM_SRGB,
@@ -196,7 +219,20 @@ bool verify_formats(UINT& formats, UINT& addresses) {
         ++formats;
         return verify_addresses(linear, addresses) && verify_addresses(tiled, addresses);
     };
+    struct Family { DXGI_FORMAT first, last; AddressCase linear, tiled; };
+    constexpr Family families[]{
+        {DXGI_FORMAT_R32G32B32A32_TYPELESS, DXGI_FORMAT_R32G32B32A32_SINT, rgba32_linear, rgba32_tiled},
+        {DXGI_FORMAT_R16G16B16A16_TYPELESS, DXGI_FORMAT_R32G32_SINT, rgba16_linear, rgba16_tiled},
+        {DXGI_FORMAT_R8G8_TYPELESS, DXGI_FORMAT_R16_FLOAT, rg8_linear, rg8_tiled},
+        {DXGI_FORMAT_R16_UNORM, DXGI_FORMAT_R16_SINT, rg8_linear, rg8_tiled},
+        {DXGI_FORMAT_R8_TYPELESS, DXGI_FORMAT_A8_UNORM, byte_linear, byte_tiled},
+    };
+    for (const auto& family : families) {
+        for (int format = family.first; format <= family.last; ++format)
+            if (!check_pair(static_cast<DXGI_FORMAT>(format), family.linear, family.tiled)) return false;
+    }
     for (auto format : pixels) if (!check_pair(format, pixel_linear, pixel_tiled)) return false;
+    for (auto format : small_blocks) if (!check_pair(format, bc1_linear, bc1_tiled)) return false;
     for (auto format : blocks) if (!check_pair(format, block_linear, block_tiled)) return false;
     return true;
 }
@@ -241,7 +277,7 @@ int wmain(int argc, wchar_t** argv) {
     if (addresses) {
         UINT checked = 0;
         for (const auto& test : address_cases) if (!verify_addresses(test, checked)) return 1;
-        std::snprintf(extended, sizeof(extended), "xg-texture PASS layouts=13 traced-descriptors=4 element-addresses=%u", checked);
+        std::snprintf(extended, sizeof(extended), "xg-texture PASS layouts=18 traced-descriptors=8 element-addresses=%u", checked);
         receipt = extended;
     }
     if (formats) {

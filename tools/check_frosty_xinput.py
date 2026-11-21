@@ -18,6 +18,21 @@ from project_tuxbox.host import Host
 from project_tuxbox.inspect import digest
 
 
+def local_gamepad():
+    from evdev import AbsInfo, UInput, ecodes as e
+
+    sticks = [e.ABS_X, e.ABS_Y, e.ABS_RX, e.ABS_RY]
+    triggers = [e.ABS_Z, e.ABS_RZ]
+    hats = [e.ABS_HAT0X, e.ABS_HAT0Y]
+    axes = [(axis, AbsInfo(0, lo, hi, 0, 0, 0)) for axes, lo, hi in
+            [(sticks, -32768, 32767), (triggers, 0, 255), (hats, -1, 1)] for axis in axes]
+    buttons = [e.BTN_SOUTH, e.BTN_EAST, e.BTN_NORTH, e.BTN_WEST, e.BTN_TL, e.BTN_TR,
+               e.BTN_SELECT, e.BTN_START, e.BTN_MODE, e.BTN_THUMBL, e.BTN_THUMBR]
+    return UInput({e.EV_KEY: buttons, e.EV_ABS: axes}, name="TuxBox Xbox 360 test controller",
+                  vendor=0x045e, product=0x028e, version=0x0114, bustype=e.BUS_USB)
+
+
+
 def wait_for(process, report, expected):
     deadline = time.monotonic() + 55
     while time.monotonic() < deadline:
@@ -32,12 +47,10 @@ def wait_for(process, report, expected):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, epilog="Disconnect other gamepads for the hot-unplug and keyboard-fallback checks.")
-    for option in ("tombox", "proton", "prefix", "provider", "work", "output"):
+    for option in ("proton", "prefix", "provider", "work", "output"):
         parser.add_argument("--" + option, type=Path, required=True)
     args = parser.parse_args()
-    sys.path.insert(0, str(args.tombox.resolve() / "tools/homebrew"))
-    from controller_fixture import e, gamepad
-
+    from evdev import ecodes as e
     work = args.work.resolve()
     work.mkdir(parents=True, exist_ok=True)
     tools = Toolchain()
@@ -70,7 +83,7 @@ exit "$status"
         with subprocess.Popen(command, cwd=directory, env=env, start_new_session=True) as process:
             try:
                 wait_for(process, report, "connect")
-                with gamepad() as controller:
+                with local_gamepad() as controller:
                     wait_for(process, report, "hold")
                     for kind, code, value in [(e.EV_KEY, e.BTN_EAST, 1), (e.EV_ABS, e.ABS_X, 24000),
                                                (e.EV_ABS, e.ABS_RZ, 160)]:

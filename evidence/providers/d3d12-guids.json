@@ -1,25 +1,22 @@
 {
   "reference": "EmbeddedXvd/Windows/System32/d3d12_xs.dll",
   "reference_sha256": "e8279440c6980eba9ba42de1e189870407c7665cf2b3fc1fb683ac07cf07f780",
-  "provider_sha256": "9d90d60b064ebd16a6a45dec36abfbb97167310d9a5a6dc5b4276658342d33fa",
-  "sdk_guest_sha256": "2c3505854c35015af8063ccfa547fc3e777ee6b52436d4b74077629ce6716d84",
+  "provider_sha256": "300af24ae01e907accfe7ea48e8cac215a0e193146b915bc9fca409a62bb4f82",
+  "sdk_guest_sha256": "8f948e30d1e19291c226570b1deda222e9f225978c6d8f05201f6bce5269168e",
   "reference_data_exports": 32,
-  "compared_data_exports": 30,
-  "method": "Compared the PE ordinal and 16 data bytes of each identifier with the supplied console DLL. An independently compiled SDK guest checks its imported data address by name, by ordinal and against the Windows SDK value.",
-  "guids_sha256_in_ascending_ordinal_order": "908d40e0f1e4201ea7c19a90f62ffc53fceed6fd545182a8ba72a5a889f8709c",
-  "remaining_data_exports": [
-    "IID_ID3D12XboxDmaCommandList",
-    "IID_IGraphicsUnknown"
-  ],
+  "compared_data_exports": 32,
+  "method": "Compared every exported GUID byte and ordinal with each supplied console DLL. The guest checks its imported address by name and by ordinal against the Windows SDK GUID or, for the two Xbox-only interfaces, the value independently read from both packaged DLLs.",
+  "guids_sha256_in_ascending_ordinal_order": "ffceb5ff322ab9744a07521ce3b84c50ce4eb59712397d68b19950c0f998a357",
+  "remaining_data_exports": [],
   "runs": [
     {
-      "provider": "1789159601 experimental-11.0-20260910b-x86_64",
+      "provider": "1793301796 experimental-11.0-20261027b-x86_64",
       "checks": [
         {
           "gate": "d3d12-guids",
           "passed": true,
           "exit_code": 0,
-          "receipt": "d3d12-guids PASS identifiers=30 bytes=480"
+          "receipt": "d3d12-guids PASS identifiers=32 bytes=512"
         }
       ]
     },
@@ -30,7 +27,7 @@
           "gate": "d3d12-guids",
           "passed": true,
           "exit_code": 0,
-          "receipt": "d3d12-guids PASS identifiers=30 bytes=480"
+          "receipt": "d3d12-guids PASS identifiers=32 bytes=512"
         }
       ]
     }
@@ -39,13 +36,15 @@
     "reference": "EmbeddedXvd/Windows/System32/d3d12_x.dll",
     "reference_sha256": "fafdfb277c36f654a0043241edcf9bb8eefee6c1092c09090b4913e917f8c469",
     "reference_exports": 53,
-    "provider_sha256": "c3d2dbd015d4b98d123e718202dd1516a26c91aae89992064de143fcd9a6f84f",
-    "guest_sha256": "b81803b65849cf107cbf2285ea68ea4e6933b1b59240027e1db541dd6b2a9dfd",
-    "ordinals_matched": 34,
-    "verified_guid_values": 29,
+    "provider_sha256": "5287a686542c4f5a5d7581cbc2896799f5b3548b0251edf8005b0f7d0ff4d37c",
+    "guest_sha256": "b0bede7237e53358d3371d434d1e6c4504f63bc500af26c9cd74aa4702b9316a",
+    "ordinals_matched": 45,
+    "verified_guid_values": 31,
     "absent_optional_identifier": "WKPDID_D3DDebugObjectNameW",
     "host": "1789159601 experimental-11.0-20260910b-x86_64",
-    "receipt": "d3d12-guids PASS identifiers=29 bytes=464",
-    "scope": "Companion DLL used as an ordinal and GUID control only."
-  }
+    "receipt": "d3d12-guids PASS identifiers=31 bytes=496",
+    "scope": "Companion DLL used as an ordinal and GUID control only.",
+    "original_dll_receipt": "d3d12-guids PASS identifiers=31 bytes=496"
+  },
+  "original_dll_receipt": "d3d12-guids PASS identifiers=32 bytes=512"
 }

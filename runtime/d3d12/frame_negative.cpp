@@ -74,7 +74,7 @@ void verify_factory_record(ID3D12Device* device) {
         throw std::runtime_error("could not commit version probe");
     }
     auto* version = reinterpret_cast<UINT*>(memory + info.dwPageSize - sizeof(UINT));
-    *version = 0x20004;
+    *version = 0xffffffff;
     const auto hr = D3D12XboxCreateDevice(nullptr, version, __uuidof(ID3D12Device), &out);
     VirtualFree(memory, 0, MEM_RELEASE);
     if (hr != E_NOTIMPL || out) throw std::runtime_error("unrecognized device-creation version accepted");
@@ -96,6 +96,8 @@ std::string run(const wchar_t* adapter, bool) {
         first.selected.AdapterLuid.HighPart != second.selected.AdapterLuid.HighPart)
         throw std::runtime_error("foreign-parent control needs two guest devices on one adapter");
     expect_hr(first.list->Reset(second.allocator.Get(), nullptr), E_INVALIDARG, "reset with foreign allocator");
+    check(second.list->Close(), "close initial empty recording");
+    expect_hr(second.list->Close(), E_FAIL, "double-close of initial recording");
     expect_hr(first.queue->Signal(second.fence.Get(), 1), E_INVALIDARG, "signal foreign fence");
 
     auto src = make_texture(first.device.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -106,6 +108,7 @@ std::string run(const wchar_t* adapter, bool) {
     from.Type = to.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
     const auto copy = method<Copy>(first.list.Get(), 83);
     check(first.list->Reset(first.allocator.Get(), nullptr), "reset before flags control");
+    expect_hr(first.list->Reset(first.allocator.Get(), nullptr), E_FAIL, "reset an open recording");
     copy(first.list.Get(), &to, 0, 0, 0, &from, nullptr, 1);
     expect_hr(first.list->Close(), E_NOTIMPL, "close after unsupported copy flags");
     check(first.list->Reset(first.allocator.Get(), nullptr), "reset before invalid location control");

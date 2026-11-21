@@ -19,12 +19,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--provider", type=Path, help="also verify the Xbox-facing resource, UAV and barrier calls")
     parser.add_argument("--placed", action="store_true", help="also check the chase depth texture at its retail heap offset")
+    parser.add_argument("--tuxbox", action="store_true", help="use the TuxBox guest interfaces for compute and readback")
     parser.add_argument("--proton", type=Path)
     parser.add_argument("--prefix", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    if args.placed and not args.provider:
-        parser.error("--placed requires --provider")
+    if (args.placed or args.tuxbox) and not args.provider:
+        parser.error("--placed and --tuxbox require --provider")
     host = Host(None, args.proton, args.prefix)
     source = ROOT / "tools/reference/depth"
     build = ROOT / "build/frosty-depth"
@@ -45,17 +46,21 @@ def main():
         cases = [("typed", 73 * 19), ("typeless", 1024 * 1024)]
         if args.provider:
             shutil.copyfile(args.provider, work / "d3d12_xs.dll")
-            wrapped = host.run(exe, ["wrapped"], timeout=60, capture=True)
+            extra = ["--tuxbox"] if args.tuxbox else []
+            wrapped = host.run(exe, ["wrapped", *extra], timeout=60, capture=True)
             result.update(provider_sha256=digest(args.provider), wrapped_exit=wrapped.returncode)
             success &= not wrapped.returncode
             if wrapped.returncode:
                 sys.stderr.buffer.write(wrapped.stdout)
             cases.append(("wrapped", 1024 * 1024))
             if args.placed:
-                placed = host.run(exe, ["placed"], timeout=90, capture=True)
+                placed = host.run(exe, ["placed", *extra], timeout=90, capture=True)
                 result["placed_exit"] = placed.returncode
                 success &= not placed.returncode
                 cases.append(("placed", 2976 * 1676))
+        if args.tuxbox:
+            result["guest_compute_slot"] = 62
+            result["guest_copy_slot"] = 83
         for case, pixels in cases:
             receipt = work / f"{case}.txt"
             observed = dict(line.split("=", 1) for line in receipt.read_text().splitlines()) if receipt.exists() else {}

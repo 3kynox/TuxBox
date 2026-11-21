@@ -1,0 +1,71 @@
+{
+  "analysis_type": "static PE export and call-site review",
+  "title_sha256": "ae39eb1e92fa806df189c768c1478a53dfb54a2cc9769a9f2301ca7921e3eb04",
+  "reference_library": "EmbeddedXvd/Windows/System32/xmem.dll",
+  "reference_library_sha256": "adc182acae5340b0618a3d57a239ed2e8deb305dbefc49439cb8a2d06c7ce812",
+  "reference_exports": {
+    "XMemAllocatePhysicalPages": {
+      "ordinal": 3,
+      "rva": "0x1940",
+      "return": "BOOL"
+    },
+    "XMemFreePhysicalPages": {
+      "ordinal": 8,
+      "rva": "0x2b40",
+      "return": "BOOL"
+    },
+    "XMemMapPhysicalPages": {
+      "ordinal": 21,
+      "rva": "0x2ac0",
+      "return": "void*"
+    }
+  },
+  "observed_abi": {
+    "XMemAllocatePhysicalPages": "BOOL WINAPI (UINT64 flags, SIZE_T* in_out_page_count, UINT64* page_token_array)",
+    "XMemMapPhysicalPages": "void* WINAPI (void* reserved_address, SIZE_T page_count, UINT64* page_token_array)",
+    "XMemFreePhysicalPages": "BOOL WINAPI (SIZE_T page_count, UINT64* page_token_array)"
+  },
+  "reference_behavior": {
+    "allocation": "The title passes a flags value of 0x20400000 and an in/out count. The reference export issues NtManagePartition operation 0x1500b8 and fills 64-bit page tokens.",
+    "mapping": "The reference export forwards address, count, and token array to NtMapUserPhysicalPages at reference IAT RVA 0x93e8. A null token array is forwarded for unmapping. The title shifts allocation byte sizes right by 16 to form the page count.",
+    "release": "The title passes page count in RCX and token-array pointer in RDX. The reference export releases tokens through NtManagePartition operation 0x1500bc.",
+    "page_size_bytes": 65536,
+    "page_size_basis": "Frosty call-site arithmetic uses byte_size >> 16; Microsoft DirectStorage documentation also describes XMem physical pages as 64 KB pages."
+  },
+  "title_call_sites": {
+    "XMemAllocatePhysicalPages": [
+      "0x5762b85",
+      "0x5762bcd",
+      "0x576599a",
+      "0x57659b1"
+    ],
+    "XMemMapPhysicalPages": [
+      "0x5762c06",
+      "0x57659d1"
+    ],
+    "XMemFreePhysicalPages": [
+      "0x57629da"
+    ]
+  },
+  "tuxbox_provider": {
+    "source": "runtime/xmem/src/physical_pages.rs",
+    "built_exports": [
+      "XMemAllocatePhysicalPages",
+      "XMemMapPhysicalPages",
+      "XMemFreePhysicalPages"
+    ],
+    "implementation": "The provider owns each token, accepts the 0x20400000 allocation profile and maps a 64 KiB CPU page per token. Unmapping saves the bytes and decommits the host range. Remapping restores bytes in the requested token order.",
+    "behaviorally_verified_exports": [
+      "XMemAllocatePhysicalPages",
+      "XMemMapPhysicalPages",
+      "XMemFreePhysicalPages"
+    ],
+    "limitations": [
+      "CPU-only mapping with at most one active mapping per token",
+      "Xbox partition allocation and GPU-visible backing remain unimplemented",
+      "The packaged control stops during xbthunk initialization on both Proton builds."
+    ],
+    "evidence": "evidence/providers/xmem-pages.json"
+  },
+  "external_reference": "https://learn.microsoft.com/en-us/xbox/gdk/docs/features/console/storage/directstorage/directstorage-overview"
+}

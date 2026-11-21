@@ -18,7 +18,9 @@ from .prep_progress import desktop_progress
 ROOT = Path(__file__).resolve().parents[1]
 FROSTY_PLAN = ROOT / "tools/reference/frosty-first-boot.json"
 PROFILES = {"frosty-xsx-shipping.exe": FROSTY_PLAN}
-CACHE = Path("drive_c/users/steamuser/AppData/Local/Temp/tombox_shader_cache/by_hlsl")
+GUEST_TEMP = Path("drive_c/users/steamuser/AppData/Local/Temp")
+SOURCE_CACHE = GUEST_TEMP / "tuxbox_shader_cache/by_source"
+TUXBOX_PROVIDER = ROOT / "build/d3d12-smoke/d3d12_xs.dll"
 
 
 def cooked_shader(pak, record):
@@ -46,14 +48,26 @@ def cooked_shader(pak, record):
     return cooked
 
 
+def shader_compiler():
+    override = os.environ.get("TUXBOX_XSHADER")
+    if override:
+        xshader = shutil.which(override)
+        if not xshader:
+            raise ValueError(f"TUXBOX_XSHADER executable was not found: {override}")
+    else:
+        info = subprocess.check_output(["rustc", "-vV"], text=True)
+        target = next(line.removeprefix("host: ") for line in info.splitlines() if line.startswith("host: "))
+        output = ROOT / "build/shader-compiler"
+        run_tool(["cargo", "build", "--release", "--locked", "--target", target,
+                  "--manifest-path", ROOT / "tools/shader-compiler/Cargo.toml", "--target-dir", output])
+        xshader = output / target / "release/xshader"
+    return Path(xshader)
+
+
 def compiler_tools():
     from build import find_dxc
 
-    override = os.environ.get("TUXBOX_XSHADER")
-    local = ROOT / "build/frosty-shader-prep/xshader"
-    xshader = shutil.which(override or "xshader") or (None if override else local)
-    if not xshader or not os.access(xshader, os.X_OK):
-        raise ValueError("Set TUXBOX_XSHADER to xshader built from the staged TomBox sources")
+    xshader = shader_compiler()
     dxc = Path(find_dxc(None))
     dxv = dxc.with_name("dxv")
     if not dxv.is_file():
@@ -63,9 +77,9 @@ def compiler_tools():
     return xshader, dxc, dxv
 
 
-def run_tool(command):
+def run_tool(command, *, timeout=None):
     result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                            text=True, errors="replace")
+                            text=True, errors="replace", timeout=timeout)
     if result.returncode:
         raise ValueError(f"{Path(command[0]).name} failed ({result.returncode}): {result.stderr[-600:].strip()}")
 
@@ -75,7 +89,14 @@ def compile_shader(pak, record, tools, work):
     cooked, hlsl, dxil = (work / name for name in ("shader.dxbc", "shader.hlsl", "shader.cso"))
     cooked.write_bytes(cooked_shader(pak, record))
     hlsl.unlink(missing_ok=True)
-    run_tool([xshader, cooked, "--hlsl-out", hlsl])
+    arguments = [xshader, cooked, "--hlsl-out", hlsl]
+    if pixel := record.get("pixel_input"):
+        pixel_source = work / "pixel.dxbc"
+        pixel_source.write_bytes(cooked_shader(pak, pixel))
+        arguments.extend(["--link-pixel", pixel_source])
+        if order := record.get("pixel_order"):
+            arguments.extend(["--pixel-order", order])
+    run_tool(arguments)
     if not hlsl.is_file() or digest(hlsl) != record["hlsl_sha256"]:
         raise ValueError(f"xshader translation differs from the staged provider for entry {record['entry']}")
     run_tool([dxc, "-T", record["profile"], "-E", "main", "-Fo", dxil, hlsl])
@@ -110,33 +131,52 @@ def has_dxil_container(data):
     return found
 
 
-def checked_entries(cache, records, previous):
+def checked_entries(cache, records, previous, *, exact_sources=False):
     """Remove structurally broken programs from the provider's lookup path even if compilation fails."""
     outputs = {}
     for key, record in records.items():
         entry = cache / (key + ".cso")
         try:
-            data = entry.read_bytes()
+            if exact_sources:
+                actual = digest(entry)
+            else:
+                data = entry.read_bytes()
+                actual = hashlib.sha256(data).hexdigest()
         except FileNotFoundError:
             continue
-        actual = hashlib.sha256(data).hexdigest()
-        if actual in (previous.get(key), record["observed_dxil_sha256"]):
+        if actual in (previous.get(key), record["observed_dxil_sha256"], record.get("compiled_dxil_sha256")):
             outputs[key] = actual
-        elif not has_dxil_container(data):
-            # TomBox trusts any nonempty cache file. Keep a recoverable copy and
-            # let its normal cache miss path rebuild this shader on demand.
+        elif exact_sources or not has_dxil_container(data):
+            # Keep a recoverable copy outside the runtime's cache lookup path.
             quarantine = cache.parent / "tuxbox-invalid"
             quarantine.mkdir(exist_ok=True)
             os.replace(entry, quarantine / f"{key}.{actual}.cso")
     return outputs
 
 
-def prepare_shaders(pak, plan, cache, progress=None):
-    """Recompile missing or damaged entries. Return counts of compiled and reused files."""
+def verified_copy(source, allowed, work):
+    """Take a snapshot and check its digest before publishing to a different cache."""
+    try:
+        with source.open("rb") as stream:
+            size = os.fstat(stream.fileno()).st_size
+            if size > 64 << 20:  # Also the D3D12 provider's maximum shader size.
+                return None
+            data = stream.read(size + 1)
+    except FileNotFoundError:
+        return None
+    if len(data) != size or hashlib.sha256(data).hexdigest() not in allowed:
+        return None
+    candidate = work / "copy.cso"
+    candidate.write_bytes(data)
+    return candidate
+
+
+def prepare_shaders(pak, plan, cache, progress=None, *, linked=False, exact_sources=False):
+    """Prepare checked DXIL entries and deduplicate equivalent source translations."""
     import fcntl  # The profiled cache layout belongs to the Linux Proton backend.
 
     cache.mkdir(parents=True, exist_ok=True)
-    state = cache.parent / "tuxbox-first-boot.json"
+    state = (cache / "tuxbox-first-boot.json") if linked else (cache.parent / "tuxbox-first-boot.json")
     # Keep this inside the provider cache so a cache reset also resets the receipt.
     with (cache.parent / "tuxbox-first-boot.lock").open("a+b") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -152,26 +192,42 @@ def prepare_shaders(pak, plan, cache, progress=None):
         tools = None
         with TemporaryDirectory(dir=cache.parent, prefix=".prepare-") as directory:
             work = Path(directory)
-            unique = {record["cache_key"]: record for record in plan["shaders"]}
+            key_field = "pair_key" if linked else ("dxbc_sha256" if exact_sources else "cache_key")
+            unique = {record[key_field]: record for record in plan["shaders"]}
             # Inspect every file before looking for tools; one missing compiler
             # must not leave later truncated entries in the runtime cache.
-            outputs = checked_entries(cache, unique, previous)
+            outputs = checked_entries(cache, unique, previous, exact_sources=exact_sources)
+            published = {}
             for key, record in unique.items():
                 entry = cache / (key + ".cso")
+                translation = (record.get("hlsl_sha256"), record["profile"])
+                if exact_sources:
+                    # The executable hash alone cannot authenticate the separate .pak.
+                    cooked_shader(pak, record)
+                    if linked:
+                        cooked_shader(pak, record["pixel_input"])
                 if key in outputs:
+                    published[translation] = (entry, outputs[key])
                     continue
-                if tools is None:
-                    tools = compiler_tools()
-                    print(f"Preparing {plan['title']} shaders for first use ({len(unique)} profiled programs)...",
-                          file=sys.stderr, flush=True)
-                message = f"Compiling {record['archive']} shader {record['entry']} ({record['profile']})"
-                if progress:
-                    progress(message)
-                print(f"  {message}", file=sys.stderr, flush=True)
-                dxil = compile_shader(pak, record, tools, work)
+                dxil = None
+                if exact_sources:
+                    if translation in published:
+                        source, sha = published[translation]
+                        dxil = verified_copy(source, {sha}, work)
+                if dxil is None:
+                    if tools is None:
+                        tools = compiler_tools()
+                        print(f"Preparing {plan['title']} shaders for first use ({len(unique)} profiled programs)...",
+                              file=sys.stderr, flush=True)
+                    message = f"Compiling {record['archive']} shader {record['entry']} ({record['profile']})"
+                    if progress:
+                        progress(message)
+                    print(f"  {message}", file=sys.stderr, flush=True)
+                    dxil = compile_shader(pak, record, tools, work)
+                    compiled += 1
                 outputs[key] = digest(dxil)
                 os.replace(dxil, entry)
-                compiled += 1
+                published[translation] = (entry, outputs[key])
                 # Preserve completed work if a later compile fails or is interrupted.
                 pending = work / "receipt.json"
                 pending.write_text(json.dumps({"plan": version, "outputs": {**previous, **outputs}}) + "\n")
@@ -183,6 +239,43 @@ def prepare_shaders(pak, plan, cache, progress=None):
         return compiled, len(outputs) - compiled
 
 
+def matching_tuxbox_provider(provider, sha):
+    if provider.parts[-5:-1] == ("Mount", "Frosty", "Binaries", "XSX"):
+        work = provider.parents[4]
+        manifest = work / "providers.json"
+        if manifest.is_file():
+            record = json.loads(manifest.read_text()).get(str(provider.relative_to(work)), {})
+            return record.get("origin") == "TuxBox d3d12" and record.get("sha256") == sha
+    return TUXBOX_PROVIDER.is_file() and sha == digest(TUXBOX_PROVIDER)
+
+
+def tuxbox_plan(profile_path, raw_plan, include_menu):
+    """Expand source aliases and the requested launch profile from package metadata."""
+    plan = dict(raw_plan)
+    source_profile = plan.pop("source_cache")
+    compiled_hashes = source_profile["compiled_dxil_sha256"]
+    programs = {record["cache_key"]: [dict(record, compiled_dxil_sha256=compiled_hashes[record["cache_key"]])]
+               for record in plan["shaders"] if record["cache_key"] in compiled_hashes}
+    additional = list(source_profile.get("additional_shaders", ()))
+    if include_menu and source_profile.get("menu_profile"):
+        additional.extend(json.loads(profile_path.with_name(source_profile["menu_profile"]).read_text()))
+    for record in additional:
+        programs.setdefault(record["cache_key"], []).append(record)
+    for alias in source_profile["aliases"]:
+        group = programs[alias["cache_key"]]
+        group.append({**group[0], **alias})
+    # Publish each verified alias alongside its translation even if compiling
+    # an unrelated, later shader is interrupted.
+    plan["shaders"] = [record for group in programs.values() for record in group]
+    if not include_menu and source_profile.get("linked_shaders"):
+        sources = {row["dxbc_sha256"] for row in plan["shaders"]}
+        source_profile = {**source_profile, "linked_shaders": [
+            pair for pair in source_profile.get("linked_shaders", ())
+            if pair["producer"] in sources and pair["pixel"] in sources
+        ]}
+    return plan, source_profile
+
+
 def prepare_for_launch(executable, host):
     """Return False when the selected target has no matching preparation profile."""
     profile = PROFILES.get(executable.name.lower())
@@ -190,16 +283,33 @@ def prepare_for_launch(executable, host):
         return False
     plan = json.loads(profile.read_text())
     provider = executable.with_name(plan["provider"])
-    if not provider.is_file() or digest(provider) != plan["provider_sha256"]:
+    if not provider.is_file() or not matching_tuxbox_provider(provider, digest(provider)):
         return False
+    plan, source_profile = tuxbox_plan(profile, plan, os.environ.get("TUXBOX_SHADER_PREP") == "menu")
     if digest(executable) != plan["executable_sha256"]:
         return False
     pak = executable.parent / plan["shader_package"]
-    cache = Path(host.env["WINEPREFIX"]) / CACHE
+    prefix = Path(host.env["WINEPREFIX"])
+    cache = prefix / SOURCE_CACHE
     with desktop_progress(plan["title"], host.env) as progress:
-        compiled, reused = prepare_shaders(pak, plan, cache, progress=progress)
+        compiled, reused = prepare_shaders(pak, plan, cache, progress=progress,
+                                          exact_sources=True)
+        if source_profile.get("linked_shaders"):
+            sources = {row["dxbc_sha256"]: row for row in plan["shaders"]}
+            pairs = {}
+            for link in source_profile["linked_shaders"]:
+                producer, pixel = sources[link["producer"]], sources[link["pixel"]]
+                directory = {"gs_6_0": "by_gs_ps", "vs_6_0": "by_vs_ps"}[producer["profile"]]
+                pair = {**producer, **link, "pixel_input": pixel,
+                        "pair_key": f"{producer['dxbc_sha256']}_{pixel['dxbc_sha256']}"}
+                if link.get("ordered"):
+                    pair["pixel_order"] = str(cache / (pixel["dxbc_sha256"] + ".cso"))
+                pairs.setdefault(directory, []).append(pair)
+            for directory, records in pairs.items():
+                pair_plan = {"title": plan["title"], "shaders": records}
+                built, found = prepare_shaders(pak, pair_plan, cache.parent / directory, progress=progress,
+                                               exact_sources=True, linked=True)
+                compiled += built
+                reused += found
         print(f"{plan['title']} shaders ready: {compiled} compiled, {reused} cached.", file=sys.stderr, flush=True)
-        if plan.get("pipeline_profile") == "frosty-chase":
-            from .pipeline_prep import prepare_pipelines
-            prepare_pipelines(executable, host, plan, cache, progress=progress)
     return True

@@ -164,5 +164,120 @@
         "release_rva": "0x575eed0"
       }
     ]
+  },
+  "standard_command_signatures": [
+    {
+      "function": "FD3D12Adapter::CreateCommandSignatures",
+      "function_rva": "0x5768260",
+      "purpose": "DrawIndirect",
+      "call_rva": "0x57682ef",
+      "device_slot": 41,
+      "argument_type": 0,
+      "byte_stride": 16
+    },
+    {
+      "function": "FD3D12Adapter::CreateCommandSignatures",
+      "function_rva": "0x5768260",
+      "purpose": "DrawIndexedIndirect",
+      "call_rva": "0x576837e",
+      "device_slot": 41,
+      "argument_type": 1,
+      "byte_stride": 20
+    },
+    {
+      "function": "FD3D12Adapter::CreateCommandSignatures",
+      "function_rva": "0x5768260",
+      "purpose": "DispatchIndirectGraphics",
+      "call_rva": "0x576840d",
+      "device_slot": 41,
+      "argument_type": 2,
+      "byte_stride": 12
+    }
+  ],
+  "indirect_compute_dispatch": {
+    "function": "FD3D12CommandContext::RHIDispatchIndirectComputeShader",
+    "function_rva": "0x5787380",
+    "call_rva": "0x57876df",
+    "command_list_slot": 59,
+    "max_command_count": 1,
+    "count_buffer": "null",
+    "count_buffer_offset": 0
+  },
+  "null_views": [
+    {
+      "function": "FD3D12DescriptorCache::Init",
+      "function_rva": "0x57902f0",
+      "call_rva": "0x5790412",
+      "device_slot": 18,
+      "view": "SRV",
+      "dimension": "TEXTURE2D",
+      "format": "B8G8R8A8_UNORM",
+      "resource": "null"
+    },
+    {
+      "function": "FD3D12DescriptorCache::Init",
+      "function_rva": "0x57902f0",
+      "call_rva": "0x57904a8",
+      "device_slot": 20,
+      "view": "RTV",
+      "dimension": "TEXTURE2D",
+      "format": "B8G8R8A8_UNORM",
+      "resource": "null"
+    },
+    {
+      "function": "FD3D12DescriptorCache::Init",
+      "function_rva": "0x57902f0",
+      "call_rva": "0x579054f",
+      "device_slot": 19,
+      "view": "UAV",
+      "dimension": "TEXTURE2D",
+      "format": "R8G8B8A8_UNORM",
+      "resource": "null"
+    }
+  ],
+  "command_list_initial_close": {
+    "function": "FD3D12CommandListHandle::FD3D12CommandListData::FD3D12CommandListData",
+    "function_rva": "0x5786450",
+    "call_rva": "0x5786909",
+    "command_list_slot": 9,
+    "creation_reserved_words": [
+      0,
+      0
+    ],
+    "initial_pipeline": "null"
+  },
+  "memory_heap_calls": [
+    {
+      "function": "FD3D12MemoryPool::Init",
+      "function_rva": "0x57a40c0",
+      "call_rva": "0x57a419e",
+      "device_slot": 28,
+      "requested_interface": "ID3D12Heap",
+      "iid_rva": "0x71b77a8"
+    },
+    {
+      "function": "FD3D12Adapter::CreatePlacedResource",
+      "function_rva": "0x57c5450",
+      "call_rva": "0x57c54ec",
+      "device_slot": 29,
+      "requested_interface": "ID3D12Resource",
+      "iid_rva": "0x67130b0"
+    }
+  ],
+  "display_allocation": {
+    "function": "FD3D12Viewport::ResizeInternal",
+    "function_rva": "0x5764080",
+    "call_rva": "0x57642c5",
+    "device_slot": 27,
+    "heap_type": "DEFAULT",
+    "heap_flags": "ALLOW_DISPLAY",
+    "dimension": "TEXTURE2D",
+    "format": "selected by viewport"
+  },
+  "volume_allocation": {
+    "function": "FXboxCommonD3D12DynamicRHI::CreateD3D12Texture3D",
+    "function_rva": "0x5760c60",
+    "call_rva": "0x57612d4",
+    "target": "FD3D12TextureAllocatorPool::AllocateTexture"
   }
 }

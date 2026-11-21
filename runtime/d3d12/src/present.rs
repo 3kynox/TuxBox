@@ -1,15 +1,17 @@
-//! Present one RGBA8 guest texture through a double-buffered DXGI swap chain.
+//! Present one RGBA8 or RGB10A2 guest texture through a double-buffered DXGI swap chain.
+
+mod window;
+use window::OutputWindow;
 
 use std::mem::{ManuallyDrop, swap};
 use std::sync::Mutex;
-use windows::Win32::Foundation::{E_FAIL, E_INVALIDARG, E_NOTIMPL, HANDLE, HWND};
+use windows::Win32::Foundation::{E_FAIL, E_INVALIDARG, E_NOTIMPL, HANDLE, S_OK};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
+    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM,
+    DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::*;
-use windows::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
-use windows::Win32::UI::WindowsAndMessaging::{IsWindow, IsWindowVisible};
 use windows::core::{HRESULT, Interface, Result};
 
 #[derive(Default)]
@@ -31,7 +33,10 @@ impl Presentation {
         // SAFETY: source is a live native resource held by the caller.
         let desc = unsafe { source.GetDesc() };
         if desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D
-            || desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM
+            || !matches!(
+                desc.Format,
+                DXGI_FORMAT_R8G8B8A8_UNORM | DXGI_FORMAT_R10G10B10A2_UNORM
+            )
             || desc.DepthOrArraySize != 1
             || desc.MipLevels != 1
             || desc.SampleDesc.Count != 1
@@ -51,7 +56,11 @@ impl Presentation {
             Some(chain) => chain,
             None => session.insert(SwapChain::new(queue, &device, &desc)?),
         };
-        chain.present(queue, source, &desc)
+        let status = chain.present(queue, source, &desc)?;
+        if status == S_OK {
+            crate::diagnostics::presented(desc.Width, desc.Height);
+        }
+        Ok(status)
     }
 }
 
@@ -92,10 +101,10 @@ struct SwapChain {
     chain: IDXGISwapChain3,
     fence: ID3D12Fence,
     frames: [Frame; 2],
-    // A window handle is an OS identifier. The originating thread owns the window.
-    window: usize,
+    window: OutputWindow,
     width: u32,
     height: u32,
+    format: DXGI_FORMAT,
     next: u64,
     // Once execution has begun, a failed signal leaves the work without a
     // retirement point. Keep its queue for a final synchronization attempt.
@@ -108,14 +117,10 @@ impl SwapChain {
         device: &ID3D12Device,
         desc: &D3D12_RESOURCE_DESC,
     ) -> Result<Self> {
-        // SAFETY: Win32 returns the calling thread's active window; DXGI copies the
-        // descriptor and takes a reference to the queue on successful creation.
+        let window = OutputWindow::acquire(desc.Width as u32, desc.Height)?;
+        // SAFETY: DXGI copies the descriptor and retains the queue. The output
+        // outlives the swap chain and its submitted frames.
         unsafe {
-            let window = GetActiveWindow();
-            if window.is_invalid() || !IsWindowVisible(window).as_bool() {
-                return Err(DXGI_ERROR_INVALID_CALL.into());
-            }
-
             let params = DXGI_SWAP_CHAIN_DESC1 {
                 Width: desc.Width as u32,
                 Height: desc.Height,
@@ -132,14 +137,15 @@ impl SwapChain {
                 ..Default::default()
             };
             let factory: IDXGIFactory2 = CreateDXGIFactory1()?;
-            let base = factory.CreateSwapChainForHwnd(queue, window, &params, None, None)?;
+            let base = factory.CreateSwapChainForHwnd(queue, window.hwnd(), &params, None, None)?;
             Ok(Self {
                 chain: base.cast()?,
                 fence: device.CreateFence(0, D3D12_FENCE_FLAG_NONE)?,
                 frames: [Frame::new(device)?, Frame::new(device)?],
-                window: window.0 as usize,
+                window,
                 width: params.Width,
                 height: params.Height,
+                format: params.Format,
                 next: 1,
                 failed_signal: None,
             })
@@ -158,10 +164,13 @@ impl SwapChain {
         // SAFETY: IsWindow accepts an opaque previously returned HWND. The caller
         // holds the session lock for the entire copy, signal and present sequence.
         unsafe {
-            if !IsWindow(Some(HWND(self.window as _))).as_bool() {
-                return Err(DXGI_ERROR_INVALID_CALL.into());
+            if !self.window.is_open() {
+                return Err(DXGI_ERROR_ACCESS_LOST.into());
             }
-            if u64::from(self.width) != desc.Width || self.height != desc.Height {
+            if u64::from(self.width) != desc.Width
+                || self.height != desc.Height
+                || self.format != desc.Format
+            {
                 return Err(E_NOTIMPL.into());
             }
             // The maximum fence value reports device removal and must stay reserved.

@@ -25,17 +25,23 @@ static void transition(ID3D12GraphicsCommandList* list, ID3D12Resource* res, UIN
 }
 
 static void copy(ID3D12GraphicsCommandList* list, ID3D12Resource* texture, UINT index, ID3D12Resource* buffer,
-                 D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint, bool to_buffer) {
+                 D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint, bool to_buffer, bool tuxbox = false) {
     D3D12_TEXTURE_COPY_LOCATION image{}, linear{};
     image.pResource = texture;
     image.SubresourceIndex = index;
     linear.pResource = buffer;
     linear.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
     linear.PlacedFootprint = footprint;
-    list->CopyTextureRegion(to_buffer ? &linear : &image, 0, 0, 0, to_buffer ? &image : &linear, nullptr);
+    auto* dst = to_buffer ? &linear : &image;
+    auto* src = to_buffer ? &image : &linear;
+    if (tuxbox)
+        frame_abi::method<frame_abi::Copy>(list, 83)(list, dst, 0, 0, 0, src, nullptr, 0);
+    else
+        list->CopyTextureRegion(dst, 0, 0, 0, src, nullptr);
 }
 
-static void run(FILE* out, UINT width, UINT height, DXGI_FORMAT depth_format, ID3D12Device* provider, bool placed) {
+static void run(FILE* out, UINT width, UINT height, DXGI_FORMAT depth_format, ID3D12Device* provider,
+                bool placed, bool tuxbox) {
     const D3D12_RECT inset{5, 3, LONG(width) - 7, LONG(height) - 3};
     ComPtr<ID3D12Device> dev;
     check(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&dev)), "D3D12CreateDevice");
@@ -86,7 +92,7 @@ static void run(FILE* out, UINT width, UINT height, DXGI_FORMAT depth_format, ID
     }
     if (provider) {
         dev.Reset();
-        check(dsv->GetDevice(IID_PPV_ARGS(&dev)), "get native device from paired resource");
+        check(dsv->GetDevice(IID_PPV_ARGS(&dev)), "get device from paired resource");
         desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
     }
     std::fprintf(out, "resource_format=%u\nwidth=%u\nheight=%u\n", depth_format, width, height);
@@ -96,7 +102,8 @@ static void run(FILE* out, UINT width, UINT height, DXGI_FORMAT depth_format, ID
     dev->GetCopyableFootprints(&desc, 0, 2, 0, planes, rows, row_bytes, &bytes);
     desc.Format = DXGI_FORMAT_R32_FLOAT;
     desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-    auto uav = resource(dev.Get(), desc, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
+    ComPtr<ID3D12Resource> uav;
+    if (!provider) uav = resource(dev.Get(), desc, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
     UINT64 color_row_bytes{};
     dev->GetCopyableFootprints(&desc, 0, 1, 0, &color, nullptr, &color_row_bytes, &color_size);
     std::fprintf(out,
@@ -116,7 +123,8 @@ static void run(FILE* out, UINT width, UINT height, DXGI_FORMAT depth_format, ID
     desc.Width = UINT64(common_pitch) * height;
     desc.Height = desc.DepthOrArraySize = desc.MipLevels = desc.SampleDesc.Count = 1;
     desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    auto staging = resource(dev.Get(), desc, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
+    ComPtr<ID3D12Resource> staging;
+    if (!provider) staging = resource(dev.Get(), desc, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
     desc.Width = bytes;
     auto readback = resource(dev.Get(), desc, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
 
@@ -125,7 +133,11 @@ static void run(FILE* out, UINT width, UINT height, DXGI_FORMAT depth_format, ID
     check(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&dsv_heap)), "create DSV heap");
     hd = {D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0};
     check(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&uav_heap)), "create UAV heap");
-    const auto depth_handle = dsv_heap->GetCPUDescriptorHandleForHeapStart();
+    auto cpu = [&](ID3D12DescriptorHeap* object) {
+        return tuxbox ? D3D12_CPU_DESCRIPTOR_HANDLE{frame_abi::method<frame_abi::CpuHandle>(object, 9)(object)}
+                      : object->GetCPUDescriptorHandleForHeapStart();
+    };
+    const auto depth_handle = cpu(dsv_heap.Get());
     D3D12_DEPTH_STENCIL_VIEW_DESC view{};
     view.Format = clear.Format;
     view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
@@ -134,7 +146,7 @@ static void run(FILE* out, UINT width, UINT height, DXGI_FORMAT depth_format, ID
         D3D12_UNORDERED_ACCESS_VIEW_DESC plane{};
         plane.Format = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
         plane.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-        provider->CreateUnorderedAccessView(dsv.Get(), nullptr, &plane, uav_heap->GetCPUDescriptorHandleForHeapStart());
+        provider->CreateUnorderedAccessView(dsv.Get(), nullptr, &plane, cpu(uav_heap.Get()));
     } else {
         dev->CreateUnorderedAccessView(uav.Get(), nullptr, nullptr, uav_heap->GetCPUDescriptorHandleForHeapStart());
     }
@@ -151,7 +163,14 @@ static void run(FILE* out, UINT width, UINT height, DXGI_FORMAT depth_format, ID
     pd.pRootSignature = root.Get();
     pd.CS = {modify_dxil, sizeof(modify_dxil)};
     ComPtr<ID3D12PipelineState> pso;
-    check(dev->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso)), "create compute PSO");
+    if (tuxbox) {
+        using Compute = HRESULT(WINAPI*)(ID3D12Device*, const D3D12_COMPUTE_PIPELINE_STATE_DESC*,
+                                         UINT, const void*, REFIID, void**);
+        check(frame_abi::method<Compute>(dev.Get(), 62)(dev.Get(), &pd, 0, nullptr, IID_PPV_ARGS(&pso)),
+              "create Xbox compute PSO");
+    } else {
+        check(dev->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso)), "create compute PSO");
+    }
 
     ComPtr<ID3D12CommandAllocator> alloc;
     ComPtr<ID3D12GraphicsCommandList> list;
@@ -172,6 +191,11 @@ static void run(FILE* out, UINT width, UINT height, DXGI_FORMAT depth_format, ID
     using Clear = void(WINAPI*)(ID3D12GraphicsCommandList*, D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_CLEAR_FLAGS,
                                  FLOAT, UINT8, UINT, const D3D12_RECT*);
     const auto clear_depth = frame_abi::method<Clear>(list.Get(), provider ? 51 : 47);
+    if (provider) {
+        using Discard = void(WINAPI*)(ID3D12GraphicsCommandList*, ID3D12Resource*, const D3D12_DISCARD_REGION*);
+        const D3D12_DISCARD_REGION plane_zero{0, nullptr, 0, 1};
+        frame_abi::method<Discard>(list.Get(), 55)(list.Get(), dsv.Get(), &plane_zero);
+    }
     clear_depth(list.Get(), depth_handle, both, .25f, 0x37, 0, nullptr);
     clear_depth(list.Get(), depth_handle, both, .75f, 0xc9, 1, &inset);
     if (provider) {
@@ -189,7 +213,11 @@ static void run(FILE* out, UINT width, UINT height, DXGI_FORMAT depth_format, ID
     using Table = void(WINAPI*)(ID3D12GraphicsCommandList*, UINT, D3D12_GPU_DESCRIPTOR_HANDLE);
     frame_abi::method<Heaps>(list.Get(), provider ? 32 : 28)(list.Get(), 1, uav_heap.GetAddressOf());
     frame_abi::method<Root>(list.Get(), provider ? 33 : 29)(list.Get(), root.Get());
-    frame_abi::method<Table>(list.Get(), provider ? 35 : 31)(list.Get(), 0, uav_heap->GetGPUDescriptorHandleForHeapStart());
+    using GpuHandle = UINT64(WINAPI*)(ID3D12DescriptorHeap*);
+    const auto uav_handle = tuxbox
+        ? D3D12_GPU_DESCRIPTOR_HANDLE{frame_abi::method<GpuHandle>(uav_heap.Get(), 10)(uav_heap.Get())}
+        : uav_heap->GetGPUDescriptorHandleForHeapStart();
+    frame_abi::method<Table>(list.Get(), provider ? 35 : 31)(list.Get(), 0, uav_handle);
     list->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
     if (provider) {
         transition(list.Get(), dsv.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
@@ -205,7 +233,7 @@ static void run(FILE* out, UINT width, UINT height, DXGI_FORMAT depth_format, ID
         transition(list.Get(), dsv.Get(), 1, D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_COPY_SOURCE);
     }
     for (UINT i = 0; i != 2; ++i)
-        copy(list.Get(), dsv.Get(), i, readback.Get(), planes[i], true);
+        copy(list.Get(), dsv.Get(), i, readback.Get(), planes[i], true, tuxbox);
     check(list->Close(), "close list");
     ID3D12CommandList* lists[] = {list.Get()};
     queue->ExecuteCommandLists(1, lists);
@@ -246,13 +274,14 @@ static void run(FILE* out, UINT width, UINT height, DXGI_FORMAT depth_format, ID
         throw std::runtime_error("depth/stencil readback mismatch");
 }
 
-static int test(const char* name, UINT width, UINT height, DXGI_FORMAT format, ID3D12Device* provider = nullptr, bool placed = false) {
+static int test(const char* name, UINT width, UINT height, DXGI_FORMAT format, ID3D12Device* provider = nullptr,
+                bool placed = false, bool tuxbox = false) {
     FILE* out{};
     if (fopen_s(&out, name, "wb"))
         return 2;
     int status = 0;
     try {
-        run(out, width, height, format, provider, placed);
+        run(out, width, height, format, provider, placed, tuxbox);
     } catch (const std::exception& e) {
         std::fprintf(out, "error=%s\n", e.what());
         status = 1;
@@ -271,9 +300,10 @@ int main(int argc, char** argv) {
         const std::array<UINT, 18> profile{0x20004, 0, ~0u, 0, 0, 0, ~0u, ~0u, 0, 1};
         ComPtr<ID3D12Device> provider;
         if (FAILED(factory(nullptr, profile.data(), IID_PPV_ARGS(&provider)))) return 2;
+        const bool tuxbox = argc == 3 && !std::strcmp(argv[2], "--tuxbox");
         if (!std::strcmp(argv[1], "placed"))
-            return test("placed.txt", 2976, 1676, DXGI_FORMAT_R32G8X24_TYPELESS, provider.Get(), true);
-        return test("wrapped.txt", 1024, 1024, DXGI_FORMAT_R32G8X24_TYPELESS, provider.Get());
+            return test("placed.txt", 2976, 1676, DXGI_FORMAT_R32G8X24_TYPELESS, provider.Get(), true, tuxbox);
+        return test("wrapped.txt", 1024, 1024, DXGI_FORMAT_R32G8X24_TYPELESS, provider.Get(), false, tuxbox);
     }
     int typed = test("typed.txt", 73, 19, DXGI_FORMAT_D32_FLOAT_S8X24_UINT);
     int typeless = test("typeless.txt", 1024, 1024, DXGI_FORMAT_R32G8X24_TYPELESS);

@@ -2,6 +2,7 @@
 #include <GameInput.h>
 #include <Xinput.h>
 #include <wrl/client.h>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <initializer_list>
@@ -49,6 +50,18 @@ static ComPtr<IGameInputReading> current(IGameInput* input, IGameInputDevice* de
     return {};
 }
 
+struct Changes {
+    std::atomic<unsigned> connected{}, disconnected{};
+};
+static void CALLBACK on_status(GameInputCallbackToken, void* ctx, IGameInputDevice*, uint64_t,
+                               GameInputDeviceStatus current, GameInputDeviceStatus previous) {
+    auto& changes = *static_cast<Changes*>(ctx);
+    if ((current ^ previous) & GameInputDeviceConnected) {
+        if (current & GameInputDeviceConnected) ++changes.connected;
+        else ++changes.disconnected;
+    }
+}
+
 int wmain(int argc, wchar_t** argv) {
     FILE* out{};
     if (argc != 2 || _wfopen_s(&out, argv[1], L"w")) return 2;
@@ -69,14 +82,20 @@ int wmain(int argc, wchar_t** argv) {
         wait_for("window focus", [&] { return GetForegroundWindow() == window; });
 
         GameInputGamepadState state{};
+        ComPtr<IGameInputDevice> keyboard_pad;
         auto keyboard_available = [&] {
             auto reading = current(input.Get(), nullptr, state);
             if (!reading) return false;
             ComPtr<IGameInputDevice> device;
             reading->GetDevice(&device);
-            return device->GetDeviceInfo()->deviceId.value[0] == 5;
+            if (!keyboard_pad) keyboard_pad = device;
+            return device.Get() == keyboard_pad.Get();
         };
         wait_for("keyboard before host gamepad", keyboard_available);
+        Changes changes{};
+        GameInputCallbackToken token{};
+        require(SUCCEEDED(input->RegisterDeviceCallback(nullptr, GameInputKindGamepad, GameInputDeviceConnected,
+            GameInputBlockingEnumeration, &changes, on_status, &token)) && changes.connected == 1, "initial pad callback");
         std::fputs("connect\n", out);
         DWORD slot = XUSER_MAX_COUNT;
         XINPUT_STATE raw{};
@@ -94,8 +113,9 @@ int wmain(int argc, wchar_t** argv) {
             auto reading = current(input.Get(), nullptr, state);
             if (!reading) return false;
             reading->GetDevice(&physical);
-            return physical->GetDeviceInfo()->deviceId.value[0] == slot + 1;
+            return physical.Get() != keyboard_pad.Get() && (physical->GetDeviceStatus() & GameInputDeviceConnected);
         });
+        wait_for("physical connection and virtual disconnection", [&] { return changes.connected == 2 && changes.disconnected == 1; });
         std::fprintf(out, "slot=%lu\nhold\n", slot);
         wait_for("Linux B, left stick and trigger in XInput", [&] {
             return XInputGetState(slot, &raw) == ERROR_SUCCESS && raw.Gamepad.wButtons == XINPUT_GAMEPAD_B &&
@@ -147,7 +167,9 @@ int wmain(int argc, wchar_t** argv) {
             return XInputGetState(slot, &raw) == ERROR_DEVICE_NOT_CONNECTED &&
                    !(physical->GetDeviceStatus() & GameInputDeviceConnected) && keyboard_available();
         });
-        std::fputs("passed\n", out);
+        wait_for("physical disconnection and virtual reconnection", [&] { return changes.connected == 3 && changes.disconnected == 2; });
+        require(input->UnregisterCallback(token, 1000000), "unregister device changes");
+        std::fputs("callback_connected=3\ncallback_disconnected=2\npassed\n", out);
     } catch (const std::exception& error) {
         std::fprintf(out, "error=%s\n", error.what());
         fclose(out);

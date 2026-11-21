@@ -9,7 +9,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT / "build"
-TARGETS = ("route", "graphics", "xmem", "dxc-utils", "xg", "gameconfig", "gamechat",
+TARGETS = ("route", "graphics", "frontpanel", "xmem", "acphal", "xgameruntime", "xcrdapi", "dxc-utils", "xg", "gameconfig", "gamechat", "gameinput",
            "mfreadwrite", "xaudio", "aac", "d3d12", "lanes")
 # rustc --print native-static-libs for the Windows MSVC target with +crt-static.
 RUST_STD_LIBS = ("kernel32.lib", "ntdll.lib", "userenv.lib", "ws2_32.lib", "dbghelp.lib",
@@ -103,7 +103,7 @@ def d3d12_exports(src, out, reference):
         except pefile.PEFormatError as error:
             raise ValueError(f"{reference.name}: {error}") from error
         ordinals = {name: ordinal for ordinal, names in slots.items() for name in names}
-    entries, identifiers = [], []
+    entries, identifiers, functions = [], [], []
     for line in lines[2:]:
         symbol, ordinal, *flags = line.split()
         name = symbol.partition("=")[0]
@@ -122,6 +122,9 @@ def d3d12_exports(src, out, reference):
         if "DATA" in flags:
             expected = f"__uuidof({name[4:]})" if name.startswith("IID_") else name
             identifiers.append(f"GUID_EXPORT({name}, {expected}, {ordinal[1:]})")
+        else:
+            functions.append(f"#define ORD_{name} {ordinal[1:]}")
+    (out / "function-ordinals.inc").write_text("\n".join(functions) + "\n")
     (out / "guid-exports.inc").write_text("\n".join(identifiers) + "\n")
     if reference is not None:
         definition = out / "d3d12-reference.def"
@@ -137,13 +140,37 @@ def build_target(tools, target, dxc, d3d12_reference=None):
         out = OUTPUT / "graphics"
         obj = tools.compile(ROOT / "graphics/desktop_clear.cpp", out)
         tools.link(out / "desktop-clear.exe", obj, "dxgi.lib", "d3d12.lib", "kernel32.lib")
+    elif target == "frontpanel":
+        src, out = ROOT / "runtime/frontpanel", OUTPUT / "frontpanel"
+        out.mkdir(parents=True, exist_ok=True)
+        archive = tools.rust_library("tuxbox-frontpanel")
+        tools.link(out / "xfrontpaneldisplay.dll", archive, *RUST_STD_LIBS,
+                   exports=src / "xfrontpaneldisplay.def")
+        guest = tools.compile(src / "guest.c", out, "/W4", "/WX")
+        tools.link(out / "frontpanel.exe", guest, "xfrontpaneldisplay.lib", "kernel32.lib")
+        fixture = out / "fixture"
+        obj = tools.compile(src / "fixture.c", fixture, "/W4", "/WX")
+        tools.link(fixture / "xfp_gc.dll", obj, exports=src / "fixture.def", no_entry=True)
     elif target == "xmem":
         src, out = ROOT / "runtime/xmem", OUTPUT / "xmem-smoke"
         out.mkdir(parents=True, exist_ok=True)
         dll = tools.rust_library("tuxbox-xmem")
-        tools.link(out / "xmem.dll", dll, "kernel32.lib", exports=src / "xmem.def", no_entry=True)
+        tools.link(out / "xmem.dll", dll, *RUST_STD_LIBS, exports=src / "xmem.def")
         guest = tools.compile(src / "guest.c", out, "/W4")
         tools.link(out / "xmem-smoke.exe", guest, "xmem.lib", "kernel32.lib")
+    elif target in ("xgameruntime", "xcrdapi"):
+        src, out = ROOT / "runtime" / target, OUTPUT / target
+        out.mkdir(parents=True, exist_ok=True)
+        archive = tools.rust_library(f"tuxbox-{target}")
+        tools.link(out / f"{target}.dll", archive, *RUST_STD_LIBS, exports=src / f"{target}.def")
+        guest = tools.compile(src / "guest.cpp", out, "/W4", "/WX")
+        binary = "runtime-control.exe" if target == "xgameruntime" else "xcrdapi-read.exe"
+        tools.link(out / binary, guest, f"{target}.lib", "kernel32.lib")
+    elif target == "acphal":
+        src, out = ROOT / "runtime/acphal", OUTPUT / "acphal"
+        out.mkdir(parents=True, exist_ok=True)
+        archive = tools.rust_library("tuxbox-acphal")
+        tools.link(out / "AcpHal.dll", archive, *RUST_STD_LIBS, exports=src / "AcpHal.def")
     elif target == "xg":
         src, out = ROOT / "runtime/xg", OUTPUT / "xg-provider"
         out.mkdir(parents=True, exist_ok=True)
@@ -194,6 +221,9 @@ def build_target(tools, target, dxc, d3d12_reference=None):
         tools.link(out / "dxcompiler_xs.dll", obj, exports=src / "dxcompiler_xs.def", no_entry=True)
         guest = tools.compile(src / "guest.cpp", out, "/W4", "/WX")
         tools.link(out / "dxc-utils.exe", guest, "dxcompiler_xs.lib", "kernel32.lib")
+        tools.link(out / "dxcompiler_x.dll", obj, exports=src / "dxcompiler_x.def", no_entry=True)
+        guest_x = tools.compile(src / "guest.cpp", out, "/W4", "/WX", "/DTUXBOX_DXC_XBOX_ONE")
+        tools.link(out / "dxc-x.exe", guest_x, "dxcompiler_x.lib", "kernel32.lib")
     elif target == "d3d12":
         src, out = ROOT / "runtime/d3d12", OUTPUT / "d3d12-smoke"
         out.mkdir(parents=True, exist_ok=True)
@@ -204,18 +234,58 @@ def build_target(tools, target, dxc, d3d12_reference=None):
         tools.link(out / "d3d12-signatures.exe", signature, "d3d12_xs.lib", "kernel32.lib")
         ids = tools.compile(src / "guid_guest.cpp", out, "/W4", "/WX", f"/I{out}")
         tools.link(out / "d3d12-guids.exe", ids, "d3d12_xs.lib", "dxguid.lib", "kernel32.lib")
+        exports = tools.compile(src / "exports_guest.cpp", out, "/W4", "/WX", f"/I{out}")
+        tools.link(out / "d3d12-exports.exe", exports, "d3d12_xs.lib", "kernel32.lib")
+        for name, source in (("features", "feature_guest.cpp"), ("queries", "query_guest.cpp"),
+                             ("queues", "queue_guest.cpp"), ("heaps", "heap_guest.cpp"),
+                             ("placement", "placement_guest.cpp"),
+                             ("frame-events", "frame_event_guest.cpp")):
+            obj = tools.compile(src / source, out, "/W4", "/WX")
+            tools.link(out / f"d3d12-{name}.exe", obj, "d3d12_xs.lib", "kernel32.lib", "dxgi.lib")
+        factory = tools.compile(src / "factory_guest.cpp", out, "/W4", "/WX")
+        tools.link(out / "d3d12-factory.exe", factory, "d3d12_xs.lib", "kernel32.lib", "dxgi.lib")
         frame = tools.compile(src / "frame_guest.cpp", out, "/W4", "/WX")
         display = tools.compile(src / "frame_present.cpp", out, "/W4", "/WX")
         tools.link(out / "xbox-frame.exe", frame, display, "d3d12_xs.lib", "dxgi.lib",
                    "user32.lib", "gdi32.lib", "kernel32.lib")
+        rgb10 = tools.compile(src / "frame_guest.cpp", out, "/W4", "/WX", "/DGUEST_FRAME_RGB10")
+        tools.link(out / "xbox-frame-rgb10.exe", rgb10, display, "d3d12_xs.lib", "dxgi.lib",
+                   "user32.lib", "gdi32.lib", "kernel32.lib")
+        size = tools.compile(src / "frame_guest.cpp", out, "/W4", "/WX", "/DGUEST_FRAME_RGB10", "/DGUEST_FRAME_4K")
+        tools.link(out / "xbox-frame-4k.exe", size, display, "d3d12_xs.lib", "dxgi.lib",
+                   "user32.lib", "gdi32.lib", "kernel32.lib")
         negative = tools.compile(src / "frame_negative.cpp", out, "/W4", "/WX")
         tools.link(out / "xbox-frame-negative.exe", negative, "d3d12_xs.lib", "dxgi.lib", "kernel32.lib")
-        subprocess.run([dxc, "-T", "cs_6_0", "-E", "main", "-O3", "-Fh", "affine.h",
-                        "-Vn", "affine_dxil", str(src / "affine.hlsl")], cwd=out, check=True)
+        for shader, entry, profile, header, variable in (
+            ("affine", "main", "cs_6_0", "affine", "affine_dxil"),
+            ("affine", "accumulate", "cs_6_0", "affine_accumulate", "accumulate_dxil"),
+            ("table", "main", "cs_6_0", "table", "table_dxil"),
+            ("triangle", "VSMain", "vs_6_0", "triangle_vs", "triangle_vs"),
+            ("triangle", "VSFromBuffer", "vs_6_0", "triangle_input_vs", "triangle_input_vs"),
+            ("triangle", "PSMain", "ps_6_0", "triangle_ps", "triangle_ps"),
+        ):
+            subprocess.run([dxc, "-T", profile, "-E", entry, "-O3", "-Fh", f"{header}.h",
+                            "-Vn", variable, str(src / f"{shader}.hlsl")], cwd=out, check=True)
+        for name, source in (("tables", "table_guest.cpp"), ("indirect", "indirect_guest.cpp"),
+                             ("draw", "graphics_guest.cpp")):
+            obj = tools.compile(src / source, out, "/W4", "/WX", f"/I{out}")
+            tools.link(out / f"d3d12-{name}.exe", obj, "d3d12_xs.lib", "dxgi.lib", "kernel32.lib")
         guest = tools.compile(src / "guest.cpp", out, f"/I{out}")
-        # Both libraries export the serializer. Import it from the Xbox-facing DLL.
-        tools.link(out / "d3d12-root-smoke.exe", guest, "d3d12_xs.lib", "d3d12.lib",
+        # These mixed-ABI guests serialize Xbox signatures on a desktop device.
+        subprocess.run([tools.linker, "/lib", "/nologo", "/machine:x64",
+                        f"/def:{src / 'signature-imports.def'}", "/out:guest-signatures.lib"], cwd=out, check=True)
+        tools.link(out / "d3d12-root-smoke.exe", guest, "guest-signatures.lib", "d3d12.lib",
                    "dxgi.lib", "kernel32.lib")
+    elif target == "gameinput":
+        src, out = ROOT / "runtime/gameinput", OUTPUT / "gameinput"
+        archive = tools.rust_library("tuxbox-gameinput")
+        abi = tools.compile(src / "abi.cpp", out, "/W4", "/WX")
+        tools.link(out / "GameInput.dll", abi, archive, "user32.lib", "xinput.lib", *RUST_STD_LIBS,
+                   exports=src / "GameInput.def")
+        subprocess.run([tools.linker, "/lib", "/nologo", "/machine:x64", f"/def:{src / 'guest-imports.def'}",
+                        "/out:guest-gameinput.lib"], cwd=out, check=True)
+        guest = tools.compile(src / "guest.cpp", out, "/W4", "/WX")
+        tools.link(out / "gameinput-control.exe", guest, "guest-gameinput.lib", "user32.lib", "kernel32.lib")
     elif target == "lanes":
         src = ROOT / "examples/lanes"
         objects, package = OUTPUT / "lanes-obj", OUTPUT / "lanes"
@@ -224,11 +294,14 @@ def build_target(tools, target, dxc, d3d12_reference=None):
         subprocess.run([dxc, "-T", "cs_6_0", "-E", "main", "-O3", "-Fh", "course_shader.h",
                         "-Vn", "course_dxil", str(src / "course.hlsl")], cwd=objects, check=True)
         course = tools.compile(src / "course.cpp", objects, f"/I{objects}")
+        screen = tools.compile(src / "screen.cpp", objects)
+        controls = tools.compile(src / "input.cpp", objects)
         game = tools.compile(src / "game.cpp", objects)
-        xmem, d3d = OUTPUT / "xmem-smoke", OUTPUT / "d3d12-smoke"
-        tools.link(objects / "lanes.exe", course, game, xmem / "xmem.lib", d3d / "d3d12_xs.lib",
-                   "d3d12.lib", "dxgi.lib", "user32.lib", "gdi32.lib", "xinput.lib", "kernel32.lib")
-        for source in (objects / "lanes.exe", xmem / "xmem.dll", d3d / "d3d12_xs.dll", src / "MicrosoftGame.config"):
+        xmem, d3d, gameinput = OUTPUT / "xmem-smoke", OUTPUT / "d3d12-smoke", OUTPUT / "gameinput"
+        tools.link(objects / "lanes.exe", course, screen, controls, game, xmem / "xmem.lib", d3d / "d3d12_xs.lib",
+                   gameinput / "guest-gameinput.lib", "onecore_apiset.lib", "/nodefaultlib:kernel32.lib")
+        for source in (objects / "lanes.exe", xmem / "xmem.dll", d3d / "d3d12_xs.dll",
+                       gameinput / "GameInput.dll", src / "MicrosoftGame.config"):
             shutil.copyfile(source, package / source.name)
         print(package / "MicrosoftGame.config", flush=True)
 
@@ -257,7 +330,7 @@ def main():
         if args.target == "xg":
             targets = ("xmem", "xg")
         if args.target == "lanes":
-            targets = ("xmem", "d3d12", "lanes")
+            targets = ("xmem", "d3d12", "gameinput", "lanes")
         dxc = find_dxc(args.dxc) if "d3d12" in targets else None
         tools = Toolchain()
         for target in targets:

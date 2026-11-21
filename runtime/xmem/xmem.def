@@ -2,7 +2,10 @@ LIBRARY xmem
 EXPORTS
     XMemAlloc=XMemAllocDefault @1
     XMemAllocDefault @2
+    XMemAllocatePhysicalPages @3
     XMemFree=XMemFreeDefault @6
     XMemFreeDefault @7
+    XMemFreePhysicalPages @8
     XMemGetWorkingSetStatistics @16
+    XMemMapPhysicalPages @21
     XMemVirtualAlloc @31

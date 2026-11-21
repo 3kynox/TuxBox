@@ -141,6 +141,18 @@ def inspect(path, executable):
             require(queue.get(rva) == wanted, f"Unexpected queue descriptor initializer at {rva:#x}")
         calls[0]["descriptor"] = "original descriptor when type != 2"
         calls[1]["descriptor_dwords"] = [2, "original dword 2", "original dword 1 != 0", 0]
+        command_list = decoded(executable, path, base, 0xE8C3AF, 0xE8C573)
+        for rva, wanted in {
+            0xE8C3AF: "xor r8d, r8d", 0xE8C46D: "mov dword ptr [rbp - 0x20], eax",
+            0xE8C470: "mov dword ptr [rbp - 0x18], edx", 0xE8C473: "mov dword ptr [rbp - 0x14], r8d",
+            0xE8C477: "mov dword ptr [rbp - 0x1c], r8d", 0xE8C48F: "xor r9d, r9d",
+            0xE8C496: "lea rdx, [rbp - 0x20]", 0xE8C4D6: f"call {base + 0xE8C524:#x}",
+            0xE8C568: "mov rcx, qword ptr [rbx + 0x30]", 0xE8C56F: "call qword ptr [rax + 0x48]",
+        }.items():
+            require(command_list.get(rva) == wanted, f"Unexpected command list setup at {rva:#x}")
+        calls[2]["creation_reserved_words"] = [0, 0]
+        calls[2]["initial_pipeline"] = "null"
+        calls[2]["initial_close"] = {"command_list_slot": 9, "call_rva": "0xe8c56f"}
         words = record(decoded(executable, path, base, 0x15ABD9C, call + 6))
         return {"kind": "static call sites", "executable_sha256": digest,
                 "factory": {"import": f"d3d12_xs.dll!{FACTORY}", "iat_rva": hex(imports[0]), "call_rva": hex(call),

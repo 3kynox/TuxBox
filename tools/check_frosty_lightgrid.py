@@ -15,6 +15,7 @@ from build import Toolchain, find_dxc
 from check_frosty_clear import fnv1a
 from check_frosty_shaders import GLOBAL_SHA, containers, decompress, global_archive, require
 from project_tuxbox.host import Host
+from project_tuxbox.shader_prep import shader_compiler
 from project_tuxbox.inspect import digest
 
 
@@ -23,11 +24,12 @@ def main():
     parser.add_argument("mount", type=Path)
     parser.add_argument("--prefix", type=Path)
     parser.add_argument("--proton", type=Path)
-    parser.add_argument("--xshader", required=True, type=Path)
+    parser.add_argument("--xshader", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--expect-unsupported-wave64", action="store_true",
                         help="verify an adapter reports a maximum below 64 and rejects the exact pipeline")
     args = parser.parse_args()
+    xshader = args.xshader.resolve() if args.xshader else shader_compiler()
     host = Host(None, args.proton, args.prefix)
     build = ROOT / "build/frosty-ff1"
     build.mkdir(exist_ok=True, parents=True)
@@ -40,7 +42,7 @@ def main():
         work = Path(temp)
         native, source, desktop = (work / name for name in ("native.dxbc", "converted.hlsl", "converted.dxil"))
         native.write_bytes(cooked)
-        report = subprocess.check_output([args.xshader.resolve(), native, "--hlsl-out", source], text=True)
+        report = subprocess.check_output([xshader, native, "--hlsl-out", source], text=True)
         require('entry=Some("LightGridInjectionCS")' in report, "Unexpected shader entry")
         dxc = find_dxc(None)
         subprocess.run([dxc, "-E", "main", "-T", "cs_6_6", "-O3", "-Fo", desktop, source], check=True)

@@ -45,18 +45,20 @@
         "file_version": "2106.4.0.0",
         "sha256": "35ecdfbea3a9f4d004b638d8b1070dcded9cb05f76514a4184b5a5832f4afb87"
       },
-      "tuxbox_sha256": "c6086ab13911a8a68fcd1daf5e536d343676d9ee0f7b5f2032204a1e70699507",
+      "tuxbox_sha256": "eb006a33a1bcfcf346ce4be25b5c345cfd359f670ad3bbfa3b30ffa2f31f15e1",
       "guest": "gamechat-session.exe",
       "guest_source": "runtime/gamechat/guest.c",
-      "guest_sha256": "1b7443a72093980f6bb7025fe874b8932ef693e734d611e7bcfaa3f3daa5958e",
+      "guest_sha256": "6064504fb9f133d8aca415631d7b93e81fa77bb384111efdace05a748a8842fe",
       "guest_imports": {
         "2": "ChatManagerAddRemoteUser",
         "3": "ChatManagerCleanup",
+        "4": "ChatManagerFinishProcessingDataFrames",
         "7": "ChatManagerGetAudioEncodingBitrate",
         "9": "ChatManagerGetChatUsers",
         "16": "ChatManagerInitialize",
         "18": "ChatManagerRemoveUser",
         "19": "ChatManagerSetAudioEncodingBitrate",
+        "24": "ChatManagerStartProcessingDataFrames",
         "29": "ChatUserGetCustomUserContext",
         "31": "ChatUserGetIsLocal",
         "36": "ChatUserGetXboxUserId",
@@ -67,13 +69,13 @@
           "provider": "1789159601 experimental-11.0-20260910b-x86_64",
           "control_exit_code": 0,
           "tuxbox_exit_code": 0,
-          "matching_receipt": "gamechat-session PASS sessions=2 remote-users=3 bitrate-settings=3 stale-handles=1 xuids=2 contexts=2"
+          "matching_receipt": "gamechat-session PASS sessions=2 remote-users=5 bitrate-settings=3 stale-handles=1 xuids=2 contexts=2 frame-batches=4"
         },
         {
           "provider": "1792432585 GE-Proton11-11",
           "control_exit_code": 0,
           "tuxbox_exit_code": 0,
-          "matching_receipt": "gamechat-session PASS sessions=2 remote-users=3 bitrate-settings=3 stale-handles=1 xuids=2 contexts=2"
+          "matching_receipt": "gamechat-session PASS sessions=2 remote-users=5 bitrate-settings=3 stale-handles=1 xuids=2 contexts=2 frame-batches=4"
         }
       ]
     }

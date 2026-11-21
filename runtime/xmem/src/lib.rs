@@ -1,7 +1,8 @@
 //! CPU-backed Xbox default allocations. Callers retain ownership until the matching free.
+mod physical_pages;
 mod virtual_memory;
 
-use core::{ffi::c_void, ptr};
+use core::{ffi::c_void, mem::size_of, ptr};
 
 use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, SetLastError};
 use windows_sys::Win32::System::Memory::{
@@ -14,8 +15,17 @@ use windows_sys::Win32::System::ProcessStatus::{
 use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
-const ORDINARY: u64 = 0x0480_009e;
 const PLACEMENT: u64 = 0x3080_4000;
+
+fn process_heap_attributes(attributes: u64) -> bool {
+    // The two packaged D3D drivers use 0x92 for startup allocations, 0x40
+    // for the blob object and 0x78 for its bytes. The packaged media decoders
+    // allocate and free CPU storage with 0x04820000. All return 16-byte aligned memory.
+    matches!(
+        attributes,
+        0x0480_009e | 0x0480_0092 | 0x0480_0040 | 0x0480_0078 | 0x0482_0000
+    )
+}
 
 /// Allocate guest memory with the selected backing. A null return denotes failure.
 #[unsafe(export_name = "XMemAllocDefault")]
@@ -25,7 +35,7 @@ pub extern "system" fn alloc_default(bytes: usize, attributes: u64) -> *mut c_vo
     }
     match attributes {
         // SAFETY: The process heap is valid for this process; HeapAlloc checks the requested size.
-        ORDINARY => unsafe { HeapAlloc(GetProcessHeap(), 0, bytes) },
+        attr if process_heap_attributes(attr) => unsafe { HeapAlloc(GetProcessHeap(), 0, bytes) },
         // SAFETY: A null base lets Windows choose a fresh allocation-granularity-aligned region.
         PLACEMENT => unsafe {
             VirtualAlloc(ptr::null(), bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)
@@ -50,7 +60,7 @@ pub unsafe extern "system" fn free_default(memory: *mut c_void, attributes: u64)
         return;
     }
     match attributes {
-        ORDINARY => {
+        attr if process_heap_attributes(attr) => {
             // SAFETY: The caller supplies a live allocation from this process heap.
             unsafe { HeapFree(GetProcessHeap(), 0, memory) };
         }

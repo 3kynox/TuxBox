@@ -19,6 +19,17 @@ __declspec(dllimport) HRESULT WINAPI ChatManagerGetChatUsers(UINT *, const User 
 __declspec(dllimport) HRESULT WINAPI ChatManagerRemoveUser(User);
 __declspec(dllimport) HRESULT WINAPI ChatUserGetIsLocal(User, BYTE *);
 
+typedef struct {
+    UINT endpoint_count;
+    const UINT64 *endpoints;
+    UINT transport;
+    UINT packet_size;
+    const BYTE *packet;
+} DataFrame;
+typedef const DataFrame *const *FrameArray;
+__declspec(dllimport) HRESULT WINAPI ChatManagerStartProcessingDataFrames(UINT *, FrameArray *);
+__declspec(dllimport) HRESULT WINAPI ChatManagerFinishProcessingDataFrames(FrameArray);
+
 #define CHECK(expr) do { if (!(expr)) { fprintf(stderr, "gamechat-session failed at %s\n", #expr); return FALSE; } } while (0)
 
 static BOOL local_provider(void) {
@@ -33,6 +44,45 @@ static BOOL local_provider(void) {
     return !_wcsicmp(exe, dll);
 }
 
+static BOOL announcement(const DataFrame *frame, UINT64 endpoint) {
+    return frame && frame->endpoint_count == 1 && frame->endpoints &&
+           frame->endpoints[0] == endpoint && frame->transport == 0 &&
+           frame->packet_size == 1 && frame->packet && frame->packet[0] == 7;
+}
+
+// Two calls to add the same user each generate a frame. A registration made
+// while those frames are borrowed appears in the next batch.
+static BOOL frame_batches(void) {
+    const HRESULT invalid_state = (HRESULT)0x800710ddU;
+    const UINT64 first_endpoint = 0x10400000041ULL, second_endpoint = 0xaaULL;
+    FrameArray frames = (FrameArray)1, nested;
+    User user, duplicate, second;
+    UINT n = 37;
+    CHECK(ChatManagerFinishProcessingDataFrames(NULL) == invalid_state);
+    CHECK(ChatManagerStartProcessingDataFrames(&n, &frames) == S_OK && !n && !frames);
+    CHECK(ChatManagerFinishProcessingDataFrames(frames) == S_OK);
+    CHECK(ChatManagerAddRemoteUser(L"801", first_endpoint, &user) == S_OK);
+    CHECK(ChatManagerAddRemoteUser(L"801", first_endpoint, &duplicate) == S_OK && user == duplicate);
+    CHECK(ChatManagerStartProcessingDataFrames(&n, &frames) == S_OK && n == 2 && frames);
+    CHECK(announcement(frames[0], first_endpoint) && announcement(frames[1], first_endpoint));
+    CHECK(ChatManagerAddRemoteUser(L"802", second_endpoint, &second) == S_OK);
+    CHECK(ChatManagerRemoveUser(user) == S_OK);
+    nested = frames;
+    CHECK(ChatManagerStartProcessingDataFrames(&n, &nested) == invalid_state && !n && !nested);
+    CHECK(ChatManagerFinishProcessingDataFrames(NULL) == E_INVALIDARG);
+    CHECK(announcement(frames[0], first_endpoint) && announcement(frames[1], first_endpoint));
+    CHECK(ChatManagerFinishProcessingDataFrames(frames) == S_OK);
+    CHECK(ChatManagerFinishProcessingDataFrames(frames) == invalid_state);
+    CHECK(ChatManagerStartProcessingDataFrames(&n, &frames) == S_OK && n == 1 && frames);
+    CHECK(announcement(frames[0], second_endpoint));
+    CHECK(ChatManagerFinishProcessingDataFrames(frames) == S_OK);
+    CHECK(ChatManagerAddRemoteUser(L"802", second_endpoint, &duplicate) == S_OK && duplicate == second);
+    CHECK(ChatManagerRemoveUser(second) == S_OK);
+    CHECK(ChatManagerStartProcessingDataFrames(&n, &frames) == S_OK && !n);
+    CHECK(ChatManagerFinishProcessingDataFrames(frames) == S_OK);
+    return TRUE;
+}
+
 static BOOL exercise(void) {
     const HRESULT no_session = (HRESULT)0x800710ddU, roster_full = (HRESULT)0x89234201U;
     const HRESULT invalid_xuid = (HRESULT)0x89234501U;
@@ -44,6 +94,9 @@ static BOOL exercise(void) {
     PCWSTR first_id = (PCWSTR)1, second_id = NULL, again_id = NULL;
     void *context = &first;
     CHECK(local_provider());
+    FrameArray batch = (FrameArray)1;
+    CHECK(ChatManagerStartProcessingDataFrames(&count, &batch) == no_session && count == 47 && batch == (FrameArray)1);
+    CHECK(ChatManagerFinishProcessingDataFrames(NULL) == no_session);
     CHECK(ChatUserGetXboxUserId(sentinel, &first_id) == no_session && first_id == (PCWSTR)1);
     CHECK(ChatUserGetCustomUserContext(sentinel, &context) == no_session && context == &first);
     CHECK(ChatUserSetCustomUserContext(sentinel, &second) == no_session);
@@ -94,6 +147,7 @@ static BOOL exercise(void) {
     CHECK(ChatManagerInitialize(2, 1.f, 0, 0, 0, 0) == S_OK);
     CHECK(ChatManagerGetAudioEncodingBitrate(&bitrate) == S_OK && bitrate == 2);
     CHECK(ChatManagerGetChatUsers(&count, &users) == S_OK && count == 0);
+    CHECK(frame_batches());
     CHECK(ChatManagerCleanup() == S_OK && ChatManagerCleanup() == no_session);
     return TRUE;
 }
@@ -101,7 +155,7 @@ static BOOL exercise(void) {
 int wmain(int argc, wchar_t **argv) {
     if (argc != 1 && (argc != 3 || wcscmp(argv[1], L"--report") || !*argv[2])) return 2;
     if (!exercise()) return 1;
-    const char *line = "gamechat-session PASS sessions=2 remote-users=3 bitrate-settings=3 stale-handles=1 xuids=2 contexts=2";
+    const char *line = "gamechat-session PASS sessions=2 remote-users=5 bitrate-settings=3 stale-handles=1 xuids=2 contexts=2 frame-batches=4";
     if (argc == 3) {
         FILE *file;
         if (_wfopen_s(&file, argv[2], L"wb")) return 1;

@@ -1,4 +1,6 @@
 import hashlib
+import io
+import json
 from pathlib import Path
 import struct
 import sys
@@ -6,7 +8,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from project_tuxbox.shader_prep import cooked_shader, prepare_shaders
+from project_tuxbox.shader_prep import SOURCE_CACHE, cooked_shader, prepare_for_launch, prepare_shaders
 
 
 def record(key, program):
@@ -16,6 +18,156 @@ def record(key, program):
 
 @unittest.skipUnless(sys.platform == "linux", "This cache layout belongs to Proton on Linux")
 class ShaderPreparation(unittest.TestCase):
+    def test_on_demand_rejects_mismatched_source_and_repairs_corrupt_output(self):
+        from project_tuxbox.runtime_shaders import compile_request
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session = root / "session"
+            session.mkdir()
+            cache = root / "cache"
+            cache.mkdir()
+            source = root / "request.dxbc"
+            source.write_bytes(b"packaged console shader")
+            key = hashlib.sha256(source.read_bytes()).hexdigest()
+            tools = ("xshader", "dxc", "dxv")
+            bitcode = b"BC\xc0\xde"
+            program = struct.pack("<II4sIII", 0x50060, 7, b"DXIL", 0x100, 16, len(bitcode)) + bitcode
+            chunk = struct.pack("<4sI", b"DXIL", len(program)) + program
+            result = b"DXBC" + bytes(16) + struct.pack("<IIII", 1, 36 + len(chunk), 1, 36) + chunk
+
+            def run(args, *, timeout):
+                if args[0] == "xshader":
+                    self.assertEqual(args[1].read_bytes(), source.read_bytes())
+                    args[args.index("--hlsl-out") + 1].write_text("void main() {}")
+                    args[args.index("--profile-out") + 1].write_text("cs_6_0")
+                elif args[0] == "dxc":
+                    args[args.index("-Fo") + 1].write_bytes(result)
+                else:
+                    self.assertEqual(args[0], "dxv")
+                    self.assertEqual(args[1].read_bytes(), result)
+
+            with patch("project_tuxbox.runtime_shaders.run_tool", side_effect=run) as pipeline:
+                with self.assertRaisesRegex(ValueError, "differ"):
+                    compile_request(source, "0" * 64, tools, cache, session)
+                pipeline.assert_not_called()
+                self.assertTrue(compile_request(source, key, tools, cache, session))
+                self.assertEqual((session / (key + ".cso")).read_bytes(), result)
+                self.assertFalse(compile_request(source, key, tools, cache, session))
+                self.assertEqual(pipeline.call_count, 3)
+                (cache / (key + ".cso")).write_bytes(result[:-1])
+                self.assertTrue(compile_request(source, key, tools, cache, session))
+                self.assertEqual(pipeline.call_count, 6)
+                self.assertEqual((session / (key + ".cso")).read_bytes(), result)
+                (cache / (key + ".sha256")).write_bytes(b"\xff" * 64)
+                self.assertTrue(compile_request(source, key, tools, cache, session))
+                self.assertEqual(pipeline.call_count, 9)
+
+    def test_source_keys_validate_packaged_bytes_and_reuse_verified_translation(self):
+        reference_program = b"measured runtime program"
+        first = dict(record("42", reference_program), offset=0, packed_bytes=2, unpacked_bytes=2,
+                     dxbc_offset=0, dxbc_bytes=2, dxbc_sha256=hashlib.sha256(b"AA").hexdigest(),
+                     hlsl_sha256="identical HLSL", compiled_dxil_sha256="other compiler")
+        alias = dict(first, entry=43, offset=2, dxbc_sha256=hashlib.sha256(b"BB").hexdigest())
+        plan = {"title": "Fixture", "shaders": [first, alias]}
+        with TemporaryDirectory() as tmp:
+            pak = Path(tmp) / "game.pak"
+            cache = Path(tmp) / SOURCE_CACHE
+            cache.mkdir(parents=True)
+            (cache / (first["dxbc_sha256"] + ".cso")).write_bytes(reference_program)
+            pak.write_bytes(b"AACC")
+            with patch("project_tuxbox.shader_prep.compiler_tools", side_effect=AssertionError("compiler called")):
+                with self.assertRaisesRegex(ValueError, "Package shader differs"):
+                    prepare_shaders(pak, plan, cache, exact_sources=True)
+                self.assertFalse((cache / (alias["dxbc_sha256"] + ".cso")).exists())
+                # The alias can reuse the first verified output.
+                pak.write_bytes(b"AABB")
+                self.assertEqual(prepare_shaders(pak, plan, cache, exact_sources=True), (0, 2))
+                for r in (first, alias):
+                    self.assertEqual((cache / (r["dxbc_sha256"] + ".cso")).read_bytes(), reference_program)
+
+    def test_linked_cache_validates_both_originals_on_warm_launch(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pak = root / "game.pak"
+            cache = (root / SOURCE_CACHE).with_name("by_gs_ps")
+            cache.mkdir(parents=True)
+            linked_dxil = b"measured linked geometry shader"
+            producer = dict(record("42", linked_dxil), offset=0, packed_bytes=1, unpacked_bytes=1,
+                            dxbc_offset=0, dxbc_bytes=1, dxbc_sha256=hashlib.sha256(b"G").hexdigest(),
+                            hlsl_sha256="linked HLSL", compiled_dxil_sha256="native digest")
+            pixel = dict(producer, entry=43, offset=1, dxbc_sha256=hashlib.sha256(b"P").hexdigest())
+            key = producer["dxbc_sha256"] + "_" + pixel["dxbc_sha256"]
+            plan = {"title": "Fixture", "shaders": [dict(producer, pixel_input=pixel, pair_key=key)]}
+            (cache / (key + ".cso")).write_bytes(linked_dxil)
+            pak.write_bytes(b"GP")
+            self.assertEqual(prepare_shaders(pak, plan, cache, exact_sources=True, linked=True), (0, 1))
+            self.assertEqual((cache / (key + ".cso")).read_bytes(), linked_dxil)
+            pak.write_bytes(b"GQ")
+            with self.assertRaisesRegex(ValueError, "Package shader differs"):
+                prepare_shaders(pak, plan, cache, exact_sources=True, linked=True)
+
+    def test_source_cache_rejects_unverified_but_well_formed_entries(self):
+        with TemporaryDirectory() as tmp:
+            pak = Path(tmp) / "game.pak"
+            pak.write_bytes(b"S")
+            cache = Path(tmp) / SOURCE_CACHE
+            cache.mkdir(parents=True)
+            record_a = dict(record("42", b"measured program"), offset=0, packed_bytes=1, unpacked_bytes=1,
+                            dxbc_offset=0, dxbc_bytes=1, dxbc_sha256=hashlib.sha256(b"S").hexdigest(),
+                            hlsl_sha256="checked translation", compiled_dxil_sha256="other compiler")
+            plan = {"title": "Fixture", "shaders": [record_a]}
+            program = struct.pack("<II4sIII4s", 0x50060, 7, b"DXIL", 0x100, 16, 4, b"BC\xc0\xde")
+            chunk = struct.pack("<4sI", b"DXIL", len(program)) + program
+            unrelated = b"DXBC" + bytes(16) + struct.pack("<IIII", 1, 36 + len(chunk), 1, 36) + chunk
+            source_entry = cache / (record_a["dxbc_sha256"] + ".cso")
+            source_entry.write_bytes(unrelated)
+            with patch("project_tuxbox.shader_prep.compiler_tools", side_effect=ValueError("no compiler")):
+                with self.assertRaisesRegex(ValueError, "no compiler"):
+                    prepare_shaders(pak, plan, cache, exact_sources=True)
+            self.assertFalse(source_entry.exists())
+
+    def test_provider_selects_preparation_and_pipeline_warmup(self):
+        from types import SimpleNamespace
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            exe = root / "fixture.exe"
+            exe.write_bytes(b"game")
+            provider = root / "d3d12_xs.dll"
+            local = root / "local.dll"
+            local.write_bytes(b"local")
+            compute = record("1", b"compute shader")
+            vertex = dict(record("2", b"vertex shader"), profile="vs_6_0")
+            pixel = dict(record("3", b"pixel shader"), profile="ps_6_1", compiled_dxil_sha256="native pixel")
+            plan = dict(title="Fixture", provider=provider.name, executable_sha256=hashlib.sha256(b"game").hexdigest(),
+                        provider_sha256=hashlib.sha256(b"reference").hexdigest(), pipeline_profile="frosty-chase",
+                        shader_package="input.pak", shaders=[compute, vertex],
+                        source_cache={"compiled_dxil_sha256": {"1": "native compute", "2": "native vertex"},
+                                      "aliases": [], "additional_shaders": [pixel]})
+            profile = root / "plan.json"
+            profile.write_text(json.dumps(plan))
+            host = SimpleNamespace(backend="proton", env={"WINEPREFIX": str(root)})
+            with patch("project_tuxbox.shader_prep.PROFILES", {exe.name: profile}), \
+                 patch("project_tuxbox.shader_prep.TUXBOX_PROVIDER", local), \
+                 patch("project_tuxbox.shader_prep.prepare_shaders", return_value=(0, 1)) as prepare, \
+                 patch("project_tuxbox.pipeline_prep.prepare_pipelines") as warm:
+                provider.write_bytes(b"unknown")
+                self.assertFalse(prepare_for_launch(exe, host))
+                prepare.assert_not_called()
+                provider.write_bytes(b"local")
+                self.assertTrue(prepare_for_launch(exe, host))
+                self.assertEqual([r["profile"] for r in prepare.call_args.args[1]["shaders"]],
+                                 ["cs_6_0", "vs_6_0", "ps_6_1"])
+                self.assertEqual(prepare.call_args.args[2], root / SOURCE_CACHE)
+                self.assertIsNone(prepare.call_args.kwargs.get("reference_cache"))
+                self.assertTrue(prepare.call_args.kwargs["exact_sources"])
+                warm.assert_not_called()
+                provider.write_bytes(b"reference")
+                prepare.reset_mock()
+                self.assertFalse(prepare_for_launch(exe, host))
+                prepare.assert_not_called()
+                warm.assert_not_called()
+
     def test_missing_compiler_quarantines_broken_files_after_first_miss(self):
         with TemporaryDirectory() as tmp:
             cache = Path(tmp) / "by_hlsl"
@@ -134,17 +286,21 @@ class ShaderLaunch(unittest.TestCase):
         from types import SimpleNamespace
         import tuxbox
 
-        with patch("sys.argv", ["tuxbox", "run", *flags, "game.exe", *game_arguments]), \
+        with TemporaryDirectory() as tmp, patch("sys.stderr", new_callable=io.StringIO), \
+             patch("sys.argv", ["tuxbox", "run", "--log-file", str(Path(tmp) / "run.log"),
+                                *flags, "game.exe", *game_arguments]), \
              patch.dict(os.environ, {"TUXBOX_SHADER_PREP": "1", **(env or {})}), \
              patch("tuxbox.launch_target", return_value=Path("game.exe")), \
              patch("tuxbox.Host") as host, patch("tuxbox.prepare_for_launch") as prepare_fn:
-            host.return_value.run.return_value = SimpleNamespace(returncode=19)
+            host.return_value.backend = "native"
+            host.return_value.version = "test"
+            host.return_value.run_game.return_value = SimpleNamespace(returncode=19)
             if isinstance(prepare, Exception):
                 prepare_fn.side_effect = prepare
             else:
                 prepare_fn.return_value = prepare
             status = tuxbox.main()
-            return status, prepare_fn.call_count, host.return_value.run.call_count
+            return status, prepare_fn.call_count, host.return_value.run_game.call_count
 
     def test_prepare_only_never_starts_game(self):
         self.assertEqual(self.run_cli(["--prepare-only"]), (0, 1, 0))

@@ -7,21 +7,32 @@
 using frame_abi::check;
 using frame_abi::ComPtr;
 
-static void sample(FILE* f) {
+static void sample(FILE* f, bool xbox) {
     MediaSession session;
     HMODULE proxy = GetModuleHandleW(L"mfplat.dll");
     using Reset = HRESULT(WINAPI*)(IMFDXGIDeviceManager*, IUnknown*, UINT);
     const auto reset = reinterpret_cast<Reset>(GetProcAddress(proxy, "MFResetDXGIDeviceManagerX"));
-    if (!reset) throw std::runtime_error("missing reset");
+    if (!reset || reinterpret_cast<Reset>(GetProcAddress(proxy, MAKEINTRESOURCEA(117))) != reset)
+        throw std::runtime_error("missing Xbox device-manager reset at ordinal 117");
     ComPtr<ID3D12Device> gpu;
     check(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&gpu)), "create D3D12");
+    ComPtr<ID3D12Device> input = gpu;
+    if (xbox) {
+        auto library = LoadLibraryW(L"d3d12_xs.dll");
+        using Factory = HRESULT (WINAPI*)(IUnknown*, const UINT*, REFIID, void**);
+        const auto factory = library ? reinterpret_cast<Factory>(GetProcAddress(library, "D3D12XboxCreateDevice")) : nullptr;
+        if (!factory) throw std::runtime_error("missing Xbox D3D12 device factory");
+        const UINT profile[18]{0x20004, 0, ~0u, 0, 0, 0, ~0u, ~0u, 0, 1};
+        input.Reset();
+        check(factory(nullptr, profile, IID_PPV_ARGS(&input)), "create Xbox D3D12 device");
+    }
     ComPtr<IMFDXGIDeviceManager> manager;
     UINT token{};
     check(MFCreateDXGIDeviceManager(&token, &manager), "create MF manager");
-    auto incorrect = reset(manager.Get(), gpu.Get(), token ^ 1u);
+    auto incorrect = reset(manager.Get(), input.Get(), token ^ 1u);
     if (SUCCEEDED(incorrect)) throw std::runtime_error("wrong token accepted");
     std::fprintf(f, "wrong_token_hr=0x%08lx\n", static_cast<unsigned long>(incorrect));
-    check(reset(manager.Get(), gpu.Get(), token), "reset through Xbox entry");
+    check(reset(manager.Get(), input.Get(), token), "reset through Xbox entry");
     HANDLE h{};
     check(manager->OpenDeviceHandle(&h), "open MF manager");
     ComPtr<ID3D11Device> video;
@@ -50,10 +61,10 @@ static void sample(FILE* f) {
           "wrap texture");
     ComPtr<IMFSample> frame;
     check(MFCreateSample(&frame), "create sample");
-    HMODULE sys = GetModuleHandleW(L"mfplat_sys.dll");
     using CreateBuffer = decltype(&MFCreateDXGISurfaceBuffer);
-    auto surface_buffer = reinterpret_cast<CreateBuffer>(GetProcAddress(sys, "MFCreateDXGISurfaceBuffer"));
-    if (!surface_buffer) throw std::runtime_error("missing MF surface buffer");
+    auto surface_buffer = reinterpret_cast<CreateBuffer>(GetProcAddress(proxy, "MFCreateDXGISurfaceBufferX"));
+    if (!surface_buffer || reinterpret_cast<CreateBuffer>(GetProcAddress(proxy, MAKEINTRESOURCEA(35))) != surface_buffer)
+        throw std::runtime_error("missing Xbox surface buffer at ordinal 35");
     ComPtr<IMFMediaBuffer> surface;
     check(surface_buffer(__uuidof(ID3D11Texture2D), wrapped.Get(), 0, FALSE, &surface), "create MF surface");
     check(frame->AddBuffer(surface.Get()), "attach surface");
@@ -91,12 +102,14 @@ static void sample(FILE* f) {
     check(manager->CloseDeviceHandle(h), "close manager");
     std::fprintf(f, "verified_pixel_words=4\n");
 }
-int wmain() {
+int wmain(int argc, wchar_t** argv) {
+    const bool xbox = argc == 2 && !wcscmp(argv[1], L"--xbox");
+    if (argc != 1 && !xbox) return 2;
     FILE* f{};
     if (_wfopen_s(&f, L"sample.txt", L"wb")) return 2;
     int rc = 0;
     try {
-        sample(f);
+        sample(f, xbox);
     } catch (const std::exception& e) {
         std::fprintf(f, "error=%s\n", e.what());
         rc = 1;

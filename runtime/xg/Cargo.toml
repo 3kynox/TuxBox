@@ -8,4 +8,5 @@ publish.workspace = true
 crate-type = ["staticlib"]
 
 [dependencies]
+tuxbox-xg-layout = { path = "../xg-layout" }
 windows-sys = { workspace = true, features = ["Win32_Foundation"] }

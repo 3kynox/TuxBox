@@ -10,15 +10,42 @@
       "name": "d3d12_xs.dll",
       "group": "Graphics and memory",
       "status": "partial",
-      "provider": "TuxBox Rust D3D12 provider. The retail run uses patched TomBox.",
-      "scope": "TuxBox creates a device for profile 0x20002 and submits command lists with verified GPU output. Four exports handle standard 1.0 and 1.1 root signatures. The reference path accepts Frosty's 0x20004 profile and renders the menu controls and movies.",
-      "remaining": "More device profiles, shader and resource operations, and correct real-time chase rendering.",
+      "provider": "TuxBox Rust device and command providers with desktop D3D12 root-signature serialization.",
+      "scope": "Two Xbox device profiles, seven feature queries, GPU heaps, guest-backed read-only textures, queues, indirect compute, descriptor and query operations, and 32 identifiers. Frosty creates pipelines from 712-byte ID3D12Device2 streams and presents 3840 × 2160 frames. A fresh Proton prefix running the checkout-built providers displays the menu and video preview, opens Settings and enters the Wake Up sequence. GPU tests cover indexed draws, depth/stencil writes and NV12 plane copies.",
+      "remaining": "Eight PE functions, additional Xbox interface methods and pipeline subobjects, more retail shaders and writable textures at guest-selected addresses remain open.",
       "evidence": [
         "runtime/d3d12/README.md",
         "evidence/matrix-awakens/retail-chase-cinematic.json",
         "evidence/d3d12-rust-comparison.json",
         "evidence/providers/d3d12-guids.json",
-        "evidence/providers/d3d12-signatures.json"
+        "evidence/providers/d3d12-signatures.json",
+        "evidence/matrix-awakens/d3d12-process-debug-flags.json",
+        "evidence/providers/d3d12-factories-valve.json",
+        "evidence/providers/d3d12-factories-ge.json",
+        "evidence/matrix-awakens/tuxbox-device-factory.json",
+        "evidence/providers/d3d12-factories-radeon.json",
+        "evidence/providers/lanes-xbox-valve.json",
+        "evidence/lanes-xbox-input.json",
+        "evidence/providers/d3d12-exports.json",
+        "evidence/providers/d3d12-bringup-valve.json",
+        "evidence/providers/d3d12-bringup-radeon.json",
+        "evidence/providers/d3d12-bringup-ge.json",
+        "evidence/matrix-awakens/d3d12-startup.json",
+        "evidence/providers/d3d12-draw.json",
+        "evidence/providers/d3d12-bringup-present.json",
+        "evidence/matrix-awakens/present-arguments.json",
+        "evidence/providers/d3d12-placement-valve.json",
+        "evidence/providers/d3d12-placement-ge.json",
+        "evidence/providers/d3d12-placement-radeon.json",
+        "evidence/matrix-awakens/tuxbox-compute-cache.json",
+        "evidence/providers/d3d12-stream-valve.json",
+        "evidence/providers/d3d12-stream-ge.json",
+        "evidence/providers/d3d12-stream-radeon.json",
+        "evidence/matrix-awakens/tuxbox-depth-stencil.json",
+        "evidence/matrix-awakens/tuxbox-media-copy.json",
+        "evidence/matrix-awakens/tuxbox-linked-materials.json",
+        "evidence/matrix-awakens/tuxbox-present-sizing.json",
+        "evidence/matrix-awakens/tuxbox-menu-startup.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/d3d12_xs.dll",
@@ -59,11 +86,20 @@
           "WKPDID_D3DDebugObjectNameW"
         ],
         "verified": [
+          "D3D10CreateBlob",
+          "D3D12CreateDevice",
           "D3D12CreateRootSignatureDeserializer",
           "D3D12CreateVersionedRootSignatureDeserializer",
+          "D3D12GetDebugInterface",
           "D3D12SerializeRootSignature",
           "D3D12SerializeVersionedRootSignature",
           "D3D12XboxCreateDevice",
+          "D3D12XboxGetProcessDebugFlags",
+          "D3D12XboxSetProcessDebugFlags",
+          "DXGIXGetFrameStatistics",
+          "DXGIXPresentArray",
+          "DXGIXSetFrameNotification",
+          "DXGIXSetVLineNotification",
           "IID_ID3D12CommandAllocator",
           "IID_ID3D12CommandList",
           "IID_ID3D12CommandQueue",
@@ -80,6 +116,7 @@
           "IID_ID3D12Resource",
           "IID_ID3D12RootSignature",
           "IID_ID3D12RootSignatureDeserializer",
+          "IID_ID3D12XboxDmaCommandList",
           "IID_IDXGIAdapter",
           "IID_IDXGIAdapter1",
           "IID_IDXGIAdapter2",
@@ -93,9 +130,29 @@
           "IID_IDXGIObject",
           "IID_IDXGISwapChain",
           "IID_IDXGISwapChain1",
+          "IID_IGraphicsUnknown",
           "WKPDID_D3DDebugObjectNameW"
         ],
-        "notes": "Five functions and 30 read-only GUIDs were exercised. The 30 identifiers match the Windows SDK, original PE data and original ordinal table."
+        "notes": "Fourteen of 22 functions and all 32 data exports have verified behavior. The original DLL returns DXGI_ERROR_UNSUPPORTED for four legacy DXGIX exports. Rendering coverage is tracked through separate device and command-list tests."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/d3d12_xs.dll",
+        "source_sha256": "e8279440c6980eba9ba42de1e189870407c7665cf2b3fc1fb683ac07cf07f780",
+        "file_description": "Xbox D3D12.XS Runtime Library for Xbox Extensions",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "direct",
+        "title_import_symbols": [
+          "D3D12XboxCreateDevice",
+          "IID_ID3D12Device",
+          "D3D12SerializeRootSignature",
+          "D3D12SerializeVersionedRootSignature",
+          "D3D12CreateDevice",
+          "D3D12XboxSetProcessDebugFlags"
+        ],
+        "static_import_chain": [
+          "Frosty-XSX-Shipping.exe",
+          "d3d12_xs.dll"
+        ]
       }
     },
     {
@@ -109,7 +166,8 @@
         "runtime/dxc/dxcompiler_xs.def",
         "evidence/matrix-awakens/valve-dxc-utils.json",
         "evidence/matrix-awakens/ge-dxc-utils.json",
-        "evidence/providers/dxc-allocator.json"
+        "evidence/providers/dxc-allocator.json",
+        "evidence/providers/dxc-factories.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/dxcompiler_xs.dll",
@@ -120,21 +178,37 @@
           "DxcCreateInstance",
           "DxcCreateInstance2"
         ]
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/dxcompiler_xs.dll",
+        "source_sha256": "40c0d27a4c8e580975b64b386a5decee083aa1465317d4f62bc16445f63681db",
+        "file_description": "",
+        "file_version": "2106.2109.12814.14741",
+        "title_reachability": "direct",
+        "title_import_symbols": [
+          "DxcCreateInstance"
+        ],
+        "static_import_chain": [
+          "Frosty-XSX-Shipping.exe",
+          "dxcompiler_xs.dll"
+        ]
       }
     },
     {
       "name": "xmem.dll",
       "group": "Graphics and memory",
       "status": "partial",
-      "provider": "TuxBox Rust allocator. The retail reference run uses TomBox.",
-      "scope": "Six named and ordinal exports cover allocation/free, working-set statistics and virtual allocation. Guest tests check alignment, reservation, page access and lifetime.",
-      "remaining": "Physical page allocation, mapping and release needed by Frosty, plus GPU-visible memory and additional attribute profiles.",
+      "provider": "TuxBox Rust CPU memory provider.",
+      "scope": "Nine exports cover heap allocation, working-set statistics, virtual memory, and the CPU side of the title’s 64 KiB physical-page profile. The guest preserves 131,072 bytes across unmap and remap in reversed page order.",
+      "remaining": "GPU-visible backing, concurrent aliases, the Xbox partition allocator, additional allocation profiles and retail validation remain open.",
       "evidence": [
         "runtime/xmem/xmem.def",
         "runtime/xmem/README.md",
         "evidence/valve-nvidia.json",
         "evidence/providers/xmem-valve.json",
-        "evidence/providers/xmem-ge.json"
+        "evidence/providers/xmem-ge.json",
+        "evidence/matrix-awakens/xmem-physical-pages.json",
+        "evidence/providers/xmem-pages.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/xmem.dll",
@@ -146,10 +220,36 @@
         "verified": [
           "XMemAlloc",
           "XMemAllocDefault",
+          "XMemAllocatePhysicalPages",
           "XMemFree",
           "XMemFreeDefault",
+          "XMemFreePhysicalPages",
           "XMemGetWorkingSetStatistics",
+          "XMemMapPhysicalPages",
           "XMemVirtualAlloc"
+        ],
+        "notes": "The physical-page controls validate CPU data and ownership for flags 0x20400000. The packaged DLL could not initialize xbthunk on either Proton build."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xmem.dll",
+        "source_sha256": "adc182acae5340b0618a3d57a239ed2e8deb305dbefc49439cb8a2d06c7ce812",
+        "file_description": "Xbox Memory Api Dll",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "direct",
+        "title_import_symbols": [
+          "XMemAlloc",
+          "XMemGetWorkingSetStatistics",
+          "XMemAllocatePhysicalPages",
+          "XMemMapPhysicalPages",
+          "XMemFreePhysicalPages",
+          "XMemFree",
+          "XMemFreeDefault",
+          "XMemAllocDefault",
+          "XMemVirtualAlloc"
+        ],
+        "static_import_chain": [
+          "Frosty-XSX-Shipping.exe",
+          "xmem.dll"
         ]
       }
     },
@@ -158,15 +258,16 @@
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox texture address computer.",
-      "scope": "Computes linear and 4 KiB tiled layouts for single-slice 2D textures in 41 formats. The supplied library and TuxBox matched on 6,231,134 texel or compressed-block addresses. A separate guest checked four texture shapes from the Frosty trace.",
-      "remaining": "Arrays, additional formats and tiling modes, multisampling and subresource copies. Calling an unimplemented texture computer method terminates the guest.",
+      "scope": "Computes linear and 4 KiB tiled 2D textures, array slices and packed mip chains. TuxBox and the supplied DLL matched on 9,231,018 texel or block addresses across 78 formats and 156 layouts. A separate check includes eight descriptors from Frosty.",
+      "remaining": "Further formats and tiling modes, 3D textures, multisampling and subresource copies. Calling an unimplemented texture computer method terminates the guest.",
       "evidence": [
-        "runtime/xg/src/layout.rs",
+        "runtime/xg-layout/src/lib.rs",
         "evidence/providers/xg-control.json",
         "evidence/providers/xg-frosty-shapes.json",
         "evidence/providers/valve.json",
         "evidence/providers/ge.json",
-        "evidence/providers/xg-formats.json"
+        "evidence/providers/xg-formats.json",
+        "evidence/providers/xg-placement-layouts.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/xg_xs.dll",
@@ -176,17 +277,31 @@
         "verified": [
           "XGCreateTextureComputer"
         ]
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xg_xs.dll",
+        "source_sha256": "fee85ef80b6fe47edaa083270933c08a37f9e27e7541f86f731daecf7ead1493",
+        "file_description": "Xbox XG Library",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "direct",
+        "title_import_symbols": [
+          "XGCreateTextureComputer"
+        ],
+        "static_import_chain": [
+          "Frosty-XSX-Shipping.exe",
+          "xg_xs.dll"
+        ]
       }
     },
     {
       "name": "xgameruntime.dll",
       "group": "Platform and storage",
       "status": "partial",
-      "provider": "ScarlettX reference runtime with a task-queue fix.",
-      "scope": "Frosty initializes the reference runtime and enters Unreal startup. A paired control verifies termination of a queue with a manual completion port.",
-      "remaining": "Several runtime interface queries fail. User and service operations need broader coverage.",
+      "provider": "TuxBox Xbox Game Runtime with Rust task queues.",
+      "scope": "TuxBox implements runtime initialization, threading-interface queries and queues. The guest checks manual, threadpool, serialized and immediate dispatch, cancellation and termination.",
+      "remaining": "User and device association, storage and other service interfaces remain open. The error-report export has no behavior control.",
       "evidence": [
-        "evidence/matrix-awakens/reference-runtime.json",
+        "evidence/providers/xgameruntime-queues.json",
         "evidence/matrix-awakens/runtime-wrappers.csv"
       ],
       "export_coverage": {
@@ -194,27 +309,57 @@
         "binary_sha256": "07872dfae601115a1c4bbe060d4f1e9689fe24afd4154a8d98b110a49e33b729",
         "total": 5,
         "data_exports": [],
-        "verified": [],
-        "notes": "The retail path uses a reference provider and its task-queue patch."
+        "verified": [
+          "InitializeApiImpl",
+          "InitializeApiImplEx",
+          "QueryApiImpl",
+          "UninitializeApiImpl"
+        ],
+        "notes": "Four entry points have guest behavior checks. QueryApiImpl currently serves the threading interface. The export count excludes interface methods."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xgameruntime.dll",
+        "source_sha256": "07872dfae601115a1c4bbe060d4f1e9689fe24afd4154a8d98b110a49e33b729",
+        "file_description": "Xbox Game Runtime Dll",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
       }
     },
     {
       "name": "xcrdapi.dll",
       "group": "Platform and storage",
       "status": "partial",
-      "provider": "TomBox storage bridge to desktop DirectStorage.",
-      "scope": "DStorageGetFactory supplies the storage path Frosty uses to initialize its I/O dispatcher and mount its IoStore container.",
-      "remaining": "Console-specific storage controls and additional request paths.",
+      "provider": "TuxBox Rust storage queues over Windows file handles, with Rust zlib decompression.",
+      "scope": "Frosty\u2019s storage factory opens files and reads queue entries into game memory. Isolated guests decoded two 64 KiB blocks directly from its retail container on two Proton builds.",
+      "remaining": "BCPack, swizzled or physical-page requests, console-specific storage controls and scheduling priorities.",
       "evidence": [
-        "evidence/matrix-awakens/reference-runtime.json"
+        "evidence/providers/xcrdapi-storage.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/xcrdapi.dll",
         "binary_sha256": "7405df41b6aa6e4ac90052ba0a1d38c6498c6d9ac57807153a4ca318285574bc",
         "total": 118,
         "data_exports": [],
-        "verified": [],
-        "notes": "The tested storage factory is provided by the reference bridge."
+        "verified": [
+          "DStorageGetFactory"
+        ],
+        "notes": "The factory is the sole static XCRDAPI import in this Frosty executable."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xcrdapi.dll",
+        "source_sha256": "7405df41b6aa6e4ac90052ba0a1d38c6498c6d9ac57807153a4ca318285574bc",
+        "file_description": "Durango XCRDAPI",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "direct",
+        "title_import_symbols": [
+          "DStorageGetFactory"
+        ],
+        "static_import_chain": [
+          "Frosty-XSX-Shipping.exe",
+          "xcrdapi.dll"
+        ]
       }
     },
     {
@@ -240,36 +385,65 @@
           "OpenGameConfigKeyForPackage",
           "OpenGameConfigForGameCore"
         ]
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/gameconfighelper.dll",
+        "source_sha256": "28562599eaba50711d5225e4b05478f8a83a9438f5501bf9068283eb71a4f33f",
+        "file_description": "Game Config Helper",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
       }
     },
     {
       "name": "GameInput.dll",
       "group": "Input and audio",
       "status": "partial",
-      "provider": "TomBox GameInput bridge with TuxBox mouse and keyboard mapping.",
-      "scope": "The retail menu accepts keyboard, mouse and Xbox D-pad input. A virtual Xbox controller verifies analog readings, simultaneous button presses, hotplug and keyboard fallback through Proton XInput.",
-      "remaining": "Additional GameInput device kinds and interfaces, physical-controller checks and input-driven chase gameplay.",
+      "provider": "TuxBox GameInput v0 provider for polling and device status callbacks.",
+      "scope": "Lanes reads keyboard, mouse and XInput state through ordinal 1. TuxBox handles the blocking device enumeration requested by Frosty. With keyboard-to-gamepad enabled, all 48 tested key edges, mouse confirmation and signed mouse-look reached the gamepad reading.",
+      "remaining": "Reading callbacks, text translation, wheel input, haptics and additional device types remain open. Hardware controller behavior needs a physical-device check.",
       "evidence": [
-        "evidence/matrix-awakens/retail-mixed-input.json",
-        "evidence/matrix-awakens/xinput-desktop.json"
+        "evidence/lanes-xbox-input.json",
+        "evidence/providers/lanes-xbox-valve.json",
+        "evidence/providers/gameinput-polling.json",
+        "evidence/providers/gameinput-devices.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/GameInput.dll",
         "binary_sha256": "25ee044071bbba405a026eaad7e1bf106b72a4f2f0b968f6855ecee5e390f6e9",
         "total": 1,
         "data_exports": [],
-        "verified": [],
-        "notes": "TuxBox mouse and keyboard mappings run behind an external GameInputCreate implementation."
+        "verified": [
+          "GameInputCreate"
+        ],
+        "notes": "The singleton factory and a subset of its returned interface are exercised. The one-export denominator excludes COM methods."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/GameInput.dll",
+        "source_sha256": "25ee044071bbba405a026eaad7e1bf106b72a4f2f0b968f6855ecee5e390f6e9",
+        "file_description": "GameInput API",
+        "file_version": "0.2106.19041.7032",
+        "title_reachability": "direct",
+        "title_import_symbols": [
+          "#1"
+        ],
+        "static_import_chain": [
+          "Frosty-XSX-Shipping.exe",
+          "GameInput.dll"
+        ]
       }
     },
     {
       "name": "AcpHal.dll",
       "group": "Input and audio",
       "status": "partial",
-      "provider": "TomBox audio hardware abstraction.",
-      "scope": "Frosty starts its mixer and submits an eight-channel buffer with the reference AcpHal provider.",
-      "remaining": "The retail import trace still reports AcpHalReleaseShapeContexts unresolved.",
+      "provider": "TuxBox Rust AcpHal provider; runtime validation pending.",
+      "scope": "The Rust provider builds seven of Frosty's imported exports: the host-backed APU heap, XMA context allocation, inert IAcpHal object, and release entry point. The earlier reference-provider trial started the mixer; TuxBox behavior remains unverified.",
+      "remaining": "Verify the imported calls in a guest or retail launch. Three exports, other SHAPE context types, APU heap reclamation, and Xbox DSP/XMA decoding remain open.",
       "evidence": [
+        "runtime/acphal/README.md",
+        "evidence/matrix-awakens/acphal-call-sites.json",
         "evidence/matrix-awakens/frosty-engine-control.json",
         "evidence/matrix-awakens-launch.json"
       ],
@@ -279,7 +453,27 @@
         "total": 10,
         "data_exports": [],
         "verified": [],
-        "notes": "The retail mixer control uses the reference provider."
+        "notes": "The current Rust DLL exports seven of ten ordinals, but no TuxBox AcpHal exports have been behaviorally verified."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/AcpHal.dll",
+        "source_sha256": "a8fe520eafe38784249d6fca38b0a185006bcc18cd3962405b8b92be1f758123",
+        "file_description": "",
+        "file_version": "",
+        "title_reachability": "direct",
+        "title_import_symbols": [
+          "AcpHalReleaseShapeContexts",
+          "AcpHalAllocateShapeContexts",
+          "AcpHalCreate",
+          "ApuAlloc",
+          "ApuFree",
+          "ApuHeapGetState",
+          "ApuCreateHeap"
+        ],
+        "static_import_chain": [
+          "Frosty-XSX-Shipping.exe",
+          "AcpHal.dll"
+        ]
       }
     },
     {
@@ -310,15 +504,33 @@
           "XAudio2CreateWithVersionInfo",
           "XAudio2CreateV2_9"
         ]
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/XAudio2_9.dll",
+        "source_sha256": "8d49f4c47a6ee01f344c45375b5a022045ad8ff7dd9f4b61e6554186c1e87c02",
+        "file_description": "XAudio2 Game Audio API",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "direct",
+        "title_import_symbols": [
+          "#2",
+          "#1",
+          "#4",
+          "#5",
+          "#6"
+        ],
+        "static_import_chain": [
+          "Frosty-XSX-Shipping.exe",
+          "XAudio2_9.dll"
+        ]
       }
     },
     {
       "name": "GameChat2.dll",
       "group": "Input and audio",
       "status": "partial",
-      "provider": "TuxBox in-process chat manager.",
-      "scope": "Eleven exports implement session setup and cleanup, a remote-user roster, locality, per-user identity and context, and encoding bitrate. Seven are among Frosty's 15 delay imports. The guest checks duplicates, capacity, removal and stale handles against the supplied DLL.",
-      "remaining": "Local users, microphone capture, audio encoding and network transport.",
+      "provider": "TuxBox Rust chat session, user roster and outgoing frame provider.",
+      "scope": "Thirteen exports cover sessions, encoding bitrate, remote users, user context and outgoing endpoint announcements. Nine are among Frosty’s 15 delay imports. The guest checks payloads, endpoint IDs and borrowed frame lifetimes against the packaged DLL.",
+      "remaining": "Local users, microphone capture, audio encoding, incoming packets and network transport remain open.",
       "evidence": [
         "runtime/gamechat/guest.c",
         "evidence/providers/platform-controls.json",
@@ -333,15 +545,46 @@
         "verified": [
           "ChatManagerAddRemoteUser",
           "ChatManagerCleanup",
+          "ChatManagerFinishProcessingDataFrames",
           "ChatManagerGetAudioEncodingBitrate",
           "ChatManagerGetChatUsers",
           "ChatManagerInitialize",
           "ChatManagerRemoveUser",
           "ChatManagerSetAudioEncodingBitrate",
+          "ChatManagerStartProcessingDataFrames",
+          "ChatUserGetCustomUserContext",
           "ChatUserGetIsLocal",
           "ChatUserGetXboxUserId",
-          "ChatUserGetCustomUserContext",
           "ChatUserSetCustomUserContext"
+        ],
+        "notes": "Packaged and TuxBox providers returned matching results on Valve Proton Experimental and GE-Proton."
+      },
+      "inventory": {
+        "source_path": "Mount/Frosty/Binaries/XSX/GameChat2.dll",
+        "source_sha256": "35ecdfbea3a9f4d004b638d8b1070dcded9cb05f76514a4184b5a5832f4afb87",
+        "file_description": "Microsoft Xbox Game Chat 2",
+        "file_version": "2106.4.0.0 (WinBuild.160101.0800)",
+        "title_reachability": "direct",
+        "title_import_symbols": [
+          "GameChatFailFastWithInform",
+          "ChatManagerInitialize",
+          "ChatManagerCleanup",
+          "ChatManagerSetAudioEncodingBitrate",
+          "ChatManagerStartProcessingDataFrames",
+          "ChatManagerFinishProcessingDataFrames",
+          "ChatManagerAddLocalUser",
+          "ChatManagerAddRemoteUser",
+          "ChatManagerRemoveUser",
+          "ChatManagerProcessIncomingPacket",
+          "ChatManagerGetChatUsers",
+          "ChatUserSetMicrophoneMuted",
+          "ChatUserGetRemoteUserMuted",
+          "ChatUserSetRemoteUserMuted",
+          "ChatUserGetIsLocal"
+        ],
+        "static_import_chain": [
+          "Frosty-XSX-Shipping.exe",
+          "GameChat2.dll"
         ]
       }
     },
@@ -349,10 +592,11 @@
       "name": "mfplat.dll",
       "group": "Media",
       "status": "partial",
-      "provider": "TuxBox sample bridge with TomBox and Proton Media Foundation.",
-      "scope": "The bridge provides the D3D12 video-sample path. Guest readback and retail movie comparisons verify decoded output.",
+      "provider": "TuxBox DXGI device bridge and Proton Media Foundation.",
+      "scope": "GPU readback verifies the Xbox device-manager reset and surface buffer. The packaged video decoders matched FFmpeg on both NV12 planes.",
       "remaining": "The remaining console Media Foundation platform and device-management interfaces.",
       "evidence": [
+        "evidence/matrix-awakens/independent-media.json",
         "evidence/matrix-awakens/media-valve.json",
         "evidence/matrix-awakens/retail-chase-cinematic.json"
       ],
@@ -362,9 +606,36 @@
         "total": 140,
         "data_exports": [],
         "verified": [
+          "MFCreateDXGISurfaceBufferX",
           "MFResetDXGIDeviceManagerX"
         ],
-        "notes": "The tested reset function belongs to the TuxBox bridge. Its other forwards use host and reference libraries."
+        "notes": "The Xbox entries at ordinals 35 and 117 passed sample readback. Another 133 named Xbox exports forward to Proton at their original ordinals."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/mfplat.dll",
+        "source_sha256": "0b29c4da03055c34fb6c6f3fbbac426cb3693ac25c419c4c6699897405966a44",
+        "file_description": "",
+        "file_version": "",
+        "title_reachability": "direct",
+        "title_import_symbols": [
+          "MFShutdown",
+          "MFCreateAlignedMemoryBuffer",
+          "MFCreateMediaType",
+          "MFResetDXGIDeviceManagerX",
+          "MFCreateSample",
+          "MFStartup",
+          "MFCreateDXGIDeviceManager",
+          "MFTEnumEx",
+          "MFCreateAttributes",
+          "MFCreateMemoryBuffer",
+          "MFCreateFile",
+          "MFllMulDiv",
+          "MFCreateWaveFormatExFromMFMediaType"
+        ],
+        "static_import_chain": [
+          "Frosty-XSX-Shipping.exe",
+          "mfplat.dll"
+        ]
       }
     },
     {
@@ -385,6 +656,15 @@
         "data_exports": [],
         "verified": [],
         "notes": "The adapter registers a separate HEVC class ID. It activates the original console class in the packaged DLL."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/mfhevcdec.dll",
+        "source_sha256": "fecc135bf0387f68c304542af3cb2c4aaed1267a06027f5198223f585678cd0d",
+        "file_description": "",
+        "file_version": "",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
       }
     },
     {
@@ -406,6 +686,15 @@
           "DllGetClassObject"
         ],
         "notes": "The TuxBox class factory accepts the original H.264 class ID and uses the packaged codec to decode frames."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/mfh264dec.dll",
+        "source_sha256": "9db2936779eec00c69c9a549e7ec4ab2af717b64b95454065e80dfa5c5a439ac",
+        "file_description": "",
+        "file_version": "",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
       }
     },
     {
@@ -429,6 +718,20 @@
         "verified": [
           "MFCreateSourceReaderFromByteStream",
           "MFCreateSourceReaderFromURL"
+        ]
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/mfreadwrite.dll",
+        "source_sha256": "e697c5620b6f685a80c6ed56c5cd5e25af4d46ebf15d9afa1bd7670d1ad84982",
+        "file_description": "",
+        "file_version": "",
+        "title_reachability": "direct",
+        "title_import_symbols": [
+          "MFCreateSourceReaderFromByteStream"
+        ],
+        "static_import_chain": [
+          "Frosty-XSX-Shipping.exe",
+          "mfreadwrite.dll"
         ]
       }
     },
@@ -455,6 +758,1333 @@
           "DllGetClassObject"
         ],
         "notes": "The class factory and unload query passed on GE-Proton. The host codec performs AAC decoding."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/MSAudDecMFT.dll",
+        "source_sha256": "810c007551ec389a2c7dd0f0066747e453b5c3d1efb3cdc62cc1f22a76c5b454",
+        "file_description": "Media Foundation Audio Decoders",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "AudioHALWrapper.dll",
+      "group": "Input and audio",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox AudioHALWrapper. 32 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/AudioHALWrapper.dll",
+        "binary_sha256": "001022660fa307ed7bde67a2dc4a33048780f53614e7969989bf5b8501881f9f",
+        "total": 32,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/AudioHALWrapper.dll",
+        "source_sha256": "001022660fa307ed7bde67a2dc4a33048780f53614e7969989bf5b8501881f9f",
+        "file_description": "Xbox AudioHALWrapper",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "ConnectedStorageService.ProxyStub.dll",
+      "group": "Platform and storage",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox Connected Storage Service Proxies and Stubs. 5 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/ConnectedStorageService.ProxyStub.dll",
+        "binary_sha256": "d5b31d926b7a56fd01778c7c6b4b21650c994a0182d989795765950f4a9802fd",
+        "total": 5,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/ConnectedStorageService.ProxyStub.dll",
+        "source_sha256": "d5b31d926b7a56fd01778c7c6b4b21650c994a0182d989795765950f4a9802fd",
+        "file_description": "Xbox Connected Storage Service Proxies and Stubs",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "d3d12_x.dll",
+      "group": "Graphics and memory",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox D3D12.X Runtime Library for UWP Extensions. 53 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/d3d12_x.dll",
+        "binary_sha256": "fafdfb277c36f654a0043241edcf9bb8eefee6c1092c09090b4913e917f8c469",
+        "total": 53,
+        "data_exports": [
+          "IID_ID3D12CommandAllocator",
+          "IID_ID3D12CommandList",
+          "IID_ID3D12CommandQueue",
+          "IID_ID3D12Debug",
+          "IID_ID3D12DescriptorHeap",
+          "IID_ID3D12Device",
+          "IID_ID3D12DeviceChild",
+          "IID_ID3D12Fence",
+          "IID_ID3D12GraphicsCommandList",
+          "IID_ID3D12Heap",
+          "IID_ID3D12Object",
+          "IID_ID3D12Pageable",
+          "IID_ID3D12PipelineState",
+          "IID_ID3D12Resource",
+          "IID_ID3D12RootSignature",
+          "IID_ID3D12RootSignatureDeserializer",
+          "IID_ID3D12XboxDmaCommandList",
+          "IID_IDXGIAdapter",
+          "IID_IDXGIAdapter1",
+          "IID_IDXGIAdapter2",
+          "IID_IDXGIDevice",
+          "IID_IDXGIDevice1",
+          "IID_IDXGIDevice2",
+          "IID_IDXGIDeviceSubObject",
+          "IID_IDXGIFactory",
+          "IID_IDXGIFactory1",
+          "IID_IDXGIFactory2",
+          "IID_IDXGIObject",
+          "IID_IDXGISwapChain",
+          "IID_IDXGISwapChain1",
+          "IID_IGraphicsUnknown"
+        ],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/d3d12_x.dll",
+        "source_sha256": "fafdfb277c36f654a0043241edcf9bb8eefee6c1092c09090b4913e917f8c469",
+        "file_description": "Xbox D3D12.X Runtime Library for UWP Extensions",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "d3dcompiler_47.dll",
+      "group": "Graphics and memory",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Direct3D HLSL Compiler for XBOX GAMECORE. 29 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/d3dcompiler_47.dll",
+        "binary_sha256": "80f44c8fe0d173886e56629269b53be65914504d01887cd17024e4fd80ca886a",
+        "total": 29,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/d3dcompiler_47.dll",
+        "source_sha256": "80f44c8fe0d173886e56629269b53be65914504d01887cd17024e4fd80ca886a",
+        "file_description": "Direct3D HLSL Compiler for XBOX GAMECORE",
+        "file_version": "9.31.18248.1001",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "dxbc2dxil_xs.dll",
+      "group": "Graphics and memory",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. 1 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/dxbc2dxil_xs.dll",
+        "binary_sha256": "d4c6a023c28bb95848e1e968426d14e7c84199043da7aa870de2fbc7229cc5f5",
+        "total": 1,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/dxbc2dxil_xs.dll",
+        "source_sha256": "d4c6a023c28bb95848e1e968426d14e7c84199043da7aa870de2fbc7229cc5f5",
+        "file_description": "",
+        "file_version": "2106.2109.12814.14741",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "dxcompiler_x.dll",
+      "group": "Graphics and memory",
+      "status": "partial",
+      "provider": "TuxBox forwards both Xbox One factories to desktop DXC at the packaged ordinals.",
+      "scope": "Both factories match the packaged DLL for retained blobs, caller allocation, a cs_6_0 shader with a root signature, and diagnostics for an invalid entry point.",
+      "remaining": "Xbox GPU-specific code generation, custom intrinsics and the compiler interfaces behind the factories need further coverage.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json",
+        "evidence/providers/dxc-factories.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/dxcompiler_x.dll",
+        "binary_sha256": "6d1ad1f61da68e875a40daddcae4616ef156a53e6539ec81313708c6bdbdedc6",
+        "total": 2,
+        "data_exports": [],
+        "verified": [
+          "DxcCreateInstance",
+          "DxcCreateInstance2"
+        ],
+        "notes": "Both exported factories are exercised. The shader check validates portable DXIL."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/dxcompiler_x.dll",
+        "source_sha256": "6d1ad1f61da68e875a40daddcae4616ef156a53e6539ec81313708c6bdbdedc6",
+        "file_description": "",
+        "file_version": "2106.2109.12814.14741",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "gamecoreclient.dll",
+      "group": "Platform and storage",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox GameCore Client Dll. 3 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/gamecoreclient.dll",
+        "binary_sha256": "251f3a650f0e1be92147201d1806f97496c9837f2b76209ee0b5a67c8d20afcd",
+        "total": 3,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/gamecoreclient.dll",
+        "source_sha256": "251f3a650f0e1be92147201d1806f97496c9837f2b76209ee0b5a67c8d20afcd",
+        "file_description": "Xbox GameCore Client Dll",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "gamecorecomproxy.dll",
+      "group": "Platform and storage",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox GameCore Proxy Dll. 5 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/gamecorecomproxy.dll",
+        "binary_sha256": "ef41038c6bc500e7ccb07da77cf0a346974f57f3da396fe6aee21fb49c361428",
+        "total": 5,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/gamecorecomproxy.dll",
+        "source_sha256": "ef41038c6bc500e7ccb07da77cf0a346974f57f3da396fe6aee21fb49c361428",
+        "file_description": "Xbox GameCore Proxy Dll",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "GCXAudioExt.dll",
+      "group": "Input and audio",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. XAudio platform extensions for GameCore on Xbox One. 11 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/GCXAudioExt.dll",
+        "binary_sha256": "4b3be0a8140070557a82053971f777c4c1b8e3d8af7ea2879585ebe469bd2230",
+        "total": 11,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/GCXAudioExt.dll",
+        "source_sha256": "4b3be0a8140070557a82053971f777c4c1b8e3d8af7ea2879585ebe469bd2230",
+        "file_description": "XAudio platform extensions for GameCore on Xbox One",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "hix_xs.dll",
+      "group": "Diagnostics and tooling",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Hang Investigation for Xbox. 8 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/hix_xs.dll",
+        "binary_sha256": "b761ebeb0c66567bb02bfac285f6194ed56075b2cc11f87f1ee416d22f6ba921",
+        "total": 8,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/hix_xs.dll",
+        "source_sha256": "b761ebeb0c66567bb02bfac285f6194ed56075b2cc11f87f1ee416d22f6ba921",
+        "file_description": "Hang Investigation for Xbox",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "minappmodelx.dll",
+      "group": "Platform and storage",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox MinAppModel Api Dll. 4 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/minappmodelx.dll",
+        "binary_sha256": "a59465e2276532b9ecf2b84004e6f40822aa9b9e2db1242410e31502f6547252",
+        "total": 4,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/minappmodelx.dll",
+        "source_sha256": "a59465e2276532b9ecf2b84004e6f40822aa9b9e2db1242410e31502f6547252",
+        "file_description": "Xbox MinAppModel Api Dll",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "minuserx.dll",
+      "group": "Platform and storage",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox MinUser Api Dll. 74 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/minuserx.dll",
+        "binary_sha256": "ef215114037bf6fed6ba1acc6fce0f93b0dc3432f2ffff67d5efce07bdcf9458",
+        "total": 74,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/minuserx.dll",
+        "source_sha256": "ef215114037bf6fed6ba1acc6fce0f93b0dc3432f2ffff67d5efce07bdcf9458",
+        "file_description": "Xbox MinUser Api Dll",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "msave64xgs.dll",
+      "group": "Platform and storage",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. \"msave64xgs.DYNLINK\". 24 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/msave64xgs.dll",
+        "binary_sha256": "5c3007c82cd4de63fcef010a5b53a0a23df96680cbff20553421b9ea3ac47bbe",
+        "total": 24,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/msave64xgs.dll",
+        "source_sha256": "5c3007c82cd4de63fcef010a5b53a0a23df96680cbff20553421b9ea3ac47bbe",
+        "file_description": "\"msave64xgs.DYNLINK\"",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "newbe_xs.dll",
+      "group": "Graphics and memory",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. 6 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/newbe_xs.dll",
+        "binary_sha256": "4857484c2de7172022a77acf813046196219c00aafbf3aff2b74df15d98f45a3",
+        "total": 6,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/newbe_xs.dll",
+        "source_sha256": "4857484c2de7172022a77acf813046196219c00aafbf3aff2b74df15d98f45a3",
+        "file_description": "",
+        "file_version": "2106.2109.12814.14741",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "pixrt.dll",
+      "group": "Diagnostics and tooling",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox Tools Framework (Durango Title OS). 3 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/pixrt.dll",
+        "binary_sha256": "37efed0963151842cd5dea48d9077d5bb840bee40f0de7c8944bff64f49f17ad",
+        "total": 3,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/pixrt.dll",
+        "source_sha256": "37efed0963151842cd5dea48d9077d5bb840bee40f0de7c8944bff64f49f17ad",
+        "file_description": "Xbox Tools Framework (Durango Title OS)",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "pixrt10.dll",
+      "group": "Diagnostics and tooling",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox Tools Framework (Durango Title OS). 3 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/pixrt10.dll",
+        "binary_sha256": "ba89459ef3469f4be0226c8cecb8f5199fffc45ddae1f4f503e8be969949bb1f",
+        "total": 3,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/pixrt10.dll",
+        "source_sha256": "ba89459ef3469f4be0226c8cecb8f5199fffc45ddae1f4f503e8be969949bb1f",
+        "file_description": "Xbox Tools Framework (Durango Title OS)",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "scdxil.dll",
+      "group": "Graphics and memory",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. 7 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/scdxil.dll",
+        "binary_sha256": "7c945a23da710ba89d6a9496f9e4122c819bb500f08fd70253b1d913e5a5ed48",
+        "total": 7,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/scdxil.dll",
+        "source_sha256": "7c945a23da710ba89d6a9496f9e4122c819bb500f08fd70253b1d913e5a5ed48",
+        "file_description": "",
+        "file_version": "2106.2109.12814.14741",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "WerXboxGc.dll",
+      "group": "Diagnostics and tooling",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Windows Error Reporting Xbox Support. 8 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/WerXboxGc.dll",
+        "binary_sha256": "ebf1e08253342e1a00609b38d617180e9c81a7e2e4bc5efac16b688ab5cde3da",
+        "total": 8,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/WerXboxGc.dll",
+        "source_sha256": "ebf1e08253342e1a00609b38d617180e9c81a7e2e4bc5efac16b688ab5cde3da",
+        "file_description": "Windows Error Reporting Xbox Support",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xapu.dll",
+      "group": "Input and audio",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Audio Processing Unit DLL. 6 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xapu.dll",
+        "binary_sha256": "c82da68696153e88f2bf65c02266b68f3f4557c044c84840e8dcd924e29d2afe",
+        "total": 6,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xapu.dll",
+        "source_sha256": "c82da68696153e88f2bf65c02266b68f3f4557c044c84840e8dcd924e29d2afe",
+        "file_description": "Audio Processing Unit DLL",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xbsc_xs.dll",
+      "group": "Graphics and memory",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. 41 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xbsc_xs.dll",
+        "binary_sha256": "e6110c2a28ec5908ec1d720a0fa2a0db685e3b5997d60a2d647b1e73f74b8f8d",
+        "total": 41,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xbsc_xs.dll",
+        "source_sha256": "e6110c2a28ec5908ec1d720a0fa2a0db685e3b5997d60a2d647b1e73f74b8f8d",
+        "file_description": "",
+        "file_version": "2106.2109.12814.14741",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xbthunk.dll",
+      "group": "Platform and storage",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox Thunk API Dll. 11 exports catalogued; reached through the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xbthunk.dll",
+        "binary_sha256": "be6fb5cb6ad675f814d47bbf47aab5605465a6334e747e9863dac6d335716f03",
+        "total": 11,
+        "data_exports": [
+          "__RedirectionInformation__"
+        ],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xbthunk.dll",
+        "source_sha256": "be6fb5cb6ad675f814d47bbf47aab5605465a6334e747e9863dac6d335716f03",
+        "file_description": "Xbox Thunk API Dll",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "transitive",
+        "title_import_symbols": [],
+        "static_import_chain": [
+          "Frosty-XSX-Shipping.exe",
+          "xmem.dll",
+          "xbthunk.dll"
+        ]
+      }
+    },
+    {
+      "name": "xbtp.dll",
+      "group": "Platform and storage",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. \"xbtp.dll\" (Game OS). 132 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xbtp.dll",
+        "binary_sha256": "c279e56608cf49a354970d0b189d0e5ddccd8151b6674edc93bfbb12f2a7f5d9",
+        "total": 132,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xbtp.dll",
+        "source_sha256": "c279e56608cf49a354970d0b189d0e5ddccd8151b6674edc93bfbb12f2a7f5d9",
+        "file_description": "\"xbtp.dll\" (Game OS)",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xfp_gc.dll",
+      "group": "Other Xbox support",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox Front Panel Display API. 8 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xfp_gc.dll",
+        "binary_sha256": "4a9bcb70edcaccdecbcce996e5b681bb713372c7d3cb7e5c4c618181541c7372",
+        "total": 8,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xfp_gc.dll",
+        "source_sha256": "4a9bcb70edcaccdecbcce996e5b681bb713372c7d3cb7e5c4c618181541c7372",
+        "file_description": "Xbox Front Panel Display API",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xfrontpaneldisplay.dll",
+      "group": "Other Xbox support",
+      "status": "complete",
+      "provider": "TuxBox Rust front-panel API with optional xfp_gc transport.",
+      "scope": "All eight wrapper exports match the packaged DLL on systems without a panel and with a controlled connected transport. The guest checks all 32 light masks, buttons, frame dimensions, pixel format, a full frame, naming and error propagation.",
+      "remaining": "Physical panel hardware was unavailable. The separate xfp_gc.dll transport has its own coverage row.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json",
+        "evidence/providers/frontpanel-control.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xfrontpaneldisplay.dll",
+        "binary_sha256": "a75f8c736fec842da0b7f1868733175848f6f4bcb769261c016bedeeb5de38e0",
+        "total": 8,
+        "data_exports": [],
+        "verified": [
+          "XFrontPanelGetButtonStates",
+          "XFrontPanelGetLightStates",
+          "XFrontPanelGetScreenDimensions",
+          "XFrontPanelGetScreenPixelFormat",
+          "XFrontPanelIsSupported",
+          "XFrontPanelPresentBuffer",
+          "XFrontPanelSetDisplayName",
+          "XFrontPanelSetLightStates"
+        ],
+        "notes": "Eight names and ordinals match the package. Fifteen fresh-process runs cover Proton Experimental, GE-Proton and Wine."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xfrontpaneldisplay.dll",
+        "source_sha256": "a75f8c736fec842da0b7f1868733175848f6f4bcb769261c016bedeeb5de38e0",
+        "file_description": "Xbox Front Panel Display API",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xg_x.dll",
+      "group": "Graphics and memory",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox XG Library. 21 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xg_x.dll",
+        "binary_sha256": "a0a47aa33313089d328fa055b02c93960fcd7c6089ee43acbdb90c5092a83901",
+        "total": 21,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xg_x.dll",
+        "source_sha256": "a0a47aa33313089d328fa055b02c93960fcd7c6089ee43acbdb90c5092a83901",
+        "file_description": "Xbox XG Library",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xgs12.dll",
+      "group": "Graphics and memory",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox UMD12 User Mode Driver for UWP Extensions. 17 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xgs12.dll",
+        "binary_sha256": "afb0f9b351a1bee483441c28bb8a32b4573d5d656dadd7d9ec0be0ffdf66fa78",
+        "total": 17,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xgs12.dll",
+        "source_sha256": "afb0f9b351a1bee483441c28bb8a32b4573d5d656dadd7d9ec0be0ffdf66fa78",
+        "file_description": "Xbox UMD12 User Mode Driver for UWP Extensions",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xgs12_10.dll",
+      "group": "Graphics and memory",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox UMD12 User Mode Driver for UWP Extensions. 18 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xgs12_10.dll",
+        "binary_sha256": "036b9a0d8569ba662e52e2f7454c3f0e6506415b3b4f7423d51f3c7e31a3a288",
+        "total": 18,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xgs12_10.dll",
+        "source_sha256": "036b9a0d8569ba662e52e2f7454c3f0e6506415b3b4f7423d51f3c7e31a3a288",
+        "file_description": "Xbox UMD12 User Mode Driver for UWP Extensions",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xgs12_10d.dll",
+      "group": "Graphics and memory",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox Debug UMD12 User Mode Driver for UWP Extensions. 18 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xgs12_10d.dll",
+        "binary_sha256": "ab5ec402680bff9990507d86329481ed7d8c70dabe80c067ad7916728a5c9136",
+        "total": 18,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xgs12_10d.dll",
+        "source_sha256": "ab5ec402680bff9990507d86329481ed7d8c70dabe80c067ad7916728a5c9136",
+        "file_description": "Xbox Debug UMD12 User Mode Driver for UWP Extensions",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xgs12_10i.dll",
+      "group": "Graphics and memory",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox Instrumented UMD12 User Mode Driver for UWP Extensions. 18 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xgs12_10i.dll",
+        "binary_sha256": "11c6ad99499d8f661199f8bceaecfe9b21e6cc4b3026a9bedb05f683bef8dde4",
+        "total": 18,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xgs12_10i.dll",
+        "source_sha256": "11c6ad99499d8f661199f8bceaecfe9b21e6cc4b3026a9bedb05f683bef8dde4",
+        "file_description": "Xbox Instrumented UMD12 User Mode Driver for UWP Extensions",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xgs12_d.dll",
+      "group": "Graphics and memory",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox Debug UMD12 User Mode Driver for UWP Extensions. 17 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xgs12_d.dll",
+        "binary_sha256": "5ee45ff7004b0f33e1d47d63a9e5a44584ca6df24821180ad0b6187da04c92eb",
+        "total": 17,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xgs12_d.dll",
+        "source_sha256": "5ee45ff7004b0f33e1d47d63a9e5a44584ca6df24821180ad0b6187da04c92eb",
+        "file_description": "Xbox Debug UMD12 User Mode Driver for UWP Extensions",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xgs12_i.dll",
+      "group": "Graphics and memory",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox Instrumented UMD12 User Mode Driver for UWP Extensions. 17 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xgs12_i.dll",
+        "binary_sha256": "9a4dd37907014b7e9508996f84859991a0033addd98d45c99603126e7fa8ad25",
+        "total": 17,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xgs12_i.dll",
+        "source_sha256": "9a4dd37907014b7e9508996f84859991a0033addd98d45c99603126e7fa8ad25",
+        "file_description": "Xbox Instrumented UMD12 User Mode Driver for UWP Extensions",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xhit.dll",
+      "group": "Diagnostics and tooling",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox Hang Investigation Tool (XHIT) User Mode Client. 4 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xhit.dll",
+        "binary_sha256": "f8475bb7d42d4b951f7b936a626a47fc98baaefb3d64b195de066059318c516e",
+        "total": 4,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xhit.dll",
+        "source_sha256": "f8475bb7d42d4b951f7b936a626a47fc98baaefb3d64b195de066059318c516e",
+        "file_description": "Xbox Hang Investigation Tool (XHIT) User Mode Client",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xhit_s.dll",
+      "group": "Diagnostics and tooling",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Xbox Hang Investigation Tool (XHIT) User Mode Client. 4 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xhit_s.dll",
+        "binary_sha256": "cf59dd408e4627708f9d8cb18030a751f1aa0c754efb06bbaee40346aea57912",
+        "total": 4,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xhit_s.dll",
+        "source_sha256": "cf59dd408e4627708f9d8cb18030a751f1aa0c754efb06bbaee40346aea57912",
+        "file_description": "Xbox Hang Investigation Tool (XHIT) User Mode Client",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "XVMAudioService.dll",
+      "group": "Input and audio",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. Gamecore XVM Audio Service. 3 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/XVMAudioService.dll",
+        "binary_sha256": "2fe01c642d1d6ac3120da5728406f2fd72310201f2275148bc770aec40fd693c",
+        "total": 3,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/XVMAudioService.dll",
+        "source_sha256": "2fe01c642d1d6ac3120da5728406f2fd72310201f2275148bc770aec40fd693c",
+        "file_description": "Gamecore XVM Audio Service",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "pixevt.dll",
+      "group": "Diagnostics and tooling",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. 16 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/pixevt.dll",
+        "binary_sha256": "a4831fb50f9c5d36bc46753e481b0cd39be6ccc0d0f209dad33f3d13726a6321",
+        "total": 16,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/pixevt.dll",
+        "source_sha256": "a4831fb50f9c5d36bc46753e481b0cd39be6ccc0d0f209dad33f3d13726a6321",
+        "file_description": "",
+        "file_version": "",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "pixlivemerge.dll",
+      "group": "Diagnostics and tooling",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. PixLiveMerge.dll. 6 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/pixlivemerge.dll",
+        "binary_sha256": "fa97410d99c482d45e9ae5686ccef43cd0c921fd13bba0d50eb042d50482b034",
+        "total": 6,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/pixlivemerge.dll",
+        "source_sha256": "fa97410d99c482d45e9ae5686ccef43cd0c921fd13bba0d50eb042d50482b034",
+        "file_description": "PixLiveMerge.dll",
+        "file_version": "1.0.10579.00023",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xtfbaseservices.dll",
+      "group": "Diagnostics and tooling",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. \"XtfBaseServices.dll\" (Game OS). 60 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xtfbaseservices.dll",
+        "binary_sha256": "b5b562b7b9c7366b9f56f7f7956bd38fc9539b22413dd2bb75f924f3ea3cab26",
+        "total": 60,
+        "data_exports": [
+          "??_7LoggingManager@xtfbaseservices@@6B@",
+          "??_7LoggingTargetBase@xtfbaseservices@@6B@",
+          "??_7LoggingTargetCommonLogTextFile@xtfbaseservices@@6B@",
+          "??_7LoggingTargetDebuggerAndConsole@xtfbaseservices@@6B@",
+          "??_7NonCopyableDLLBase@xtfbaseservices@@6B@"
+        ],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xtfbaseservices.dll",
+        "source_sha256": "b5b562b7b9c7366b9f56f7f7956bd38fc9539b22413dd2bb75f924f3ea3cab26",
+        "file_description": "\"XtfBaseServices.dll\" (Game OS)",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xtfconsolecontrol.dll",
+      "group": "Diagnostics and tooling",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. \"XtfConsoleControl.dll\" (Game OS). 2 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xtfconsolecontrol.dll",
+        "binary_sha256": "9c935b7af822848a5c85c46d0400598a0285b2b7ff7b3cd18e51929f811449f8",
+        "total": 2,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xtfconsolecontrol.dll",
+        "source_sha256": "9c935b7af822848a5c85c46d0400598a0285b2b7ff7b3cd18e51929f811449f8",
+        "file_description": "\"XtfConsoleControl.dll\" (Game OS)",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xtfdebugmonitor.dll",
+      "group": "Diagnostics and tooling",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. \"XtfDebugMonitor.dll\" (Game OS). 2 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xtfdebugmonitor.dll",
+        "binary_sha256": "b549f145314ed0a55f697e7b9c339df74f4eb5be81c645309f6825c809bec961",
+        "total": 2,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xtfdebugmonitor.dll",
+        "source_sha256": "b549f145314ed0a55f697e7b9c339df74f4eb5be81c645309f6825c809bec961",
+        "file_description": "\"XtfDebugMonitor.dll\" (Game OS)",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xtfdiaginfo.dll",
+      "group": "Diagnostics and tooling",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. \"XtfDiagInfo.dll\" (Game OS). 2 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xtfdiaginfo.dll",
+        "binary_sha256": "447d68be161250ab3cc14242e2588375aa486af2bad593e586418e7cee5b78bb",
+        "total": 2,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xtfdiaginfo.dll",
+        "source_sha256": "447d68be161250ab3cc14242e2588375aa486af2bad593e586418e7cee5b78bb",
+        "file_description": "\"XtfDiagInfo.dll\" (Game OS)",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xtfeventserver.dll",
+      "group": "Diagnostics and tooling",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. \"XtfEventServer.dll\" (Game OS). 2 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xtfeventserver.dll",
+        "binary_sha256": "d53e877eadbcf79de318878fc56b92042317098a4f75d0da1a58431dd69f552f",
+        "total": 2,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xtfeventserver.dll",
+        "source_sha256": "d53e877eadbcf79de318878fc56b92042317098a4f75d0da1a58431dd69f552f",
+        "file_description": "\"XtfEventServer.dll\" (Game OS)",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xtffileio.dll",
+      "group": "Diagnostics and tooling",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. \"XtfFileIO.dll\" (Game OS). 2 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xtffileio.dll",
+        "binary_sha256": "17fbaa341aae32a98c72f7881bfb09db4b8cd476681e770157ccd4f3be36d49c",
+        "total": 2,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xtffileio.dll",
+        "source_sha256": "17fbaa341aae32a98c72f7881bfb09db4b8cd476681e770157ccd4f3be36d49c",
+        "file_description": "\"XtfFileIO.dll\" (Game OS)",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xtfpix.dll",
+      "group": "Diagnostics and tooling",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. \"XtfPix.dll\" (Game OS). 9 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xtfpix.dll",
+        "binary_sha256": "119201e1cbf45dc915703bb51ce12c6f9e354d6030373a4ffcedf4983f3d674b",
+        "total": 9,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xtfpix.dll",
+        "source_sha256": "119201e1cbf45dc915703bb51ce12c6f9e354d6030373a4ffcedf4983f3d674b",
+        "file_description": "\"XtfPix.dll\" (Game OS)",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "xtfremoterun.dll",
+      "group": "Diagnostics and tooling",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. \"XtfRemoteRun.dll\" (Game OS). 2 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/xtfremoterun.dll",
+        "binary_sha256": "143dc6d0428ec572418dd1cea30b6532c78ca66224c92eff133dacf73fdd8435",
+        "total": 2,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/xtfremoterun.dll",
+        "source_sha256": "143dc6d0428ec572418dd1cea30b6532c78ca66224c92eff133dacf73fdd8435",
+        "file_description": "\"XtfRemoteRun.dll\" (Game OS)",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
+      }
+    },
+    {
+      "name": "ConIoSrv.dll",
+      "group": "Other Xbox support",
+      "status": "incomplete",
+      "provider": "No verified TuxBox provider for this library.",
+      "scope": "On-disk Xbox support module. OneCore Console IO Server. 1 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified.",
+      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "evidence": [
+        "evidence/frosty-xbox-library-inventory.json"
+      ],
+      "export_coverage": {
+        "reference": "EmbeddedXvd/Windows/System32/ConIoSrv.dll",
+        "binary_sha256": "92bb50110167e56be326910c74a7915c37847c99d8ed445f980cb41e009aba4b",
+        "total": 1,
+        "data_exports": [],
+        "verified": [],
+        "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
+      },
+      "inventory": {
+        "source_path": "EmbeddedXvd/Windows/System32/ConIoSrv.dll",
+        "source_sha256": "92bb50110167e56be326910c74a7915c37847c99d8ed445f980cb41e009aba4b",
+        "file_description": "OneCore Console IO Server",
+        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
+        "title_reachability": "not statically reachable",
+        "title_import_symbols": [],
+        "static_import_chain": []
       }
     }
   ],
@@ -464,5 +2094,18 @@
     "verified": "Each listed export has tested behavior through a TuxBox implementation or an explicit TuxBox adapter. Name or ordinal lookup must reach the tested entry. External-only implementations receive no credit. A function may support only part of its inputs.",
     "data_exports": "Exports resolving to non-executable sections, excluding forwarders. The denominator also includes these data slots.",
     "interfaces": "COM vtable methods, supported data formats and feature completeness are described in each library record. They have no export-table denominator."
+  },
+  "inventory_summary": {
+    "evidence": "evidence/frosty-xbox-library-inventory.json",
+    "system_image_dlls_scanned": 245,
+    "title_mount_dlls_scanned": 4,
+    "catalogued_xbox_facing_dlls": 61,
+    "direct_static_imports": 11,
+    "transitive_static_dependencies": 1,
+    "not_statically_reachable": 49,
+    "title_regular_import_dlls": 65,
+    "title_regular_import_symbols": 537,
+    "title_delay_import_dlls": 1,
+    "title_delay_import_symbols": 15
   }
 }

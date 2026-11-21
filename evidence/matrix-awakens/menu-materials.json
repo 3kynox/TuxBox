@@ -1,0 +1,244 @@
+{
+  "title": "The Matrix Awakens",
+  "title_version": "1.20.1831.3754",
+  "title_sha256": "ae39eb1e92fa806df189c768c1478a53dfb54a2cc9769a9f2301ca7921e3eb04",
+  "camera": {
+    "package": "Frosty/Content/Blueprint/Gameplay/Camera/BP_FrostyCameraManager.uasset",
+    "sha256": "ac2bbcfb465a3c58e90a953add0700a9f8b2daceb804a7dcc30aeaa1f2ae3f6b",
+    "component": "DigitalRainPlane",
+    "class": "StaticMeshComponent",
+    "mesh": "/Game/Destruction/FX/Systems/_Resources/Plane",
+    "material_instance": "/Game/Effect/UI/MatrixCodeUI/Materials/MI_MatrixCode_UI"
+  },
+  "parameter_collection": {
+    "asset": "MPC_MatrixCodeUI",
+    "scalar_parameters": [
+      "TimeOffset"
+    ]
+  },
+  "materials": [
+    {
+      "asset": "Frosty/Content/Effect/UI/MatrixCodeUI/Materials/M_MatrixCode_UI.uasset",
+      "asset_sha256": "ab7e74e59d930e78ac2fa0a3012721e0f781ea97263e25ad1eba74a6c5d4cd7c",
+      "shader_map_sha1": "4c82a79adc660960d8098cc0592af797ed382cca",
+      "asset_map_id_offset": 16136,
+      "shader_map_entry": 136,
+      "entries": [
+        3528,
+        2,
+        3529,
+        3530,
+        3531,
+        3532,
+        19
+      ],
+      "pixel_programs": [
+        {
+          "entry": 3530,
+          "dxbc_sha256": "66582875b1cc75c3429a6fa0efcf878affb89d5ca52fbc33e68aa0690e018c99"
+        },
+        {
+          "entry": 3531,
+          "dxbc_sha256": "98b72406078b9e142ee1628bcc2306af54a3fcabb9b400baa9be983113558ded"
+        }
+      ]
+    },
+    {
+      "asset": "Frosty/Content/Effect/UI/MatrixCodeUI/Materials/PPM_MatrixCodeUIFilter.uasset",
+      "asset_sha256": "4b5b1c8f12899c629de86aec2b6abea4b1535778b8eb2c5342a3bc6fe4203447",
+      "shader_map_sha1": "2624287577f2fd34db9e098e8d92a0ebf01b4326",
+      "asset_map_id_offset": 7436,
+      "shader_map_entry": 66,
+      "entries": [
+        1459,
+        2,
+        748,
+        1460,
+        1279,
+        1461,
+        1462,
+        1463,
+        19
+      ],
+      "pixel_programs": [
+        {
+          "entry": 1461,
+          "dxbc_sha256": "0c41d2ba5d0309dda44666503dc5b50c27c8a3a840cdad9a81a25d238eae0f08"
+        },
+        {
+          "entry": 1462,
+          "dxbc_sha256": "8a7dd92fdff86c0f7d4f3007b788f27a077b0e9afdc3f200647b05f9bd1d129d"
+        },
+        {
+          "entry": 1463,
+          "dxbc_sha256": "f4ae3d082d9a2f5e6b0d74d115d766b067cdfb6fb28fdf88a0cc6b6300adeaa0"
+        }
+      ]
+    }
+  ],
+  "textures": [
+    {
+      "asset": "Frosty/Content/Effect/UI/MatrixCodeUI/Textures/T_DigitalRain_Flipbook_01_SubPixelEdge.uasset",
+      "asset_sha256": "fe3b4f72f60b65c2f534ac62cc34e9b91ebd49dcbe082b93c9a6ff7315e12c29",
+      "format": "PF_DXT1",
+      "width": 8192,
+      "height": 8192,
+      "first_cooked_mip": 1,
+      "mip_count": 13
+    },
+    {
+      "asset": "Frosty/Content/Effect/UI/MatrixCodeUI/Textures/T_CRT_RGB_SubPixelPattern.uasset",
+      "asset_sha256": "20ca3d8cb5ce662c761eab2fc3948c68dd8812a406f7ca7ffebed803b31da31a",
+      "format": "PF_DXT1",
+      "width": 256,
+      "height": 256,
+      "first_cooked_mip": 0,
+      "mip_count": 9
+    },
+    {
+      "asset": "Frosty/Content/Effect/UI/MatrixCodeUI/Textures/T_EV_FogSheet_Falloff_03.uasset",
+      "asset_sha256": "eeb2f437aad90d736ccb024a1e1ed2b0b9f4ef0cd99c75651470c922a399e93b",
+      "format": "PF_DXT5",
+      "width": 256,
+      "height": 256,
+      "first_cooked_mip": 0,
+      "mip_count": 9
+    },
+    {
+      "asset": "Frosty/Content/Effect/UI/MatrixCodeUI/Textures/T_BloomKernel_MatrixCode_Upward.uasset",
+      "asset_sha256": "224e50ad95bc639ca68027f609e7a50c115d707d25b38d5f24a9679a35ee8243",
+      "format": "PF_BC6H",
+      "width": 2048,
+      "height": 2048,
+      "first_cooked_mip": 0,
+      "mip_count": 1
+    },
+    {
+      "asset": "Frosty/Content/Effect/UI/MatrixCodeUI/Materials/Curves/CurveAtlas_MatrixCodeUI.uasset",
+      "asset_sha256": "d9cba2cbaebe303db850462557af9a43103a18d769d5e79485073525a8bd222b",
+      "format": "PF_FloatRGBA",
+      "width": 256,
+      "height": 8,
+      "first_cooked_mip": 0,
+      "mip_count": 1
+    }
+  ],
+  "method": "Matched a complete 20-byte shader-map key embedded in each cooked material export to a unique key in the package material shader archive. Read the associated shader-index range and the packaged texture platform-data and mip headers.",
+  "menu_gpu_replay": {
+    "capture_tool": "RenderDoc 1.46",
+    "adapter": "NVIDIA GeForce RTX 4070 Ti SUPER",
+    "geometry": {
+      "archive": "Material",
+      "vertex_entry": 2,
+      "vertex_dxbc_sha256": "e1a4282159cf2592d5b283e9e790d3c8668f13d31cb9013585f9cd887b8ebeb4",
+      "pixel_entry": 3530,
+      "indices": 6,
+      "vertices": 4,
+      "instances": 1
+    },
+    "instance_culling": {
+      "compute_dxbc_sha256": [
+        "46dc8c6c941cee2e290a5cc9953083bb1d89be893a21b4206ecdfd22259fe490",
+        "98e02d75a4daec17354269988eaaa5e2718a7bc915de2cd24c9a2954b0db13d9"
+      ],
+      "original_translated_work_item_bytes": 16,
+      "corrected_work_item_bytes": 8,
+      "visible_instance_offset_elements": 38984,
+      "instance_id_before": 131586,
+      "instance_id_after": 1984,
+      "instance_data_buffer_elements": 40960,
+      "clip_positions_xyzw_after": [
+        [
+          236.3225,
+          -298.5468,
+          10.0,
+          139.9939
+        ],
+        [
+          236.3225,
+          590.3419,
+          10.0,
+          139.9986
+        ],
+        [
+          -263.6775,
+          -298.5468,
+          10.0,
+          140.0039
+        ],
+        [
+          -263.6774,
+          590.3419,
+          10.0,
+          140.0087
+        ]
+      ]
+    },
+    "vertex_fetch": {
+      "input": "SV_VertexID",
+      "before_texcoord0_xy": [
+        [
+          1.0,
+          1.0
+        ],
+        [
+          1.0,
+          1.0
+        ],
+        [
+          1.0,
+          1.0
+        ],
+        [
+          1.0,
+          1.0
+        ]
+      ],
+      "after_texcoord0_xy": [
+        [
+          1.0,
+          1.0
+        ],
+        [
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ]
+    },
+    "material_ps_inputs": [
+      {
+        "register": "t0",
+        "format": "R16G16B16A16_FLOAT",
+        "dimensions": [
+          256,
+          8
+        ]
+      },
+      {
+        "register": "t1",
+        "format": "BC3_UNORM",
+        "dimensions": [
+          256,
+          256
+        ]
+      },
+      {
+        "register": "t2",
+        "format": "BC1_UNORM",
+        "dimensions": [
+          4096,
+          4096
+        ]
+      }
+    ],
+    "method": "Replayed the captured menu draw. Correcting the work-item stride in the two compute shaders changed the visible-instance ID and produced finite clip positions. With those strides held fixed, replayed the same four vertices twice, once with zero vertex and instance IDs and once with the original inputs. Read TEXCOORD0.xy from the output of the vertex shader. The draw uses one instance, so only the vertex ID varies."
+  }
+}

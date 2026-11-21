@@ -1,4 +1,6 @@
 //! The local Game Chat manager's remote participant roster and bitrate setting.
+mod frames;
+
 use core::ptr;
 use std::sync::{Mutex, MutexGuard};
 use windows_sys::Win32::Foundation::{E_FAIL, E_NOTIMPL, E_OUTOFMEMORY, E_POINTER, S_OK};
@@ -48,6 +50,7 @@ struct Session {
     limit: usize,
     bitrate: u32,
     endpoints: Vec<u64>,
+    outgoing: frames::OutgoingFrames,
     users: Vec<User>,
     // Parallel indices give the guest the dense array of handles required by
     // GetChatUsers. A handle is an opaque value, never a Rust object pointer.
@@ -96,6 +99,7 @@ pub extern "system" fn initialize(
         limit: max_users as usize,
         bitrate: BITRATE_24_KBPS,
         endpoints: Vec::new(),
+        outgoing: frames::OutgoingFrames::default(),
         users: Vec::new(),
         handles: Vec::new(),
     });
@@ -171,6 +175,9 @@ pub unsafe extern "system" fn add_remote(
             return E_OUTOFMEMORY;
         }
     }
+    if let Err(hr) = session.outgoing.reserve_announcement() {
+        return hr;
+    }
     let result = if session.users.len() >= session.limit {
         ROSTER_FULL
     } else if let Some(index) = session.users.iter().position(|user| user.xuid == xuid) {
@@ -200,6 +207,9 @@ pub unsafe extern "system" fn add_remote(
     if new_endpoint {
         session.endpoints.push(endpoint);
     }
+    // The package also announces duplicate users and full-roster requests
+    // once endpoint registration succeeds.
+    session.outgoing.announce(endpoint);
     result
 }
 
@@ -222,6 +232,7 @@ pub extern "system" fn remove_user(handle: usize) -> HRESULT {
         session
             .endpoints
             .retain(|&endpoint| endpoint != user.endpoint);
+        session.outgoing.remove_endpoint(user.endpoint);
     }
     S_OK
 }

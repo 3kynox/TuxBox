@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Check selected real Frosty global shaders against the Linux TomBox translator.
+"""Check selected real Frosty global shaders with the checkout-local shader translator.
 
-python tools/check_frosty_shaders.py /path/to/MA/Mount --xshader ../TomBox/target/release/xshader --output receipt.json
+python tools/check_frosty_shaders.py /path/to/MA/Mount --output receipt.json
 
 Reads the uncompressed Global archive member in the audited Frosty-XSX.pak.
 Only the JSON receipt is retained. Requires liblz4, llvm-mc and DirectX Shader Compiler.
@@ -30,6 +30,7 @@ from build import find_dxc
 from check_frame_profile import decoded, interface, require, rip
 from check_frosty_profile import BUILD, check_rows, symbols
 from project_tuxbox.inspect import digest
+from project_tuxbox.shader_prep import shader_compiler
 
 GLOBAL_SHA = "afab84fa891e491d64f1c2a9bdf26a66afc2054aef2cd9110e358402473b4fb2"
 ENTRY = struct.Struct("<QIIB")  # offset in code area, stored bytes, decoded bytes, frequency
@@ -192,7 +193,7 @@ def ray_state(data, llvm_mc):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mount", type=Path)
-    parser.add_argument("--xshader", required=True, type=Path)
+    parser.add_argument("--xshader", type=Path)
     parser.add_argument("--xscan", type=Path, help="also survey HLSL translation across the non-ray global archive")
     parser.add_argument("--dxc", type=Path)
     parser.add_argument("--output", type=Path, required=True)
@@ -200,7 +201,8 @@ def main():
     args = parser.parse_args()
     llvm_mc = shutil.which("llvm-mc")
     require(llvm_mc, "llvm-mc is required")
-    xshader, dxc = args.xshader.resolve(), Path(find_dxc(args.dxc)).resolve()
+    xshader = args.xshader.resolve() if args.xshader else shader_compiler()
+    dxc = Path(find_dxc(args.dxc)).resolve()
     payload, entries = global_archive(args.mount)
     lib = find_library("lz4")
     require(lib, "liblz4 is required")

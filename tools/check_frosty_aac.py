@@ -14,7 +14,7 @@ from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from build import Toolchain
+from project_tuxbox.media import build_audio
 from check_frosty_hevc import run_host
 from project_tuxbox.host import Host
 from project_tuxbox.inspect import digest
@@ -28,13 +28,10 @@ def main():
     work = args.work.resolve()
     work.mkdir(exist_ok=True, parents=True)
     dll = work / "frosty_packaged_aac.dll"
-    shutil.copyfile(args.packaged_os / "Windows/System32/MSAudDecMFT.dll", dll)
-    for name in ("xmem.dll", "mfplat.dll", "mfplat_sys.dll", "mfplat_tombox.dll"):
-        shutil.copyfile(args.hevc_work / name, work / name)
-    t = Toolchain()
-    obj = t.compile(ROOT / "tools/reference/aac/decode.cpp", work, "/W4", "/WX", f"/I{ROOT / 'runtime/d3d12'}")
     guest = work / "aac.exe"
-    t.link(guest, obj, "mfplat.lib", "mfuuid.lib", "ole32.lib", "advapi32.lib", "kernel32.lib")
+    build_audio(work, args.packaged_os)
+    for name in ("xmem.dll", "mfplat.dll", "mfplat_sys.dll"):
+        shutil.copyfile(args.hevc_work / name, work / name)
     host = Host("proton", args.proton, args.prefix)
     run_host(host, guest, work, "register", "registration.txt")
     packets = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-select_streams", "a:0",

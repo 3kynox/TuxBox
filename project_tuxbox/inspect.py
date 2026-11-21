@@ -1,11 +1,17 @@
-"""Read PE imports and GDK manifest declarations without loading guest code."""
+"""Read package binaries, PE imports and GDK launch declarations without loading guest code."""
 from collections import Counter
 from contextlib import closing
 from hashlib import sha256
+from io import BytesIO
 from pathlib import Path, PureWindowsPath
+import struct
 from xml.etree import ElementTree
+import zlib
 
 import pefile
+
+from .gameconfig import binary_game_config
+from .symbols import symbol_header
 
 
 def digest(path):
@@ -82,6 +88,53 @@ def image(path, *, imports=True):
     return result
 
 
+def binary_file(path):
+    """Read a bounded prefix. Only game-config hives need a full, size-limited parse."""
+    size = path.stat().st_size
+    result = {"kind": "opaque binary", "size_bytes": size}
+    with path.open("rb") as stream:
+        if path.name.casefold() == "microsoft_gameconfig.bin":
+            try:
+                result["game_config"] = binary_game_config(stream)
+                result["kind"] = "Xbox game configuration"
+            except ValueError as exc:
+                result["error"] = str(exc)
+            return result
+        head = stream.read(65536)
+
+    if head.startswith(b"MZ"):
+        try:
+            with closing(pefile.PE(data=head, fast_load=True)) as pe:
+                entry = pe.OPTIONAL_HEADER.AddressOfEntryPoint
+                if len(pe.sections) != pe.FILE_HEADER.NumberOfSections or not pe.sections:
+                    return result
+                if any(s.SizeOfRawData and s.PointerToRawData + s.SizeOfRawData > size for s in pe.sections):
+                    return result
+                executable = any(s.Characteristics & 0x20000000 for s in pe.sections)
+                header = pe.OPTIONAL_HEADER
+                catalog = header.Subsystem == 17  # IMAGE_SUBSYSTEM_XBOX_CODE_CATALOG in winnt.h.
+                result.update(kind="Xbox code catalog" if catalog else "PE image",
+                              machine=hex(pe.FILE_HEADER.Machine), entry_rva=hex(entry),
+                              sections=len(pe.sections), executable_sections=executable)
+                if catalog:
+                    result.update(subsystem=header.Subsystem, code_bytes=header.SizeOfCode,
+                                  force_integrity=bool(header.DllCharacteristics & 0x80))
+        except pefile.PEFormatError:
+            pass
+    elif head.startswith(b"ANOA\x2a\xcc\xf4\x80") and len(head) >= 24:
+        result.update(kind="Unsync build manifest", version=struct.unpack_from("<Q", head, 8)[0])
+    elif len(head) > 8:
+        unpacked, packed = struct.unpack_from("<II", head)
+        if packed != size - 8:
+            return result
+        try:
+            header = zlib.decompressobj().decompress(head[8:], 4096)
+            result.update(symbol_header(BytesIO(header), unpacked))
+        except (ValueError, zlib.error):
+            pass
+    return result
+
+
 def member(root, declared):
     name = PureWindowsPath(declared)
     if not name.parts or name.anchor or ".." in name.parts or ":" in declared:
@@ -104,21 +157,30 @@ def member(root, declared):
 def manifest(root):
     config = member(root, "MicrosoftGame.config")
     if config is None:
-        raise ValueError("No MicrosoftGame.config in that directory")
-    if config.stat().st_size > 16 * 1024 * 1024:
-        raise ValueError("Manifest exceeds the inspector's 16 MiB limit")
-    game = ElementTree.parse(config).getroot()
-    if game.tag.split("}")[-1] != "Game":
-        raise ValueError("Expected a Game manifest")
+        config = member(root, "microsoft_gameconfig.bin")
+        if config is None:
+            raise ValueError("No MicrosoftGame.config or microsoft_gameconfig.bin in that directory")
+        with config.open("rb") as stream:
+            game_config = binary_game_config(stream)
+        declarations = game_config["executables"]
+        identity = ElementTree.Element("Identity", game_config["identity"])
+    else:
+        if config.stat().st_size > 16 * 1024 * 1024:
+            raise ValueError("Manifest exceeds the inspector's 16 MiB limit")
+        game = ElementTree.parse(config).getroot()
+        if game.tag.split("}")[-1] != "Game":
+            raise ValueError("Expected a Game manifest")
+        identity = game.find("{*}Identity")
+        declarations = game.findall("{*}ExecutableList/{*}Executable")
     entries = []
-    for exe in game.findall("{*}ExecutableList/{*}Executable"):
+    for exe in declarations:
         name = exe.get("Name")
         if not name:
             raise ValueError("An Executable declaration is missing its Name")
         entries.append((name, exe.get("Id"), exe.get("TargetDeviceFamily"), member(root, name)))
     if not entries:
         raise ValueError("Manifest has no executable declarations")
-    return config, game.find("{*}Identity"), entries
+    return config, identity, entries
 
 
 def package(root):
@@ -126,6 +188,7 @@ def package(root):
     config, identity, entries = manifest(root)
     files = Counter()
     libraries = []
+    binaries = []
     for path in sorted(root.rglob("*")):
         if path.is_symlink() or not path.is_file():
             continue
@@ -137,12 +200,19 @@ def package(root):
             except (pefile.PEFormatError, OSError) as exc:
                 info = {"error": str(exc)}
             libraries.append({"path": path.relative_to(root).as_posix(), **info})
+        elif ext == ".bin":
+            try:
+                info = binary_file(path)
+            except OSError as exc:
+                info = {"error": str(exc)}
+            binaries.append({"path": path.relative_to(root).as_posix(), **info})
     return {
-        "manifest_sha256": digest(config), "identity": dict(identity.attrib) if identity is not None else {},
+        "manifest_file": config.name, "manifest_sha256": digest(config),
+        "identity": dict(identity.attrib) if identity is not None else {},
         "files_by_extension": dict(sorted(files.items())),
         "executables": [{"path": name, "id": app_id, "target": target, "present": path is not None,
                          **({"image": image(path)} if path else {})} for name, app_id, target, path in entries],
-        "libraries": libraries,
+        "libraries": libraries, "binary_files": binaries,
     }
 
 

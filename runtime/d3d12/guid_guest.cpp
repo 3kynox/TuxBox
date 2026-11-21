@@ -1,5 +1,4 @@
-// The Windows SDK supplies each expected value. Read console data through
-// the guest IAT, then check both GetProcAddress lookup paths against it.
+// Read console data through the guest IAT and check both GetProcAddress paths.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <d3d12.h>
@@ -9,6 +8,10 @@
 #include <cstdio>
 #include <cwchar>
 #include <iterator>
+
+// These console IDs are present in both supplied DLLs.
+struct __declspec(uuid("30bc77b9-8379-4b25-95de-b8588c42275d")) ID3D12XboxDmaCommandList;
+struct __declspec(uuid("aceeea63-e0a9-4a1c-bbec-71b2f485f758")) IGraphicsUnknown;
 
 #define GUID_EXPORT(symbol, expected, ordinal) extern "C" const GUID* const __imp_##symbol;
 #include "guid-exports.inc"

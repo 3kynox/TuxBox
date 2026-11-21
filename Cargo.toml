@@ -1,7 +1,7 @@
 [workspace]
 members = [
-    "runtime/aac", "runtime/d3d12", "runtime/gamechat", "runtime/gameconfig",
-    "runtime/mfreadwrite", "runtime/xaudio", "runtime/xg", "runtime/xmem", "tools/pipeline-prep",
+    "runtime/aac", "runtime/acphal", "runtime/d3d12", "runtime/frontpanel", "runtime/gamechat", "runtime/gameconfig", "runtime/gameinput",
+    "runtime/mfreadwrite", "runtime/xaudio", "runtime/xg", "runtime/xcrdapi", "runtime/xg-layout", "runtime/xgameruntime", "runtime/xmem", "tools/pipeline-prep",
 ]
 resolver = "3"
 

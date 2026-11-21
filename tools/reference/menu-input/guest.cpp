@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <stdexcept>
 #include <windows.h>
+#include <Xinput.h>
 #include <wrl/client.h>
 
 using Microsoft::WRL::ComPtr;
@@ -136,23 +137,20 @@ int wmain(int argc, wchar_t **argv) {
     }
     ComPtr<IGameInput> input;
     require(SUCCEEDED(GameInputCreate(&input)), "GameInputCreate");
+    XINPUT_STATE hardware{};
+    for (DWORD slot = 0; slot < XUSER_MAX_COUNT; ++slot)
+      require(XInputGetState(slot, &hardware) != ERROR_SUCCESS, "disconnect physical controllers for the desktop-only test");
     if (wcscmp(argv[1], L"off") == 0) {
       ComPtr<IGameInputReading> reading;
-      if (SUCCEEDED(input->GetCurrentReading(GameInputKindGamepad, nullptr,
-                                             &reading))) {
-        ComPtr<IGameInputDevice> device;
-        reading->GetDevice(&device);
-        require(device->GetDeviceInfo()->deviceId.value[0] != 5,
-                "unexpected keyboard device");
-      }
+      require(FAILED(input->GetCurrentReading(GameInputKindGamepad, nullptr, &reading)) && !reading,
+              "unexpected keyboard gamepad");
       std::fprintf(receipt, "keyboard_pad_absent=1\n");
     } else {
       GameInputGamepadState expected{};
       auto previous = expect(input.Get(), expected);
       ComPtr<IGameInputDevice> device;
       previous->GetDevice(&device);
-      require(device->GetDeviceInfo()->deviceId.value[0] == 5,
-              "unexpected port; disconnect physical gamepads for this test");
+      require(device && device->GetDeviceInfo()->supportedInput & GameInputKindGamepad, "keyboard gamepad identity");
       require(!device->GetDeviceInfo()->supportedRumbleMotors,
               "synthetic rumble");
       const struct {
@@ -249,10 +247,10 @@ int wmain(int argc, wchar_t **argv) {
       require(GetCursorPos(&actual) && actual.x == home.x && actual.y == home.y,
               "restore cursor after mouse look");
       std::fprintf(receipt,
-                   "keyboard_port=5\nbuttons=12\nkeyboard_aliases=2\nbipolar_axes=4\n"
+                   "keyboard_device_id=%u\nbuttons=12\nkeyboard_aliases=2\nbipolar_axes=4\n"
                    "triggers=2\nordered_edges=%u\nmouse_confirm=1\nmouse_aim_fire=1\n"
                    "mouse_look_signed_axes=2\nmouse_idle_neutral=1\ncursor_restored=1\n",
-                   transitions);
+                   device->GetDeviceInfo()->deviceId.value[0], transitions);
     }
     DestroyWindow(window);
     fclose(receipt);

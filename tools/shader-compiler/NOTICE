@@ -1,0 +1,11 @@
+The shader container, metadata, RDNA2 decoder and HLSL translator in src/
+derive from the TomBox contributors' tuxbox-xshader crate, via brcly/TomBox
+(ca6cf6a6b44e36d3ca4420db55a660a7bc6d6d5a plus working-tree changes).
+The original crate is MIT OR Apache-2.0. This distribution selects Apache-2.0.
+See ../../docs/licenses/tombox/Apache-2.0.txt.
+
+Modified for TuxBox in November 2026. The Frosty translation changes include
+wave operations, buffer and texture addressing, compute programs and linked
+vertex/geometry and pixel signatures. This host tool includes only the
+translation library and the command-line entry point used by shader preparation.
+Its source builds independently of the reference runtime.

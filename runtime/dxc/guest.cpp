@@ -18,6 +18,13 @@
 namespace {
 using Microsoft::WRL::ComPtr;
 constexpr UINT32 size = 257;
+#ifdef TUXBOX_DXC_XBOX_ONE
+constexpr wchar_t module_name[] = L"dxcompiler_x.dll";
+constexpr WORD first_ordinal = 1;
+#else
+constexpr wchar_t module_name[] = L"dxcompiler_xs.dll";
+constexpr WORD first_ordinal = 3;
+#endif
 
 void check(HRESULT hr, const char* operation) {
     if (SUCCEEDED(hr)) return;
@@ -83,9 +90,9 @@ public:
 };
 
 void run_allocator() {
-    const auto module = GetModuleHandleW(L"dxcompiler_xs.dll");
-    if (!module || GetProcAddress(module, MAKEINTRESOURCEA(3)) != GetProcAddress(module, "DxcCreateInstance") ||
-        GetProcAddress(module, MAKEINTRESOURCEA(4)) != GetProcAddress(module, "DxcCreateInstance2"))
+    const auto module = GetModuleHandleW(module_name);
+    if (!module || GetProcAddress(module, MAKEINTRESOURCEA(first_ordinal)) != GetProcAddress(module, "DxcCreateInstance") ||
+        GetProcAddress(module, MAKEINTRESOURCEA(first_ordinal + 1)) != GetProcAddress(module, "DxcCreateInstance2"))
         throw std::runtime_error("console DXC factory ordinals differ");
     auto allocator = Microsoft::WRL::Make<Allocator>();
     if (!allocator) throw std::bad_alloc();
@@ -104,19 +111,61 @@ void run_allocator() {
         throw std::runtime_error("caller allocator has outstanding allocations");
 }
 
+void run_compiler() {
+    constexpr char source[] =
+        "RWStructuredBuffer<uint> dst : register(u0);"
+        "[RootSignature(\"UAV(u0)\")]"
+        "[numthreads(1,1,1)] void main(uint3 pos : SV_DispatchThreadID) { dst[pos.x] = pos.x + 7; }";
+    const DxcBuffer input{source, sizeof(source) - 1, DXC_CP_UTF8};
+    ComPtr<IDxcCompiler3> compiler;
+    check(DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler)), "create compiler");
+    LPCWSTR args[] = {L"-T", L"cs_6_0", L"-E", L"main", L"-Vd"};
+    ComPtr<IDxcResult> result;
+    check(compiler->Compile(&input, args, ARRAYSIZE(args), nullptr, IID_PPV_ARGS(&result)), "compile");
+    HRESULT status;
+    check(result->GetStatus(&status), "compile status");
+    if (FAILED(status)) {
+        ComPtr<IDxcBlobEncoding> errors;
+        if (SUCCEEDED(result->GetErrorBuffer(&errors)) && errors && errors->GetBufferSize())
+            throw std::runtime_error("compile shader: " + std::string(
+                static_cast<const char*>(errors->GetBufferPointer()), errors->GetBufferSize()));
+    }
+    check(status, "compile shader");
+    ComPtr<IDxcBlob> object;
+    check(result->GetResult(&object), "compiled object");
+    if (!object) throw std::runtime_error("compiler returned an empty object");
+    ComPtr<IDxcUtils> utils;
+    check(DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils)), "create utilities");
+    const DxcBuffer container{object->GetBufferPointer(), object->GetBufferSize(), 0};
+    void* part = nullptr;
+    UINT32 part_bytes = 0;
+    check(utils->GetDxilContainerPart(&container, DXC_PART_DXIL, &part, &part_bytes), "get DXIL part");
+    if (!part || !part_bytes) throw std::runtime_error("compiled shader has no DXIL payload");
+
+    args[3] = L"missing_entry";
+    result.Reset();
+    check(compiler->Compile(&input, args, ARRAYSIZE(args), nullptr, IID_PPV_ARGS(&result)), "compile invalid entry");
+    check(result->GetStatus(&status), "invalid entry status");
+    ComPtr<IDxcBlobEncoding> diagnostics;
+    check(result->GetErrorBuffer(&diagnostics), "diagnostic blob");
+    if (SUCCEEDED(status) || !diagnostics || !diagnostics->GetBufferSize())
+        throw std::runtime_error("invalid shader entry generated no failure or diagnostic");
+}
+
 }
 
 int wmain(int argc, wchar_t** argv) {
     FILE* report = stdout;
     const bool custom = argc > 1 && !std::wcscmp(argv[1], L"--allocator");
-    const int next = custom ? 2 : 1;
+    const bool compile = argc > 1 && !std::wcscmp(argv[1], L"--compile");
+    const int next = custom || compile ? 2 : 1;
     if (argc == next + 2 && !std::wcscmp(argv[next], L"--report") && *argv[next + 1]) {
         if (_wfopen_s(&report, argv[next + 1], L"wb") != 0) {
             std::fputs("dxc-utils failed: cannot open report\n", stderr);
             return 1;
         }
     } else if (argc != next) {
-        std::fputs("usage: dxc-utils.exe [--allocator] [--report FILE]\n", stderr);
+        std::fputs("usage: dxc guest [--allocator | --compile] [--report FILE]\n", stderr);
         return 2;
     }
     int status = 0;
@@ -124,7 +173,11 @@ int wmain(int argc, wchar_t** argv) {
         int written;
         if (custom) {
             run_allocator();
-            written = std::fprintf(report, "dxc-allocator PASS ordinals=3,4 custom=1 retained=1 balanced=1\n");
+            written = std::fprintf(report, "dxc-allocator PASS ordinals=%d,%d custom=1 retained=1 balanced=1\n",
+                                   first_ordinal, first_ordinal + 1);
+        } else if (compile) {
+            run_compiler();
+            written = std::fprintf(report, "dxc-compiler PASS profile=cs_6_0 dxil=1 invalid-entry=1 diagnostics=1\n");
         } else {
             run();
             written = std::fprintf(report, "dxc-utils PASS bytes=%u source-freed=1 writable=%u retained=1\n", size, size);

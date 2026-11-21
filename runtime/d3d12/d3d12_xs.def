@@ -1,10 +1,19 @@
 LIBRARY d3d12_xs
 EXPORTS
+    D3D10CreateBlob=d3dcompiler_47.D3DCreateBlob @4
     D3D12CreateRootSignatureDeserializer=d3d12.D3D12CreateRootSignatureDeserializer @7
     D3D12CreateVersionedRootSignatureDeserializer=d3d12.D3D12CreateVersionedRootSignatureDeserializer @8
+    D3D12CreateDevice=tuxbox_create_device @6
+    D3D12GetDebugInterface @9
     D3D12SerializeRootSignature=d3d12.D3D12SerializeRootSignature @10
     D3D12SerializeVersionedRootSignature=d3d12.D3D12SerializeVersionedRootSignature @11
+    D3D12XboxGetProcessDebugFlags @15
+    D3D12XboxSetProcessDebugFlags @16
     D3D12XboxCreateDevice @13
+    DXGIXGetFrameStatistics=tuxbox_dxgix_unsupported @18
+    DXGIXPresentArray=tuxbox_dxgix_unsupported @19
+    DXGIXSetFrameNotification=tuxbox_dxgix_unsupported @20
+    DXGIXSetVLineNotification=tuxbox_dxgix_unsupported @21
     IID_ID3D12CommandAllocator @22 DATA
     IID_ID3D12CommandList @23 DATA
     IID_ID3D12CommandQueue @24 DATA
@@ -21,6 +30,7 @@ EXPORTS
     IID_ID3D12Resource @35 DATA
     IID_ID3D12RootSignature @36 DATA
     IID_ID3D12RootSignatureDeserializer @37 DATA
+    IID_ID3D12XboxDmaCommandList @38 DATA
     IID_IDXGIAdapter @39 DATA
     IID_IDXGIAdapter1 @40 DATA
     IID_IDXGIAdapter2 @41 DATA
@@ -34,4 +44,5 @@ EXPORTS
     IID_IDXGIObject @49 DATA
     IID_IDXGISwapChain @50 DATA
     IID_IDXGISwapChain1 @51 DATA
+    IID_IGraphicsUnknown @52 DATA
     WKPDID_D3DDebugObjectNameW @54 DATA

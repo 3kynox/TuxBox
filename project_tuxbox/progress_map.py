@@ -118,6 +118,25 @@ def retail_summary(evidence, report):
     if key not in trials:
         raise ValueError(f"Unknown current retail trial {key!r}")
     notes = loader_notes(report, key)
+    independent = read_json(evidence / "matrix-awakens/independent-menu.json")
+    if (independent.get("executable_sha256") == report.get("sha256") and report.get("sha256")
+            and "independent-menu.webp" in independent.get("captures", {})):
+        rows = [("Main menu", "Rendered", GREEN)]
+        if "independent-settings.webp" in independent["captures"]:
+            rows.append(("Settings", "Opened from keyboard", GREEN))
+        menu = read_json(evidence / "matrix-awakens/menu-background.json")
+        if menu.get("title_sha256") == report["sha256"] and "verified" in menu:
+            if menu["verified"]:
+                rows.append(("Green code background", "Animated", GREEN))
+            elif menu.get("observation") == "Black":
+                rows.append(("Green code background", "Missing", RED))
+        if "independent-wakeup.webp" in independent["captures"]:
+            rows.append(("Start Chase", "Opening cinematic", GREEN))
+        rows.append(("Driving and shooting", "Unverified", MUTED))
+        host = independent.get("proton", "")
+        if "experimental" in host.casefold():
+            host = "Proton Experimental"
+        return host, notes, rows
     replay = read_json(evidence / report["chase_display_receipt"]) if report.get("chase_display_receipt") else {}
     extended = replay.get("desktop_extended_trial", {})
     if not report.get("sha256"):
@@ -206,7 +225,8 @@ def draw_runtime(svg, y, evidence):
         text(group, 18, 70, "The Matrix Awakens", 25, AMBER, bold=True)
         if retail:
             element(group, "desc").text = ". ".join(notes)
-            text(group, 18, 96, "Retail launch with reference providers", 15)
+            label = "Retail launch with TuxBox providers" if any(row[0] == "Main menu" for row in retail) else "Retail comparison run"
+            text(group, 18, 96, label, 15)
             text(group, 18, 118, host, 15, MUTED)
             top = 136
             for labels, value, color in retail_rows:
@@ -256,10 +276,51 @@ def export_breakdown(library):
     return f"{len(verified)-tested_data}/{functions} functions, {tested_data}/{len(data)} data"
 
 
+def frosty_import_coverage(evidence, libraries):
+    inventory = read_json(evidence / "frosty-xbox-library-inventory.json")
+    if not inventory:
+        return None
+    direct = {}
+    for entry in inventory["title"]["imports"]:
+        direct.setdefault(entry["module"].casefold(), []).extend(entry["symbols"])
+    binaries = {(pe["name"].casefold(), pe["sha256"]): pe for pe in inventory["libraries"]}
+    results = {}
+    for library in libraries:
+        name = library["name"]
+        if name.casefold() not in direct:
+            continue
+        coverage = library.get("export_coverage") or {}
+        pe = binaries.get((name.casefold(), coverage.get("binary_sha256")))
+        if pe is None:
+            results[name] = None
+            continue
+        slots = {}
+        for entry in pe["exports"]["entries"]:
+            ordinal = entry["ordinal"]
+            slots[f"#{ordinal}"] = ordinal
+            slots.update(dict.fromkeys(entry["names"], ordinal))
+        verified = {slots[symbol] for symbol in coverage["verified"] if symbol in slots}
+        # Multiple import spellings can resolve to one export slot. Preserve the first
+        # title spelling for display and count unresolved imports as outstanding.
+        imported = {}
+        for symbol in direct[name.casefold()]:
+            imported.setdefault(slots.get(symbol, symbol), symbol)
+        results[name] = {symbol: slot in verified for slot, symbol in imported.items()}
+    return results
+
+
+def import_tally(symbols):
+    return f"{sum(symbols.values())}/{len(symbols)}" if symbols is not None else "Unmeasured"
+
+
 def library_table(evidence):
     libraries = read_json(evidence / "library-status.json").get("libraries", [])
+    direct = frosty_import_coverage(evidence, libraries)
     name_width = max([len("Library"), *(len(lib["name"]) for lib in libraries)])
-    lines = [f"{'Library':<{name_width}}  {'Verified TuxBox exports':<26} {'Count':>7}  {'Share':>10}  Status"]
+    heading = f"{'Library':<{name_width}}  {'Verified TuxBox exports':<26} {'Count':>7}  {'Share':>10}  Status"
+    if direct is not None:
+        heading += "      Static PE path  Frosty imports verified"
+    lines = [heading]
     for library in libraries:
         tally, percent, fraction = export_progress(library)
         if fraction is None:
@@ -269,13 +330,30 @@ def library_table(evidence):
             cells = fraction * 22
             filled = "#" * int(cells) + ("+" if cells % 1 else "")
             bar = f"[{filled:.<22}]"
-        lines.append(f"{library['name']:<{name_width}}  {bar:<26} {tally:>7}  {percent:>10}  "
-                     f"{library['status'].capitalize()}")
+        name, state = library["name"], library["status"].capitalize()
+        row = f"{name:<{name_width}}  {bar:<26} {tally:>7}  {percent:>10}  "
+        if direct is None:
+            lines.append(row + state)
+            continue
+        relation = (library.get("inventory") or {}).get("title_reachability")
+        path = {"transitive": "transitive", "not statically reachable": "no static path"}.get(relation, "unscanned")
+        path = "direct" if name in direct else path
+        count = import_tally(direct[name]) if name in direct else "—"
+        lines.append(f"{row}{state:<10} {path:<14}  {count}")
+    if direct:
+        measured = [symbols for symbols in direct.values() if symbols is not None]
+        if measured:
+            checked = sum(sum(symbols.values()) for symbols in measured)
+            total = sum(len(symbols) for symbols in measured)
+            lines.extend(["", f"TuxBox has verified {checked}/{total} distinct Frosty imports from the measured DLLs. "
+                          f"Matching build evidence covers {len(measured)} of {len(direct)} directly imported tracked DLLs."])
+        else:
+            lines.extend(["", "Frosty direct import coverage is unmeasured for this build."])
     details = [f"{library['name']} covers {parts}." for library in libraries if (parts := export_breakdown(library))]
     return "\n".join(lines + (["", *details] if details else []))
 
 
-def draw_libraries(svg, y, data):
+def draw_libraries(svg, y, data, direct):
     libraries = data.get("libraries", [])
     if not libraries:
         return y
@@ -297,15 +375,22 @@ def draw_libraries(svg, y, data):
     group = section(svg, PAD, y, "Xbox library coverage")
     window(group, INNER, height, "~/evidence/library-status.json")
     text(group, 18, 70, "Xbox library coverage", 25, AMBER, bold=True)
-    text(group, INNER-18, 68, f"{len(libraries)} tracked DLLs · TuxBox and reference providers",
-         15, MUTED, anchor="end")
+    summary = data.get("inventory_summary", {})
+    if summary:
+        heading = (f"{len(libraries)} tracked · {summary['system_image_dlls_scanned']} system DLLs scanned · "
+                   f"{summary['direct_static_imports']} imports · {summary['transitive_static_dependencies']} transitive")
+    else:
+        heading = f"{len(libraries)} tracked DLLs · TuxBox and reference providers"
+    text(group, INNER-18, 68, heading, 14, MUTED, anchor="end")
     x = 18
     for name in COLORS:
         symbol(group, x+5, 99, name)
         label = f"{counts[name]} {name}"
         text(group, x+20, 104, label, 15, COLORS[name])
         x += 20 + 10*len(label) + 24
-    text(group, 18, 130, "Bars show verified TuxBox exports / all DLL exports. Status also covers methods and reference runtimes.", 15, MUTED)
+    text(group, 18, 130,
+         "Bars show verified TuxBox exports. * title import · ~ static dependency · blank = no static path; dynamic loads are unmeasured.",
+         13, MUTED)
     y0 = 148
     for band, band_height in zip(bands, band_heights):
         for col, (family, entries) in enumerate(band):
@@ -321,10 +406,31 @@ def draw_libraries(svg, y, data):
                 tally, percent, fraction = export_progress(library)
                 cell = element(group, "g")
                 parts = export_breakdown(library)
+                inventory = library.get("inventory") or {}
+                relation = inventory.get("title_reachability")
+                marker = {"direct": " *", "transitive": " ~"}.get(relation, "")
+                title_symbols = inventory.get("title_import_symbols", [])
+                if direct is not None and name in direct:
+                    symbols = direct[name]
+                    reach_note = f"Frosty direct imports verified {import_tally(symbols)}."
+                    if symbols is None:
+                        reach_note += " The reviewed DLL hash does not match the PE inventory."
+                    else:
+                        for checked, label in [(True, "Verified"), (False, "Unverified")]:
+                            names = [symbol for symbol, covered in symbols.items() if covered == checked]
+                            if names:
+                                reach_note += f" {label} ({', '.join(names)})."
+                elif title_symbols:
+                    reach_note = "Title PE imports: " + ", ".join(title_symbols)
+                elif inventory.get("static_import_chain"):
+                    reach_note = "Static title path: " + " -> ".join(inventory["static_import_chain"])
+                else:
+                    reach_note = "No static PE import path found; dynamic loads are not measured."
                 element(cell, "title").text = (f"{name} · {state.capitalize()} · Verified TuxBox exports {tally} "
-                                               f"({percent}). {library['provider']} {library['scope']}")
+                                               f"({percent}). {library['provider']} {library['scope']} "
+                                               f"{reach_note}")
                 symbol(cell, x+6, top-5, state)
-                text(cell, x+20, top, name, 15)
+                text(cell, x+20, top, name + marker, 15)
                 if fraction is None:
                     element(cell, "line", x1=bar_x, x2=bar_x+bar_width, y1=top-5, y2=top-5,
                             stroke=MUTED, stroke_dasharray="2 4")
@@ -339,6 +445,85 @@ def draw_libraries(svg, y, data):
                     top += 16
                 top += row_height
         y0 += band_height
+    return y+height+GAP
+
+
+def shader_validation(data):
+    checks = [row.get("standalone_dxil_validated") for row in data["requested"]]
+    measured = sum(check is not None for check in checks)
+    if not measured:
+        return ""
+    return (f"Standalone DXIL passed for {checks.count(True)}/{measured} tested programs "
+            f"among {len(checks)} distinct title requests.")
+
+
+def shader_table(evidence):
+    data = read_json(evidence / "matrix-awakens/shader-inventory.json")
+    if not data:
+        return "No retail shader inventory recorded."
+    lines = ["Frosty shader coverage",
+             f"{'Shader stage':<16} {'Packaged':>9} {'HLSL / unique DXBC':>21} {'In profile':>11} {'Profiled / requested':>23}"]
+    for row in data["stages"]:
+        emitted = row["hlsl_emitted"]
+        hlsl = f"{emitted:,}/{row['unique_dxbc']:,}" if emitted is not None else "—"
+        observed = f"{row['requested_in_profile']}/{row['requested_dxbc']}" if row["requested_dxbc"] else "—"
+        lines.append(f"{row['stage']:<16} {row['global'] + row['material']:>9,} {hlsl:>21} "
+                     f"{row['profiled_dxbc']:>11} {observed:>23}")
+    lines.append(f"The preparation profile includes {data['linked_variants']} additional linked variants.")
+    if validation := shader_validation(data):
+        lines.append(validation)
+    for material in data.get("menu_materials", ()):
+        requested = [f"{row['stage']} #{row['entry']}" for row in material["members"] if row["observed_in"]]
+        matches = ", ".join(requested) or "none in these traces"
+        lines.append(f"{Path(material['asset']).stem} (map {material['map']}, {len(material['members'])} entries) "
+                     f"· request trace matches {matches}.")
+    for shader in data["requested"]:
+        if not shader["in_preparation_profile"]:
+            where = ", ".join(shader["archive_entries"]) or "outside the indexed archives"
+            frontend = {True: "HLSL emitted", False: "frontend failed", None: "frontend unmeasured"}[shader.get("hlsl_emitted")]
+            if (validated := shader.get("standalone_dxil_validated")) is not None:
+                frontend = "standalone DXIL passed" if validated else "standalone DXIL failed"
+            lines.append(f"Unprofiled {shader['stage'].lower()} {shader['source_sha256']} ({where}, {frontend})")
+    return "\n".join(lines)
+
+
+def draw_shaders(svg, y, data):
+    if not data:
+        return y
+    rows = data["stages"]
+    validation = shader_validation(data)
+    height = 195 + 27 * len(rows) + (21 if validation else 0)
+    group = section(svg, PAD, y, "Frosty shader coverage")
+    window(group, INNER, height, "~/evidence/matrix-awakens/shader-inventory.json")
+    text(group, 18, 70, "Frosty shader coverage", 25, AMBER, bold=True)
+    packages = sum(row["global"] + row["material"] for row in rows)
+    sources = sum(row["profiled_dxbc"] for row in rows)
+    text(group, INNER-18, 68, f"{packages:,} shipped entries · {sources} in profile · "
+         f"{data['linked_variants']} linked variants", 14, MUTED, anchor="end")
+    text(group, 18, 97, "HLSL counts unique source programs the translator can read and emit as desktop shader code.", 14, MUTED)
+    text(group, 18, 118, "Requests are distinct programs seen in captured title runs. A pipeline can request a shader before drawing.", 14, MUTED)
+    columns = [(18, "Stage"), (263, "Packaged"), (561, "HLSL / unique DXBC"), (694, "In profile"), (INNER-18, "In profile / requested")]
+    for x, label in columns:
+        text(group, x, 151, label, 14, AQUA, anchor="start" if x == 18 else "end")
+    for index, row in enumerate(rows):
+        top = 164 + 27*index
+        rect(group, 18, top-3, INNER-36, 1, LINE)
+        text(group, 18, top+17, row["stage"], 15)
+        text(group, 263, top+17, f"{row['global']+row['material']:,}", 15, TEXT, anchor="end")
+        for x, width, right, value, total in (
+                (299, 98, 561, row["hlsl_emitted"], row["unique_dxbc"]),
+                (722, 94, INNER-18, row["requested_in_profile"], row["requested_dxbc"])):
+            if value is None or not total:
+                text(group, right, top+17, "—", 15, MUTED, anchor="end")
+                continue
+            rect(group, x, top+8, width, 7, LINE)
+            if value:
+                rect(group, x, top+8, width*value/total, 7, GREEN if value == total else AMBER)
+            text(group, right, top+17, f"{value:,} / {total:,}", 14, TEXT if value else RED, anchor="end")
+        text(group, 694, top+17, f"{row['profiled_dxbc']:,}", 15, TEXT, anchor="end")
+    if validation:
+        text(group, 18, height-35, validation, 14, TEXT)
+    text(group, 18, height-14, "Ray-tracing entries contain serialized state objects. Their translation has a separate path.", 14, MUTED)
     return y+height+GAP
 
 
@@ -360,9 +545,9 @@ def render_map(evidence):
                              "aria-labelledby": "map-title map-description"})
     element(svg, "title", id="map-title").text = "TuxBox runtime compatibility"
     element(svg, "desc", id="map-description").text = (
-        "Current runtime capabilities, retail output and Xbox DLL coverage. "
+        "Current runtime capabilities, retail output, Xbox DLL coverage and shader preparation. "
         "A checked circle marks complete coverage, a half-filled circle partial coverage "
-        "and an open ring incomplete coverage. Each bar shows the fraction of reviewed DLL exports verified in TuxBox.")
+        "and an open ring incomplete coverage. Shader bars show frontend and preparation coverage. DLL bars show verified exports.")
     bg = rect(svg, 0, 0, WIDTH, 1, BG)
     rect(svg, 0, 0, WIDTH, 48, BAR)
     rect(svg, 0, 47, WIDTH, 1, LINE)
@@ -372,7 +557,9 @@ def render_map(evidence):
     brand.set("letter-spacing", "4")
     text(svg, WIDTH-PAD, 30, "Xbox Series X|S", 16, AQUA, anchor="end")
     y = draw_runtime(svg, 48+GAP, evidence)
-    y = draw_libraries(svg, y, read_json(evidence / "library-status.json"))
+    y = draw_shaders(svg, y, read_json(evidence / "matrix-awakens/shader-inventory.json"))
+    data = read_json(evidence / "library-status.json")
+    y = draw_libraries(svg, y, data, frosty_import_coverage(evidence, data.get("libraries", [])))
     height = draw_verification(svg, y, evidence) + 6
     bg.set("height", str(height))
     svg.set("viewBox", f"0 0 {WIDTH} {height}")

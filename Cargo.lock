@@ -3,6 +3,21 @@
 version = 4
 
 [[package]]
+name = "adler2"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+
+[[package]]
+name = "miniz_oxide"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
+dependencies = [
+ "adler2",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -40,10 +55,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "tuxbox-acphal"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "tuxbox-d3d12"
 version = "0.1.0"
 dependencies = [
+ "tuxbox-xg-layout",
  "windows",
+]
+
+[[package]]
+name = "tuxbox-frontpanel"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
 ]
 
 [[package]]
@@ -55,6 +85,13 @@ dependencies = [
 
 [[package]]
 name = "tuxbox-gameconfig"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
+name = "tuxbox-gameinput"
 version = "0.1.0"
 dependencies = [
  "windows-sys",
@@ -83,7 +120,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "tuxbox-xcrdapi"
+version = "0.1.0"
+dependencies = [
+ "miniz_oxide",
+ "windows",
+ "windows-core",
+]
+
+[[package]]
 name = "tuxbox-xg"
+version = "0.1.0"
+dependencies = [
+ "tuxbox-xg-layout",
+ "windows-sys",
+]
+
+[[package]]
+name = "tuxbox-xg-layout"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
+name = "tuxbox-xgameruntime"
 version = "0.1.0"
 dependencies = [
  "windows-sys",
