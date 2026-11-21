@@ -14,7 +14,8 @@ from .inspect import digest, image, launch_target
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build"
-BASE_SUITES = ("cpu", "xmem", "graphics", "graphics-abi", "guest-frame", "present", "lanes", "cpu-benchmark")
+BASE_SUITES = ("cpu", "xmem", "graphics", "graphics-abi", "guest-frame", "present", "lanes",
+               "cpu-benchmark", "xg-provider", "gameconfig", "gamechat", "mfreadwrite", "xaudio")
 OPTIONAL_PROVIDERS = {"dxc-utils": "dxc-utils/dxcompiler.dll", "xg": "xg/xg_xs.dll"}
 SUITES = (*BASE_SUITES, *OPTIONAL_PROVIDERS)
 
@@ -103,11 +104,38 @@ def verify(host, output, adapter, selected=None, samples=1):
                   r"dxc-utils PASS bytes=257 source-freed=1 writable=257 retained=1",
                   providers={"dxc-utils/dxcompiler_xs.dll": ("DxcCreateInstance",)},
                   dependencies=("dxc-utils/dxcompiler.dll",))
+        xg_addresses = r"xg-texture PASS layouts=13 traced-descriptors=4 element-addresses=273263"
         if "xg" in selected:
             check("xg-native-layout", "xg/xg-texture.exe", ["--report"],
                   r"xg-texture PASS descriptors=4 layout-queries=8 plane-records=4 releases=4",
                   providers={"xg/xg_xs.dll": ("XGCreateTextureComputer",)},
                   dependencies=("xmem-smoke/xmem.dll",))
+            check("xg-native-addresses", "xg/xg-texture.exe", ["--addresses", "--report"], xg_addresses,
+                  providers={"xg/xg_xs.dll": ("XGCreateTextureComputer",)},
+                  dependencies=("xmem-smoke/xmem.dll",))
+        if "xg-provider" in selected:
+            check("xg-addresses", "xg-provider/xg-texture.exe", ["--addresses", "--report"], xg_addresses,
+                  providers={"xg-provider/xg_xs.dll": ("XGCreateTextureComputer",)})
+        if "gameconfig" in selected:
+            check("gameconfig-query", "gameconfig/gameconfig-query.exe", ["--report"],
+                  r"gameconfig-query PASS paths=7 hives=2 missing-key=1",
+                  providers={"gameconfig/gameconfighelper.dll":
+                             ("GetRegistryPathForPackage", "OpenGameConfigKeyForPackage")})
+        if "gamechat" in selected:
+            check("gamechat-roster", "gamechat/gamechat-session.exe", ["--report"],
+                  r"gamechat-session PASS sessions=2 remote-users=3 bitrate-settings=3 stale-handles=1",
+                  providers={"gamechat/GameChat2.dll": ("ChatManagerInitialize", "ChatManagerCleanup",
+                             "ChatManagerAddRemoteUser", "ChatManagerGetChatUsers", "ChatManagerRemoveUser",
+                             "ChatUserGetIsLocal", "ChatManagerSetAudioEncodingBitrate",
+                             "ChatManagerGetAudioEncodingBitrate")})
+        if "mfreadwrite" in selected:
+            check("mfreadwrite-pcm", "mfreadwrite/mfreadwrite-smoke.exe", ["--report"],
+                  r"mfreadwrite PASS pcm=48000/2/16 frames=2501 bytes=10004 seek=1200 eos=2 invalid=2",
+                  providers={"mfreadwrite/mfreadwrite.dll": ("MFCreateSourceReaderFromByteStream",)})
+        if "xaudio" in selected:
+            check("xaudio-mix", "xaudio/xaudio.exe", ["--report"],
+                  r"xaudio PASS factories=1,9 effects=3 spatial=2/2 mix=2/2",
+                  providers={"xaudio/XAudio2_9.dll": ("#1", "#2", "#3", "#4", "#5", "#6", "#9")})
         if "xmem" in selected:
             check("xmem-default", "xmem-smoke/xmem-smoke.exe", ["--report"],
                   re.escape("xmem-default: PASS (ordinary and 64 KiB allocations, host working set v2, virtual reserve/commit)"), providers={"xmem-smoke/xmem.dll": memory_symbols})
@@ -170,6 +198,12 @@ GATE_LABELS = {
     "route-RRRRDD": "Upper route and guest output", "route-LDDRRRR": "Lower route and collision",
     "invalid-route": "Invalid input exit status", "xmem-default": "Xbox memory allocation, working set and CPU pages",
     "xg-native-layout": "Native Scarlett XG texture layouts with Rust XMem",
+    "xg-native-addresses": "Supplied XG texture layouts and element addresses",
+    "xg-addresses": "TuxBox XG texture layouts and element addresses",
+    "gameconfig-query": "Package registry paths and configuration keys",
+    "gamechat-roster": "Game-chat session, remote roster and bitrate settings",
+    "mfreadwrite-pcm": "PCM source reading, seeking and end of stream",
+    "xaudio-mix": "Xbox audio ordinals, spatial routing and stereo mix",
     "dxc-create-blob": "Xbox DXC utilities and binary blob lifetime",
     "desktop-clear": "Desktop D3D12 pixel readback", "root-signature": "Xbox root-signature import and compute readback",
     "guest-command-list": "Xbox command-list clear and ordered copy readback",
@@ -211,5 +245,5 @@ def status():
         lines.append("| " + " | ".join([GATE_LABELS.get(gate, gate), *cells]) + " |")
     lines += ["", "Rebuild this table from the repository root with "
               "`python tuxbox.py status > docs/RESULTS.md`. A dash means that the gate was omitted from that run. "
-              "[Milestones and retail evidence](PROGRESS.md)"]
+              "[Xbox DLL checks](LIBRARIES.md#run-the-provider-checks) · [Milestones and retail evidence](PROGRESS.md)"]
     return "\n".join(lines)

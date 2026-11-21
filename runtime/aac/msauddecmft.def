@@ -1,0 +1,4 @@
+LIBRARY MSAudDecMFT
+EXPORTS
+    DllCanUnloadNow @1
+    DllGetClassObject @2

@@ -56,13 +56,16 @@
     {
       "name": "xg_xs.dll",
       "group": "Graphics and memory",
-      "status": "incomplete",
-      "provider": "Supplied console XG library.",
-      "scope": "Four RGBA8 and BC7 texture descriptions exercise linear and tiled layouts through XGCreateTextureComputer using TuxBox memory allocation.",
-      "remaining": "Implement the texture computer and layout calculations in a replacement XG library.",
+      "status": "partial",
+      "provider": "TuxBox texture address computer.",
+      "scope": "Computes linear and 4 KiB tiled layouts for single-slice 2D textures in six formats. The same guest matched the supplied library on 13 layouts and 273,263 texel or compressed-block addresses, including four shapes from Frosty's placed-resource trace.",
+      "remaining": "Arrays, additional formats and tiling modes, multisampling and subresource copies. Calling an unimplemented texture computer method terminates the guest.",
       "evidence": [
-        "runtime/xg/guest.cpp",
-        "evidence/valve-nvidia.json"
+        "runtime/xg/src/layout.rs",
+        "evidence/providers/xg-control.json",
+        "evidence/providers/xg-frosty-shapes.json",
+        "evidence/providers/valve.json",
+        "evidence/providers/ge.json"
       ]
     },
     {
@@ -91,12 +94,15 @@
     {
       "name": "gameconfighelper.dll",
       "group": "Platform and storage",
-      "status": "incomplete",
-      "provider": "Supplied console configuration helper in the embedded-runtime trial.",
-      "scope": "The loader found the supplied helper in the package-runtime experiment.",
-      "remaining": "A replacement for configuration and package-identity queries with independent behavioral tests.",
+      "status": "partial",
+      "provider": "TuxBox package registry helper using Win32 and WinRT.",
+      "scope": "Implements two of the 24 exports in the reviewed Windows Game Runtime helper. The guest obtains an owned UTF-16 package path and opens configuration keys in both supported registry hives. Boundary lengths, Unicode and missing keys matched the supplied helper.",
+      "remaining": "The embedded runtime's GetCurrentPackageGameConfig call and the remaining configuration and package-identity queries.",
       "evidence": [
-        "evidence/matrix-awakens-launch.json"
+        "runtime/gameconfig/guest.c",
+        "evidence/providers/platform-controls.json",
+        "evidence/providers/valve.json",
+        "evidence/providers/ge.json"
       ]
     },
     {
@@ -126,24 +132,29 @@
     {
       "name": "XAudio2_9.dll",
       "group": "Input and audio",
-      "status": "incomplete",
-      "provider": "Proton XAudio2.",
-      "scope": "Host XAudio2 accepts the title's first mixer buffer. A separate private stereo loopback matches the intro soundtrack.",
-      "remaining": "Xbox-specific XAudio2 behavior has no independently verified replacement here.",
+      "status": "partial",
+      "provider": "TuxBox Xbox ordinal exports backed by system XAudio2.",
+      "scope": "Seven exports cover all five static imports in Frosty. The guest creates engines through both factory ordinals, instantiates three effects, pans a source and measures the signal on each stereo channel.",
+      "remaining": "Console ordinals 7, 8 and 10, XMA playback and a retail mixer run with the replacement.",
       "evidence": [
-        "evidence/matrix-awakens/frosty-engine-control.json",
-        "evidence/matrix-awakens-launch.json"
+        "runtime/xaudio/xaudio.def",
+        "evidence/providers/xaudio-control.json",
+        "evidence/providers/valve.json",
+        "evidence/providers/ge.json"
       ]
     },
     {
       "name": "GameChat2.dll",
       "group": "Input and audio",
-      "status": "incomplete",
-      "provider": "Supplied title library, delay-loaded.",
-      "scope": "Frosty declares 15 delay imports for game chat.",
-      "remaining": "A working chat provider and a voice-session test.",
+      "status": "partial",
+      "provider": "TuxBox in-process chat manager.",
+      "scope": "Eight exports implement session setup and cleanup, a remote-user roster, locality and encoding bitrate. Seven are among Frosty's 15 delay imports. The guest checks duplicates, capacity, removal and stale handles against the supplied DLL.",
+      "remaining": "Local users, microphone capture, audio encoding and network transport.",
       "evidence": [
-        "evidence/matrix-awakens-launch.json"
+        "runtime/gamechat/guest.c",
+        "evidence/providers/platform-controls.json",
+        "evidence/providers/valve.json",
+        "evidence/providers/ge.json"
       ]
     },
     {
@@ -184,23 +195,28 @@
     {
       "name": "mfreadwrite.dll",
       "group": "Media",
-      "status": "incomplete",
-      "provider": "Proton Media Foundation source reader.",
-      "scope": "The source-reader control opens a movie byte stream and obtains its video media type.",
-      "remaining": "Console source-reader behavior relies on the host.",
+      "status": "partial",
+      "provider": "TuxBox synchronous PCM source reader.",
+      "scope": "Console ordinal 5 opens a seekable RIFF/WAVE byte stream. The guest compares 2,501 stereo frames and checks stream selection, seeking, timestamps, end of stream and invalid inputs.",
+      "remaining": "Compressed audio, MP4 video, asynchronous source reading and sink writing.",
       "evidence": [
-        "evidence/matrix-awakens/media-valve.json"
+        "runtime/mfreadwrite/guest.cpp",
+        "evidence/providers/valve.json",
+        "evidence/providers/ge.json"
       ]
     },
     {
       "name": "MSAudDecMFT.dll",
       "group": "Media",
-      "status": "incomplete",
-      "provider": "Supplied audio decoder registered in the test prefix.",
-      "scope": "The original AAC decoder processes 96 access units. The six-channel PCM output was compared with FFmpeg.",
-      "remaining": "A replacement for the packaged decoder.",
+      "status": "partial",
+      "provider": "TuxBox AAC transform adapter using GE-Proton's host decoder.",
+      "scope": "Handles the first format change and end-of-stream drain. On GE-Proton the guest decoded 25 generated and 96 Frosty AAC-LC packets into 48 kHz six-channel PCM. Each channel was compared with FFmpeg.",
+      "remaining": "Proton Experimental fails with 0xd0000001. Retail COM activation, other hosts and additional AAC profiles need validation.",
       "evidence": [
-        "evidence/matrix-awakens/aac-valve.json"
+        "tools/check_aac_provider.py",
+        "evidence/providers/aac-ge.json",
+        "evidence/providers/aac-frosty-ge.json",
+        "evidence/providers/aac-valve.json"
       ]
     }
   ]

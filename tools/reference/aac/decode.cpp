@@ -47,8 +47,37 @@ int wmain(int argc, wchar_t** argv) {
                   "register threading model");
         }
         ComPtr<IMFTransform> decoder;
-        check(CoCreateInstance(CLSID_MSAACDecMFT, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&decoder)),
-              "activate AAC");
+        HMODULE local{};
+        using CanUnload = HRESULT(WINAPI*)();
+        CanUnload can_unload{};
+        if (!wcscmp(argv[1], L"decode-local")) {
+            wchar_t path[MAX_PATH]{}, actual[MAX_PATH]{};
+            DWORD n = GetFullPathNameW(L"MSAudDecMFT.dll", MAX_PATH, path, nullptr);
+            if (!n || n >= MAX_PATH || !(local = LoadLibraryExW(path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH)) ||
+                !GetModuleFileNameW(local, actual, MAX_PATH) || _wcsicmp(actual, path))
+                throw std::runtime_error("app-local AAC DLL unavailable");
+            using GetClass = HRESULT(WINAPI*)(REFCLSID, REFIID, void**);
+            auto get_class = reinterpret_cast<GetClass>(GetProcAddress(local, "DllGetClassObject"));
+            can_unload = reinterpret_cast<CanUnload>(GetProcAddress(local, "DllCanUnloadNow"));
+            if (!get_class || !can_unload || GetProcAddress(local, MAKEINTRESOURCEA(2)) !=
+                GetProcAddress(local, "DllGetClassObject") || can_unload() != S_OK)
+                throw std::runtime_error("AAC class exports");
+            ComPtr<IClassFactory> factory;
+            if (get_class(GUID_NULL, IID_PPV_ARGS(&factory)) != CLASS_E_CLASSNOTAVAILABLE || factory)
+                throw std::runtime_error("unexpected AAC class");
+            check(get_class(CLSID_MSAACDecMFT, IID_PPV_ARGS(&factory)), "AAC factory");
+            check(factory->LockServer(TRUE), "lock AAC server");
+            factory.Reset();
+            if (can_unload() != S_FALSE) throw std::runtime_error("locked server permits unload");
+            check(get_class(CLSID_MSAACDecMFT, IID_PPV_ARGS(&factory)), "reacquire AAC factory");
+            check(factory->LockServer(FALSE), "unlock AAC server");
+            check(factory->CreateInstance(nullptr, IID_PPV_ARGS(&decoder)), "activate app-local AAC");
+            factory.Reset();
+            if (can_unload() != S_FALSE) throw std::runtime_error("live decoder permits unload");
+        } else {
+            check(CoCreateInstance(CLSID_MSAACDecMFT, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&decoder)),
+                  "activate AAC");
+        }
         std::fprintf(file, "activated=1\n");
         if (!wcscmp(argv[1], L"register"))
             return 0;
@@ -134,6 +163,10 @@ int wmain(int argc, wchar_t** argv) {
         if (!idx || !pcmBytes)
             throw std::runtime_error("no output");
         decoder.Reset();
+        if (local) {
+            if (can_unload() != S_OK) throw std::runtime_error("AAC decoder still retained");
+            FreeLibrary(local);
+        }
         MFShutdown();
         CoUninitialize();
         fclose(file);

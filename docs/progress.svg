@@ -95,11 +95,11 @@
       <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
       <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
     </g>
-    <text x="182" y="104" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">10 partial</text>
+    <text x="182" y="104" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">16 partial</text>
     <g transform="translate(311 99)">
       <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
     </g>
-    <text x="326" y="104" fill="#e74c3c" font-size="15" text-anchor="start" font-weight="normal">6 incomplete</text>
+    <text x="326" y="104" fill="#e74c3c" font-size="15" text-anchor="start" font-weight="normal">0 incomplete</text>
     <rect x="18.0" y="123" width="225.0" height="1" fill="#272733" />
     <text x="18.0" y="151" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Graphics and memory</text>
     <g>
@@ -127,11 +127,12 @@
       <text x="39.0" y="237" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">xmem.dll</text>
     </g>
     <g>
-      <title>xg_xs.dll · Incomplete · Supplied console XG library. Four RGBA8 and BC7 texture descriptions exercise linear and tiled layouts through XGCreateTextureComputer using TuxBox memory allocation.</title>
+      <title>xg_xs.dll · Partial · TuxBox texture address computer. Computes linear and 4 KiB tiled layouts for single-slice 2D textures in six formats. The same guest matched the supplied library on 13 layouts and 273,263 texel or compressed-block addresses, including four shapes from Frosty's placed-resource trace.</title>
       <g transform="translate(24.0 262)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
+        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="39.0" y="267" fill="#e74c3c" font-size="15" text-anchor="start" font-weight="normal">xg_xs.dll</text>
+      <text x="39.0" y="267" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">xg_xs.dll</text>
     </g>
     <rect x="255.0" y="123" width="225.0" height="1" fill="#272733" />
     <text x="255.0" y="151" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Platform and storage</text>
@@ -152,11 +153,12 @@
       <text x="276.0" y="207" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">xcrdapi.dll</text>
     </g>
     <g>
-      <title>gameconfighelper.dll · Incomplete · Supplied console configuration helper in the embedded-runtime trial. The loader found the supplied helper in the package-runtime experiment.</title>
+      <title>gameconfighelper.dll · Partial · TuxBox package registry helper using Win32 and WinRT. Implements two of the 24 exports in the reviewed Windows Game Runtime helper. The guest obtains an owned UTF-16 package path and opens configuration keys in both supported registry hives. Boundary lengths, Unicode and missing keys matched the supplied helper.</title>
       <g transform="translate(261.0 232)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
+        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="276.0" y="237" fill="#e74c3c" font-size="15" text-anchor="start" font-weight="normal">gameconfighelper.dll</text>
+      <text x="276.0" y="237" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">gameconfighelper.dll</text>
     </g>
     <rect x="492.0" y="123" width="225.0" height="1" fill="#272733" />
     <text x="492.0" y="151" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Input and audio</text>
@@ -177,18 +179,20 @@
       <text x="513.0" y="207" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">AcpHal.dll</text>
     </g>
     <g>
-      <title>XAudio2_9.dll · Incomplete · Proton XAudio2. Host XAudio2 accepts the title's first mixer buffer. A separate private stereo loopback matches the intro soundtrack.</title>
+      <title>XAudio2_9.dll · Partial · TuxBox Xbox ordinal exports backed by system XAudio2. Seven exports cover all five static imports in Frosty. The guest creates engines through both factory ordinals, instantiates three effects, pans a source and measures the signal on each stereo channel.</title>
       <g transform="translate(498.0 232)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
+        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="513.0" y="237" fill="#e74c3c" font-size="15" text-anchor="start" font-weight="normal">XAudio2_9.dll</text>
+      <text x="513.0" y="237" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">XAudio2_9.dll</text>
     </g>
     <g>
-      <title>GameChat2.dll · Incomplete · Supplied title library, delay-loaded. Frosty declares 15 delay imports for game chat.</title>
+      <title>GameChat2.dll · Partial · TuxBox in-process chat manager. Eight exports implement session setup and cleanup, a remote-user roster, locality and encoding bitrate. Seven are among Frosty's 15 delay imports. The guest checks duplicates, capacity, removal and stale handles against the supplied DLL.</title>
       <g transform="translate(498.0 262)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
+        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="513.0" y="267" fill="#e74c3c" font-size="15" text-anchor="start" font-weight="normal">GameChat2.dll</text>
+      <text x="513.0" y="267" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">GameChat2.dll</text>
     </g>
     <rect x="729.0" y="123" width="225.0" height="1" fill="#272733" />
     <text x="729.0" y="151" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Media</text>
@@ -217,18 +221,20 @@
       <text x="750.0" y="237" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">mfh264dec.dll</text>
     </g>
     <g>
-      <title>mfreadwrite.dll · Incomplete · Proton Media Foundation source reader. The source-reader control opens a movie byte stream and obtains its video media type.</title>
+      <title>mfreadwrite.dll · Partial · TuxBox synchronous PCM source reader. Console ordinal 5 opens a seekable RIFF/WAVE byte stream. The guest compares 2,501 stereo frames and checks stream selection, seeking, timestamps, end of stream and invalid inputs.</title>
       <g transform="translate(735.0 262)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
+        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="750.0" y="267" fill="#e74c3c" font-size="15" text-anchor="start" font-weight="normal">mfreadwrite.dll</text>
+      <text x="750.0" y="267" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">mfreadwrite.dll</text>
     </g>
     <g>
-      <title>MSAudDecMFT.dll · Incomplete · Supplied audio decoder registered in the test prefix. The original AAC decoder processes 96 access units. The six-channel PCM output was compared with FFmpeg.</title>
+      <title>MSAudDecMFT.dll · Partial · TuxBox AAC transform adapter using GE-Proton's host decoder. Handles the first format change and end-of-stream drain. On GE-Proton the guest decoded 25 generated and 96 Frosty AAC-LC packets into 48 kHz six-channel PCM. Each channel was compared with FFmpeg.</title>
       <g transform="translate(735.0 292)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
+        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
+        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="750.0" y="297" fill="#e74c3c" font-size="15" text-anchor="start" font-weight="normal">MSAudDecMFT.dll</text>
+      <text x="750.0" y="297" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">MSAudDecMFT.dll</text>
     </g>
   </g>
   <g transform="translate(14 823)">

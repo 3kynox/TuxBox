@@ -1,0 +1,3 @@
+LIBRARY mfreadwrite
+EXPORTS
+    MFCreateSourceReaderFromByteStream @5

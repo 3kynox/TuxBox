@@ -1,0 +1,4 @@
+LIBRARY gameconfighelper
+EXPORTS
+    GetRegistryPathForPackage @13
+    OpenGameConfigKeyForPackage @17

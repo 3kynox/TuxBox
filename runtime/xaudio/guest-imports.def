@@ -1,0 +1,9 @@
+LIBRARY XAudio2_9.dll
+EXPORTS
+    GuestCreate @1 NONAME
+    GuestReverb @2 NONAME
+    GuestMeter @3 NONAME
+    GuestEffect @4 NONAME
+    GuestCalculate @5 NONAME
+    GuestInitialize @6 NONAME
+    GuestVersioned @9 NONAME

@@ -1,0 +1,18 @@
+[package]
+name = "tuxbox-mfreadwrite"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "tuxbox_mfreadwrite"
+crate-type = ["staticlib"]
+
+[dependencies]
+windows-core = "0.61.2"
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+] }

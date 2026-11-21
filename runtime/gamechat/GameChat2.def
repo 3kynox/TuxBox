@@ -1,0 +1,10 @@
+LIBRARY GameChat2
+EXPORTS
+    ChatManagerAddRemoteUser @2
+    ChatManagerCleanup @3
+    ChatManagerGetAudioEncodingBitrate @7
+    ChatManagerGetChatUsers @9
+    ChatManagerInitialize @16
+    ChatManagerRemoveUser @18
+    ChatManagerSetAudioEncodingBitrate @19
+    ChatUserGetIsLocal @31

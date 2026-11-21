@@ -211,4 +211,4 @@ python tools/check_loader_trace.py "$SOURCE" --prefix-system32 "$PREFIX/drive_c/
   --run current build/frosty-logs/steam-default.log "$rc"
 ```
 
-To exercise the texture layouts independently, copy `$SYSTEM/xg_xs.dll` to `build/xg/` and run `python tuxbox.py verify --only xg --output build/xg-results.json`. The checked-in evidence contains hashes and measurements. The external DLLs stay in your dump, build directory or test prefix.
+To check TuxBox’s own texture address computer, build it with `python build.py xg` and run `python tuxbox.py verify --only xg-provider --output build/xg-provider-results.json`. For comparison with the supplied library, copy `$SYSTEM/xg_xs.dll` to `build/xg/` and run `python tuxbox.py verify --only xg --output build/xg-results.json`. The checked-in evidence contains hashes and measurements. The external DLLs stay in your dump, build directory or test prefix.

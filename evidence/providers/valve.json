@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "type": "homebrew",
+  "date_utc": "2026-11-21",
+  "host": "Linux",
+  "os_release": "7.3.4-1-cachyos",
+  "cpu": "AMD Ryzen 7 9800X3D 8-Core Processor",
+  "machine": "x86_64",
+  "backend": "proton",
+  "provider": "1789159601 experimental-11.0-20260910b-x86_64",
+  "binaries_sha256": {
+    "xg-provider/xg-texture.exe": "93fa9538494a4f1bdb6e51c4dbf31b37a15e888388cf19dac138f0cde0179788",
+    "xg-provider/xg_xs.dll": "ee80b92fb61dc173a939f179027cd2df03463cdfabdca0f009dcfa1a3b8f996a",
+    "gameconfig/gameconfig-query.exe": "18631102e6cec9c6478e55754903f2be9ba629ecfb468adde8649c9241b58644",
+    "gameconfig/gameconfighelper.dll": "17d969c848e5609e6971c26ded7fa4b0041ed1302d12e42bdeb9f3bcd5eaa6cb",
+    "gamechat/gamechat-session.exe": "814ede525793f052279b74573a416e99086047324681848be40565204cb58a1a",
+    "gamechat/GameChat2.dll": "62807cdc859d055b871fdc1a07d5a06f3d469858586f8d28e50eb8425fbce309",
+    "mfreadwrite/mfreadwrite-smoke.exe": "83bc8454930273fe6e63a74e314e4ad9caad36db907088d4f9c52a619355be83",
+    "mfreadwrite/mfreadwrite.dll": "c6489b86a649398f79f0193f73b1cd4535fb2411ea967123296424fe6db21fca",
+    "xaudio/xaudio.exe": "5fa8a1e1d8cc05115654eccecad07a8358482f182ecb39ddcba8afbad37c2ea5",
+    "xaudio/XAudio2_9.dll": "7cda971c84956100d3712cd4432472df90d06405f44d2a70ca537070ba9838e4"
+  },
+  "checks": [
+    {
+      "gate": "xg-addresses",
+      "passed": true,
+      "exit_code": 0,
+      "receipt": "xg-texture PASS layouts=13 traced-descriptors=4 element-addresses=273263"
+    },
+    {
+      "gate": "gameconfig-query",
+      "passed": true,
+      "exit_code": 0,
+      "receipt": "gameconfig-query PASS paths=7 hives=2 missing-key=1"
+    },
+    {
+      "gate": "gamechat-roster",
+      "passed": true,
+      "exit_code": 0,
+      "receipt": "gamechat-session PASS sessions=2 remote-users=3 bitrate-settings=3 stale-handles=1"
+    },
+    {
+      "gate": "mfreadwrite-pcm",
+      "passed": true,
+      "exit_code": 0,
+      "receipt": "mfreadwrite PASS pcm=48000/2/16 frames=2501 bytes=10004 seek=1200 eos=2 invalid=2"
+    },
+    {
+      "gate": "xaudio-mix",
+      "passed": true,
+      "exit_code": 0,
+      "receipt": "xaudio PASS factories=1,9 effects=3 spatial=2/2 mix=2/2"
+    }
+  ]
+}

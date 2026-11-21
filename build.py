@@ -9,7 +9,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT / "build"
-TARGETS = ("route", "graphics", "xmem", "dxc-utils", "xg", "d3d12", "lanes")
+TARGETS = ("route", "graphics", "xmem", "dxc-utils", "xg", "gameconfig", "gamechat",
+           "mfreadwrite", "xaudio", "aac", "d3d12", "lanes")
 # rustc --print native-static-libs for the Windows MSVC target with +crt-static.
 RUST_STD_LIBS = ("kernel32.lib", "ntdll.lib", "userenv.lib", "ws2_32.lib", "dbghelp.lib",
                  "/defaultlib:libcmt")
@@ -106,11 +107,49 @@ def build_target(tools, target, dxc):
         guest = tools.compile(src / "guest.c", out, "/W4")
         tools.link(out / "xmem-smoke.exe", guest, "xmem.lib", "kernel32.lib")
     elif target == "xg":
-        src, out = ROOT / "runtime/xg", OUTPUT / "xg"
+        src, out = ROOT / "runtime/xg", OUTPUT / "xg-provider"
+        out.mkdir(parents=True, exist_ok=True)
+        tools.link(out / "xg_xs.dll", tools.rust_library("tuxbox-xg"), *RUST_STD_LIBS,
+                   exports=src / "xg_xs.def")
         guest = tools.compile(src / "guest.cpp", out, "/W4", "/WX")
-        subprocess.run([tools.linker, "/lib", "/nologo", "/machine:x64",
-                        f"/def:{src / 'xg_xs.def'}", "/out:xg_xs.lib"], cwd=out, check=True)
         tools.link(out / "xg-texture.exe", guest, "xg_xs.lib", "kernel32.lib")
+        # The optional console control uses the same guest and its own supplied DLL.
+        control = OUTPUT / "xg"
+        control.mkdir(exist_ok=True)
+        shutil.copyfile(out / "xg-texture.exe", control / "xg-texture.exe")
+    elif target in ("gameconfig", "gamechat", "mfreadwrite", "xaudio", "aac"):
+        src, out = ROOT / "runtime" / target, OUTPUT / target
+        out.mkdir(parents=True, exist_ok=True)
+        archive = tools.rust_library(f"tuxbox-{target}")
+        if target == "gameconfig":
+            tools.link(out / "gameconfighelper.dll", archive, "runtimeobject.lib", "advapi32.lib",
+                       *RUST_STD_LIBS, exports=src / "gameconfighelper.def")
+            guest = tools.compile(src / "guest.c", out, "/W4", "/WX")
+            tools.link(out / "gameconfig-query.exe", guest, "gameconfighelper.lib", "runtimeobject.lib",
+                       "advapi32.lib", "kernel32.lib")
+        elif target == "gamechat":
+            tools.link(out / "GameChat2.dll", archive, *RUST_STD_LIBS, exports=src / "GameChat2.def")
+            guest = tools.compile(src / "guest.c", out, "/W4", "/WX")
+            tools.link(out / "gamechat-session.exe", guest, "GameChat2.lib", "kernel32.lib")
+        elif target == "mfreadwrite":
+            tools.link(out / "mfreadwrite.dll", archive, "mfplat.lib", "ole32.lib",
+                       *RUST_STD_LIBS, exports=src / "mfreadwrite.def")
+            guest = tools.compile(src / "guest.cpp", out, "/W4", "/WX")
+            tools.link(out / "mfreadwrite-smoke.exe", guest, "mfreadwrite.lib", "mfplat.lib",
+                       "mfuuid.lib", "ole32.lib", "kernel32.lib")
+        elif target == "xaudio":
+            tools.link(out / "XAudio2_9.dll", archive, *RUST_STD_LIBS, exports=src / "xaudio.def")
+            guest = tools.compile(src / "guest.cpp", out, "/W4", "/WX")
+            subprocess.run([tools.linker, "/lib", "/nologo", "/machine:x64",
+                            f"/def:{src / 'guest-imports.def'}", "/out:guest-xaudio.lib"], cwd=out, check=True)
+            tools.link(out / "xaudio.exe", guest, "guest-xaudio.lib", "ole32.lib", "kernel32.lib")
+        else:
+            tools.link(out / "MSAudDecMFT.dll", archive, "mfplat.lib", "ole32.lib", *RUST_STD_LIBS,
+                       exports=src / "msauddecmft.def")
+            guest = tools.compile(ROOT / "tools/reference/aac/decode.cpp", out, "/W4", "/WX",
+                                  f"/I{ROOT / 'runtime/d3d12'}")
+            tools.link(out / "aac.exe", guest, "mfplat.lib", "mfuuid.lib", "ole32.lib",
+                       "advapi32.lib", "kernel32.lib")
     elif target == "dxc-utils":
         src, out = ROOT / "runtime/dxc", OUTPUT / "dxc-utils"
         obj = tools.compile(src / "module.c", out, "/W4", "/WX")

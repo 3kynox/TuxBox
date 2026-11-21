@@ -1,5 +1,8 @@
 [workspace]
-members = ["runtime/d3d12", "runtime/xmem", "tools/pipeline-prep"]
+members = [
+    "runtime/aac", "runtime/d3d12", "runtime/gamechat", "runtime/gameconfig",
+    "runtime/mfreadwrite", "runtime/xaudio", "runtime/xg", "runtime/xmem", "tools/pipeline-prep",
+]
 resolver = "3"
 
 [workspace.package]
