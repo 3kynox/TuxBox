@@ -168,6 +168,26 @@ def selection(entry, count, extra):
         "pages": count, "selected": len(base), "additional_pages": len(second), "initial_indirect_x": 32}
 
 
+def compact_visualize_rays(entry, mode, groups):
+    mask, flag = {248: (1, 1), 249: (1, 0), 259: (3, 1)}[entry]
+    count = 64 * groups
+    values = [0x12340000 + lane for lane in range(count)]
+    def bits(lane):
+        if mode == "all": return flag
+        if mode == "none": return flag ^ 1
+        return lane % 4
+    records = [[0xabc00000 | bits(lane), 0x24680000 + lane] for lane in range(count)]
+    selected = [lane for lane in range(count) if (records[lane][0] & mask) == flag]
+    seed = [[3] + [GUARD] * 15, [GUARD] * 150, [GUARD] * 300]
+    expected = [row.copy() for row in seed]
+    expected[0][0] += len(selected)
+    for index, lane in enumerate(selected, 3):
+        expected[1][index] = values[lane]
+        expected[2][2 * index:2 * index + 2] = records[lane]
+    return [0] * 64, [values, [v for record in records for v in record]], seed, [4, 4, 8], 4, groups, 1, expected, {
+        "selected": selected, "mode": mode, "groups": groups}
+
+
 def compact_hwrt_rays(entry, count, sparse, groups=1):
     counts = [count if not sparse or lane in (0, 2, 31, 32, 33, 63) else 0 for lane in range(64)]
     records = [[0x12340000 + lane, 0x43210000 + lane, 0xabc00000 | (lane % 4),
@@ -271,7 +291,7 @@ def main():
     p.add_argument("--prefix", type=Path)
     p.add_argument("--proton", type=Path)
     p.add_argument("--xshader", type=Path)
-    p.add_argument("--entry", type=int, choices=(507, 509, 512, 513, 517, 1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470, 3477),
+    p.add_argument("--entry", type=int, choices=(248, 249, 259, 507, 509, 512, 513, 517, 1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470, 3477),
                    help="run the controls for one archive entry")
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
@@ -280,6 +300,9 @@ def main():
     compiler = args.xshader.resolve() if args.xshader else compiler
     data, entries = global_archive(args.mount)
     cases, libraries = {}, {}
+    for entry in (248, 249, 259):
+        for mode, groups in (("all", 1), ("none", 1), ("mixed", 1), ("mixed", 2)):
+            cases[f"visualize_{entry}_{mode}_{groups}"] = (entry, compact_visualize_rays(entry, mode, groups))
     for entry in (507, 509, 512, 513):
         for name, count, sparse, groups in (("empty", 0, False, 1), ("full", 64, False, 1),
                                     ("partial", 33, False, 1), ("sparse", 64, True, 1),
@@ -383,7 +406,7 @@ def main():
                     words(work / f"{name}.b{i}", constants)
             else:
                 words(work / (name+".cbv"), cb)
-            if entry in (507, 509, 512, 513, 517, 1016, 1243, 1257, 1793, 3477, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470):
+            if entry in (248, 249, 259, 507, 509, 512, 513, 517, 1016, 1243, 1257, 1793, 3477, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470):
                 for i, records in enumerate(srv):
                     words(work / f"{name}.t{i}", records)
             else:
@@ -418,6 +441,16 @@ def main():
                             if actual[272] in winners:
                                 array = array.copy()
                                 array[272] = actual[272]
+                    if entry in (248, 249, 259) and metadata["groups"] > 1 and i in (1, 2):
+                        # Sort both outputs using the same value permutation.
+                        data_bytes = (work / f"{name}.out1.bin").read_bytes()
+                        data = list(struct.unpack(f"<{len(data_bytes) // 4}I", data_bytes))
+                        count = len(metadata["selected"])
+                        order = sorted(range(count), key=lambda j: data[3 + j])
+                        width = i
+                        first = 3 * width
+                        actual[first:first + count * width] = [
+                            actual[first + j * width + k] for j in order for k in range(width)]
                     if entry in (507, 509, 512, 513) and i == 1 and metadata["groups"] > 1:
                         # Groups reserve contiguous blocks in unspecified order.
                         first, end = 15, 15 + 5 * len(metadata["selected"])

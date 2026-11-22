@@ -15,7 +15,12 @@ midpoints and three vertices (216 cases), 108 oblique-ray edge cases and 108
 edge cases with tied dominant ray directions. A seeded set of 24 finite
 BOX16/BOX32 inputs is compared with CPU box calculations. The control also
 records nine parallel or degenerate triangle cases and five zero, subnormal,
-or infinite ray cases. The scalar shader matches the tested edge ownership
+or infinite ray cases. Twenty additional box tests cover both signs of an
+infinite inverse direction at slab interiors, boundaries and exterior points.
+Another 90 cases exercise descriptor box growth against one- and two-step
+floating-point gaps at five positive distances. The scalar helper still only
+supports zero growth; other growth behavior needs broader validation.
+The scalar shader matches the tested parallel-slab and edge ownership
 and zero-determinant results; general special-value behavior and numerical
 equivalence remain unverified. The control checks all three observed barycentric selectors
 on each paired triangle type using unequal barycentrics. These cases do not
@@ -33,8 +38,9 @@ clang -I"$HSA_ROOT/include" tools/reference/bvh-node/native/probe.c -L"$HSA_ROOT
 LD_LIBRARY_PATH="$HSA_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" /tmp/tuxbox-bvh-probe /tmp/tuxbox-bvh-probe.hsaco
 ```
 
-The descriptor encodes a zero base, full 42-bit range, zero box growth,
-closest-first sorting and barycentric triangle return mode. The HSA host
+The descriptor encodes a zero base, full 42-bit range, closest-first sorting
+and barycentric triangle return mode. Except for the dedicated growth cases,
+box growth is zero. The HSA host
 checks that its GPU is gfx1036 and that the allocation meets the node alignment
 before dispatch. The result is specific to the chosen inputs and GPU. Compare
 with `tools/check_frosty_bvh_nodes.py`, whose corresponding synthetic cases

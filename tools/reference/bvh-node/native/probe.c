@@ -107,7 +107,7 @@ int main(int argc, char **argv) {
   CHK(hsa_executable_symbol_get_info(
       sym, HSA_EXECUTABLE_SYMBOL_INFO_KERNEL_KERNARG_SEGMENT_SIZE, &arg_size));
   void *out, *args;
-  CHK(hsa_memory_allocate(region, 20480, &out));
+  CHK(hsa_memory_allocate(region, 32768, &out));
   if ((uintptr_t)out % 256 != 0) {
     fprintf(stderr, "HSA allocation is not 256-byte aligned\n");
     return 1;
@@ -116,8 +116,8 @@ int main(int argc, char **argv) {
   CHK(hsa_memory_allocate(region, arg_size, &args));
   CHK(hsa_amd_agents_allow_access(1, &gpu, NULL, args));
   *(void **)args = out;
-  memset(out, 0, 20480);
-  uint32_t *node = (uint32_t *)out + 2048;
+  memset(out, 0, 32768);
+  uint32_t *node = (uint32_t *)out + 3072;
   node[0] = 0x9;
   node[1] = 0x12;
   node[2] = 0x1b;
@@ -125,19 +125,19 @@ int main(int argc, char **argv) {
   float bounds[24] = {10, 10, 2, 12, 12, 4, -1, -1, 2, 1, 1, 4,
                       -1, -1, 2, 1,  1,  4, -1, -1, 2, 1, 1, 4};
   memcpy(node + 4, bounds, sizeof(bounds));
-  uint32_t *halfnode = (uint32_t *)out + 2112;
+  uint32_t *halfnode = (uint32_t *)out + 3136;
   memcpy(halfnode, node, 16);
   _Float16 *halfbounds = (_Float16 *)(halfnode + 4);
   for (int i = 0; i < 24; i++)
     halfbounds[i] = bounds[i];
-  uint32_t *tri = (uint32_t *)out + 2176;
+  uint32_t *tri = (uint32_t *)out + 3200;
   float verts[12] = {0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0};
   memcpy(tri, verts, sizeof(verts));
   tri[12] = 0x80;
   tri[13] = 1;
   tri[14] = 2;
   tri[15] = 0x0909;
-  uint32_t *scaled = (uint32_t *)out + 2240;
+  uint32_t *scaled = (uint32_t *)out + 3264;
   float scaled_verts[12] = {0, 0, 0, 2, 0, 0, 0, 2, 0, 2, 2, 0};
   memcpy(scaled, scaled_verts, sizeof(scaled_verts));
   scaled[12] = 0x80;
@@ -151,7 +151,7 @@ int main(int argc, char **argv) {
                                           {{0, 0, 0}, {1, 1, 0}, {-1, 1, 0}}};
   for (unsigned shape = 0; shape < 3; shape++) {
     for (unsigned p = 0; p < 6; p++) {
-      unsigned base = shape == 0 ? 2304 : 2496 + (shape - 1) * 96;
+      unsigned base = shape == 0 ? 3328 : 3520 + (shape - 1) * 96;
       uint32_t *dst = (uint32_t *)out + base + p * 16;
       for (unsigned v = 0; v < 3; v++)
         memcpy(dst + v * 3, vertices[shape][permutations[p][v]],
@@ -162,7 +162,7 @@ int main(int argc, char **argv) {
   const unsigned selectors[3] = {9, 2, 4};
   for (unsigned side = 0; side < 2; side++) {
     for (unsigned r = 0; r < 3; r++) {
-      uint32_t *dst = (uint32_t *)out + 2400 + (side * 3 + r) * 16;
+      uint32_t *dst = (uint32_t *)out + 3424 + (side * 3 + r) * 16;
       memcpy(dst, tri, 64);
       unsigned shift = side * 8;
       dst[15] = (0x0909u & ~(0xffu << shift)) | (selectors[r] << shift);
@@ -174,7 +174,7 @@ int main(int argc, char **argv) {
   uint32_t seed = 0x74757862u;
   static const float inverses[6] = {-4.f, -2.f, -1.f, 1.f, 2.f, 4.f};
   for (unsigned test = 0; test < 24; test++) {
-    uint32_t *record = (uint32_t *)out + 3008 + test * 48;
+    uint32_t *record = (uint32_t *)out + 4032 + test * 48;
     float origin[3], inverse[3], keys[4];
     for (unsigned axis = 0; axis < 3; axis++) {
       origin[axis] = (float)((int)(next_random(&seed) % 9) - 4);
@@ -236,9 +236,27 @@ int main(int argc, char **argv) {
     }
   }
   float degenerate[12] = {0, 0, 0, 1, 0, 0, 2, 0, 0, 0, 0, 0};
-  uint32_t *degenerate_node = (uint32_t *)out + 2816;
+  uint32_t *degenerate_node = (uint32_t *)out + 3840;
   memcpy(degenerate_node, degenerate, sizeof(degenerate));
   degenerate_node[15] = 9;
+  uint32_t *slab = (uint32_t *)out + 3872;
+  slab[0] = 9;
+  slab[1] = 18;
+  slab[2] = 27;
+  slab[3] = 36;
+  float slab_bounds[24] = {-1, -1, 2, 1, 1, 4, -1, -1, 3, 1,  1, 5,
+                           1,  -1, 2, 2, 1, 4, -2, -2, 2, -1, 2, 4};
+  memcpy(slab + 4, slab_bounds, sizeof(slab_bounds));
+  static const float grow_values[5] = {.5f, 1.f, 1.5f, 2.f, 1024.f};
+  for (unsigned test = 0; test < 15; test++) {
+    uint32_t *box = (uint32_t *)out + 5504 + test * 32;
+    box[0] = 9;
+    box[1] = box[2] = box[3] = 0xffffffffu;
+    float f = grow_values[test / 3];
+    float values[24] = {f, 0, 0, 2 * f, f, f};
+    memcpy(box + 4, values, sizeof(values));
+    box[4] += test % 3;
+  }
   hsa_signal_t signal;
   CHK(hsa_signal_create(1, 0, NULL, &signal));
   uint64_t index = hsa_queue_load_write_index_relaxed(queue);
@@ -374,6 +392,36 @@ int main(int argc, char **argv) {
     if (((uint32_t *)out)[1940 + i] != special_float[i])
       failed = 1;
   printf("nonfinite_and_subnormal=5\n");
+  static const uint32_t slab_expected[10][4] = {
+      {9, 18, 0xffffffff, 0xffffffff},
+      {9, 36, 18, 0xffffffff},
+      {9, 27, 18, 0xffffffff},
+      {27, 0xffffffff, 0xffffffff, 0xffffffff},
+      {9, 18, 0xffffffff, 0xffffffff},
+      {9, 18, 0xffffffff, 0xffffffff},
+      {0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff},
+      {9, 36, 18, 0xffffffff},
+      {9, 27, 18, 0xffffffff},
+      {9, 18, 0xffffffff, 0xffffffff}};
+  for (unsigned sign = 0; sign < 2; sign++)
+    for (unsigned n = 0; n < 10; n++)
+      for (unsigned lane = 0; lane < 4; lane++)
+        if (((uint32_t *)out)[1960 + 4 * (sign * 10 + n) + lane] !=
+            slab_expected[n][lane])
+          failed = 1;
+  printf("parallel_box_slabs=20\n");
+  static const unsigned grows[6] = {0, 1, 2, 3, 4, 8};
+  for (unsigned test = 0; test < 15; test++)
+    for (unsigned g = 0; g < 6; g++) {
+      uint32_t want = (test % 3 <= grows[g]) ? 9u : 0xffffffffu;
+      unsigned base = 2040 + 4 * (test * 6 + g);
+      if (((uint32_t *)out)[base] != want)
+        failed = 1;
+      for (unsigned lane = 1; lane < 4; lane++)
+        if (((uint32_t *)out)[base + lane] != 0xffffffffu)
+          failed = 1;
+    }
+  printf("box_growth_cases=90\n");
   if (failed) {
     fprintf(stderr, "instruction probe failed or timed out\n");
     return 1;

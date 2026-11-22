@@ -4,8 +4,10 @@
 //! models only recorded deserialize writes, reads, and already-enqueued fence
 //! signals/waits. It rejects unordered conflicting accesses and unknown waits.
 //! Actual runtime use additionally needs resource ownership, GPU publication,
-//! alias tracking, submission failure handling, and fence-based retirement.
-use std::collections::BTreeMap;
+//! actual resource ownership, GPU publication, full alias tracking, and
+//! submission failure handling. Retirement here models verified GPU fence
+//! completion, but does not itself wait for or own native fences.
+use std::collections::{BTreeMap, VecDeque};
 
 type Queue = u32;
 type Fence = u32;
@@ -35,6 +37,12 @@ fn before(a: &Clock, b: &Clock) -> bool {
 struct Write {
     clock: Clock,
     version: Version,
+    resource: u64,
+}
+#[derive(Clone)]
+struct Resource {
+    active: bool,
+    uses: Vec<Clock>,
 }
 #[derive(Clone, Default)]
 struct Entry {
@@ -48,6 +56,9 @@ struct Graph {
     addresses: BTreeMap<Address, Entry>,
     sources: BTreeMap<u64, Version>,
     ranges: BTreeMap<Address, u64>,
+    resources: BTreeMap<u64, Resource>,
+    next_resource: u64,
+    completed: Clock,
 }
 
 #[derive(Clone, Copy)]
@@ -116,7 +127,30 @@ impl Graph {
                     {
                         return Err(Error::UnorderedAccess);
                     }
-                    entry.writer = Some(Write { clock, version });
+                    let resource = staged
+                        .next_resource
+                        .checked_add(1)
+                        .ok_or(Error::Unsupported)?;
+                    staged.next_resource = resource;
+                    if let Some(previous) = &entry.writer {
+                        staged
+                            .resources
+                            .get_mut(&previous.resource)
+                            .ok_or(Error::Unsupported)?
+                            .active = false;
+                    }
+                    staged.resources.insert(
+                        resource,
+                        Resource {
+                            active: true,
+                            uses: vec![clock.clone()],
+                        },
+                    );
+                    entry.writer = Some(Write {
+                        clock,
+                        version,
+                        resource,
+                    });
                     entry.readers.clear();
                 }
                 Op::Read(address) => {
@@ -129,6 +163,12 @@ impl Graph {
                         return Err(Error::UnorderedAccess);
                     }
                     reads.push(writer.version);
+                    staged
+                        .resources
+                        .get_mut(&writer.resource)
+                        .ok_or(Error::Unsupported)?
+                        .uses
+                        .push(clock.clone());
                     entry.readers.push(clock);
                 }
                 Op::Unsupported => return Err(Error::Unsupported),
@@ -156,6 +196,43 @@ impl Graph {
         Ok(())
     }
 
+    // Caller must have observed the specified signal complete on the GPU.
+    // Merge its full dependency clock: an executed queue wait guarantees the
+    // signaled predecessors also finished. Unknown values are never guessed.
+    fn complete(&mut self, fence: Fence, value: u64) -> Result<(), Error> {
+        let clock = self
+            .fences
+            .get(&fence)
+            .and_then(|f| f.get(&value))
+            .ok_or(Error::UnknownFence)?;
+        for (&queue, &tick) in clock {
+            self.completed
+                .entry(queue)
+                .and_modify(|v| *v = (*v).max(tick))
+                .or_insert(tick);
+        }
+        Ok(())
+    }
+
+    fn collect(&mut self) -> Vec<u64> {
+        let retired: Vec<_> = self
+            .resources
+            .iter()
+            .filter_map(|(&id, resource)| {
+                (!resource.active
+                    && resource
+                        .uses
+                        .iter()
+                        .all(|clock| before(clock, &self.completed)))
+                .then_some(id)
+            })
+            .collect();
+        for id in &retired {
+            self.resources.remove(id);
+        }
+        retired
+    }
+
     fn wait(&mut self, queue: Queue, fence: Fence, value: u64) -> Result<(), Error> {
         let published = self
             .fences
@@ -172,6 +249,78 @@ impl Graph {
         }
         self.tick(queue)?;
         Ok(())
+    }
+}
+
+// An isolated topological scheduler for queue operations, including a wait
+// recorded before its future signal. Pending operations remain queued rather
+// than being speculatively published. It is not a CPU submission interceptor.
+#[derive(Clone)]
+enum Event {
+    Submit(Vec<Op>),
+    Signal(Fence, u64),
+    Wait(Fence, u64),
+}
+#[derive(Default)]
+struct Scheduler {
+    graph: Graph,
+    pending: BTreeMap<Queue, VecDeque<Event>>,
+    reads: Vec<Version>,
+}
+impl Scheduler {
+    fn add_queue(&mut self, queue: Queue) {
+        self.graph.add_queue(queue);
+        self.pending.entry(queue).or_default();
+    }
+    fn enqueue(&mut self, queue: Queue, event: Event) -> Result<(), Error> {
+        self.pending
+            .get_mut(&queue)
+            .ok_or(Error::UnknownQueue)?
+            .push_back(event);
+        Ok(())
+    }
+    // Returns the number processed; a zero return with pending events means
+    // an unresolved future signal, not a claim of deadlock.
+    fn drain(&mut self) -> Result<usize, Error> {
+        let mut count = 0;
+        loop {
+            let mut progress = false;
+            let queues: Vec<_> = self.pending.keys().copied().collect();
+            for queue in queues {
+                let Some(event) = self
+                    .pending
+                    .get(&queue)
+                    .and_then(|events| events.front())
+                    .cloned()
+                else {
+                    continue;
+                };
+                let mut staged = self.graph.clone();
+                let result = match event {
+                    Event::Submit(ref ops) => staged.submit(queue, ops),
+                    Event::Signal(fence, value) => {
+                        staged.signal(queue, fence, value).map(|()| Vec::new())
+                    }
+                    Event::Wait(fence, value) => {
+                        staged.wait(queue, fence, value).map(|()| Vec::new())
+                    }
+                };
+                match result {
+                    Err(Error::UnknownFence) if matches!(event, Event::Wait(_, _)) => continue,
+                    Err(error) => return Err(error),
+                    Ok(reads) => {
+                        self.graph = staged;
+                        self.reads.extend(reads);
+                        self.pending.get_mut(&queue).unwrap().pop_front();
+                        count += 1;
+                        progress = true;
+                    }
+                }
+            }
+            if !progress {
+                return Ok(count);
+            }
+        }
     }
 }
 
@@ -283,5 +432,71 @@ mod tests {
             g.submit(1, &[Op::Deserialize(0x1080, 2)]),
             Err(Error::UnknownAddress)
         );
+    }
+    #[test]
+    fn replaced_resources_wait_for_every_queue_reader() {
+        let mut g = graph();
+        g.submit(1, &[Op::Deserialize(0x1000, 10)]).unwrap();
+        g.signal(1, 7, 1).unwrap();
+        g.wait(2, 7, 1).unwrap();
+        g.submit(2, &[Op::Read(0x1000)]).unwrap();
+        g.signal(2, 8, 1).unwrap();
+        g.wait(1, 8, 1).unwrap();
+        // The same source content is intentionally republished; resources
+        // still have distinct ownership identities.
+        g.submit(1, &[Op::Deserialize(0x1000, 10)]).unwrap();
+        assert!(g.collect().is_empty());
+        assert_eq!(g.complete(8, 2), Err(Error::UnknownFence));
+        g.complete(7, 1).unwrap();
+        assert!(g.collect().is_empty());
+        g.complete(8, 1).unwrap();
+        assert_eq!(g.collect(), [1]);
+        assert!(g.resources.contains_key(&2));
+        assert!(g.collect().is_empty());
+    }
+
+    #[test]
+    fn failed_batch_does_not_publish_or_retire_resources() {
+        let mut g = graph();
+        g.submit(1, &[Op::Deserialize(0x1000, 10)]).unwrap();
+        assert_eq!(
+            g.submit(1, &[Op::Deserialize(0x1000, 11), Op::Unsupported]),
+            Err(Error::Unsupported)
+        );
+        assert_eq!(g.resources.len(), 1);
+        assert!(g.resources[&1].active);
+        assert_eq!(g.submit(1, &[Op::Read(0x1000)]).unwrap(), [10]);
+    }
+    #[test]
+    fn future_signal_wait_defers_consumer_and_its_reads() {
+        let mut s = Scheduler::default();
+        s.add_queue(1);
+        s.add_queue(2);
+        s.graph.register(0x1000, 256).unwrap();
+        // Queue 2 is submitted first, exactly like the GPU retention control.
+        s.enqueue(2, Event::Wait(7, 1)).unwrap();
+        s.enqueue(2, Event::Submit(vec![Op::Read(0x1000)])).unwrap();
+        assert_eq!(s.drain().unwrap(), 0);
+        assert!(s.reads.is_empty());
+        s.enqueue(1, Event::Submit(vec![Op::Deserialize(0x1000, 42)]))
+            .unwrap();
+        s.enqueue(1, Event::Signal(7, 1)).unwrap();
+        assert_eq!(s.drain().unwrap(), 4);
+        assert_eq!(s.reads, [42]);
+        assert!(s.pending.values().all(VecDeque::is_empty));
+    }
+
+    #[test]
+    fn unresolved_wait_does_not_publish_later_operations() {
+        let mut s = Scheduler::default();
+        s.add_queue(1);
+        s.graph.register(0x1000, 256).unwrap();
+        s.enqueue(1, Event::Wait(7, 1)).unwrap();
+        s.enqueue(1, Event::Signal(7, 1)).unwrap();
+        s.enqueue(1, Event::Submit(vec![Op::Deserialize(0x1000, 42)]))
+            .unwrap();
+        assert_eq!(s.drain().unwrap(), 0);
+        assert!(s.graph.addresses.is_empty());
+        assert_eq!(s.pending[&1].len(), 3);
     }
 }

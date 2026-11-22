@@ -1,5 +1,5 @@
 // Scalar reference operations for Xbox runtime-style BVH4 records.
-// Scope: finite inputs, nonzero ray direction components, zero box growth,
+// Scope: finite boxes and origins, finite or infinite inverse direction, zero box growth,
 // closest-first sorting, and uncompressed single triangles. This is not a
 // hardware-exact replacement for image_bvh64_intersect_ray.
 float tb_bvh_bound(uint node[32], uint child, uint component, bool box16) {
@@ -25,6 +25,15 @@ uint4 tb_bvh_boxes(uint node[32], bool box16, float3 origin,
         float3 b = (upper - origin) * inverseDirection;
         float3 nearAxis = min(a, b);
         float3 farAxis = max(a, b);
+        // Infinite reciprocal represents a parallel ray. Avoid 0 * infinity
+        // at slab boundaries; those boundaries belong to the box.
+        [unroll] for (uint axis = 0; axis < 3; ++axis) {
+            if (isinf(inverseDirection[axis])) {
+                bool inside = origin[axis] >= lower[axis] && origin[axis] <= upper[axis];
+                nearAxis[axis] = asfloat(inside ? 0xff800000u : 0x7f800000u);
+                farAxis[axis] = asfloat(inside ? 0x7f800000u : 0xff800000u);
+            }
+        }
         float nearT = max(0.0, max(nearAxis.x, max(nearAxis.y, nearAxis.z)));
         float farT = min(extent, min(farAxis.x, min(farAxis.y, farAxis.z)));
         child[i] = nearT <= farT ? node[i] : 0xffffffffu;

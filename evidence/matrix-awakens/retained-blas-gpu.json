@@ -5,24 +5,31 @@
   "modified_body_sha256": "d15889e17ab0b4ec78c74ae1c95a3d1d2f9c2482897146096a43034326f9b811",
   "body_bytes": 31232,
   "shader_sha256": "9d54b49d4e9b91f597f46d6673856828940aa6c31253f70b5a92ae9f3866c4cf",
+  "directory_shader_sha256": "f269c62b07113002b692d4effa053a458afac86b50446127af70216ee27688f6",
   "adapters": {
     "AMD": {
       "adapter": "1002:13c0",
       "source_offset": 320,
       "copies": 3,
       "two_queues_with_fence": true,
+      "blocked_fence_verified": true,
       "upload_written_after_close": true,
       "gpu_header_reads": 3,
-      "replayed_after_completion": true
+      "replayed_after_completion": true,
+      "reversed_list_submission": true,
+      "gpu_directory_publication": true
     },
     "NVIDIA": {
       "adapter": "10de:2705",
       "source_offset": 320,
       "copies": 3,
       "two_queues_with_fence": true,
+      "blocked_fence_verified": true,
       "upload_written_after_close": true,
       "gpu_header_reads": 3,
-      "replayed_after_completion": true
+      "replayed_after_completion": true,
+      "reversed_list_submission": true,
+      "gpu_directory_publication": true
     }
   }
 }

@@ -4,6 +4,7 @@
 
 pub(crate) mod page_list;
 mod compact_views;
+mod compact_visualize_rays;
 mod compact_hwrt_rays;
 mod distance_field_requests;
 
@@ -247,6 +248,9 @@ pub(super) fn hlsl(shader: &ShaderExtract) -> Option<String> {
         return Some(source);
     }
     if let Some(source) = compact_hwrt_rays::translate(shader) {
+        return Some(source);
+    }
+    if let Some(source) = compact_visualize_rays::translate(shader) {
         return Some(source);
     }
     if let Some(source) = compact_views::translate(shader) {

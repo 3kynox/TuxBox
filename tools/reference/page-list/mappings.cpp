@@ -48,6 +48,7 @@ static void dispatch(Context &ctx, const std::string &name, UINT entry, UINT gro
     const std::vector<UINT> srvs = no_hzb ? std::vector<UINT>{16,16,16,800,4} : post_instance ? std::vector<UINT>{16,16,16,4,800,4,8,4} : single_instance ? std::vector<UINT>{16,16,16,4,800,4} : cluster ? std::vector<UINT>{16,16,16,4,4,4,4,16,4,800,4}
                                            : instance ? std::vector<UINT>{16,16,16,4,4,4,4,800,8,4}
                                            : cards ? std::vector<UINT>{16, 4, 4, 4}
+                                           : (entry == 248 || entry == 249 || entry == 259) ? std::vector<UINT>{4, 8}
                                            : (entry == 507 || entry == 509 || entry == 512 || entry == 513) ? std::vector<UINT>{4, 20}
                                            : entry == 517 ? std::vector<UINT>{4, 4}
                                            : entry == 1016 ? std::vector<UINT>{8, 4, 4}
@@ -128,7 +129,7 @@ static void dispatch(Context &ctx, const std::string &name, UINT entry, UINT gro
         D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
         u.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
         u.Buffer.NumElements = sizes[i] / strides[i];
-        const bool typed = ((entry == 507 || entry == 509 || entry == 512 || entry == 513) && i == 0) || (!post_instance && !no_hzb && single_instance && i == 3) || ((entry == 1019 || entry == 2138) && i == 0) || (cluster && i == 5) || ((entry == 1213 || entry == 1215 || entry == 1230) && i == 0)
+        const bool typed = ((entry == 248 || entry == 249 || entry == 259 || entry == 507 || entry == 509 || entry == 512 || entry == 513) && i == 0) || (!post_instance && !no_hzb && single_instance && i == 3) || ((entry == 1019 || entry == 2138) && i == 0) || (cluster && i == 5) || ((entry == 1213 || entry == 1215 || entry == 1230) && i == 0)
                         || ((entry == 1219 || entry == 1236) && i == 1);
         u.Buffer.StructureByteStride = typed ? 0 : strides[i];
         if (typed) u.Format = DXGI_FORMAT_R32_UINT;

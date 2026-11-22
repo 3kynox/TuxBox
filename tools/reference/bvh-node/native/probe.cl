@@ -9,46 +9,46 @@ __kernel void probe(__global unsigned *out) {
          inverse = (float4)(10.f, 10.f, 1.f, 0.f);
   float4 dir = (float4)(0.1f, 0.1f, 1.f, 0.f);
   *(__global uint4 *)(out + 0) =
-      intersect(((ulong)(out + 2048) >> 3) | 5ul, origin, dir, inverse);
+      intersect(((ulong)(out + 3072) >> 3) | 5ul, origin, dir, inverse);
   *(__global uint4 *)(out + 4) =
-      intersect(((ulong)(out + 2112) >> 3) | 4ul, origin, dir, inverse);
+      intersect(((ulong)(out + 3136) >> 3) | 4ul, origin, dir, inverse);
   dir = (float4)(0.f, 0.f, 1.f, 0.f);
   *(__global uint4 *)(out + 8) =
-      intersect(((ulong)(out + 2176) >> 3) | 0ul,
+      intersect(((ulong)(out + 3200) >> 3) | 0ul,
                 (float4)(0.25f, 0.25f, -1.f, 0.f), dir, inverse);
   *(__global uint4 *)(out + 12) =
-      intersect(((ulong)(out + 2176) >> 3) | 1ul,
+      intersect(((ulong)(out + 3200) >> 3) | 1ul,
                 (float4)(0.75f, 0.75f, -1.f, 0.f), dir, inverse);
   *(__global uint4 *)(out + 16) =
-      intersect(((ulong)(out + 2176) >> 3) | 0ul,
+      intersect(((ulong)(out + 3200) >> 3) | 0ul,
                 (float4)(0.5f, 0.5f, 0.f, 0.f), dir, inverse);
   *(__global uint4 *)(out + 20) =
-      intersect(((ulong)(out + 2176) >> 3) | 0ul, (float4)(2.f, 2.f, -1.f, 0.f),
+      intersect(((ulong)(out + 3200) >> 3) | 0ul, (float4)(2.f, 2.f, -1.f, 0.f),
                 dir, inverse);
   dir = (float4)(0.f, 0.f, -1.f, 0.f);
   *(__global uint4 *)(out + 24) =
-      intersect(((ulong)(out + 2176) >> 3) | 0ul,
+      intersect(((ulong)(out + 3200) >> 3) | 0ul,
                 (float4)(0.5f, 0.5f, 0.f, 0.f), dir, inverse);
   *(__global uint4 *)(out + 28) =
-      intersect(((ulong)(out + 2176) >> 3) | 0ul, (float4)(2.f, 2.f, 1.f, 0.f),
+      intersect(((ulong)(out + 3200) >> 3) | 0ul, (float4)(2.f, 2.f, 1.f, 0.f),
                 dir, inverse);
   *(__global uint4 *)(out + 32) =
-      intersect(((ulong)(out + 2176) >> 3) | 0ul,
+      intersect(((ulong)(out + 3200) >> 3) | 0ul,
                 (float4)(0.5f, 0.5f, -1.f, 0.f), -dir, inverse);
   *(__global uint4 *)(out + 36) =
-      intersect(((ulong)(out + 2176) >> 3) | 0ul,
+      intersect(((ulong)(out + 3200) >> 3) | 0ul,
                 (float4)(0.f, 0.5f, -1.f, 0.f), -dir, inverse);
   *(__global uint4 *)(out + 40) =
-      intersect(((ulong)(out + 2176) >> 3) | 0ul,
+      intersect(((ulong)(out + 3200) >> 3) | 0ul,
                 (float4)(0.5f, 0.f, -1.f, 0.f), -dir, inverse);
   *(__global uint4 *)(out + 44) =
-      intersect(((ulong)(out + 2176) >> 3) | 0ul,
+      intersect(((ulong)(out + 3200) >> 3) | 0ul,
                 (float4)(0.25f, 0.25f, 0.f, 0.f), -dir, inverse);
   *(__global uint4 *)(out + 48) =
-      intersect(((ulong)(out + 2240) >> 3) | 0ul, (float4)(2.f, 2.f, -1.f, 0.f),
+      intersect(((ulong)(out + 3264) >> 3) | 0ul, (float4)(2.f, 2.f, -1.f, 0.f),
                 -dir, inverse);
   *(__global uint4 *)(out + 52) =
-      intersect(((ulong)(out + 2240) >> 3) | 0ul, (float4)(2.f, 2.f, 1.f, 0.f),
+      intersect(((ulong)(out + 3264) >> 3) | 0ul, (float4)(2.f, 2.f, 1.f, 0.f),
                 dir, inverse);
   const float2 points[3][6] = {
       {(float2)(0.f, .5f), (float2)(.5f, 0.f), (float2)(.5f, .5f),
@@ -63,7 +63,7 @@ __kernel void probe(__global unsigned *out) {
         for (uint p = 0; p < 6; ++p) {
           float z = facing ? 1.f : -1.f;
           float4 ray = (float4)(0.f, 0.f, -z, 0.f);
-          uint node_base = shape == 0 ? 2304 : 2496 + (shape - 1) * 96;
+          uint node_base = shape == 0 ? 3328 : 3520 + (shape - 1) * 96;
           uint result_base = shape == 0 ? 56 : 368 + (shape - 1) * 288;
           ulong node = ((ulong)(out + node_base + permutation * 16)) >> 3;
           *(__global uint4 *)(out + result_base +
@@ -81,7 +81,7 @@ __kernel void probe(__global unsigned *out) {
       uint index = side * 3 + rotation;
       float4 start = side ? (float4)(.75f, .625f, -1.f, 0.f)
                           : (float4)(.25f, .125f, -1.f, 0.f);
-      ulong node = (((ulong)(out + 2400 + index * 16)) >> 3) | side;
+      ulong node = (((ulong)(out + 3424 + index * 16)) >> 3) | side;
       *(__global uint4 *)(out + 344 + index * 4) =
           intersect(node, start, (float4)(0.f, 0.f, 1.f, 0.f), inverse);
     }
@@ -95,7 +95,7 @@ __kernel void probe(__global unsigned *out) {
         float3 ray = directions[d] * (facing ? -1.f : 1.f);
         for (uint p = 0; p < 3; p++) {
           float3 hit = (float3)(points[shape][p].x, points[shape][p].y, 0.f);
-          uint base = shape == 0 ? 2304 : 2496 + (shape - 1) * 96;
+          uint base = shape == 0 ? 3328 : 3520 + (shape - 1) * 96;
           ulong node = ((ulong)(out + base)) >> 3;
           uint index = ((shape * 6 + d) * 2 + facing) * 3 + p;
           *(__global uint4 *)(out + 1040 + 4 * index) = intersect(
@@ -113,14 +113,14 @@ __kernel void probe(__global unsigned *out) {
         for (uint p = 0; p < 3; p++) {
           float3 ray = tied[d] * (facing ? -1.f : 1.f);
           float3 hit = (float3)(points[shape][p].x, points[shape][p].y, 0.f);
-          uint base = shape == 0 ? 2304 : 2496 + (shape - 1) * 96;
+          uint base = shape == 0 ? 3328 : 3520 + (shape - 1) * 96;
           uint index = ((shape * 6 + d) * 2 + facing) * 3 + p;
           *(__global uint4 *)(out + 1472 + 4 * index) =
               intersect(((ulong)(out + base)) >> 3, (float4)(hit - ray, 0.f),
                         (float4)(ray, 0.f), inverse);
         }
-  ulong regular = ((ulong)(out + 2176)) >> 3,
-        degenerate = ((ulong)(out + 2816)) >> 3;
+  ulong regular = ((ulong)(out + 3200)) >> 3,
+        degenerate = ((ulong)(out + 3840)) >> 3;
   *(__global uint4 *)(out + 1904) = intersect(
       regular, (float4)(.25f, .25f, -1, 0), (float4)(1, 0, 0, 0), inverse);
   *(__global uint4 *)(out + 1908) = intersect(
@@ -153,8 +153,31 @@ __kernel void probe(__global unsigned *out) {
   *(__global uint4 *)(out + 1956) =
       intersect(regular, (float4)(.25f, .25f, as_float(0xff800000u), 0),
                 (float4)(0, 0, 1, 0), inverse);
+  const float4 slab_origins[10] = {
+      (float4)(0, 0, -4, 0), (float4)(-1, 0, -4, 0),  (float4)(1, 0, -4, 0),
+      (float4)(2, 0, -4, 0), (float4)(0, -1, -4, 0),  (float4)(0, 1, -4, 0),
+      (float4)(0, 2, -4, 0), (float4)(-1, -1, -4, 0), (float4)(1, 1, -4, 0),
+      (float4)(0, 0, 2, 0)};
+  for (uint sign = 0; sign < 2; sign++)
+    for (uint n = 0; n < 10; n++) {
+      float inf = as_float(sign ? 0xff800000u : 0x7f800000u);
+      *(__global uint4 *)(out + 1960 + 4 * (sign * 10 + n)) =
+          intersect((((ulong)(out + 3872)) >> 3) | 5ul, slab_origins[n],
+                    (float4)(0, 0, 1, 0), (float4)(inf, inf, 1, 0));
+    }
+  const uint grows[6] = {0, 1, 2, 3, 4, 8};
+  for (uint test = 0; test < 15; test++)
+    for (uint g = 0; g < 6; g++) {
+      uint4 descriptor =
+          (uint4)(0, 0x80000000u | (grows[g] << 23), 0xffffffffu, 0x810003ffu);
+      ulong node = (((ulong)(out + 5504 + test * 32)) >> 3) | 5ul;
+      *(__global uint4 *)(out + 2040 + 4 * (test * 6 + g)) =
+          __builtin_amdgcn_image_bvh_intersect_ray_l(
+              node, 10000.f, (float4)(0, 0, 0, 0), (float4)(1, 1, 1, 0),
+              (float4)(1, 1, 1, 0), descriptor);
+    }
   for (uint test = 0; test < 24; test++) {
-    __global uint *record = out + 3008 + test * 48;
+    __global uint *record = out + 4032 + test * 48;
     float4 origin = (float4)(as_float(record[32]), as_float(record[33]),
                              as_float(record[34]), 0.f);
     float4 inverse = (float4)(as_float(record[35]), as_float(record[36]),

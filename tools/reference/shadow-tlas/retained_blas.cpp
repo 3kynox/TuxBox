@@ -1,6 +1,7 @@
 // Queue-ordered raw Xbox BLAS body retention control. No runtime integration.
 #include "../independent-shaders/context.h"
 #include "retained_dxil.h"
+#include "directory_dxil.h"
 using namespace shader_control;
 
 static void wait(ID3D12Fence* fence, UINT64 value) {
@@ -96,9 +97,12 @@ int main() {
         // Queue B waits on A's copy; CPU does not wait between submissions.
         check(second->Wait(ready.Get(), 1), "queue wait");
         second->ExecuteCommandLists(1, next);
+        check(second->Signal(complete.Get(), 1), "signal complete");
+        // The dependency has not been signaled, so this resource set must
+        // still be retained while the second queue is pending.
+        if (complete->GetCompletedValue() != 0) throw std::runtime_error("queue wait did not block");
         ctx.queue->ExecuteCommandLists(1, first);
         check(ctx.queue->Signal(ready.Get(), 1), "signal ready");
-        check(second->Signal(complete.Get(), 1), "signal complete");
         wait(complete.Get(), 1);
         write_buffer(readback.Get(), "retained", body * 3 + 192);
         // The previous executions are complete before replay. Restore the
@@ -122,7 +126,89 @@ int main() {
         check(second->Signal(complete.Get(), 2), "replay signal complete");
         wait(complete.Get(), 2);
         write_buffer(readback.Get(), "replayed", body * 3 + 192);
-        std::fprintf(receipt, "body_bytes=%u\nsource_offset=%u\nsource_after_close=1\ncross_queue_wait=1\ncompleted_list_replay=1\n", body, offset + 64);
+        // Two lists target the same retained bytes. Record the list that will
+        // execute second first, then submit in the opposite order.
+        auto reverse_target = buffer(ctx.device.Get(), body, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
+        auto reverse_readback = buffer(ctx.device.Get(), body, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+        ComPtr<ID3D12CommandAllocator> reverse_allocator_a, reverse_allocator_b;
+        ComPtr<ID3D12GraphicsCommandList> reverse_a, reverse_b;
+        check(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&reverse_allocator_a)), "reverse allocator a");
+        check(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&reverse_allocator_b)), "reverse allocator b");
+        check(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, reverse_allocator_a.Get(), nullptr, IID_PPV_ARGS(&reverse_a)), "reverse list a");
+        transition(reverse_a.Get(), reverse_target.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+        reverse_a->CopyBufferRegion(reverse_target.Get(), 0, a.Get(), offset + 64, body);
+        transition(reverse_a.Get(), reverse_target.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        reverse_a->CopyBufferRegion(reverse_readback.Get(), 0, reverse_target.Get(), 0, body);
+        check(reverse_a->Close(), "close reverse a");
+        check(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, reverse_allocator_b.Get(), nullptr, IID_PPV_ARGS(&reverse_b)), "reverse list b");
+        reverse_b->CopyBufferRegion(reverse_target.Get(), 0, b.Get(), offset + 64, body);
+        transition(reverse_b.Get(), reverse_target.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        check(reverse_b->Close(), "close reverse b");
+        ID3D12CommandList* reverse_first[] = {reverse_b.Get()};
+        ID3D12CommandList* reverse_next[] = {reverse_a.Get()};
+        ctx.queue->ExecuteCommandLists(1, reverse_first);
+        ctx.queue->ExecuteCommandLists(1, reverse_next);
+        check(ctx.queue->Signal(complete.Get(), 3), "reverse signal");
+        wait(complete.Get(), 3);
+        write_buffer(reverse_readback.Get(), "reversed", body);
+        // A one-entry GPU directory stores a guest address and a retained
+        // backing address. Record A then B, but submit B then A, and have the
+        // GPU shader observe the entry from A after its ordered write.
+        const UINT64 entry_a[] = {0x12345600ull, old->GetGPUVirtualAddress()};
+        const UINT64 entry_b[] = {0x12345600ull, newer->GetGPUVirtualAddress()};
+        auto entry_a_upload = buffer(ctx.device.Get(), 16, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
+        auto entry_b_upload = buffer(ctx.device.Get(), 16, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
+        auto directory = buffer(ctx.device.Get(), 16, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
+        auto directory_result = buffer(ctx.device.Get(), 16, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        auto directory_readback = buffer(ctx.device.Get(), 16, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+        upload(entry_a_upload.Get(), entry_a, sizeof(entry_a));
+        upload(entry_b_upload.Get(), entry_b, sizeof(entry_b));
+        D3D12_ROOT_PARAMETER dir_params[2]{};
+        dir_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+        dir_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+        D3D12_ROOT_SIGNATURE_DESC dir_desc{2, dir_params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+        ComPtr<ID3DBlob> dir_blob;
+        check(D3D12SerializeRootSignature(&dir_desc, D3D_ROOT_SIGNATURE_VERSION_1, &dir_blob, nullptr), "directory root serialization");
+        ComPtr<ID3D12RootSignature> dir_root;
+        check(ctx.device->CreateRootSignature(0, dir_blob->GetBufferPointer(), dir_blob->GetBufferSize(), IID_PPV_ARGS(&dir_root)), "directory root");
+        D3D12_COMPUTE_PIPELINE_STATE_DESC dir_pd{};
+        dir_pd.pRootSignature = dir_root.Get();
+        dir_pd.CS = {directory_dxil, sizeof(directory_dxil)};
+        ComPtr<ID3D12PipelineState> dir_pipeline;
+        check(ctx.device->CreateComputePipelineState(&dir_pd, IID_PPV_ARGS(&dir_pipeline)), "directory pipeline");
+        ComPtr<ID3D12CommandAllocator> dir_allocator_a, dir_allocator_b;
+        ComPtr<ID3D12GraphicsCommandList> dir_a, dir_b;
+        check(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&dir_allocator_a)), "directory allocator a");
+        check(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&dir_allocator_b)), "directory allocator b");
+        check(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, dir_allocator_a.Get(), nullptr, IID_PPV_ARGS(&dir_a)), "directory list a");
+        transition(dir_a.Get(), directory.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+        dir_a->CopyBufferRegion(directory.Get(), 0, entry_a_upload.Get(), 0, 16);
+        transition(dir_a.Get(), directory.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        dir_a->SetComputeRootSignature(dir_root.Get());
+        dir_a->SetPipelineState(dir_pipeline.Get());
+        dir_a->SetComputeRootShaderResourceView(0, directory->GetGPUVirtualAddress());
+        dir_a->SetComputeRootUnorderedAccessView(1, directory_result->GetGPUVirtualAddress());
+        dir_a->Dispatch(1, 1, 1);
+        transition(dir_a.Get(), directory_result.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        dir_a->CopyBufferRegion(directory_readback.Get(), 0, directory_result.Get(), 0, 16);
+        check(dir_a->Close(), "close directory a");
+        check(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, dir_allocator_b.Get(), nullptr, IID_PPV_ARGS(&dir_b)), "directory list b");
+        dir_b->CopyBufferRegion(directory.Get(), 0, entry_b_upload.Get(), 0, 16);
+        transition(dir_b.Get(), directory.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        check(dir_b->Close(), "close directory b");
+        ID3D12CommandList* dir_first[] = {dir_b.Get()};
+        ID3D12CommandList* dir_next[] = {dir_a.Get()};
+        ctx.queue->ExecuteCommandLists(1, dir_first);
+        ctx.queue->ExecuteCommandLists(1, dir_next);
+        check(ctx.queue->Signal(complete.Get(), 4), "directory signal");
+        wait(complete.Get(), 4);
+        D3D12_RANGE dir_range{0, 16}, empty{};
+        void* dir_data{};
+        check(directory_readback->Map(0, &dir_range, &dir_data), "directory readback");
+        bool directory_matches = std::memcmp(dir_data, entry_a, 16) == 0;
+        directory_readback->Unmap(0, &empty);
+        if (!directory_matches) throw std::runtime_error("GPU directory publication mismatch");
+        std::fprintf(receipt, "body_bytes=%u\nsource_offset=%u\nsource_after_close=1\ncross_queue_wait=1\nblocked_fence_verified=1\ncompleted_list_replay=1\nreverse_submission=1\ngpu_directory_publication=1\n", body, offset + 64);
     } catch (const std::exception& e) {
         std::fprintf(receipt, "error=%s\n", e.what()); result = 1;
     }

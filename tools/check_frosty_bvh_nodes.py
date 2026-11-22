@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Compare standalone BVH4 node math on the CPU, Radeon and GeForce.
 
-The control covers finite nonzero ray directions, zero box growth and
+The control covers finite inputs and infinite inverse directions for parallel
+slabs, zero box growth and
 closest-first child sorting. Supplying --serialized adds the root BOX16 or
 BOX32 from a user-owned Frosty serialized BLAS to the synthetic inputs.
 The output is a mathematical comparison, not a native AMD-instruction oracle.
@@ -42,10 +43,17 @@ def box_reference(node, box16, origin, inverse, extent, sort_children):
     for child in range(4):
         bound = struct.unpack_from("<6e" if box16 else "<6f", raw,
                                    16 + child * (12 if box16 else 24))
-        near = max(0.0, *(min((bound[i] - origin[i]) * inverse[i],
-                               (bound[i + 3] - origin[i]) * inverse[i]) for i in range(3)))
-        far = min(extent, *(max((bound[i] - origin[i]) * inverse[i],
-                                (bound[i + 3] - origin[i]) * inverse[i]) for i in range(3)))
+        ranges = []
+        for axis in range(3):
+            if math.isinf(inverse[axis]):
+                ranges.append((-math.inf, math.inf) if bound[axis] <= origin[axis] <= bound[axis + 3]
+                              else (math.inf, -math.inf))
+            else:
+                a = (bound[axis] - origin[axis]) * inverse[axis]
+                b = (bound[axis + 3] - origin[axis]) * inverse[axis]
+                ranges.append((min(a, b), max(a, b)))
+        near = max(0.0, *(item[0] for item in ranges))
+        far = min(extent, *(item[1] for item in ranges))
         results.append((near, node[child] if near <= far else INVALID))
     if sort_children:
         for a, b in ((0, 2), (1, 3), (0, 1), (2, 3), (1, 2)):
@@ -98,7 +106,11 @@ def triangle_reference(origin, direction, a, b, c):
 
 
 def vector(value):
-    return "float3(" + ", ".join(f"{v:.9f}" for v in value) + ")"
+    def component(v):
+        if math.isinf(v):
+            return "asfloat(0x7f800000u)" if v > 0 else "asfloat(0xff800000u)"
+        return f"{v:.9f}"
+    return "float3(" + ", ".join(component(v) for v in value) + ")"
 
 
 def main():
@@ -177,6 +189,13 @@ def main():
         origin, inverse = (0, 0, -4), (10, 10, 1)
         assert box_reference(node, box16, origin, inverse, 100, True) == [27, 18, 36, INVALID]
         boxes.append((node, box16, "equal-distance lanes", origin, inverse, 100, True))
+    parallel_bounds = [(-1, -1, 2, 1, 1, 4), (-1, -1, 3, 1, 1, 5),
+                       (1, -1, 2, 2, 1, 4), (-2, -2, 2, -1, 2, 4)]
+    for kind, sign, x in ((True, 1, -1), (True, -1, 1), (False, 1, 2), (False, -1, 3)):
+        node = box_node(parallel_bounds, kind)
+        node[3] = 36
+        boxes.append((node, kind, "parallel slabs", (x, 0, -4),
+                      (sign * math.inf, sign * math.inf, 1), 100, True))
     triangles = [
         ((0.25, 0.25, -1), (0, 0, 1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
         ((0.25, 0.25, 1), (0, 0, -1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
@@ -188,10 +207,6 @@ def main():
         ((-0.5, -0.5, -1), (1, 1, 1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
         ((2, 2, -1), (0, 0, 1), (0, 0, 0), (2, 0, 0), (0, 2, 0)),
         ((2, 2, 1), (0, 0, -1), (0, 0, 0), (2, 0, 0), (0, 2, 0)),
-        ((0, 0.5, -1), (0, 0, 1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
-        ((0.5, 0, -1), (0, 0, 1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
-        ((0.5, 0, 1), (0, 0, -1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
-        ((0.5, 0.5, 1), (0, 0, -1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
         ((-0.5, 0.5, -1), (0, 0, 1), (0, 0, 0), (1, 1, 0), (-1, 1, 0)),
         ((0, 1, -1), (0, 0, 1), (0, 0, 0), (1, 1, 0), (-1, 1, 0)),
         ((-0.5, -1.5, -1), (1, 2, 1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),

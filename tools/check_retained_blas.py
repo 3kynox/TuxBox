@@ -39,13 +39,16 @@ def main():
     report = {'scope': 'Standalone GPU buffer retention and byte copy control; not runtime BLAS provenance or a compact-AS implementation',
               'serialized_sha256': digest(source), 'body_sha256': digest(body),
               'modified_body_sha256': digest(modified), 'body_bytes': len(body),
-              'shader_sha256': digest((ROOT / 'tools/reference/shadow-tlas/retained_blas.hlsl').read_bytes()), 'adapters': {}}
+              'shader_sha256': digest((ROOT / 'tools/reference/shadow-tlas/retained_blas.hlsl').read_bytes()),
+              'directory_shader_sha256': digest((ROOT / 'tools/reference/shadow-tlas/directory.hlsl').read_bytes()), 'adapters': {}}
     with TemporaryDirectory(prefix='tuxbox-retained-blas-') as directory:
         work = Path(directory)
         (work / 'source.bin').write_bytes(source)
         dxc = Path(find_dxc(None))
         subprocess.run([dxc, '-T', 'cs_6_0', '-E', 'main', '-O3', '-Fh', work / 'retained_dxil.h',
                         '-Vn', 'retained_dxil', ROOT / 'tools/reference/shadow-tlas/retained_blas.hlsl'], check=True)
+        subprocess.run([dxc, '-T', 'cs_6_0', '-E', 'main', '-O3', '-Fh', work / 'directory_dxil.h',
+                        '-Vn', 'directory_dxil', ROOT / 'tools/reference/shadow-tlas/directory.hlsl'], check=True)
         toolchain = Toolchain()
         obj = toolchain.compile(ROOT / 'tools/reference/shadow-tlas/retained_blas.cpp', work, f'/I{ROOT / "runtime/d3d12"}', f'/I{work}')
         exe = work / 'retained.exe'
@@ -67,8 +70,10 @@ def main():
                 raise ValueError(f'{name} retained copies differ')
             if (work / 'replayed.bin').read_bytes() != modified + body + modified + modified[:64] + body[:64] + modified[:64]:
                 raise ValueError(f'{name} replayed copies differ')
+            if (work / 'reversed.bin').read_bytes() != modified:
+                raise ValueError(f'{name} reversed submission order differs')
             report['adapters'][name] = {'adapter': adapter, 'source_offset': 320, 'copies': 3,
-                                       'two_queues_with_fence': True, 'upload_written_after_close': True, 'gpu_header_reads': 3, 'replayed_after_completion': True}
+                                       'two_queues_with_fence': True, 'blocked_fence_verified': True, 'upload_written_after_close': True, 'gpu_header_reads': 3, 'replayed_after_completion': True, 'reversed_list_submission': True, 'gpu_directory_publication': True}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
