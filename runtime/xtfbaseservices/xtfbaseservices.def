@@ -1,0 +1,5 @@
+LIBRARY xtfbaseservices
+EXPORTS
+    XtfErrAreAssertsEnabled @44
+    XtfErrPopAssertsEnabled @46
+    XtfErrPushAssertsEnabled @47

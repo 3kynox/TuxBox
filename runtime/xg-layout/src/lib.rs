@@ -98,6 +98,41 @@ impl Plane {
         Ok(plane)
     }
 
+    /// Compute a single-mip, uncompressed 4 KiB-swizzled 3D plane.
+    pub fn compute_4k_volume(desc: &Desc) -> Result<Self, i32> {
+        if desc.layout != TILE_4K
+            || desc.mips != 1
+            || (70..=84).contains(&desc.format)
+            || (94..=99).contains(&desc.format)
+        {
+            return Err(E_NOTIMPL);
+        }
+        let mut linear = *desc;
+        linear.layout = LINEAR;
+        let mut plane = Self::compute(&linear)?;
+        let (tw, th, td, _, _, _) = volume_tile(plane.element_bytes).ok_or(E_NOTIMPL)?;
+        let pitch = (desc.width as u32).next_multiple_of(tw);
+        let rows = desc.height.next_multiple_of(th);
+        let depth = u32::from(desc.slices).next_multiple_of(td);
+        let slice_bytes = u64::from(pitch) * u64::from(rows) * u64::from(plane.element_bytes);
+        let mip = &mut plane.mips[0];
+        mip.size = slice_bytes * u64::from(depth);
+        mip.slice_bytes = slice_bytes;
+        mip.pitch_texels = pitch;
+        mip.pitch_bytes = pitch * plane.element_bytes;
+        mip.alignment = 4096;
+        mip.pitch_elements = pitch;
+        mip.padded_rows = rows;
+        mip.padded_depth = depth;
+        mip.swizzle = 5;
+        // The 3D tiled descriptor records tile depth in this field.
+        mip.samples = td;
+        plane.size = mip.size;
+        plane.slice_bytes = slice_bytes * u64::from(td);
+        plane.alignment = 4096;
+        Ok(plane)
+    }
+
     pub fn compute(desc: &Desc) -> Result<Self, i32> {
         let (block, element_bytes, tile_width, tile_height): (u32, u32, u32, u32) =
             match desc.format {
@@ -237,12 +272,25 @@ impl Plane {
         self.element_offset_in_slice(0, level, x, y)
     }
 
-    /// Element address in a 3D plane returned by `compute_linear_volume`.
+    /// Element address in a supported linear or 4 KiB-swizzled 3D plane.
     pub fn element_offset_in_volume(&self, z: u32, level: u32, x: u64, y: u32) -> Option<u64> {
-        if z >= self.mips.get(level as usize)?.depth {
+        let mip = self.mips.get(level as usize)?;
+        if z >= mip.depth || x >= u64::from(mip.width_elements) || y >= mip.height_elements {
             return None;
         }
-        self.element_offset_in_slice(z, level, x, y)
+        if mip.swizzle == 0 {
+            return self.element_offset_in_slice(z, level, x, y);
+        }
+        let (tw, th, td, xb, yb, zb) = volume_tile(self.element_bytes)?;
+        let x = u32::try_from(x).ok()?;
+        let tile = (z / td) * (mip.padded_rows / th) * (mip.pitch_elements / tw)
+            + (y / th) * (mip.pitch_elements / tw)
+            + x / tw;
+        Some(
+            mip.offset
+                + u64::from(tile) * 4096
+                + u64::from(scatter(x, xb) + scatter(y, yb) + scatter(z, zb)),
+        )
     }
 
     pub fn element_offset_in_slice(&self, slice: u32, level: u32, x: u64, y: u32) -> Option<u64> {
@@ -272,6 +320,19 @@ impl Plane {
         let tile = (y / tile_height) * (mip.pitch_elements / tile_width) + x / tile_width;
         Some(origin + u64::from(tile * 4096 + scatter(x, x_bits) + scatter(y, y_bits)))
     }
+}
+
+type VolumeTile = (u32, u32, u32, &'static [u8], &'static [u8], &'static [u8]);
+
+fn volume_tile(bytes: u32) -> Option<VolumeTile> {
+    Some(match bytes {
+        1 => (16, 16, 16, &[0, 1, 6, 9], &[3, 5, 8, 11], &[2, 4, 7, 10]),
+        2 => (8, 16, 16, &[1, 6, 9], &[3, 5, 8, 11], &[2, 4, 7, 10]),
+        4 => (8, 16, 8, &[2, 6, 9], &[3, 5, 8, 11], &[4, 7, 10]),
+        8 => (8, 8, 8, &[3, 6, 9], &[5, 8, 11], &[4, 7, 10]),
+        16 => (4, 8, 8, &[6, 9], &[5, 8, 11], &[4, 7, 10]),
+        _ => return None,
+    })
 }
 
 fn scatter(value: u32, positions: &[u8]) -> u32 {

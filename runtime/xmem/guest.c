@@ -155,7 +155,7 @@ static int virtual_cpu_profiles(void)
 {
     SYSTEM_INFO system; GetSystemInfo(&system);
     SIZE_T page = system.dwPageSize;
-    const DWORD protections[] = { PAGE_NOACCESS, PAGE_READONLY, PAGE_READWRITE,
+    const DWORD protections[] = { PAGE_NOACCESS, PAGE_READONLY, PAGE_READWRITE, PAGE_EXECUTE,
                                   PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE };
     MEMORY_BASIC_INFORMATION area;
     for (unsigned i = 0; i < sizeof protections / sizeof protections[0]; ++i) {
@@ -176,7 +176,21 @@ static int virtual_cpu_profiles(void)
                 area.State == MEM_COMMIT && area.Protect == protection);
         REQUIRE(VirtualFree(base, 0, MEM_RELEASE));
     }
-    REQUIRE(!XMemVirtualAlloc(NULL, page, MEM_RESERVE | MEM_COMMIT, 1, PAGE_READWRITE | PAGE_GUARD));
+    for (unsigned i = 1; i < sizeof protections / sizeof protections[0]; ++i) {
+        DWORD guarded = protections[i] | PAGE_GUARD;
+        BYTE *base = XMemVirtualAlloc(NULL, page, MEM_RESERVE | MEM_COMMIT, 1, guarded);
+        REQUIRE(base && VirtualQuery(base, &area, sizeof area) == sizeof area && area.Protect == guarded);
+        BYTE sample = 0xff; SIZE_T transferred = 0;
+        REQUIRE(!ReadProcessMemory(GetCurrentProcess(), base, &sample, 1, &transferred));
+        REQUIRE(VirtualQuery(base, &area, sizeof area) == sizeof area && area.Protect == protections[i]);
+        // Execute-only pages are not guaranteed to be readable on every host.
+        if (protections[i] != PAGE_EXECUTE) {
+            REQUIRE(ReadProcessMemory(GetCurrentProcess(), base, &sample, 1, &transferred));
+            REQUIRE(transferred == 1 && sample == 0);
+        }
+        REQUIRE(VirtualFree(base, 0, MEM_RELEASE));
+    }
+    REQUIRE(!XMemVirtualAlloc(NULL, page, MEM_RESERVE | MEM_COMMIT, 1, PAGE_NOACCESS | PAGE_GUARD));
     REQUIRE(GetLastError() == ERROR_NOT_SUPPORTED);
     return 0;
 }
@@ -530,7 +544,7 @@ int wmain(int argc, wchar_t **argv)
     }
     if (cpu_profiles_only) {
         REQUIRE(!virtual_cpu_profiles());
-        const char result[] = "xmem-virtual-cpu PASS protections=5 allocations=10 invalid=1\n";
+        const char result[] = "xmem-virtual-cpu PASS protections=6 allocations=12 guards=5 invalid=1\n";
         if (report && (fputs(result, report) == EOF || fclose(report))) return 2;
         fputs(result, stdout);
         return 0;

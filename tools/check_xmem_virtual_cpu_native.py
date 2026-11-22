@@ -13,7 +13,7 @@ import pefile
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE = "adc182acae5340b0618a3d57a239ed2e8deb305dbefc49439cb8a2d06c7ce812"
-EXPECTED = "xmem-native-virtual-cpu PASS profiles=30 flags=preserved"
+EXPECTED = "xmem-native-virtual-cpu PASS profiles=66 flags=preserved"
 
 
 def main():

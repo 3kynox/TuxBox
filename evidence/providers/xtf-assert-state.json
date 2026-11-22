@@ -1,0 +1,31 @@
+{
+  "scope": "Assertion-enable state API only. Assertion callbacks, reporting, other XTF APIs and underflow diagnostic logging are not implemented.",
+  "reference_sha256": "b5b562b7b9c7366b9f56f7f7956bd38fc9539b22413dd2bb75f924f3ea3cab26",
+  "provider_sha256": "ad043b23313310d2a968544b3b67ab3c59f9e5a02f1b6e78a9e3507aaa4be037",
+  "guest_sha256": "d91a7bfed876693cefa6b2a12466bc934df92097eb67acbd855e6eb348f133cd",
+  "host": "1793301796 experimental-11.0-20261027b-x86_64",
+  "runs": {
+    "reference": {
+      "initial": "1",
+      "underflow": "1",
+      "disable": "0",
+      "nested": "1",
+      "restore1": "0",
+      "thread": "0,1,0",
+      "after_thread": "0",
+      "restore2": "1",
+      "deep": "1,1"
+    },
+    "provider": {
+      "initial": "1",
+      "underflow": "1",
+      "disable": "0",
+      "nested": "1",
+      "restore1": "0",
+      "thread": "0,1,0",
+      "after_thread": "0",
+      "restore2": "1",
+      "deep": "1,1"
+    }
+  }
+}

@@ -2,7 +2,7 @@
 """Compare Xbox XG 3D texture exports with the TuxBox provider.
 
 The same Windows guest runs with each DLL and compares every output byte for
-12,825 supported-subset layouts and 99,180 sampled element addresses. No game
+17,385 supported-subset layouts and 673,740 sampled element addresses. No game
 bytes are distributed. Supply the original XG DLL and a TuxBox XMem DLL.
 """
 import argparse
@@ -58,10 +58,10 @@ def main():
             run = subprocess.run([str(wine), str(guest)], cwd=trial, env=env, timeout=60,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
             out = run.stdout.decode('utf-8', errors='replace').strip()
-            if run.returncode or 'xg-3d PASS 12825 layouts 99180 element addresses' not in out:
+            if run.returncode or 'xg-3d PASS 17385 layouts 673740 element addresses' not in out:
                 raise RuntimeError(f'{name} control failed ({run.returncode}): {out}')
             data = (trial / 'texture3d-results.bin').read_bytes()
-            if len(data) != 12825 * 0x1b40 + 99180 * 12:
+            if len(data) != 17385 * 0x1b40 + 673740 * 12:
                 raise ValueError(f'{name} emitted an unexpected number of result bytes')
             outputs.append(data)
             results[name] = {'dll_sha256': digest(dll), 'guest_receipt': out.splitlines()[-1],
@@ -75,19 +75,19 @@ def main():
         if check.returncode or b'unsupported descriptor rejected' not in check.stdout:
             raise RuntimeError(f'unsupported-subset control failed: {check.stdout!r}')
         receipt = {
-            'scope': 'XGComputeTexture3DLayout (ordinal 6) and XGCreateTexture3DComputer (ordinal 10) for a bounded subset. Identical guest and XMem dependency; complete layouts and sampled element addresses compared against the supplied Xbox XG DLL.',
-            'subset': '57 uncompressed color formats; eight square and rectangular shapes including one-pixel edges and 2,048-pixel boundaries; depth 1, 2, 3, 8 or 2,048; one or three mips; shader-resource bind; linear swizzle with default, immutable or staging usage; no CPU access flags, misc flags or explicit pitch. Depth-only mip chains, block-compressed formats and other combinations are unsupported.',
+            'scope': 'XGComputeTexture3DLayout (ordinal 6), XGCreateTexture3DComputer (ordinal 10) and generic XGCreateTextureComputer (ordinal 11) for a bounded 3D subset. Identical guest and XMem dependency; complete layouts and sampled element addresses compared against the supplied Xbox XG DLL.',
+            'subset': '57 uncompressed color formats; eight square and rectangular shapes including one-pixel edges and 2,048-pixel boundaries; depth 1, 2, 3, 8 or 2,048; one or three mips; shader-resource bind; linear swizzle with default, immutable or staging usage, or single-mip 4 KiB swizzle with default or immutable usage; no CPU access flags, misc flags or explicit pitch. Depth-only mip chains, block-compressed formats and other combinations are unsupported.',
             'host': (proton / 'version').read_text().strip(),
             'guest_sha256': digest(exe), 'guest_source_sha256': digest(source),
             'xmem_sha256': digest(args.xmem),
-            'layouts': 12825, 'sampled_element_addresses': 99180,
-            'checks': ['both exports and complete layouts', 'sampled mip and depth-slice addresses including the first out-of-range slice',
+            'layouts': 17385, 'sampled_element_addresses': 673740,
+            'checks': ['all three exports and complete matching layouts', 'sampled mip and depth-slice addresses including the first out-of-range slice',
                        'null arguments and guards', 'unverified usage rejected by provider'],
             'runs': results,
         }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(receipt, indent=2) + '\n')
-    print('xg-3d differential PASS: 12825 layouts and 99180 addresses match')
+    print('xg-3d differential PASS: 17385 layouts and 673740 addresses match')
 
 
 if __name__ == '__main__':

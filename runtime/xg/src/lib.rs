@@ -459,12 +459,11 @@ pub struct Texture3DDesc {
 }
 
 fn texture_3d_plane(desc: &Texture3DDesc) -> Result<Plane, i32> {
-    // Only the native-verified linear, single-plane color subset is supported.
-    if !matches!(desc.usage, 0 | 1 | 3)
+    // Native-verified linear color volumes and single-mip 4 KiB volumes.
+    if !matches!((desc.usage, desc.swizzle), (0 | 1 | 3, 0) | (0 | 1, 5))
         || desc.bind_flags != 8
         || desc.cpu_access != 0
         || desc.misc_flags != 0
-        || desc.swizzle != 0
         || desc.pitch != 0
         || desc.mips == 0
         || (70..=84).contains(&desc.format)
@@ -482,7 +481,7 @@ fn texture_3d_plane(desc: &Texture3DDesc) -> Result<Plane, i32> {
     }
     let mips = u16::try_from(desc.mips).map_err(|_| E_INVALIDARG)?;
     let depth = u16::try_from(desc.depth).map_err(|_| E_INVALIDARG)?;
-    Plane::compute_linear_volume(&Desc {
+    let base = Desc {
         dimension: 3,
         alignment: 0,
         width: u64::from(desc.width),
@@ -492,9 +491,14 @@ fn texture_3d_plane(desc: &Texture3DDesc) -> Result<Plane, i32> {
         format: desc.format,
         samples: 1,
         quality: 0,
-        layout: 256,
+        layout: 256 + desc.swizzle,
         flags: 0,
-    })
+    };
+    if desc.swizzle == 0 {
+        Plane::compute_linear_volume(&base)
+    } else {
+        Plane::compute_4k_volume(&base)
+    }
 }
 
 /// # Safety
@@ -590,9 +594,42 @@ unsafe extern "system" fn create(desc: *const Desc, out: *mut *mut Computer) -> 
     let Some(desc) = (unsafe { desc.as_ref() }) else {
         return E_INVALIDARG;
     };
-    let plane = match Plane::compute(desc) {
-        Ok(p) => p,
-        Err(hr) => return hr,
+    let (plane, dimension) = match desc.dimension {
+        4 => {
+            if desc.alignment != 0 || desc.flags != 0 || desc.samples != 1 || desc.quality != 0 {
+                return E_NOTIMPL;
+            }
+            let width = match u32::try_from(desc.width) {
+                Ok(width) => width,
+                Err(_) => return E_NOTIMPL,
+            };
+            let swizzle = match desc.layout {
+                256 => 0,
+                261 => 5,
+                _ => return E_NOTIMPL,
+            };
+            let typed = Texture3DDesc {
+                width,
+                height: desc.height,
+                depth: u32::from(desc.slices),
+                mips: u32::from(desc.mips),
+                format: desc.format,
+                usage: if swizzle == 0 { 3 } else { 0 },
+                bind_flags: 8,
+                cpu_access: 0,
+                misc_flags: 0,
+                swizzle,
+                pitch: 0,
+            };
+            match texture_3d_plane(&typed) {
+                Ok(plane) => (plane, 4),
+                Err(hr) => return hr,
+            }
+        }
+        _ => match Plane::compute(desc) {
+            Ok(plane) => (plane, 3),
+            Err(hr) => return hr,
+        },
     };
-    unsafe { allocate_computer(plane, 3, out) }
+    unsafe { allocate_computer(plane, dimension, out) }
 }

@@ -43,15 +43,15 @@ int main(int argc, char **argv)
     *(uint32_t *)(image + 0xe0d8) = 0;
     alloc_fn allocate = (alloc_fn)(image + 0x2140);
     const uint32_t flags[] = {0x1000, 0x2000, 0x3000};
-    const uint32_t protection[] = {1, 2, 4, 0x20, 0x40};
+    const uint32_t protection[] = {1, 2, 4, 0x10, 0x20, 0x40, 0x102, 0x104, 0x110, 0x120, 0x140};
     unsigned expected = 0;
-    for (unsigned i = 0; i < 3; ++i) for (unsigned j = 0; j < 5; ++j) for (unsigned k = 0; k < 2; ++k) {
+    for (unsigned i = 0; i < 3; ++i) for (unsigned j = 0; j < 11; ++j) for (unsigned k = 0; k < 2; ++k) {
         uint32_t f = flags[i] | (k ? 0x100000 : 0);
         void *result = allocate(NULL, 16384, f, 1, protection[j]);
         ++expected;
         if (result != (void *)0x12340000 || calls != expected || flags_seen != f ||
             protection_seen != protection[j] || bytes_seen != 16384) return 6;
     }
-    puts("xmem-native-virtual-cpu PASS profiles=30 flags=preserved");
+    puts("xmem-native-virtual-cpu PASS profiles=66 flags=preserved");
     return 0;
 }

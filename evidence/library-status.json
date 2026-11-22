@@ -208,7 +208,7 @@
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox Rust CPU memory provider.",
-      "scope": "Nine exports cover heap allocation, working-set statistics, virtual memory, and the CPU side of the title\u2019s 64 KiB physical-page profile. The guest preserves 131,072 bytes across unmap and remap in reversed page order. XMemMakeTag matches the supplied routine on 5,120 inputs. XMemVirtualQuery explicitly reports unsupported pending a verified Xbox success path. Allocation and free calls route through installed callbacks; a local reference control checks argument forwarding and restoring defaults. XMemGetWriteWatch and XMemResumeWriteWatch match the checked suspension transitions and host dirty-page query. The checked write-watch allocation profiles are exercised end-to-end on the CPU. Scatter mapping supports provider-owned CPU pages with remapping and guard checks. Profile 1 accepts checked CPU reserve/commit and ordinary protection combinations. Ordinary CPU heap routing covers the tested attribute fields, including zero.",
+      "scope": "Nine exports cover heap allocation, working-set statistics, virtual memory, and the CPU side of the title\u2019s 64 KiB physical-page profile. The guest preserves 131,072 bytes across unmap and remap in reversed page order. XMemMakeTag matches the supplied routine on 5,120 inputs. XMemVirtualQuery explicitly reports unsupported pending a verified Xbox success path. Allocation and free calls route through installed callbacks; a local reference control checks argument forwarding and restoring defaults. XMemGetWriteWatch and XMemResumeWriteWatch match the checked suspension transitions and host dirty-page query. The checked write-watch allocation profiles are exercised end-to-end on the CPU. Scatter mapping supports provider-owned CPU pages with remapping and guard checks. Profile 1 accepts checked CPU reserve/commit and ordinary protection combinations. Ordinary CPU heap routing covers the tested attribute fields, including zero. The tested CPU virtual allocation profile includes executable and guard protections.",
       "remaining": "GPU-visible backing, concurrent aliases, the Xbox partition allocator, additional allocation profiles and retail validation remain open. XMemVirtualQuery console metadata and success-path reference comparison remain open. Memory profiling callbacks and concurrent guest callback lifetime remain unverified. Other XMemSetOption IDs and untested Xbox allocation profiles remain unsupported; console concurrency has not been compared. Scatter mapping has not been compared against the console NT success path and does not support GPU backing or simultaneous aliases. Xbox partition heap, special alignment and allocation-failure behavior remain unverified.",
       "evidence": [
         "runtime/xmem/xmem.def",
@@ -278,8 +278,8 @@
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox texture address computer.",
-      "scope": "Computes linear and 4 KiB tiled 2D textures, array slices and packed mip chains. TuxBox and the supplied DLL matched on 9,231,018 texel or block addresses across 78 formats and 156 layouts. A separate check includes eight descriptors from Frosty. XGComputeBufferLayout matches the supplied DLL on 967 buffer descriptors, including invalid arguments and full output guards. The 2D-specific layout and computer exports match the supplied DLL on 7,020 sampled layouts and 81,432 sampled addresses for the checked usage and swizzle profiles. The 1D-specific layout and computer exports match 4,104 sampled linear layouts and 45,144 addresses for 57 uncompressed formats. The 3D-specific layout and computer exports match 12,825 sampled linear layouts and 99,180 sampled addresses for 57 uncompressed formats. Tile shapes for buffers and checked 2D formats matched the supplied DLL across 11,990 cases. Depth/stencil swizzle validation matched the supplied DLL across 6,125 cases. Optimal swizzle selection matches the supplied DLL across 70,200 cases; the eight-argument ABI is confirmed at two supplied driver call sites.",
-      "remaining": "Further formats and tiling modes, tiled 3D textures, multisampling and subresource copies. Calling an unimplemented texture computer method terminates the guest. Other 2D-specific descriptor profiles return unsupported. Block-compressed and other untested 1D descriptor profiles return unsupported. Compressed 3D textures, depth-only mip chains and other untested 3D profiles return unsupported. Tile shapes for 1D and 3D match the sampled reference rejections; unknown formats remain unsupported. Other SDK versions and source-level defaults for the eighth argument are unverified.",
+      "scope": "Computes linear and 4 KiB tiled 2D textures, array slices and packed mip chains. TuxBox and the supplied DLL matched on 9,231,018 texel or block addresses across 78 formats and 156 layouts. A separate check includes eight descriptors from Frosty. XGComputeBufferLayout matches the supplied DLL on 967 buffer descriptors, including invalid arguments and full output guards. The 2D-specific layout and computer exports match the supplied DLL on 7,020 sampled layouts and 81,432 sampled addresses for the checked usage and swizzle profiles. The 1D-specific layout and computer exports match 4,104 sampled linear layouts and 45,144 addresses for 57 uncompressed formats. The 3D-specific layout and computer exports match 17,385 sampled linear and single-mip tiled layouts and 673,740 sampled addresses for 57 uncompressed formats. Tile shapes for buffers and checked 2D formats matched the supplied DLL across 11,990 cases. Depth/stencil swizzle validation matched the supplied DLL across 6,125 cases. Optimal swizzle selection matches the supplied DLL across 70,200 cases; the eight-argument ABI is confirmed at two supplied driver call sites.",
+      "remaining": "Further formats and tiling modes, tiled 3D mip chains, multisampling and subresource copies. Calling an unimplemented texture computer method terminates the guest. Other 2D-specific descriptor profiles return unsupported. Block-compressed and other untested 1D descriptor profiles return unsupported. Compressed 3D textures, depth-only mip chains and other untested 3D profiles return unsupported. Tile shapes for 1D and 3D match the sampled reference rejections; unknown formats remain unsupported. Other SDK versions and source-level defaults for the eighth argument are unverified.",
       "evidence": [
         "runtime/xg-layout/src/lib.rs",
         "evidence/providers/xg-control.json",
@@ -1876,12 +1876,13 @@
     {
       "name": "xtfbaseservices.dll",
       "group": "Diagnostics and tooling",
-      "status": "incomplete",
-      "provider": "No verified TuxBox provider for this library.",
-      "scope": "On-disk Xbox support module. \"XtfBaseServices.dll\" (Game OS). 60 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified.",
-      "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
+      "status": "partial",
+      "provider": "TuxBox Rust XTF assertion state.",
+      "scope": "Process-wide assertion enable, nested push and pop state match the checked no-handler reference cases.",
+      "remaining": "Assertion handlers, reporting, underflow diagnostics and other XTF services remain unimplemented; the partial provider is not staged automatically.",
       "evidence": [
-        "evidence/frosty-xbox-library-inventory.json"
+        "evidence/frosty-xbox-library-inventory.json",
+        "evidence/providers/xtf-assert-state.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/xtfbaseservices.dll",
@@ -1894,7 +1895,11 @@
           "??_7LoggingTargetDebuggerAndConsole@xtfbaseservices@@6B@",
           "??_7NonCopyableDLLBase@xtfbaseservices@@6B@"
         ],
-        "verified": [],
+        "verified": [
+          "XtfErrAreAssertsEnabled",
+          "XtfErrPopAssertsEnabled",
+          "XtfErrPushAssertsEnabled"
+        ],
         "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
       },
       "inventory": {
