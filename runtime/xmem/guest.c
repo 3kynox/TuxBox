@@ -151,6 +151,36 @@ static int virtual_query(void)
     return 0;
 }
 
+static int virtual_cpu_profiles(void)
+{
+    SYSTEM_INFO system; GetSystemInfo(&system);
+    SIZE_T page = system.dwPageSize;
+    const DWORD protections[] = { PAGE_NOACCESS, PAGE_READONLY, PAGE_READWRITE,
+                                  PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE };
+    MEMORY_BASIC_INFORMATION area;
+    for (unsigned i = 0; i < sizeof protections / sizeof protections[0]; ++i) {
+        DWORD protection = protections[i];
+        BYTE *base = XMemVirtualAlloc(NULL, 2 * page, MEM_RESERVE | MEM_COMMIT, 1, protection);
+        REQUIRE(base && !((UINT_PTR)base % system.dwAllocationGranularity));
+        REQUIRE(VirtualQuery(base, &area, sizeof area) == sizeof area);
+        REQUIRE(area.AllocationBase == base && area.State == MEM_COMMIT && area.Protect == protection);
+        if (protection == PAGE_READWRITE || protection == PAGE_EXECUTE_READWRITE) {
+            base[0] = 0x39; base[2 * page - 1] = 0xb4;
+            REQUIRE(base[0] == 0x39 && base[2 * page - 1] == 0xb4);
+        }
+        REQUIRE(VirtualFree(base, 0, MEM_RELEASE));
+        base = XMemVirtualAlloc(NULL, 2 * page, MEM_RESERVE | MEM_TOP_DOWN, 1, protection);
+        REQUIRE(base && VirtualQuery(base, &area, sizeof area) == sizeof area && area.State == MEM_RESERVE);
+        REQUIRE(XMemVirtualAlloc(base, 2 * page, MEM_COMMIT, 1, protection) == base);
+        REQUIRE(VirtualQuery(base, &area, sizeof area) == sizeof area &&
+                area.State == MEM_COMMIT && area.Protect == protection);
+        REQUIRE(VirtualFree(base, 0, MEM_RELEASE));
+    }
+    REQUIRE(!XMemVirtualAlloc(NULL, page, MEM_RESERVE | MEM_COMMIT, 1, PAGE_READWRITE | PAGE_GUARD));
+    REQUIRE(GetLastError() == ERROR_NOT_SUPPORTED);
+    return 0;
+}
+
 static int write_watch(void)
 {
     HMODULE module = GetModuleHandleW(L"xmem.dll");
@@ -462,13 +492,21 @@ int wmain(int argc, wchar_t **argv)
     BOOL hooks_only = argc >= 2 && !wcscmp(argv[1], L"--hooks");
     BOOL watch_only = argc >= 2 && !wcscmp(argv[1], L"--watch");
     BOOL scatter_only = argc >= 2 && !wcscmp(argv[1], L"--scatter");
-    if (pages_only || query_only || tag_only || hooks_only || watch_only || scatter_only) { --argc; ++argv; }
+    BOOL cpu_profiles_only = argc >= 2 && !wcscmp(argv[1], L"--virtual-cpu");
+    if (pages_only || query_only || tag_only || hooks_only || watch_only || scatter_only || cpu_profiles_only) { --argc; ++argv; }
     if (!(argc == 1 || (argc == 3 && wcscmp(argv[1], L"--report") == 0))) {
-        fputs("usage: xmem-smoke.exe [--pages|--query|--tags|--hooks|--watch|--scatter] [--report FILE]\n", stderr);
+        fputs("usage: xmem-smoke.exe [--pages|--query|--tags|--hooks|--watch|--scatter|--virtual-cpu] [--report FILE]\n", stderr);
         return 2;
     }
     if (argc == 3 && _wfopen_s(&report, argv[2], L"wb") != 0) return 2;
     REQUIRE(app_local_provider());
+    if (cpu_profiles_only) {
+        REQUIRE(!virtual_cpu_profiles());
+        const char result[] = "xmem-virtual-cpu PASS protections=5 allocations=10 invalid=1\n";
+        if (report && (fputs(result, report) == EOF || fclose(report))) return 2;
+        fputs(result, stdout);
+        return 0;
+    }
     if (scatter_only) {
         REQUIRE(!scattered_pages());
         const char result[] = "xmem-scatter PASS pages=3 remapped-bytes=196608 duplicates=2 guards=2 rollback=1\n";

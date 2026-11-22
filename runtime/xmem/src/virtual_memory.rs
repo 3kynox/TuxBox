@@ -5,7 +5,7 @@ use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTE
 use windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringA;
 use windows_sys::Win32::System::Memory::{
     GetWriteWatch, MEM_COMMIT, MEM_RESERVE, MEMORY_BASIC_INFORMATION, PAGE_NOACCESS, PAGE_READWRITE,
-    VirtualAlloc,
+    PAGE_READONLY, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, VirtualAlloc,
 };
 
 use windows_sys::Win32::System::SystemServices::{MEM_TOP_DOWN, MEM_WRITE_WATCH};
@@ -147,8 +147,9 @@ pub unsafe extern "system" fn virtual_alloc(
         }
     }
     let operation = allocation_type & !MEM_TOP_DOWN;
-    let plain = matches!((operation, protect),
-        (MEM_RESERVE, PAGE_NOACCESS) | (MEM_COMMIT, PAGE_READWRITE));
+    let plain = matches!(protect, PAGE_NOACCESS | PAGE_READONLY | PAGE_READWRITE |
+        PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE)
+        && (operation == MEM_RESERVE || operation == MEM_COMMIT || operation == MEM_RESERVE | MEM_COMMIT);
     let watched = (operation == MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH && protect == PAGE_READWRITE)
         || (operation == MEM_RESERVE | MEM_WRITE_WATCH && protect == PAGE_NOACCESS);
     if profile != 1 || !(plain || watched) {
