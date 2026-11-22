@@ -33,6 +33,10 @@ numerator and denominator on gfx1036. The node instruction has no minimum
 distance input; subsequent shader traversal may filter the candidate. This is
 one synthetic triangle and does not establish full shader 219 behavior. The
 recorded result is `evidence/matrix-awakens/bvh-native-endpoints.json`.
+The probe also checks an on-triangle ray origin (distance zero), for both Z
+directions at the interior and at three edge points. The interior produces a
+zero numerator in both directions; the tested edges have differing ownership.
+These node results do not include a traversal's culling or distance filters.
 
 Requirements are an accessible `/dev/kfd`, an HSA runtime and its headers,
 a clang with the AMDGPU target, and `ld.lld`. Compile and run from the project

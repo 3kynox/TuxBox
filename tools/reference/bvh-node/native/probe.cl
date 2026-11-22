@@ -18,6 +18,18 @@ __kernel void probe(__global unsigned *out) {
             (float4)(as_float(0x7f800000u), as_float(0x7f800000u), 1.f, 0.f),
             descriptor);
   }
+  for (uint i = 0; i < 8; ++i) {
+    uint4 descriptor = (uint4)(0u, 0x80000000u, 0xffffffffu, 0x890003ffu);
+    float x = as_float(out[8500 + i * 3]);
+    float y = as_float(out[8501 + i * 3]);
+    float zdir = as_float(out[8502 + i * 3]);
+    *(__global uint4 *)(out + 8448 + 4 * i) =
+        __builtin_amdgcn_image_bvh_intersect_ray_l(
+            ((ulong)(out + 3200)) >> 3, as_float(out[8524]),
+            (float4)(x, y, 0.f, 0.f), (float4)(0.f, 0.f, zdir, 0.f),
+            (float4)(as_float(0x7f800000u), as_float(0x7f800000u), zdir, 0.f),
+            descriptor);
+  }
   float4 origin = (float4)(0.f, 0.f, -4.f, 0.f),
          inverse = (float4)(10.f, 10.f, 1.f, 0.f);
   float4 dir = (float4)(0.1f, 0.1f, 1.f, 0.f);

@@ -280,6 +280,12 @@ int main(int argc, char **argv) {
   tri[15] = 0x0909;
   const float endpoint_inputs[7] = {.5f, 1.f, 2.f, 100.f, .25f, .25f, -1.f};
   memcpy((uint32_t *)out + 8400, endpoint_inputs, sizeof(endpoint_inputs));
+  const float zero_rays[24] = {.25f, .25f, 1, .25f, .25f, -1,
+                               0, .5f, 1, 0, .5f, -1,
+                               .5f, 0, 1, .5f, 0, -1,
+                               .5f, .5f, 1, .5f, .5f, -1};
+  memcpy((uint32_t *)out + 8500, zero_rays, sizeof(zero_rays));
+  ((uint32_t *)out)[8524] = bits(2.f);
   uint32_t *scaled = (uint32_t *)out + 3264;
   float scaled_verts[12] = {0, 0, 0, 2, 0, 0, 0, 2, 0, 2, 2, 0};
   memcpy(scaled, scaled_verts, sizeof(scaled_verts));
@@ -612,6 +618,25 @@ int main(int argc, char **argv) {
       uint32_t actual = ((uint32_t *)out)[8416 + 4 * i + j];
       printf("%s%08x", j ? "," : "", actual);
       if (actual != endpoint_expected[j])
+        failed = 1;
+    }
+    putchar('\n');
+  }
+  const uint32_t zero_expected[8][4] = {
+      {0, 0xbf800000, 0xbe800000, 0xbe800000},
+      {0, 0x3f800000, 0x3e800000, 0x3e800000},
+      {0, 0xbf800000, 0, 0xbf000000},
+      {0, 0x3f800000, 0, 0x3f000000},
+      {0xff800000, 0xbf800000, 0xbf000000, 0},
+      {0, 0x3f800000, 0x3f000000, 0},
+      {0xff800000, 0xbf800000, 0xbf000000, 0xbf000000},
+      {0x7f800000, 0x3f800000, 0x3f000000, 0x3f000000}};
+  for (unsigned i = 0; i < 8; i++) {
+    printf("triangle_zero_%u words=", i);
+    for (unsigned j = 0; j < 4; j++) {
+      uint32_t actual = ((uint32_t *)out)[8448 + 4 * i + j];
+      printf("%s%08x", j ? "," : "", actual);
+      if (actual != zero_expected[i][j])
         failed = 1;
     }
     putchar('\n');
