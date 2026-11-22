@@ -42,9 +42,9 @@ int main(int argc, char** argv) {
         // This usage is outside TuxBox's verified subset.
         sample.usage = 2; sample.swizzle = 0;
         if (compute(&sample, unchanged.body) != E_NOTIMPL || create(&sample, &sentinel) != E_NOTIMPL || sentinel) return 4;
-        sample.usage = 0; sample.swizzle = 5; // Tiled mip chains are not yet supported.
+        sample.usage = 0; sample.swizzle = 5; sample.width = 13; // Packed mip tails are not yet supported.
         if (compute(&sample, unchanged.body) != E_NOTIMPL || create(&sample, &sentinel) != E_NOTIMPL || sentinel) return 4;
-        ResourceDesc unsupported{4,0,37,13,3,3,28,1,0,261,0};
+        ResourceDesc unsupported{4,0,13,13,3,3,28,1,0,261,0};
         if (generic(&unsupported, &sentinel) != E_NOTIMPL || sentinel) return 4;
         for (uint8_t b : unchanged.body) if (b != 0xa5) return 5;
         std::puts("xg-3d unsupported descriptor rejected"); return 0;

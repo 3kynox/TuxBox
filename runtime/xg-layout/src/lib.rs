@@ -98,10 +98,9 @@ impl Plane {
         Ok(plane)
     }
 
-    /// Compute a single-mip, uncompressed 4 KiB-swizzled 3D plane.
+    /// Compute an uncompressed 4 KiB-swizzled 3D plane without packed mips.
     pub fn compute_4k_volume(desc: &Desc) -> Result<Self, i32> {
         if desc.layout != TILE_4K
-            || desc.mips != 1
             || (70..=84).contains(&desc.format)
             || (94..=99).contains(&desc.format)
         {
@@ -111,24 +110,41 @@ impl Plane {
         linear.layout = LINEAR;
         let mut plane = Self::compute(&linear)?;
         let (tw, th, td, _, _, _) = volume_tile(plane.element_bytes).ok_or(E_NOTIMPL)?;
-        let pitch = (desc.width as u32).next_multiple_of(tw);
-        let rows = desc.height.next_multiple_of(th);
-        let depth = u32::from(desc.slices).next_multiple_of(td);
-        let slice_bytes = u64::from(pitch) * u64::from(rows) * u64::from(plane.element_bytes);
-        let mip = &mut plane.mips[0];
-        mip.size = slice_bytes * u64::from(depth);
-        mip.slice_bytes = slice_bytes;
-        mip.pitch_texels = pitch;
-        mip.pitch_bytes = pitch * plane.element_bytes;
-        mip.alignment = 4096;
-        mip.pitch_elements = pitch;
-        mip.padded_rows = rows;
-        mip.padded_depth = depth;
-        mip.swizzle = 5;
-        // The 3D tiled descriptor records tile depth in this field.
-        mip.samples = td;
-        plane.size = mip.size;
-        plane.slice_bytes = slice_bytes * u64::from(td);
+        let levels = usize::from(desc.mips);
+        let mut chain_bytes = 0u64;
+        for (level, mip) in plane.mips[..levels].iter_mut().enumerate() {
+            let scale = 1u32 << level;
+            let w = (desc.width as u32).div_ceil(scale);
+            let h = desc.height.div_ceil(scale);
+            let d = u32::from(desc.slices).div_ceil(scale);
+            // Packed-tail placement is not yet implemented.
+            if levels > 1 && w <= tw {
+                return Err(E_NOTIMPL);
+            }
+            let pitch = w.next_multiple_of(tw);
+            let rows = h.next_multiple_of(th);
+            let depth = d.next_multiple_of(td);
+            let slice_bytes = u64::from(pitch) * u64::from(rows) * u64::from(plane.element_bytes);
+            mip.size = slice_bytes * u64::from(depth);
+            mip.slice_bytes = slice_bytes;
+            mip.pitch_texels = pitch;
+            mip.pitch_bytes = pitch * plane.element_bytes;
+            mip.alignment = 4096;
+            mip.pitch_elements = pitch;
+            mip.padded_rows = rows;
+            mip.padded_depth = depth;
+            mip.depth = (u32::from(desc.slices) >> level).max(1);
+            mip.swizzle = 5;
+            mip.samples = td;
+            chain_bytes += slice_bytes * u64::from(td);
+        }
+        let mut end = chain_bytes;
+        for mip in &mut plane.mips[..levels] {
+            end -= mip.slice_bytes * u64::from(td);
+            mip.offset = end;
+        }
+        plane.slice_bytes = chain_bytes;
+        plane.size = chain_bytes * u64::from(plane.mips[0].padded_depth / td);
         plane.alignment = 4096;
         Ok(plane)
     }
@@ -283,11 +299,10 @@ impl Plane {
         }
         let (tw, th, td, xb, yb, zb) = volume_tile(self.element_bytes)?;
         let x = u32::try_from(x).ok()?;
-        let tile = (z / td) * (mip.padded_rows / th) * (mip.pitch_elements / tw)
-            + (y / th) * (mip.pitch_elements / tw)
-            + x / tw;
+        let tile = (y / th) * (mip.pitch_elements / tw) + x / tw;
         Some(
             mip.offset
+                + u64::from(z / td) * self.slice_bytes
                 + u64::from(tile) * 4096
                 + u64::from(scatter(x, xb) + scatter(y, yb) + scatter(z, zb)),
         )
