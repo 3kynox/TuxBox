@@ -119,6 +119,8 @@ Frosty uses compute shaders to allocate physical shadow pages, choose pages for 
 
 The first-boot hair cluster-culling shader also passes five CPU-modeled readbacks on Radeon and GeForce through TuxBox’s D3D12 provider. The controls cover visible and hidden clusters, LOD and frustum selection. [GPU readbacks](../evidence/matrix-awakens/hair-cluster-provider-gpus.json)
 
+A second hair cluster-culling shader now passes six provider-level readbacks on both GPUs, including its additional per-cluster LOD metadata. [GPU readbacks](../evidence/matrix-awakens/hair-cluster-503-gpus.json)
+
 Two hair cluster prefix-sum shaders also match CPU-modeled results on Radeon and GeForce through the provider, including empty, partial and multi-block inputs and output guard words. These checks cover the prefix stage only. [GPU readbacks](../evidence/matrix-awakens/hair-prefix-provider-gpus.json)
 
 The hair-mesh deformation shader passes CPU-modeled checks on Radeon and GeForce for multiple control-point counts, partial output and two groups. This verifies one stage; hair rendering still needs end-to-end validation. [GPU readbacks](../evidence/matrix-awakens/hair-mesh-deformation.json)

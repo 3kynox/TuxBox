@@ -27,6 +27,7 @@ mod mesh;
 mod mesh_exports;
 mod exec_group;
 mod hair_cluster;
+mod hair_cluster_export;
 mod instance_cull;
 mod instance_cull_tail;
 mod instance_cull_hzb;
@@ -850,6 +851,7 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
         && insns.iter().any(|op| op.mnemonic == "s_and_saveexec_b32")
         && insns.iter().any(|op| op.mnemonic.starts_with("v_cmp_") && matches!(op.dst[..], [Opnd::Sgpr(n)] if n & 1 != 0));
     let particle_sort = particle_sort::prepare(ex, &mut insns);
+    let hair_cluster_export = hair_cluster_export::prepare(ex, &mut insns);
     let hair_cluster = hair_cluster::prepare(ex, &mut insns);
     let instance_cull = instance_cull::prepare(ex, &mut insns);
     let hzb_cull = instance_cull_hzb::prepare(ex, &mut insns);
@@ -1033,6 +1035,10 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     {
         em.body = exec_group::group(&em.body);
     }
+    if hair_cluster_export {
+        em.body.insert_str(0, "    uint4 hair_record = 0;\n");
+        em.body.push_str(hair_cluster_export::EPILOGUE);
+    }
     if hair_cluster {
         em.body.insert_str(0, "    uint4 hair_record = 0;
 ");
@@ -1061,6 +1067,7 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     if page_waves || wave_cull { hlsl.insert_str(0, page_waves::DECLARATIONS); }
     if particle_sort { hlsl.insert_str(0, particle_sort::DECLARATIONS); }
     if hair_cluster { hlsl.insert_str(0, hair_cluster::DECLARATIONS); }
+    if hair_cluster_export { hlsl.insert_str(0, hair_cluster_export::DECLARATIONS); }
     if instance_cull { hlsl.insert_str(0, &instance_cull::queue_declarations(1)); }
     if post_cull { hlsl.insert_str(0, "groupshared uint cull_mask[2], cull_base;\n"); }
     if let Some(program) = view_cull { hlsl.insert_str(0, &program.declarations()); }
@@ -3047,6 +3054,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             _ => {}
         }
         if hair_cluster::emit(self, ins) { return Ok(()); }
+        if hair_cluster_export::emit(self, ins) { return Ok(()); }
         if m == "tb_hidden_instance" {
             self.line("hidden = (exec_lo & 1u) != 0u; hidden_id = v0; if (hidden) v42 = v28;");
             return Ok(());
