@@ -278,6 +278,8 @@ int main(int argc, char **argv) {
   tri[13] = 1;
   tri[14] = 2;
   tri[15] = 0x0909;
+  const float endpoint_inputs[7] = {.5f, 1.f, 2.f, 100.f, .25f, .25f, -1.f};
+  memcpy((uint32_t *)out + 8400, endpoint_inputs, sizeof(endpoint_inputs));
   uint32_t *scaled = (uint32_t *)out + 3264;
   float scaled_verts[12] = {0, 0, 0, 2, 0, 0, 0, 2, 0, 2, 2, 0};
   memcpy(scaled, scaled_verts, sizeof(scaled_verts));
@@ -601,6 +603,18 @@ int main(int argc, char **argv) {
     printf("%08x%c", ((uint32_t *)out)[i], i % 4 == 3 ? '\n' : ' ');
     if (((uint32_t *)out)[i] != expected[i])
       failed = 1;
+  }
+  const uint32_t endpoint_expected[4] = {0xbf800000, 0xbf800000, 0xbe800000,
+                                         0xbe800000};
+  for (unsigned i = 0; i < 4; i++) {
+    printf("triangle_endpoint_max=%.1f words=", endpoint_inputs[i]);
+    for (unsigned j = 0; j < 4; j++) {
+      uint32_t actual = ((uint32_t *)out)[8416 + 4 * i + j];
+      printf("%s%08x", j ? "," : "", actual);
+      if (actual != endpoint_expected[j])
+        failed = 1;
+    }
+    putchar('\n');
   }
   // Check hit status separately: these cases map the hardware's edge
   // ownership, without assuming the returned unnormalized barycentrics.

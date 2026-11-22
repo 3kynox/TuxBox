@@ -5,6 +5,19 @@ static uint4 intersect(ulong node, float4 origin, float4 direction,
       node, 100.f, origin, direction, inverse, descriptor);
 }
 __kernel void probe(__global unsigned *out) {
+  // Seeded by the host: triangle candidates have no near-distance operand.
+  // Max distance is deliberately loaded at runtime for each call.
+  for (uint i = 0; i < 4; ++i) {
+    uint4 descriptor = (uint4)(0u, 0x80000000u, 0xffffffffu, 0x890003ffu);
+    float4 endpoint_origin = (float4)(as_float(out[8404]), as_float(out[8405]),
+                                      as_float(out[8406]), 0.f);
+    *(__global uint4 *)(out + 8416 + 4 * i) =
+        __builtin_amdgcn_image_bvh_intersect_ray_l(
+            ((ulong)(out + 3200)) >> 3, as_float(out[8400 + i]),
+            endpoint_origin, (float4)(0.f, 0.f, 1.f, 0.f),
+            (float4)(as_float(0x7f800000u), as_float(0x7f800000u), 1.f, 0.f),
+            descriptor);
+  }
   float4 origin = (float4)(0.f, 0.f, -4.f, 0.f),
          inverse = (float4)(10.f, 10.f, 1.f, 0.f);
   float4 dir = (float4)(0.1f, 0.1f, 1.f, 0.f);

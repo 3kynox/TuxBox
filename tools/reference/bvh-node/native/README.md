@@ -27,6 +27,13 @@ equivalence remain unverified. The control checks all three observed barycentric
 on each paired triangle type using unequal barycentrics. These cases do not
 establish general instruction equivalence.
 
+The same probe checks a TRI0 intersection at distance 1 with four dynamically
+loaded maximum distances: 0.5, 1, 2 and 100. All four return the same finite
+numerator and denominator on gfx1036. The node instruction has no minimum
+distance input; subsequent shader traversal may filter the candidate. This is
+one synthetic triangle and does not establish full shader 219 behavior. The
+recorded result is `evidence/matrix-awakens/bvh-native-endpoints.json`.
+
 Requirements are an accessible `/dev/kfd`, an HSA runtime and its headers,
 a clang with the AMDGPU target, and `ld.lld`. Compile and run from the project
 root, using the actual HSA installation prefix in `HSA_ROOT`:

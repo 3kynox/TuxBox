@@ -1,0 +1,61 @@
+{
+  "scope": "One synthetic gfx1036 TRI0 candidate; not full shader traversal or a game execution",
+  "sources_sha256": {
+    "tools/reference/bvh-node/native/probe.c": "182cd1c34b081f801fc116fb36ec250017d69520cc430b8e0f0dc7b1aceb3a5b",
+    "tools/reference/bvh-node/native/probe.cl": "cc908145852a227d152f5671dcbe30ee04f6e31ed255f3029cd25dcb7deb9187"
+  },
+  "node_vertices": [
+    [
+      0,
+      0,
+      0
+    ],
+    [
+      1,
+      0,
+      0
+    ],
+    [
+      0,
+      1,
+      0
+    ],
+    [
+      1,
+      1,
+      0
+    ]
+  ],
+  "node_type": 0,
+  "descriptor_words": [
+    "00000000",
+    "80000000",
+    "ffffffff",
+    "890003ff"
+  ],
+  "origin": [
+    0.25,
+    0.25,
+    -1.0
+  ],
+  "direction": [
+    0,
+    0,
+    1
+  ],
+  "maximum_distance_inputs": [
+    0.5,
+    1.0,
+    2.0,
+    100.0
+  ],
+  "inputs": "Host-seeded GPU buffer read dynamically for origin and maximum distances",
+  "output_words_each": [
+    "bf800000",
+    "bf800000",
+    "be800000",
+    "be800000"
+  ],
+  "inference": "The finite numerator and denominator are both -1, so this node produces a distance-1 candidate even when its maximum-distance operand is 0.5. The instruction has no near-distance operand. This does not establish full shader 219 behavior.",
+  "reproduce": "Follow the build and execution commands in tools/reference/bvh-node/native/README.md; check the four triangle_endpoint_max lines and exit status."
+}
