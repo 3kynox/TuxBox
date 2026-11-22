@@ -155,9 +155,14 @@ def retail_summary(evidence, report):
         boot = packaged.get("retail_boot", {})
         renderer = read_json(evidence / "matrix-awakens/packaged-renderer.json")
         if renderer.get("title_sha256") == report["sha256"] and renderer.get("first_present"):
-            milestone = "Menu displayed" if renderer.get("menu_verified") else "First 4K frame"
-            rows[:0] = [("Packaged graphics settings", milestone, GREEN if renderer.get("menu_verified") else AMBER),
-                        ("Earlier reduced-effects tests", "", MUTED)]
+            milestone = "Menu displayed" if renderer.get("menu_verified") else (
+                "Black frame" if renderer.get("window", "").startswith("Black") else "Frame presented")
+            previous = {label for label, _, _ in rows}
+            reduced = "Chase + city reached" if "City sandbox" in previous else (
+                "Chase reached" if "Chase tutorial" in previous else "Menu rendered")
+            rows = [("Original settings", milestone, GREEN if renderer.get("menu_verified") else RED),
+                    ("Earlier reduced-effects run", reduced, GREEN),
+                    ("Visual quality", "Artifacts remain", AMBER)]
         elif (packaged.get("title_sha256") == report["sha256"] and boot.get("exit_code")
                 and boot.get("mangohud_frames") == 0 and boot.get("first_present") is False):
             rows[:0] = [("Packaged graphics settings", "Blocked before first frame", RED),
@@ -392,8 +397,8 @@ def draw_libraries(svg, y, data, direct):
         by_group.setdefault(library["group"], []).append(library)
     groups = list(by_group.items())
     # Allow room for the widest filename, the bar and its two right-aligned labels.
-    name_width = 32 + max(len(row["name"]) for row in libraries) * 9.2
-    columns = 2 if len(groups) > 1 and (INNER-36+GAP)/2 >= name_width+220 else 1
+    name_width = 27 + max(len(row["name"]) for row in libraries) * 7.3
+    columns = 2 if len(groups) > 1 and (INNER-36+GAP)/2 >= name_width+110 else 1
     width = (INNER-36+GAP)/columns
     bands = [groups[i:i+columns] for i in range(0, len(groups), columns)]
     row_height = 29
@@ -418,7 +423,7 @@ def draw_libraries(svg, y, data, direct):
         text(group, x+20, 104, label, 15, COLORS[name])
         x += 20 + 10*len(label) + 24
     text(group, 18, 130,
-         "Bars show verified TuxBox exports. * title import · ~ static dependency · blank = no static path; dynamic loads are unmeasured.",
+         "Bars: verified exports, not game compatibility. * Frosty import  ·  ~ static dependency  ·  dynamic loads unmeasured.",
          13, MUTED)
     y0 = 148
     for band, band_height in zip(bands, band_heights):
@@ -426,7 +431,7 @@ def draw_libraries(svg, y, data, direct):
             x = 18+col*width
             right = x+width-GAP
             bar_x = x+name_width
-            bar_width = right-bar_x-143
+            bar_width = right-bar_x-110
             rect(group, x, y0, width-GAP, 1, LINE)
             text(group, x, y0+25, family, 16, AQUA, bold=True)
             top = y0+52
@@ -459,7 +464,7 @@ def draw_libraries(svg, y, data, direct):
                                                f"({percent}). {library['provider']} {library['scope']} "
                                                f"{reach_note}")
                 symbol(cell, x+6, top-5, state)
-                text(cell, x+20, top, name + marker, 15)
+                text(cell, x+20, top, name + marker, 13)
                 if fraction is None:
                     element(cell, "line", x1=bar_x, x2=bar_x+bar_width, y1=top-5, y2=top-5,
                             stroke=MUTED, stroke_dasharray="2 4")
@@ -467,7 +472,7 @@ def draw_libraries(svg, y, data, direct):
                     rect(cell, bar_x, top-9, bar_width, 7, LINE)
                     if fraction:
                         rect(cell, bar_x, top-9, round(bar_width*fraction, 4), 7, AQUA)
-                text(cell, right-83, top, tally, 13, MUTED, anchor="end")
+                text(cell, right-58, top, tally, 12, MUTED, anchor="end")
                 text(cell, right, top, percent, 13, TEXT, bold=True, anchor="end")
                 if parts:
                     text(cell, x+20, top+16, parts, 13, MUTED)
@@ -664,44 +669,29 @@ def draw_shaders(svg, y, evidence):
     data = read_json(evidence / "matrix-awakens/shader-inventory.json")
     if not data:
         return y
-    rows = data["stages"]
-    independent = independent_counts(data)
+    # Reuse the receipt checks so mismatched builds and invalid counts never
+    # appear as measured coverage. Detailed per-stage results live in SHADERS.md.
     checks = shader_checks(evidence, data)
-    height = 195 + 27 * len(rows) + 21 * len(checks)
+    rows = []
+    for prefix, label in (("Global raster archive", "Global raster"),
+                          ("Material raster archive", "Material raster"),
+                          ("Global compute archive", "Global compute"),
+                          ("Ray tracing", "Ray tracing")):
+        note = next((item for item in checks if item.startswith(prefix)), None)
+        if note:
+            rows.append((label, note.split(" · ", 1)[1] if " · " in note else note))
+    height = 146 + 29 * len(rows)
     group = section(svg, PAD, y, "Frosty shader coverage")
-    window(group, INNER, height, "~/evidence/matrix-awakens/shader-inventory.json")
+    window(group, INNER, height, "~/docs/SHADERS.md")
     text(group, 18, 70, "Frosty shader coverage", 25, AMBER, bold=True)
-    packages = sum(row["global"] + row["material"] for row in rows)
-    sources = sum(row["profiled_dxbc"] for row in rows)
-    text(group, INNER-18, 68, f"{packages:,} shipped entries · {sources} in profile · "
-         f"{data['linked_variants']} linked variants", 14, MUTED, anchor="end")
-    text(group, 18, 97, "HLSL counts all translated programs. TuxBox only counts those translated with the legacy emitter disabled.", 14, MUTED)
-    text(group, 18, 118, f"Stage table uses compiler snapshot {data['compiler_sha256'][:8]}. Requests can precede a draw.", 14, MUTED)
-    columns = [(18, "Stage"), (211, "Packaged"), (463, "HLSL / unique DXBC"), (584, "TuxBox only"),
-               (694, "In profile"), (INNER-18, "In profile / requested")]
-    for x, label in columns:
-        text(group, x, 151, label, 14, AQUA, anchor="start" if x == 18 else "end")
-    for index, row in enumerate(rows):
-        top = 164 + 27*index
-        rect(group, 18, top-3, INNER-36, 1, LINE)
-        text(group, 18, top+17, row["stage"], 15)
-        text(group, 211, top+17, f"{row['global']+row['material']:,}", 15, TEXT, anchor="end")
-        text(group, 584, top+17, independent.get(row["stage"], "—"), 15, TEXT, anchor="end")
-        for x, width, right, value, total in (
-                (229, 84, 463, row["hlsl_emitted"], row["unique_dxbc"]),
-                (722, 94, INNER-18, row["requested_in_profile"], row["requested_dxbc"])):
-            if value is None or not total:
-                text(group, right, top+17, "—", 15, MUTED, anchor="end")
-                continue
-            rect(group, x, top+8, width, 7, LINE)
-            if value:
-                rect(group, x, top+8, width*value/total, 7, GREEN if value == total else AMBER)
-            text(group, right, top+17, f"{value:,} / {total:,}", 14, TEXT if value else RED, anchor="end")
-        text(group, 694, top+17, f"{row['profiled_dxbc']:,}", 15, TEXT, anchor="end")
-    for line, check in enumerate(checks):
-        text(group, 18, height-14-21*(len(checks)-line), check, 14, TEXT)
-    text(group, 18, height-14, "Ray-tracing entries are packaged separately from the DXBC programs counted in the table.", 14, MUTED)
-    return y+height+GAP
+    text(group, 18, 96, "Packaged entries translated in measured compiler snapshots", 14, MUTED)
+    for index, (label, detail) in enumerate(rows):
+        top = 112 + 29 * index
+        rect(group, 18, top, INNER-36, 1, LINE)
+        text(group, 18, top+20, label, 15)
+        text(group, INNER-18, top+20, detail, 14, TEXT, anchor="end")
+    text(group, 18, height-13, "Translation is not proof of correct rendering. See SHADERS.md for GPU checks.", 14, MUTED)
+    return y + height + GAP
 
 
 def draw_d3d12(svg, y, data):
@@ -757,7 +747,6 @@ def render_map(evidence):
     brand.set("letter-spacing", "4")
     text(svg, WIDTH-PAD, 30, "Xbox Series X|S", 16, AQUA, anchor="end")
     y = draw_runtime(svg, 48+GAP, evidence)
-    y = draw_d3d12(svg, y, interface_inventory(evidence))
     y = draw_shaders(svg, y, evidence)
     data = read_json(evidence / "library-status.json")
     y = draw_libraries(svg, y, data, frosty_import_coverage(evidence, data.get("libraries", [])))

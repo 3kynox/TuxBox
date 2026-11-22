@@ -1,11 +1,13 @@
 # Research sources
 
-Record the source revision, observed guest build, hardware and experiment whenever a finding changes the runtime. Public desktop API documentation gives an expected desktop result. An Xbox export with the same spelling still needs a guest call-site or ABI check.
+These projects are research references; do not copy their code into TuxBox. Record the source revision, observed guest build, hardware and experiment whenever a finding changes the runtime. Public desktop API documentation gives an expected desktop result. An Xbox export with the same spelling still needs a guest call-site or ABI check.
 
 | Source | How it informs this project |
 |---|---|
 | [TomBox fork, ca6cf6a](https://github.com/brcly/TomBox/tree/ca6cf6a6b44e36d3ca4420db55a660a7bc6d6d5a) | Earlier Frosty comparisons used this runtime, its GDK-specific D3D12.x call profiles and its shader translator. The tested fork included changes after this commit. The current launcher builds the compiler and providers in this checkout. |
 | [6Stars](https://github.com/Ahmet-Dedeler/6Stars/tree/a16d99bb180eb7cf86632bf99df3174ec8ef11f5) | Research the RAGE-specific asset and PSO layouts. Select a particular archive record, hash the input and compare a known output. Other engines may have different packaging. Its [source license](https://github.com/Ahmet-Dedeler/6Stars/blob/a16d99bb180eb7cf86632bf99df3174ec8ef11f5/LICENSE) has custom redistribution terms. |
+| [SCARAB](https://github.com/p-portela/SCARAB) | Research reference for Xbox D3D12 interfaces, exported identifiers and host bridge tests. Its reported results are separate from TuxBox measurements. |
+| [XCL](https://github.com/ivall/xcl) | Research reference for Xbox RDNA2 translation and graphics behavior. XCL reports using a game-supplied BVH builder; independently verify its relevance to each TuxBox title. |
 | [ScarlettX](https://github.com/Freminet/ScarlettX/tree/bda18b4d3dab501dd0f372e5d1921f462c6bd457) | Compare published Windows HLE results and limitations for Concept Destruction. The reported delay in exposing CPU-written texture data suggests a regression test with two distinct uploads and submissions in one frame. |
 | [Xodus](https://github.com/xodus-gaming/xodus/tree/49453a4a458f8d9d0e8c93de6319d60b4291fa59) and [its Gaming Runtime](https://github.com/xodus-gaming/xgameruntime) | Use PC GDK package and runtime behavior as a comparison for configuration, storage and user APIs. Verify console imports and GPU interfaces separately. The projects publish GPL and LGPL terms respectively. |
 | [Microsoft Xbox GDK samples](https://github.com/microsoft/Xbox-GDK-Samples/blob/main/gdk-samples-list.md) and [repository notices](https://github.com/microsoft/Xbox-GDK-Samples/blob/main/NOTICE.md) | Select targeted behaviors from SimpleTriangle, GameInputInterfacing and AMD_FSR. Record the sample revision and whether the binary was built for PC or Scarlett. |
@@ -25,7 +27,7 @@ Both consoles use custom AMD graphics hardware. AnyPS5’s fetch test supplies P
 
 TuxBox reads DXBC signatures, pipeline validation data, and root signatures from the documented DirectX layouts. The XDAT, FSSM, and FSPX readers were developed against shader bytes from supplied titles. The RDNA decoder uses AMD’s published instruction encodings. Its generated opcode table includes AMD’s MIT-licensed data. [DirectX container format](https://llvm.org/docs/DirectX/DXContainer.html) · [AMD ISA tables](https://gpuopen.com/machine-readable-isa/) · [AMD data license](licenses/amd/isa-MIT.txt)
 
-TuxBox independently emits HLSL for supported pixel exports, fragment discards and compute buffer initializers or empty dispatches. The default compiler also includes the TomBox-derived HLSL emitter and its resource-binding code, which Frosty still needs for most shaders. Building the compiler with `--no-default-features` omits that implementation. ScarlettX is a research reference. [Shader coverage and build commands](SHADERS.md#independent-translation) · [Compiler notice](../tools/shader-compiler/NOTICE) · [Apache license](licenses/tombox/Apache-2.0.txt)
+TuxBox independently emits HLSL for supported pixel and compute shaders, including exports, fragment discards, buffer initializers and selected game shader programs. The default compiler also includes the TomBox-derived HLSL emitter and its resource-binding code, which Frosty still needs for most shaders. Building the compiler with `--no-default-features` omits that implementation. ScarlettX is a research reference. [Shader coverage and build commands](SHADERS.md#independent-translation) · [Compiler notice](../tools/shader-compiler/NOTICE) · [Apache license](licenses/tombox/Apache-2.0.txt)
 
 ## Source attribution for runtime patches
 

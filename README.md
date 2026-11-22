@@ -37,4 +37,4 @@ Run `python tuxbox.py inspect /path/to/game` to see the executable TuxBox will l
 
 [![TuxBox progress, including game tests, shader coverage and Xbox libraries](docs/progress.svg)](docs/progress.svg)
 
-[Xbox library support](docs/LIBRARIES.md) · [Shader coverage](docs/SHADERS.md) · [Results by system](docs/RESULTS.md) · [How TuxBox works](docs/ARCHITECTURE.md) · [Project credits and references](docs/REFERENCES.md)
+[Current progress](docs/PROGRESS.md) · [Xbox libraries](docs/LIBRARIES.md) · [Shader coverage](docs/SHADERS.md) · [Test results](docs/RESULTS.md) · [Architecture](docs/ARCHITECTURE.md) · [Credits and references](docs/REFERENCES.md)

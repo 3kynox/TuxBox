@@ -1,16 +1,16 @@
 {
   "scope": "Packaged global compute archive entries translated to HLSL. Counts do not measure DXIL validation, pipeline creation or rendered output.",
   "archive_sha256": "afab84fa891e491d64f1c2a9bdf26a66afc2054aef2cd9110e358402473b4fb2",
-  "compiler_sha256": "fe39cee8940ce79bd3e045f09bda74a8888e872429f19834a025d9543dcbdd26",
+  "compiler_sha256": "8b09d1d99add1425c99c5d1f98df509dab1c663835f4d1388745aaee1b2ea5ba",
   "stage": {
     "entries": 2508,
-    "translated": 2286,
-    "failed": 222,
+    "translated": 2287,
+    "failed": 221,
     "observed": 0,
     "observed_failed": 0,
     "failure_reasons": {
       "raw BVH node intersection requires traversal translation": 96,
-      "unverified EXEC election": 101,
+      "unverified EXEC election": 100,
       "wave reduction: unsupported reduction op v_add_f32": 10,
       "gather4 with explicit LOD/bias unsupported [image_gather4_l]": 2,
       "unresolved image [image_atomic_umin]": 1,
@@ -22,5 +22,5 @@
       "wave reduction: unsupported reduction op v_max_u32": 5
     }
   },
-  "full_survey_sha256": "64796b80aa6ff4b7feb01348fe9fb4d387034c17b866fc87725185704858b2fa"
+  "full_survey_sha256": "6ae3f39ed4a22a7470b3852f200edeee18a13ff49254c8c7ad56d8a175446523"
 }

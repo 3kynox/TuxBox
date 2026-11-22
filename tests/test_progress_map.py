@@ -229,3 +229,19 @@ class ProgressMapTests(unittest.TestCase):
             graphic = render_map(root)
             self.assertIn(">Animated<", graphic)
             self.assertIn("Retail launch with TuxBox providers", graphic)
+
+    def test_current_original_settings_are_not_described_as_a_rendered_frame(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence = root / "matrix-awakens"
+            evidence.mkdir()
+            (root / "matrix-awakens-launch.json").write_text(json.dumps({
+                "sha256": "game", "trials": {"trial": {}}}))
+            (evidence / "independent-menu.json").write_text(json.dumps({
+                "executable_sha256": "game", "captures": {"independent-menu.webp": "capture"}}))
+            (evidence / "packaged-renderer.json").write_text(json.dumps({
+                "title_sha256": "game", "first_present": "presented", "menu_verified": False,
+                "window": "Black outside the MangoHud overlay"}))
+            graphic = render_map(root)
+            self.assertIn("Black frame", graphic)
+            self.assertNotIn("First 4K frame", graphic)
