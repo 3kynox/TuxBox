@@ -3802,12 +3802,18 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 let src = r(&s[0])?;
                 let t = self.tmp;
                 self.tmp += 1;
-                // Read the original 32-bit words, including helper lanes. QuadReadLaneAt
-                // requires a uniform lane argument, so select after all four reads.
-                self.line("#if __SHADER_TARGET_MAJOR >= 6");
-                self.line(&format!("uint4 t{t}quad = uint4(QuadReadLaneAt({src}, 0), QuadReadLaneAt({src}, 1), QuadReadLaneAt({src}, 2), QuadReadLaneAt({src}, 3));"));
                 let dst = d.ok_or("no dst")?;
-                self.wv(&dst, &format!("t{t}quad[({:#x}u >> (tb_quad * 2u)) & 3u]", off & 255))?;
+                let pattern = off & 255;
+                let lane = pattern & 3;
+                self.line("#if __SHADER_TARGET_MAJOR >= 6");
+                // Keep reads outside the emulated EXEC predicate so helper lanes participate.
+                if pattern == lane * 0x55 {
+                    self.line(&format!("uint t{t}quad = QuadReadLaneAt({src}, {lane});"));
+                    self.wv(&dst, &format!("t{t}quad"))?;
+                } else {
+                    self.line(&format!("uint4 t{t}quad = uint4(QuadReadLaneAt({src}, 0), QuadReadLaneAt({src}, 1), QuadReadLaneAt({src}, 2), QuadReadLaneAt({src}, 3));"));
+                    self.wv(&dst, &format!("t{t}quad[({pattern:#x}u >> (tb_quad * 2u)) & 3u]"))?;
+                }
                 self.line("#else");
                 self.line(&format!("float t{t} = asfloat({src}); uint t{t}s = ({:#x}u >> (tb_quad * 2u)) & 3u;", off & 255));
                 self.wv(&dst, &format!("asuint(t{t} + ((float)(t{t}s & 1u) - (float)(tb_quad & 1u)) * ddx_fine(t{t}) + ((float)(t{t}s >> 1) - (float)(tb_quad >> 1)) * ddy_fine(t{t}))"))?;

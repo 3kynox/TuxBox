@@ -73,8 +73,10 @@ class ChaseWarmupTests(unittest.TestCase):
                 else:
                     self.assertEqual(args[0], "dxv")
 
+            updates = []
+
             def prepare():
-                return prepare_chase(pak, by_source, profile, "title", set())
+                return prepare_chase(pak, by_source, profile, "title", set(), updates.append)
 
             with patch.dict("project_tuxbox.chase_warmup.ARCHIVES", archives, clear=True), \
                  patch("project_tuxbox.chase_warmup.decoder"), \
@@ -86,7 +88,10 @@ class ChaseWarmupTests(unittest.TestCase):
                 self.assertTrue((cache / (key + ".cso")).exists())
                 fail_pair = False
                 self.assertEqual(prepare(), (1, 2))
+                self.assertTrue(updates)
+                updates.clear()
                 self.assertEqual(prepare(), (0, 3))
+                self.assertFalse(updates)
                 # A pre-staged pixel takes precedence, including when an older
                 # runtime DXIL and its previously linked producer both exist.
                 staged = program(0, b"DIFF")

@@ -122,8 +122,39 @@ def remove_request(path):
 def serve(session, stop, report):
     # Cargo can replace the release executable while another title is running.
     # Keep the executable we fingerprint private to this host worker.
-    with TemporaryDirectory(prefix="tuxbox-xshader-") as tmp:
-        _serve_requests(session, stop, report, Path(tmp) / "xshader")
+    with TemporaryDirectory(prefix="tuxbox-xshader-") as tmp, request_notifications(session / "requests", stop) as wait:
+        _serve_requests(session, stop, report, Path(tmp) / "xshader", wait)
+
+
+@contextmanager
+def request_notifications(directory, stop):
+    # The Proton guest publishes both shader files and complete link directories
+    # by renaming them into this directory. Install the watch before scanning.
+    import ctypes
+    import select
+    libc = ctypes.CDLL(None)
+    init = getattr(libc, "inotify_init1", None)
+    fd = init(os.O_NONBLOCK | os.O_CLOEXEC) if init else -1
+    if fd < 0:
+        yield lambda: stop.wait(0.05)
+        return
+    try:
+        moved_to = 0x00000080
+        if libc.inotify_add_watch(fd, os.fsencode(directory), moved_to) < 0:
+            yield lambda: stop.wait(0.05)
+            return
+        changes = select.poll()
+        changes.register(fd, select.POLLIN)
+
+        def wait():
+            # A bounded fallback scan also handles filesystems without events
+            # and lets shutdown finish when there is no outstanding work.
+            if changes.poll(50):
+                os.read(fd, 65536)
+
+        yield wait
+    finally:
+        os.close(fd)
 
 
 def snapshot_compiler_cache(xshader, cache_root):
@@ -141,13 +172,27 @@ def snapshot_compiler_cache(xshader, cache_root):
     return tools, cache
 
 
-def _serve_requests(session, stop, report, xshader):
+def _serve_requests(session, stop, report, xshader, wait):
+    def bind_cache():
+        tools, cache = snapshot_compiler_cache(xshader, session.parent)
+        # Publish only after the exact compiler used by this worker is pinned.
+        # A guest which starts earlier can still submit ordinary requests.
+        pending = session / "compiler-id.tmp"
+        pending.write_text(cache.name, encoding="ascii")
+        pending.replace(session / "compiler-id")
+        return tools, cache
+
     tools = cache = None
+    if (session.parent / "runtime").is_dir():
+        try:
+            tools, cache = bind_cache()
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass  # Retry and report the error if this game needs a shader.
     while not stop.is_set():
         directory = session / "requests"
         requests = [*directory.glob("*.dxbc"), *directory.glob("*.link"), *directory.glob("*.stencil")]
         if not requests:
-            stop.wait(0.05)
+            wait()
             continue
         for source in requests:
             if stop.is_set():
@@ -159,7 +204,7 @@ def _serve_requests(session, stop, report, xshader):
                 continue
             try:
                 if tools is None:
-                    tools, cache = snapshot_compiler_cache(xshader, session.parent)
+                    tools, cache = bind_cache()
                 compiled = compile_request(source, key, tools, cache, session)
                 if compiled:
                     report(f"Compiled Xbox shader {key}")

@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import struct
 import sys
@@ -136,9 +137,10 @@ class ShaderPreparation(unittest.TestCase):
             provider = root / "d3d12_xs.dll"
             local = root / "local.dll"
             local.write_bytes(b"local")
-            compute = record("1", b"compute shader")
-            vertex = dict(record("2", b"vertex shader"), profile="vs_6_0")
-            pixel = dict(record("3", b"pixel shader"), profile="ps_6_1", compiled_dxil_sha256="native pixel")
+            compute = dict(record("1", b"compute shader"), dxbc_sha256="compute")
+            vertex = dict(record("2", b"vertex shader"), profile="vs_6_0", dxbc_sha256="vertex")
+            pixel = dict(record("3", b"pixel shader"), profile="ps_6_1", dxbc_sha256="pixel",
+                         compiled_dxil_sha256="native pixel")
             plan = dict(title="Fixture", provider=provider.name, executable_sha256=hashlib.sha256(b"game").hexdigest(),
                         provider_sha256=hashlib.sha256(b"reference").hexdigest(), pipeline_profile="frosty-chase",
                         shader_package="input.pak", shaders=[compute, vertex],
@@ -146,11 +148,14 @@ class ShaderPreparation(unittest.TestCase):
                                       "aliases": [], "additional_shaders": [pixel]})
             profile = root / "plan.json"
             profile.write_text(json.dumps(plan))
+            profile.with_name("frosty-chase-warmup.json").write_text("{}")
             host = SimpleNamespace(backend="proton", env={"WINEPREFIX": str(root)})
             with patch("project_tuxbox.shader_prep.PROFILES", {exe.name: profile}), \
                  patch("project_tuxbox.shader_prep.TUXBOX_PROVIDER", local), \
                  patch("project_tuxbox.shader_prep.prepare_shaders", return_value=(0, 1)) as prepare, \
-                 patch("project_tuxbox.pipeline_prep.prepare_pipelines") as warm:
+                 patch("project_tuxbox.chase_warmup.prepare_chase", return_value=(0, 2)) as chase, \
+                 patch("project_tuxbox.pipeline_prep.prepare_pipelines") as warm, patch.dict(os.environ):
+                os.environ.pop("TUXBOX_SHADER_PREP", None)
                 provider.write_bytes(b"unknown")
                 self.assertFalse(prepare_for_launch(exe, host))
                 prepare.assert_not_called()
@@ -161,7 +166,20 @@ class ShaderPreparation(unittest.TestCase):
                 self.assertEqual(prepare.call_args.args[2], root / SOURCE_CACHE)
                 self.assertIsNone(prepare.call_args.kwargs.get("reference_cache"))
                 self.assertTrue(prepare.call_args.kwargs["exact_sources"])
+                chase.assert_called_once()
+                warm.assert_called_once_with(exe, host, prepare.call_args.args[1], root / SOURCE_CACHE, None,
+                                             standalone=True)
+                warm.reset_mock()
+                chase.reset_mock()
+                with patch.dict("os.environ", TUXBOX_SHADER_PREP="menu"):
+                    self.assertTrue(prepare_for_launch(exe, host))
                 warm.assert_not_called()
+                chase.assert_not_called()
+                with patch.dict("os.environ", TUXBOX_SHADER_PREP="misspelled"):
+                    self.assertTrue(prepare_for_launch(exe, host))
+                chase.assert_called_once()
+                warm.assert_called_once()
+                warm.reset_mock()
                 provider.write_bytes(b"reference")
                 prepare.reset_mock()
                 self.assertFalse(prepare_for_launch(exe, host))

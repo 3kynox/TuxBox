@@ -8,11 +8,13 @@ verify_layout=yes
 replay_options=()
 extra_variables=()
 nanite=false
+profile_pipelines=false
 selected_work=
 arguments=()
 while (( $# )); do
     case $1 in
         --nanite) nanite=true ;;
+        --profile-pipelines) profile_pipelines=true ;;
         --work)
             if (( $# < 2 )); then echo "--work requires a prepared working directory" >&2; exit 2; fi
             selected_work=$(realpath -e -- "$2")
@@ -24,7 +26,7 @@ done
 set -- "${arguments[@]}"
 if [[ -n $selected_work ]]; then replay_options+=(--work "$selected_work"); fi
 if [[ $nanite == true ]]; then replay_options+=(--nanite); fi
+if [[ $profile_pipelines == true ]]; then replay_options+=(--profile-pipelines); fi
 # Bridge destruction exceeded 12 GiB while both city and finale assets were live.
 desktop_limits=(--property=MemoryHigh=13G --property=MemoryMax=15G --property=MemorySwapMax=2G)
-export TUXBOX_SHADER_PREP=${TUXBOX_SHADER_PREP:-menu}
 source "$repo/tools/frosty_session.sh"

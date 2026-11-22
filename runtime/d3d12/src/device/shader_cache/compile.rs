@@ -1,7 +1,7 @@
 //! Submit unprofiled console shaders to the running launcher's compiler.
-use super::{Stage, read_portable_file};
+use super::{Stage, read_portable_file, source_digest};
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -21,6 +21,44 @@ fn session() -> Option<&'static PathBuf> {
             Some(std::env::temp_dir().join("tuxbox_shader_cache").join(name))
         })
         .as_ref()
+}
+
+fn read_digest(path: &Path) -> Option<[u8; 64]> {
+    let mut file = fs::File::open(path).ok()?;
+    if file.metadata().ok()?.len() != 64 {
+        return None;
+    }
+    let mut digest = [0; 64];
+    file.read_exact(&mut digest).ok()?;
+    Some(digest)
+}
+
+fn cached_translation(session: &Path, key: &str, stage: Stage) -> Option<Vec<u8>> {
+    // The worker can publish the fingerprint after the first pipeline arrives.
+    // Remember a successful binding for this process and retry an early miss.
+    static CACHE: OnceLock<PathBuf> = OnceLock::new();
+    let cache = if let Some(cache) = CACHE.get() {
+        cache
+    } else {
+        let id = read_digest(&session.join("compiler-id"))?;
+        if !id
+            .iter()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(c))
+        {
+            return None;
+        }
+        let directory = session
+            .parent()?
+            .join("runtime")
+            .join(str::from_utf8(&id).ok()?);
+        CACHE.get_or_init(|| directory)
+    };
+    let file = cache.join(format!("{key}.cso"));
+    let expected = read_digest(&file.with_extension("sha256"))?;
+    let bytes = read_portable_file(&file, stage)?;
+    // Host writers replace both files atomically, but can publish between
+    // these two reads. Validate exactly what the pipeline will consume.
+    (source_digest(&bytes)?.as_bytes() == expected).then_some(bytes)
 }
 
 pub(super) fn on_demand(shader: &[u8], source: &str, stage: Stage) -> Option<Vec<u8>> {
@@ -87,6 +125,16 @@ fn request(
         return None;
     }
     let pending = dir.join(format!("{key}.{}.tmp", std::process::id()));
+    if let Some(bytes) = cached_translation(dir, key, stage) {
+        // Later PSOs in this session can use the verified reply directly.
+        if fs::write(&pending, &bytes)
+            .and_then(|()| fs::rename(&pending, &result))
+            .is_err()
+        {
+            let _ = fs::remove_file(&pending);
+        }
+        return Some(bytes);
+    }
     if let Err(err) = submit(&pending, &dir.join("requests"))
         && err.kind() != io::ErrorKind::AlreadyExists
     {

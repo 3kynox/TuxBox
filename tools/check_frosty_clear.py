@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -91,11 +92,37 @@ def check_tuxbox_cache(dll, host, work, shaders, portable):
     keys[0].write_bytes(b"DXBC-truncated")
     run("402_corrupt", sources[0], success=False)
     messages = []
-    for phase in ("cold", "warm"):
+    for phase in ("cold", "warm_worker", "warm"):
         with shader_session(cache.parent, host.env, messages.append):
+            session = cache.parent / host.env["TUXBOX_SHADER_SESSION"]
+            marker = session / "compiler-id"
+            if phase == "warm_worker":
+                # Keep the worker's pinned cache, but exercise the original
+                # path used by guests that cannot read that cache directly.
+                deadline = time.monotonic() + 15
+                while not marker.exists() and time.monotonic() < deadline:
+                    time.sleep(.01)
+                marker.unlink()
             run(f"402_on_demand_{phase}", sources[0], success=True)
+            if phase == "warm":
+                compiler_id = marker.read_text()
+            require(digest(session / keys[0].name) == digest(portable), "Unexpected shader session reply")
     require(sum(message.startswith("Compiled Xbox shader ") for message in messages) == 1,
             f"Expected one cold compilation and a warm cache hit: {messages}")
+    # With no worker and no requests directory, only a verified persistent
+    # result can create this pipeline. A bad checksum must fail immediately.
+    with TemporaryDirectory(prefix="run-", dir=cache.parent) as offline:
+        session = Path(offline)
+        host.env["TUXBOX_SHADER_SESSION"] = session.name
+        try:
+            (session / "compiler-id").write_text(compiler_id)
+            run("402_direct_no_worker", sources[0], success=True)
+            (session / keys[0].name).unlink()
+            stamp = cache.parent / "runtime" / compiler_id / keys[0].with_suffix(".sha256").name
+            stamp.write_text("0" * 64)
+            run("402_bad_persistent_checksum", sources[0], success=False)
+        finally:
+            host.env.pop("TUXBOX_SHADER_SESSION", None)
     for shader, key, source in zip(shaders, keys, sources):
         shutil.copyfile(portable, key)
         run(f"{shader['index']}_warm", source, success=True)

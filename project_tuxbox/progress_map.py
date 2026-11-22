@@ -516,7 +516,7 @@ def shader_checks(evidence, data):
             and warmup["compiler_sha256"] == data.get("compiler_sha256")
             and warmup["warm"]["total_compiled"] == 0):
         chase = warmup["warm"]["chase"]
-        notes.append(f"Optional chase warmup · {chase['programs']['checked']:,} programs and "
+        notes.append(f"Gameplay shader warmup · {chase['programs']['checked']:,} programs and "
                      f"{chase['links']['checked']} linked pairs ready before playing")
     total = next((row["global"] for row in data["stages"] if row["stage"] == "Mesh"), 0)
     results = []

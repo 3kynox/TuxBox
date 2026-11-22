@@ -1,0 +1,334 @@
+{
+  "title": "The Matrix Awakens",
+  "title_version": "1.20.1831.3754",
+  "scene": "Main menu before Start Chase",
+  "gpu": "GeForce RTX 4070 Ti SUPER",
+  "proton": "1793301796 experimental-11.0-20261027b-x86_64",
+  "d3d12_xs_sha256": "332f2f9b4fb85d04f7a7dfca3180c63b6d005db1381e24b6f03fd5d359dd10db",
+  "capture": "Lossless desktop game-window PNGs at 1920 × 1080. Each run used the reduced-effects profile with the graphics settings listed below, stock Proton and MangoHud. The captures sample different moments in the animated background.",
+  "timing_method": "MangoHud per-present frametimes on the desktop. The capture interval runs from filesystem birth of the first PNG through birth of the last PNG in each set, relative to the creation of the MangoHud CSV. The preceding ten seconds are reported separately. Percentiles use nearest rank. These intervals measure the menu on this machine. The original capture interval is throttled to one present per second.",
+  "guest_output_size": [
+    3840,
+    2160
+  ],
+  "screen_percentage_max_resolution_cvar": 1440,
+  "metric": {
+    "tool": "tools/measure_frosty_menu.py",
+    "comparison_size": [
+      1280,
+      720
+    ],
+    "background_regions_xyxy_exclusive": [
+      [
+        360,
+        0,
+        1200,
+        72
+      ],
+      [
+        1216,
+        0,
+        1280,
+        690
+      ],
+      [
+        0,
+        200,
+        64,
+        560
+      ],
+      [
+        0,
+        576,
+        815,
+        690
+      ]
+    ],
+    "description": "Area-resample RGB to the comparison size and evaluate four disjoint background regions. A bright pixel has R, G and B all at least 230. Record the side of the largest completely bright square. Count four-connected bright shapes whose width and height are both at least 7 pixels and whose bounding box is at least 90% filled. Exclude clipped shapes from the box count. The green percentage measures pixels with G > 40, 10G > 13R and 25G > 24B across the same regions.",
+    "reproduce": "python tools/measure_frosty_menu.py /path/to/window-frames/*.png"
+  },
+  "runs": [
+    {
+      "profile": "Original reduced-effects profile",
+      "screen_percentage_cvar": 33.3333,
+      "anti_aliasing_method_cvar": 0,
+      "temporal_upsampling_cvar": 0,
+      "distinct_backgrounds": 3,
+      "sampled_pixels_per_frame": 220590,
+      "frames": [
+        {
+          "image": "ready-0.png",
+          "background_rgb_sha256": "bf9ab08e8bba7f2aed791b5ff924c9451ef33724d42c578cd08299dd2a674f7b",
+          "largest_solid_square_side_px": 15,
+          "bright_boxes": 3,
+          "green_pixels": 26014
+        },
+        {
+          "image": "ready-1.png",
+          "background_rgb_sha256": "bf9ab08e8bba7f2aed791b5ff924c9451ef33724d42c578cd08299dd2a674f7b",
+          "largest_solid_square_side_px": 15,
+          "bright_boxes": 3,
+          "green_pixels": 26014
+        },
+        {
+          "image": "ready-2.png",
+          "background_rgb_sha256": "75dab45b17e624ef150a8e1494b283d28f40c62273a54df4f7f0b6c24663df5f",
+          "largest_solid_square_side_px": 16,
+          "bright_boxes": 2,
+          "green_pixels": 25715
+        },
+        {
+          "image": "ready-3.png",
+          "background_rgb_sha256": "4be7cb242a162b90fe1f542feded8ded6ab9b9db15267e290ea4800f215b20b1",
+          "largest_solid_square_side_px": 15,
+          "bright_boxes": 2,
+          "green_pixels": 22092
+        }
+      ],
+      "mangohud_during_capture": {
+        "mangohud_elapsed_seconds": [
+          224.825,
+          227.07
+        ],
+        "frames": 3,
+        "mean_fps": 1.0,
+        "p50_ms": 1001.17,
+        "p95_ms": 1001.2,
+        "p99_ms": 1001.2,
+        "max_ms": 1001.2,
+        "over_100_ms": 3
+      },
+      "mangohud_preceding_10s": {
+        "frames": 9,
+        "mean_fps": 1.0,
+        "p50_ms": 1001.01,
+        "p95_ms": 1001.33,
+        "p99_ms": 1001.33,
+        "max_ms": 1001.33,
+        "over_100_ms": 9
+      }
+    },
+    {
+      "profile": "100% screen percentage",
+      "screen_percentage_cvar": 100,
+      "anti_aliasing_method_cvar": 0,
+      "temporal_upsampling_cvar": 0,
+      "distinct_backgrounds": 5,
+      "sampled_pixels_per_frame": 220590,
+      "frames": [
+        {
+          "image": "test-0.png",
+          "background_rgb_sha256": "292784fc0b6c961c4566efda9efe740ccb7b3dd45b36c6073385276a73ccf848",
+          "largest_solid_square_side_px": 11,
+          "bright_boxes": 0,
+          "green_pixels": 27010
+        },
+        {
+          "image": "test-1.png",
+          "background_rgb_sha256": "b3d16faeba2ce5a011531f8318cc8f5dba89d7cceac0232adbd6319c0f8d6792",
+          "largest_solid_square_side_px": 11,
+          "bright_boxes": 0,
+          "green_pixels": 20801
+        },
+        {
+          "image": "test-2.png",
+          "background_rgb_sha256": "04d78d86fcb3503c85051390f0f24dc14fce8650228c075d1fad081816b2bdaa",
+          "largest_solid_square_side_px": 11,
+          "bright_boxes": 0,
+          "green_pixels": 19244
+        },
+        {
+          "image": "test-3.png",
+          "background_rgb_sha256": "781091a220777cc27d1bd9f0bc4d99bea331e3c61cd3bfc74b4f8b92d84f8aa2",
+          "largest_solid_square_side_px": 8,
+          "bright_boxes": 0,
+          "green_pixels": 17451
+        },
+        {
+          "image": "test-4.png",
+          "background_rgb_sha256": "956b1487ea620b75cc9dbfe11dae1359f96cdf624fc4c4c85f9abacfaf748bbb",
+          "largest_solid_square_side_px": 11,
+          "bright_boxes": 0,
+          "green_pixels": 16280
+        }
+      ],
+      "mangohud_during_capture": {
+        "mangohud_elapsed_seconds": [
+          92.194,
+          95.889
+        ],
+        "frames": 249,
+        "mean_fps": 67.25,
+        "p50_ms": 13.58,
+        "p95_ms": 21.59,
+        "p99_ms": 30.49,
+        "max_ms": 86.38,
+        "over_100_ms": 0
+      },
+      "mangohud_preceding_10s": {
+        "frames": 809,
+        "mean_fps": 80.94,
+        "p50_ms": 11.89,
+        "p95_ms": 15.23,
+        "p99_ms": 21.02,
+        "max_ms": 47.97,
+        "over_100_ms": 0
+      }
+    },
+    {
+      "profile": "Temporal Super Resolution",
+      "screen_percentage_cvar": 33.3333,
+      "anti_aliasing_method_cvar": 4,
+      "temporal_upsampling_cvar": 1,
+      "distinct_backgrounds": 5,
+      "sampled_pixels_per_frame": 220590,
+      "frames": [
+        {
+          "image": "test-0.png",
+          "background_rgb_sha256": "c9337e3421567d530c869a5e935b06a5dc6024cd17f0f080f95cb3758c48278c",
+          "largest_solid_square_side_px": 6,
+          "bright_boxes": 0,
+          "green_pixels": 18778
+        },
+        {
+          "image": "test-1.png",
+          "background_rgb_sha256": "731835fc317129108ba6bb28a2fa4908fd6a96f5580778847f0789fcf4ef8bd1",
+          "largest_solid_square_side_px": 7,
+          "bright_boxes": 0,
+          "green_pixels": 18427
+        },
+        {
+          "image": "test-2.png",
+          "background_rgb_sha256": "cbf9993cc62c47a868999f874731a459ef26bc45a108b17305d486810cf07014",
+          "largest_solid_square_side_px": 5,
+          "bright_boxes": 0,
+          "green_pixels": 16735
+        },
+        {
+          "image": "test-3.png",
+          "background_rgb_sha256": "10b8354948ff0f76bc040870341f4602b79201df04b2251d51e966c8eb48d9bb",
+          "largest_solid_square_side_px": 7,
+          "bright_boxes": 0,
+          "green_pixels": 15891
+        },
+        {
+          "image": "test-4.png",
+          "background_rgb_sha256": "eb87a087a487a44f96b7d793942ab2ec7fd96c8b47d7fd68e832b11f7e87c4e1",
+          "largest_solid_square_side_px": 5,
+          "bright_boxes": 0,
+          "green_pixels": 17657
+        }
+      ],
+      "mangohud_during_capture": {
+        "mangohud_elapsed_seconds": [
+          71.506,
+          75.375
+        ],
+        "frames": 42,
+        "mean_fps": 10.77,
+        "p50_ms": 89.99,
+        "p95_ms": 107.07,
+        "p99_ms": 109.68,
+        "max_ms": 109.68,
+        "over_100_ms": 6
+      },
+      "mangohud_preceding_10s": {
+        "frames": 112,
+        "mean_fps": 11.15,
+        "p50_ms": 89.38,
+        "p95_ms": 93.84,
+        "p99_ms": 98.6,
+        "max_ms": 101.71,
+        "over_100_ms": 1
+      }
+    },
+    {
+      "profile": "Temporal anti-aliasing with upsampling",
+      "screen_percentage_cvar": 33.3333,
+      "anti_aliasing_method_cvar": 2,
+      "temporal_upsampling_cvar": 1,
+      "distinct_backgrounds": 6,
+      "sampled_pixels_per_frame": 220590,
+      "frames": [
+        {
+          "image": "fullscreen-0.png",
+          "background_rgb_sha256": "3a095819ce02fde2212f156f69126891cf0b5eb54a9fded3af450dd9d59651cb",
+          "largest_solid_square_side_px": 11,
+          "bright_boxes": 1,
+          "green_pixels": 17369
+        },
+        {
+          "image": "fullscreen-1.png",
+          "background_rgb_sha256": "f2be4de11460fcb01657ec1eefaf403a8661ad1735077f426b1fd42007d0ef93",
+          "largest_solid_square_side_px": 8,
+          "bright_boxes": 0,
+          "green_pixels": 18743
+        },
+        {
+          "image": "fullscreen-2.png",
+          "background_rgb_sha256": "1a1ba0fd53b11c50f9aef70c85ef9b637c896a19a4be3486599718048df640ac",
+          "largest_solid_square_side_px": 10,
+          "bright_boxes": 0,
+          "green_pixels": 22092
+        },
+        {
+          "image": "fullscreen-3.png",
+          "background_rgb_sha256": "7cdb59c9d5c3e2ed00d2176f5487893a5c5f1ba0ed90b54da0464998bd941600",
+          "largest_solid_square_side_px": 8,
+          "bright_boxes": 0,
+          "green_pixels": 22660
+        },
+        {
+          "image": "fullscreen-4.png",
+          "background_rgb_sha256": "d200cd9414ca9e886ff4878da46fb4b14d0653b6b09688f67ee0bea1e6504ba8",
+          "largest_solid_square_side_px": 11,
+          "bright_boxes": 3,
+          "green_pixels": 21061
+        },
+        {
+          "image": "fullscreen-5.png",
+          "background_rgb_sha256": "828bb845a4683db2c6b59fe43f5ba0dee4a0ff3f54a6807956b391a842cc00c0",
+          "largest_solid_square_side_px": 11,
+          "bright_boxes": 1,
+          "green_pixels": 21244
+        }
+      ],
+      "mangohud_during_capture": {
+        "mangohud_elapsed_seconds": [
+          167.293,
+          171.593
+        ],
+        "frames": 359,
+        "mean_fps": 83.47,
+        "p50_ms": 11.83,
+        "p95_ms": 14.42,
+        "p99_ms": 15.15,
+        "max_ms": 16.24,
+        "over_100_ms": 0
+      },
+      "mangohud_preceding_10s": {
+        "frames": 839,
+        "mean_fps": 84.49,
+        "p50_ms": 11.73,
+        "p95_ms": 14.31,
+        "p99_ms": 15.99,
+        "max_ms": 20.36,
+        "over_100_ms": 0
+      }
+    }
+  ],
+  "comparison": {
+    "image": "menu-quality.png",
+    "regions_xyxy": [
+      0,
+      537,
+      850,
+      720
+    ],
+    "frames": [
+      "before/ready-0.png",
+      "taa-720/fullscreen-0.png"
+    ],
+    "description": "Same lower-left background region at two different moments in the animation. Labels sit outside the game image."
+  }
+}

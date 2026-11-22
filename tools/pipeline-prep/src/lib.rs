@@ -66,8 +66,9 @@ fn create_guest_device(module: HMODULE) -> Result<ID3D12Device, String> {
     }
 }
 
-fn compute_root(guest: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
-    // Frosty's serialized v1.1 root contains one distinct table per range.
+fn compute_root(guest: &ID3D12Device, version_1_0: bool) -> Result<ID3D12RootSignature, String> {
+    // Frosty uses one descriptor table per range. On the TuxBox device the
+    // game requests root signature 1.0. The historical comparison used 1.1.
     let descriptors = D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
     let static_data = descriptors | D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE;
     let volatile_data = descriptors | D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
@@ -112,17 +113,79 @@ fn compute_root(guest: &ID3D12Device) -> Result<ID3D12RootSignature, String> {
             "SerializeVersionedRootSignature",
             D3D12SerializeVersionedRootSignature(&descriptor, &mut bytes, None),
         )?;
-        let bytes = checked(
+        let mut bytes = checked(
             "SerializeVersionedRootSignature",
             bytes.ok_or_else(|| E_POINTER.into()),
         )?;
+        if version_1_0 {
+            let mut reader: Option<ID3D12VersionedRootSignatureDeserializer> = None;
+            checked(
+                "ReadRootSignature",
+                D3D12CreateVersionedRootSignatureDeserializer(
+                    bytes.GetBufferPointer(),
+                    bytes.GetBufferSize(),
+                    &ID3D12VersionedRootSignatureDeserializer::IID,
+                    (&raw mut reader).cast(),
+                ),
+            )?;
+            let reader = checked("ReadRootSignature", reader.ok_or_else(|| E_POINTER.into()))?;
+            let root = checked(
+                "RootSignature1.0",
+                reader.GetRootSignatureDescAtVersion(D3D_ROOT_SIGNATURE_VERSION_1_0),
+            )?;
+            let mut converted = None;
+            checked(
+                "SerializeRootSignature1.0",
+                D3D12SerializeVersionedRootSignature(root, &mut converted, None),
+            )?;
+            bytes = checked(
+                "SerializeRootSignature1.0",
+                converted.ok_or_else(|| E_POINTER.into()),
+            )?;
+        }
         let data =
             std::slice::from_raw_parts(bytes.GetBufferPointer().cast(), bytes.GetBufferSize());
         checked("CreateRootSignature", guest.CreateRootSignature(1, data))
     }
 }
 
-fn prepare(title_dir: &Path, report_path: &Path, shaders: &[PathBuf]) -> Result<(), String> {
+fn guest_pipeline(
+    guest: &ID3D12Device,
+    desc: &D3D12_COMPUTE_PIPELINE_STATE_DESC,
+) -> windows::core::Result<ID3D12PipelineState> {
+    type Create = unsafe extern "system" fn(
+        *mut c_void,
+        *const D3D12_COMPUTE_PIPELINE_STATE_DESC,
+        u32,
+        *const c_void,
+        *const GUID,
+        *mut *mut c_void,
+    ) -> HRESULT;
+    let mut state = None;
+    // SAFETY: the verified TuxBox Xbox device exposes CreateComputePipelineStateX
+    // at slot 62. The descriptor and its root live through the synchronous call.
+    unsafe {
+        let slots = *guest.as_raw().cast::<*const *const c_void>();
+        let create: Create = std::mem::transmute(*slots.add(62));
+        create(
+            guest.as_raw(),
+            desc,
+            0,
+            ptr::null(),
+            &ID3D12PipelineState::IID,
+            (&raw mut state).cast(),
+        )
+        .ok()?;
+    }
+    state.ok_or_else(|| E_POINTER.into())
+}
+
+fn prepare(
+    title_dir: &Path,
+    report_path: &Path,
+    shaders: &[PathBuf],
+    standalone: bool,
+) -> Result<(), String> {
     let directory_error = "cannot select the title's binary directory";
     let title_dir = std::path::absolute(title_dir).map_err(|_| directory_error)?;
     std::env::set_current_dir(&title_dir).map_err(|_| directory_error)?;
@@ -136,14 +199,18 @@ fn prepare(title_dir: &Path, report_path: &Path, shaders: &[PathBuf]) -> Result<
         )
     };
     let guest = create_guest_device(*module)?;
-    let root = compute_root(&guest)?;
+    let root = compute_root(&guest, standalone)?;
 
-    // The guest and desktop vtables differ. The root returns an owned desktop
-    // device; pipeline creation must use that device's CreateComputePipelineState.
-    let mut host = None;
-    // SAFETY: root is live and GetDevice writes to an empty COM reference slot.
-    checked("GetDevice", unsafe { root.GetDevice(&mut host) })?;
-    let host: ID3D12Device = checked("GetDevice", host.ok_or_else(|| E_POINTER.into()))?;
+    // The reference renderer returns native root objects, whereas TuxBox
+    // returns guest objects which must go through the Xbox pipeline slot.
+    let mut host: Option<ID3D12Device> = None;
+    if !standalone {
+        // SAFETY: root is live and GetDevice writes to an empty COM reference slot.
+        checked("GetDevice", unsafe { root.GetDevice(&mut host) })?;
+        if host.is_none() {
+            return Err("missing reference device".into());
+        }
+    }
 
     let mut report = File::create(report_path).map_err(|error| error.to_string())?;
     for shader_path in shaders {
@@ -163,7 +230,12 @@ fn prepare(title_dir: &Path, report_path: &Path, shaders: &[PathBuf]) -> Result<
         let start = Instant::now();
         // SAFETY: the descriptor borrows initialized shader bytes for the call.
         // Release its explicit COM reference on success and failure.
-        let result = unsafe { host.CreateComputePipelineState::<ID3D12PipelineState>(&descriptor) };
+        let result = match &host {
+            Some(host) => unsafe {
+                host.CreateComputePipelineState::<ID3D12PipelineState>(&descriptor)
+            },
+            None => guest_pipeline(&guest, &descriptor),
+        };
         let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
         drop(ManuallyDrop::into_inner(descriptor.pRootSignature));
         let _pipeline = checked("CreateComputePipelineState", result)?;
@@ -186,10 +258,14 @@ pub extern "C" fn wmain(_argc: i32, _argv: *const *const u16) -> i32 {
     let [title_dir, report, shaders @ ..] = args.as_slice() else {
         return 2;
     };
+    let standalone = shaders
+        .first()
+        .is_some_and(|arg| arg == Path::new("--tuxbox"));
+    let shaders = if standalone { &shaders[1..] } else { shaders };
     if shaders.is_empty() {
         return 2;
     }
-    match prepare(title_dir, report, shaders) {
+    match prepare(title_dir, report, shaders, standalone) {
         Ok(()) => 0,
         Err(error) => {
             if let Ok(mut output) = OpenOptions::new().create(true).append(true).open(report) {

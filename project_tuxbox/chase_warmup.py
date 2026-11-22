@@ -50,13 +50,15 @@ def prepare_batch(jobs, prepare, label, progress):
         try:
             for ordinal, result in enumerate(as_completed(pending), 1):
                 try:
-                    compiled += result.result()
+                    built = result.result()
                 except (ValueError, OSError) as error:
                     raise ValueError(f"Preparing chase {label} {pending[result]}: {error}") from error
-                if ordinal == total or ordinal % 50 == 0:
+                first_compile = built and compiled == 0
+                compiled += built
+                if first_compile or ordinal == total or (compiled and ordinal % 50 == 0):
                     message = f"Chase {label}: {ordinal}/{total} ready ({compiled} compiled)"
                     print(message, file=sys.stderr, flush=True)
-                    if progress:
+                    if compiled and progress:
                         progress(message)
         finally:
             for future in pending:

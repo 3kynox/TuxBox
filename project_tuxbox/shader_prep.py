@@ -295,10 +295,15 @@ def prepare_for_launch(executable, host):
     provider = executable.with_name(plan["provider"])
     if not matching_tuxbox_provider(provider):
         return False
-    mode = os.environ.get("TUXBOX_SHADER_PREP")
-    plan, source_profile = tuxbox_plan(profile, plan, mode in ("menu", "chase"))
     if digest(executable) != plan["executable_sha256"]:
         return False
+    mode = os.environ.get("TUXBOX_SHADER_PREP", "chase")
+    if mode not in ("0", "1", "menu", "chase"):
+        print(f"Unknown TUXBOX_SHADER_PREP={mode!r}. Using chase.", file=sys.stderr)
+        mode = "chase"
+    name = mode if mode in ("menu", "chase") else "startup"
+    print(f"{plan['title']} shader preparation profile: {name}", file=sys.stderr, flush=True)
+    plan, source_profile = tuxbox_plan(profile, plan, mode in ("menu", "chase"))
     pak = executable.parent / plan["shader_package"]
     prefix = Path(host.env["WINEPREFIX"])
     cache = prefix / SOURCE_CACHE
@@ -324,10 +329,12 @@ def prepare_for_launch(executable, host):
                 reused += found
         if mode == "chase":
             from .chase_warmup import prepare_chase
+            from .pipeline_prep import prepare_pipelines
             chase_profile = json.loads(profile.with_name("frosty-chase-warmup.json").read_text())
             built, found = prepare_chase(pak, cache, chase_profile, plan["executable_sha256"],
                                          {row["dxbc_sha256"] for row in plan["shaders"]}, progress)
             compiled += built
             reused += found
+            prepare_pipelines(executable, host, plan, cache, progress, standalone=True)
         print(f"{plan['title']} shaders ready: {compiled} compiled, {reused} cached.", file=sys.stderr, flush=True)
     return True

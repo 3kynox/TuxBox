@@ -81,6 +81,7 @@ if (( $# == 0 )) && [[ ${run_options[0]:-} != --prepare-only ]]; then
     fi
 fi
 if [[ ${run_options[0]:-} != --prepare-only && " ${*,,} " != *" -nullrhi "* ]]; then
+    if [[ ${profile_pipelines:-false} == true ]]; then run_options+=(--profile-pipelines); fi
     case ${TUXBOX_MANGOHUD:-auto} in
         auto) if command -v mangohud >/dev/null; then run_options+=(--mangohud); fi ;;
         1) run_options+=(--mangohud) ;;

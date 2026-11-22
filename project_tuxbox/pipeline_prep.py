@@ -14,6 +14,8 @@ from .shader_prep import ROOT
 HELPER = ROOT / "tools/pipeline-prep"
 COMPUTE_PIPELINES = {("global", 379), ("global", 2227), ("global", 3333), ("global", 2696), ("global", 856),
                      ("material", 37635), ("material", 15458)}
+# These pipeline keys occur in the title's v1.0 cache on the TuxBox provider.
+CHASE_COMPUTE_PIPELINES = {("global", index) for index in (1825, 2653, 2696, 3385, 3444, 3725)}
 
 
 def winpath(path):
@@ -99,14 +101,17 @@ def helper_binary(work, filename, source_id):
     return output
 
 
-def prepare_pipelines(executable, host, plan, cache, progress=None):
+def prepare_pipelines(executable, host, plan, cache, progress=None, *, standalone=False):
     import fcntl
 
     if host.env.get("VKD3D_SHADER_CACHE_PATH") == "0":
         return
-    records = [r for r in plan["shaders"] if (r["archive"], r["entry"]) in COMPUTE_PIPELINES]
-    if len(records) != len(COMPUTE_PIPELINES):
+    indices = CHASE_COMPUTE_PIPELINES if standalone else COMPUTE_PIPELINES
+    records = [r for r in plan["shaders"] if (r["archive"], r["entry"]) in indices]
+    if len(records) != len(indices):
         raise ValueError("Missing Frosty chase pipeline profile")
+    key = "dxbc_sha256" if standalone else "cache_key"
+    shaders = {r["entry"]: cache / (r[key] + ".cso") for r in records}
     work = cache.parent / "tuxbox-pipelines"
     work.mkdir(parents=True, exist_ok=True)
     with (work / "prepare.lock").open("a+b") as lock:
@@ -117,6 +122,9 @@ def prepare_pipelines(executable, host, plan, cache, progress=None):
         except (OSError, ValueError, UnicodeError):
             saved = {}
         env = host.env.copy()
+        if standalone or env.get("TUXBOX_REFERENCE_CBV") == "1":
+            from .console_cbv import configure_console_cbv
+            configure_console_cbv(host.backend, env, executable, lambda message: print(message, file=sys.stderr))
         gpu = device_key(env)
         inputs = [ROOT / "Cargo.toml", ROOT / "Cargo.lock", ROOT / ".cargo/config.toml",
                   HELPER / "Cargo.toml", *sorted((HELPER / "src").rglob("*.rs"))]
@@ -124,13 +132,15 @@ def prepare_pipelines(executable, host, plan, cache, progress=None):
         paths = archives(executable, env)
         settings = {k: v for k, v in env.items() if k.startswith(("VK_", "VKD3D_", "DXVK_", "__GL_", "MESA_", "DRI_"))
                     or k in ("XDG_CACHE_HOME", "PROTONPATH", "STEAM_COMPAT_SHADER_PATH")}
-        identity = dict(driver=gpu, proton=host.version, provider=plan["provider_sha256"],
+        provider = digest(executable.with_name(plan["provider"])) if standalone else plan["provider_sha256"]
+        identity = dict(driver=gpu, proton=host.version, provider=provider,
                         executable=plan["executable_sha256"], helper=source, settings=settings,
-                        dxil=[digest(cache / (r["cache_key"] + ".cso")) for r in records])
+                        dxil=[digest(path) for path in shaders.values()])
         if (gpu and isinstance(saved, dict) and identity == saved.get("identity")
                 and driver_cache_directories(env) == saved.get("driver_cache_dirs")
                 and isinstance(saved.get("archives"), list)
                 and still_cached(archive_files(paths), saved["archives"])):
+            print(f"Frosty compute pipelines ready: {len(records)} cached.", file=sys.stderr, flush=True)
             return
         message = f"Preparing {len(records)} Frosty compute pipelines on this GPU…"
         if progress:
@@ -141,8 +151,9 @@ def prepare_pipelines(executable, host, plan, cache, progress=None):
             stage = Path(temp)
             report = stage / "compiled.txt"
             args = [winpath(executable.parent), winpath(report)]
-            for record in records:
-                args.append(winpath(cache / (record["cache_key"] + ".cso")))
+            if standalone:
+                args.append("--tuxbox")
+            args.extend(winpath(path) for path in shaders.values())
             # Keep the actual title's Proton log for the actual title.
             env.pop("PROTON_LOG", None)
             env["WINEDEBUG"] = "-all"
@@ -151,9 +162,9 @@ def prepare_pipelines(executable, host, plan, cache, progress=None):
                 detail = report.read_text(errors="replace").strip() if report.exists() else "no GPU result"
                 raise ValueError(f"Pipeline preparation exited with {process.returncode}: {detail}")
             by_key = {key: float(ms) for key, ms in (row.split() for row in report.read_text().splitlines())}
-            if set(by_key) != {r["cache_key"] for r in records}:
+            if set(by_key) != {path.stem for path in shaders.values()}:
                 raise ValueError("GPU preparation did not finish all profiled Frosty pipelines")
-            timings = {record["entry"]: by_key[record["cache_key"]] for record in records}
+            timings = {entry: by_key[path.stem] for entry, path in shaders.items()}
             files = archive_files(paths)
             # The write archive may be renamed to the main archive at next startup.
             # Prefer its identity when this run appended new pipelines there.

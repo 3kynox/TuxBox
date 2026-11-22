@@ -6,9 +6,37 @@ from unittest.mock import Mock, patch
 
 from project_tuxbox.mangohud import performance_capture
 from project_tuxbox.performance import summarize_capture
+from project_tuxbox.pipeline_profile import pipeline_capture, summarize
 
 
 class PerformanceTests(unittest.TestCase):
+    def test_pipeline_timings_group_driver_retries_and_read_partial_traces(self):
+        with TemporaryDirectory(prefix="pipeline timings ") as tmp:
+            log = Mock(path=Path(tmp) / "run.log")
+            env = {}
+            with pipeline_capture("proton", env, log):
+                first = Path(env["VKD3D_QUEUE_PROFILE"].removeprefix("Z:").replace("\\", "/"))
+                self.assertEqual(env["VKD3D_QUEUE_PROFILE_ABSOLUTE"], "1")
+                events = [
+                    ("pso", "0000000000000001 GFX MISS", 100),
+                    ("pso", "0000000000000001 FALLBACK OK", 155_500),
+                    ("pso", "0000000000000002 COMP IDENT OK", 1_100),
+                    ("pso", "0000000000000000 META GFX", 8),
+                    ("present", "SPIN", 500_000),
+                ]
+                first.write_text("[\n" + "".join(json.dumps(dict(name=label, pid=kind, ph="X",
+                                 ts=2_000_000, dur=duration)) + ",\n" for kind, label, duration in events)
+                                 + '{"pid":"pso","name":')
+            result = json.loads(first.with_name("summary.json").read_text())
+            self.assertEqual(result, summarize(first))
+            self.assertEqual(result["groups"]["graphics"], dict(calls=2, total_ms=155.6, over_100_ms=1))
+            self.assertEqual(result["groups"]["compute"]["calls"], 1)
+            self.assertEqual(result["groups"]["driver_internal"]["calls"], 1)
+            self.assertEqual(result["slowest"][0]["wine_seconds"], 2)
+            self.assertEqual(result["slowest"][0]["operation"], "FALLBACK OK")
+            with pipeline_capture("proton", env, log):
+                self.assertNotIn(first.parent.name, env["VKD3D_QUEUE_PROFILE"])
+
     def test_managed_capture_uses_its_own_config_and_finalizes_after_game_error(self):
         with TemporaryDirectory(prefix="hud test ") as tmp, patch("shutil.which", return_value="/usr/bin/mangohud"), \
                 patch("project_tuxbox.mangohud.monotonic", side_effect=[0.0, 1.0]):

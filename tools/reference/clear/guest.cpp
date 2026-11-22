@@ -2,6 +2,7 @@
 #include "../compute_buffers.h"
 #ifdef TUXBOX_CACHE_CONTROL
 #include "frame_abi.h"
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #else
@@ -145,8 +146,12 @@ int main() {
         ComPtr<ID3D12PipelineState> pso;
         using Pipeline = HRESULT (WINAPI*)(ID3D12Device*, const D3D12_COMPUTE_PIPELINE_STATE_DESC*,
                                            UINT, const void*, REFIID, void**);
+        const auto start = std::chrono::steady_clock::now();
         const auto hr = frame_abi::method<Pipeline>(device.Get(), 62)(device.Get(), &desc, 0, nullptr,
                                                                       IID_PPV_ARGS(&pso));
+        const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - start);
+        std::fprintf(receipt, "pipeline_us=%lld\n", static_cast<long long>(elapsed.count()));
         std::fprintf(receipt, "pipeline_hr=0x%08lx\n", static_cast<unsigned long>(hr));
         check(hr, "create cooked compute pipeline");
 #else
