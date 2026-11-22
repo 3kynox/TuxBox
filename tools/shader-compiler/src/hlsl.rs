@@ -399,6 +399,7 @@ struct Emitter<'a> {
     indexed_lane: bool,
     /// Complete 32-thread wave using independent one-word vector comparison masks.
     single_wave32: bool,
+    reflection_mask32: bool,
     light_grid: bool,
     page_waves: bool,
     wave_cull: bool,
@@ -883,6 +884,7 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     em.wave_cull = wave_cull;
     em.indexed_lane = indexed_lane;
     em.single_wave32 = single_wave32;
+    em.reflection_mask32 = reflection && ex.isa.len() == 1028;
     if matches!(ex.stage, Stage::Vertex | Stage::Geometry) {
         em.out_interp = feeds_ps.cloned().unwrap_or_default();
     }
@@ -1339,6 +1341,7 @@ impl<'a> Emitter<'a> {
             compute_swizzle: false,
             indexed_lane: false,
             single_wave32: false,
+            reflection_mask32: false,
             light_grid: false,
             page_waves: false,
             wave_cull: false,
@@ -4574,7 +4577,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 return self.ws(&hi(&d), &format!("t{t}ballot.y"));
             }
             self.ws(&d, &format!("(((exec_lo & 1u) != 0u) && {c}) ? 1u : 0u"))?;
-            if self.single_wave32 || self.packed.as_ref().is_some_and(|p| p.abi == RootAbi::RegisterWave32) { return Ok(()); } // The next SGPR can hold an independent mask.
+            if self.single_wave32 || self.reflection_mask32 || self.packed.as_ref().is_some_and(|p| p.abi == RootAbi::RegisterWave32) { return Ok(()); } // The next SGPR can hold an independent mask.
             let dh = hi(&d);
             if !matches!(dh, Opnd::Null | Opnd::ConstInt(_)) {
                 self.touch(&dh);

@@ -1,0 +1,25 @@
+{
+  "scope": "Isolated Rust-owned immutable GPU upload and private-fence retention; not a runtime queue-ordered shadow or shader integration",
+  "serialized_sha256": "38bd71be9dd00e74952a9612f87f7df37a1617ca9f9847bb531b40bc5a4ad6af",
+  "rust_sha256": "14da2d08b1e9e03248631f47c91dff6425a05d678b32105a4bcae6ccb51f29db",
+  "validator_sha256": "cff765144d8eb27d635fd0700a5d4102ef41eb1e08444a2206ba7df93dbd9e6d",
+  "shader_sha256": "475fbf72ee83146b9ab041ea69d565f5c6e42b41c99ea7b0e63a9588c33cc606",
+  "adapters": {
+    "AMD": {
+      "adapter": "1002:13c0",
+      "immutable_after_source_mutation": true,
+      "malformed_rejected": true,
+      "blocked_gpu_retained": true,
+      "two_fence_retirement": true,
+      "two_gpu_queues": true
+    },
+    "NVIDIA": {
+      "adapter": "10de:2705",
+      "immutable_after_source_mutation": true,
+      "malformed_rejected": true,
+      "blocked_gpu_retained": true,
+      "two_fence_retirement": true,
+      "two_gpu_queues": true
+    }
+  }
+}

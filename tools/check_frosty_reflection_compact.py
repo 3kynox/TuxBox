@@ -17,6 +17,7 @@ from project_tuxbox.inspect import digest
 from project_tuxbox.shader_prep import compiler_tools
 
 GUARD = 0xdeadbeef
+GROUP_SIZES = {576: 128, 579: 256, 589: 1024, 601: 512, 587: 128, 592: 512, 600: 1024, 606: 256}
 CASES = ("none", "full", "mixed", "lane31", "lane32", "lane63", "one_tile", "no_tiles")
 
 
@@ -39,13 +40,15 @@ def words(path, values):
     path.write_bytes(struct.pack(f"<{len(values)}I", *values))
 
 
-def run(mount, compiler, host, work):
+def run(mount, compiler, host, work, entry):
+    size = GROUP_SIZES[entry]
+    small = entry in (587, 592, 600, 606)
     payload, entries = global_archive(mount)
-    ((_, native, _),) = containers(decompress(payload, entries[576], decoder()))
-    (work / "576.dxbc").write_bytes(native)
-    hlsl, profile, dxil = (work / f"576.{suffix}" for suffix in ("hlsl", "profile", "dxil"))
+    ((_, native, _),) = containers(decompress(payload, entries[entry], decoder()))
+    (work / f"{entry}.dxbc").write_bytes(native)
+    hlsl, profile, dxil = (work / f"{entry}.{suffix}" for suffix in ("hlsl", "profile", "dxil"))
     _, dxc, dxv = compiler_tools()
-    subprocess.run([compiler, work / "576.dxbc", "--hlsl-out", hlsl, "--profile-out", profile], check=True)
+    subprocess.run([compiler, work / f"{entry}.dxbc", "--hlsl-out", hlsl, "--profile-out", profile], check=True)
     subprocess.run([dxc, "-E", "main", "-T", profile.read_text().strip(), "-O3", "-Fo", dxil, hlsl], check=True)
     subprocess.run([dxv, dxil], check=True, stdout=subprocess.DEVNULL)
     for case in CASES:
@@ -62,13 +65,14 @@ def run(mount, compiler, host, work):
         depths = [f32(.5 if active(case, lane_for_xy(x, y)) else 0)
                   for y in range(8) for x in range(8)]
         words(work / f"{case}.t0", depths)
-        words(work / f"{case}.t1", [f32(0)] * 64)
-        words(work / f"{case}.t2", [f32(.25)] * 64)
-        words(work / f"{case}.t3", [0] * 8)
-        words(work / f"{case}.t4", [0 if case == "no_tiles" else 1 if case == "one_tile" else 2] * 8)
+        words(work / f"{case}.t1", [f32(.25 if small else 0)] * 64)
+        words(work / f"{case}.t2", [0] * 16 if small else [f32(.25)] * 64)
+        words(work / f"{case}.t3", [0 if case == "no_tiles" else 1 if case == "one_tile" else size // 64] * 8 if small else [0] * 16)
+        if not small:
+            words(work / f"{case}.t4", [0 if case == "no_tiles" else 1 if case == "one_tile" else size // 64] * 8)
         words(work / f"{case}.u0", [5] + [GUARD] * 15)
-        words(work / f"{case}.u1", [GUARD] * 512)
-    (work / "vsm.inputs").write_text("".join(f"{case} 576 1 1 4 2 4 8\n" for case in CASES))
+        words(work / f"{case}.u1", [GUARD] * (size * 2 + 64))
+    (work / "vsm.inputs").write_text("".join(f"{case} {entry} 1 1 4 2 4 8\n" for case in CASES))
     toolchain = Toolchain()
     obj = toolchain.compile(ROOT / "tools/reference/reflection-compact/guest.cpp", work, "/W4", "/WX", f"/I{ROOT / 'runtime/d3d12'}")
     exe = work / "vsm.exe"
@@ -84,23 +88,23 @@ def run(mount, compiler, host, work):
             return list(struct.unpack(f"<{len(data) // 4}I", data))
         actual_counter, actual_records = read(0), read(1)
         records = []
-        for lane in range(128):
+        for lane in range(size):
             if active(case, lane):
                 x, y = xy(lane)
-                records.extend([x | (y << 16), 0x34003400])
+                records.extend([x | (y << 16), 0x3c003400 if small else 0x34003400])
         # The guest reserves one extra entry if its last lane is inactive.
-        expected_counter = 5 + len(records) // 2 + int(not active(case, 127))
-        expected_records = [GUARD] * 512
+        expected_counter = 5 + len(records) // 2 + int(not active(case, size - 1))
+        expected_records = [GUARD] * (size * 2 + 64)
         expected_records[10:10 + len(records)] = records
         if len(actual_records) != len(expected_records) or len(actual_counter) != 16:
             raise ValueError(f"{case}: unexpected reflection readback length")
         differences = sum(a != b for a, b in zip(actual_records, expected_records))
         differences += sum(a != b for a, b in zip(actual_counter, [expected_counter] + [GUARD] * 15))
         if differences:
-            raise ValueError(f"{case}: {differences} reflection readback mismatches")
+            raise ValueError(f"{case}: {differences} reflection readback mismatches; counter={actual_counter[0]:#x}/{expected_counter:#x}; records={[(i,hex(a),hex(b)) for i,(a,b) in enumerate(zip(actual_records,expected_records)) if a!=b][:8]}")
         results[case] = {"selected": len(records) // 2, "counter": expected_counter,
                          "checked_words": len(actual_records) + len(actual_counter), "mismatches": differences}
-    return {"gpu": receipt, "host": host.version, "source_sha256": digest(work / "576.dxbc"),
+    return {"gpu": receipt, "host": host.version, "source_sha256": digest(work / f"{entry}.dxbc"),
             "dxil_sha256": digest(dxil), "cases": results}
 
 
@@ -110,11 +114,12 @@ def main():
     p.add_argument("--prefix", type=Path, required=True)
     p.add_argument("--proton", type=Path, required=True)
     p.add_argument("--xshader", type=Path)
+    p.add_argument("--entry", type=int, choices=GROUP_SIZES, default=576)
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
     compiler = args.xshader.resolve() if args.xshader else compiler_tools()[0]
     with TemporaryDirectory(dir=ROOT / "build") as temp:
-        result = run(args.mount, compiler, Host(None, args.proton, args.prefix), Path(temp))
+        result = run(args.mount, compiler, Host(None, args.proton, args.prefix), Path(temp), args.entry)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     return 0

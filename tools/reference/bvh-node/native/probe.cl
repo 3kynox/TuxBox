@@ -193,6 +193,17 @@ __kernel void probe(__global unsigned *out) {
           intersect(node, origins[i], (float4)(1, 1, 1, 0), inverses[i]);
     }
   }
+  if (out[3000] == 2u)
+    for (uint test = 0; test < 6; test++) {
+      __global uint *record = out + 2688 + test * 32;
+      float4 origin = (float4)(as_float(record[16]), as_float(record[17]),
+                               as_float(record[18]), 0.f);
+      float4 dir = (float4)(as_float(record[19]), as_float(record[20]),
+                            as_float(record[21]), 0.f);
+      *(__global uint4 *)(out + 2500 + test * 4) =
+          intersect((((ulong)record) >> 3) | record[22], origin, dir,
+                    (float4)(1, 1, 1, 0));
+    }
   for (uint test = 0; test < 48; test++) {
     uint base = test < 24 ? 4032 + test * 48 : 6144 + (test - 24) * 48;
     __global uint *record = out + base;

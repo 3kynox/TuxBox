@@ -43,11 +43,12 @@ static void dispatch(Context &ctx, const std::string &name, UINT entry, UINT gro
     const bool post_instance = entry == 3397 || entry == 3398 || entry == 3412 || entry == 3422 || entry == 3432 || entry == 3454 || entry == 3457 || entry == 3470;
     const bool single_instance = no_hzb || entry == 3396 || entry == 3399 || entry == 3438 || entry == 3430 || entry == 3449 || entry == 3451 || entry == 3456 || entry == 3458 || post_instance;
     const bool depth_cull = instance || cluster || (single_instance && !no_hzb);
-    const bool reflection = entry == 576;
+    const bool small_reflection = entry == 587 || entry == 592 || entry == 600 || entry == 606;
+    const bool reflection = small_reflection || entry == 576 || entry == 579 || entry == 589 || entry == 601;
     const bool cards = entry == 1243 || entry == 1257;
     InstanceDepth hzb;
     InstanceDepth reflection_textures[3];
-    const std::vector<UINT> srvs = reflection ? std::vector<UINT>{4,4,4,4,4} : no_hzb ? std::vector<UINT>{16,16,16,800,4} : post_instance ? std::vector<UINT>{16,16,16,4,800,4,8,4} : single_instance ? std::vector<UINT>{16,16,16,4,800,4} : cluster ? std::vector<UINT>{16,16,16,4,4,4,4,16,4,800,4}
+    const std::vector<UINT> srvs = small_reflection ? std::vector<UINT>{4,4,4,4} : reflection ? std::vector<UINT>{4,4,4,4,4} : no_hzb ? std::vector<UINT>{16,16,16,800,4} : post_instance ? std::vector<UINT>{16,16,16,4,800,4,8,4} : single_instance ? std::vector<UINT>{16,16,16,4,800,4} : cluster ? std::vector<UINT>{16,16,16,4,4,4,4,16,4,800,4}
                                            : instance ? std::vector<UINT>{16,16,16,4,4,4,4,800,8,4}
                                            : cards ? std::vector<UINT>{16, 4, 4, 4}
                                            : (entry == 248 || entry == 249 || entry == 259) ? std::vector<UINT>{4, 8}
@@ -66,7 +67,7 @@ static void dispatch(Context &ctx, const std::string &name, UINT entry, UINT gro
     }
     for (UINT i = 0; i < srvs.size(); ++i) {
         auto bytes = read_file(name + (srvs.size() > 1 ? ".t" + std::to_string(i) : ".srv"));
-        if (reflection && i < 3) { reflection_textures[i].bind(dev, list.Get(), cpu(i), bytes); continue; }
+        if (reflection && i < (small_reflection ? 2u : 3u)) { reflection_textures[i].bind(dev, list.Get(), cpu(i), bytes); continue; }
         if (depth_cull && i == 3) { hzb.bind(dev, list.Get(), cpu(i), bytes); continue; }
         bound.push_back(source(bytes));
         D3D12_SHADER_RESOURCE_VIEW_DESC view{};
@@ -78,7 +79,7 @@ static void dispatch(Context &ctx, const std::string &name, UINT entry, UINT gro
             view.Buffer.StructureByteStride = 0;
             view.Format = DXGI_FORMAT_R32_UINT;
         }
-        if ((reflection && i >= 3) || entry == 1019 || ((entry == 507 || entry == 509 || entry == 512 || entry == 513) && i == 0)) {
+        if ((reflection && i >= (small_reflection ? 2u : 3u)) || entry == 1019 || ((entry == 507 || entry == 509 || entry == 512 || entry == 513) && i == 0)) {
             view.Buffer.StructureByteStride = 0;
             view.Format = DXGI_FORMAT_R32_UINT;
         }

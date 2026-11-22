@@ -65,6 +65,15 @@ BOX32 root; it validates the root's range in the file, not the full graph or
 its safety for traversal. The generated dump contains game-owned node bytes;
 keep it local.
 
+`--retail-triangles /path/to/serialized.bin /tmp/tuxbox-bvh-leaves.bin`
+selects six supported paired leaves with finite vertices and nonzero projected
+area; pass the resulting local dump to the differential tool. The tool returns
+a nonzero exit status when any raw word differs and writes the mismatches to
+the requested JSON report. `--strict` additionally compiles the HLSL with
+DXC strict IEEE math. For the tested Frosty sphere leaves, both GPU HLSL
+results differ from native by up to three ULP in the finite same-sign output
+words, with or without `--strict`; do not treat the helper as bit exact.
+
 The descriptor encodes a zero base, full 42-bit range, closest-first sorting
 and barycentric triangle return mode. Except for the dedicated growth cases,
 box growth is zero. The HSA host

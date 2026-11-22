@@ -29,9 +29,10 @@ def run():
     parser.add_argument("--prefix-nvidia", type=Path, required=True)
     parser.add_argument("--amd-vulkan", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--strict", action="store_true", help="compile with DXC strict IEEE math")
     args = parser.parse_args()
     data = args.dump.read_bytes()
-    is_triangle = data[:8] == b"TXBVT001"
+    is_triangle = data[:8] in (b"TXBVT001", b"TXBVT002")
     if is_triangle and len(data) == 8 + 6 * 27 * 4:
         cases = [struct.unpack_from("<27I", data, 8 + i * 27 * 4) for i in range(6)]
     elif data[:8] == b"TXBVH001" and len(data) == 8 + 48 * 52 * 4:
@@ -63,7 +64,8 @@ def run():
             shader += f"{{ uint node[32] = {{ {node} }}; uint4 r = tb_bvh_boxes(node, {half}, float3({origin}), float3({inverse}), {extent}, {sort});"
             shader += "".join(f" output[{4*i+j}] = r[{j}];" for j in range(4)) + " }\n"
     shader += "}\n"
-    scope = "synthetic paired triangle" if is_triangle else (
+    scope = ("serialized BLAS paired triangle" if data[:8] == b"TXBVT002" else
+             "synthetic paired triangle") if is_triangle else (
         "serialized BLAS root" if data[:8] == b"TXBVR001" else "synthetic BOX16/BOX32")
     report = {"scope": f"{scope} cases: native gfx1036 instruction output versus HLSL, not a general opcode equivalence proof",
               "cases": len(cases), "native_dump_sha256": hashlib.sha256(data).hexdigest(),
@@ -73,7 +75,10 @@ def run():
         hlsl, cso = work / "node.hlsl", work / "node.cso"
         hlsl.write_text(shader)
         dxc = Path(find_dxc(None))
-        subprocess.run([dxc, "-T", "cs_6_0", "-E", "main", hlsl, "-Fo", cso], check=True)
+        dxc_args = [dxc, "-T", "cs_6_0", "-E", "main", hlsl, "-Fo", cso]
+        if args.strict:
+            dxc_args.append("-Gis")
+        subprocess.run(dxc_args, check=True)
         subprocess.run([dxc.with_name("dxv"), cso], check=True)
         report["dxil_sha256"] = hashlib.sha256(cso.read_bytes()).hexdigest()
         toolchain = Toolchain()
@@ -99,18 +104,23 @@ def run():
             raw = (work / "node.bin").read_bytes()
             actual = struct.unpack(f"<{len(raw)//4}I", raw)
             start, end = 96, 96 + 4 * len(cases)
+            mismatches = []
             for i, case in enumerate(cases):
                 got = actual[start + 4*i:start + 4*i + 4]
                 want = case[23:27] if is_triangle else case[48:52]
                 if got != want:
-                    raise ValueError(f"{name} case {i}: {got} != native {want}")
+                    mismatches.append({"case": i, "actual": [f"{v:08x}" for v in got],
+                                       "native": [f"{v:08x}" for v in want]})
             if any(value != 0x76540000 + i for i, value in enumerate(actual) if i < start or i >= end):
                 raise ValueError(f"{name} output guard changed")
             report["adapters"][name] = {"adapter": adapter, "cases": len(cases),
-                                         "guard_words": len(actual) - 4 * len(cases)}
+                                         "guard_words": len(actual) - 4 * len(cases),
+                                         "mismatches": mismatches}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
+    if any(value["mismatches"] for value in report["adapters"].values()):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

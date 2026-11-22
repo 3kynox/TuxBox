@@ -12,7 +12,7 @@ const BLOCK: usize = 64;
 const LIMIT: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, PartialEq)]
-enum Error {
+pub(crate) enum Error {
     Length,
     Decode,
     Bounds,
@@ -21,7 +21,7 @@ enum Error {
     Pointer,
 }
 #[derive(Debug)]
-struct Summary {
+pub(crate) struct Summary {
     box16: usize,
     box32: usize,
     leaves: usize,
@@ -49,7 +49,7 @@ fn half(bits: u16) -> f32 {
 fn valid(b: [f32; 6]) -> bool {
     b.iter().all(|v| v.is_finite()) && (0..3).all(|i| b[i] <= b[i + 3])
 }
-fn validate(bytes: &[u8]) -> Result<Summary, Error> {
+pub(crate) fn validate(bytes: &[u8]) -> Result<Summary, Error> {
     if bytes.len() < 2 * BLOCK || bytes.len() > LIMIT {
         return Err(Error::Length);
     }

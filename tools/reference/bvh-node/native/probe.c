@@ -1,5 +1,6 @@
 #include <hsa/hsa.h>
 #include <hsa/hsa_ext_amd.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,10 +52,11 @@ int main(int argc, char **argv) {
   if (argc != 2 &&
       !(argc == 4 && (strcmp(argv[2], "--dump") == 0 ||
                       strcmp(argv[2], "--dump-triangles") == 0)) &&
-      !(argc == 5 && strcmp(argv[2], "--retail") == 0)) {
+      !(argc == 5 && (strcmp(argv[2], "--retail") == 0 ||
+                      strcmp(argv[2], "--retail-triangles") == 0))) {
     fprintf(stderr,
             "usage: %s probe.hsaco [--dump|--dump-triangles output.bin | "
-            "--retail serialized.bin output.bin]\n",
+            "--retail|--retail-triangles serialized.bin output.bin]\n",
             argv[0]);
     return 2;
   }
@@ -276,26 +278,89 @@ int main(int argc, char **argv) {
       perror("open serialized BLAS");
       return 1;
     }
-    uint32_t root;
     if (fseek(source, 0, SEEK_END) != 0)
       return 1;
     long length = ftell(source);
-    if (length < 116 || fseek(source, 112, SEEK_SET) != 0 ||
-        fread(&root, sizeof(root), 1, source) != 1)
+    if (length < 120)
       return 1;
-    uint32_t kind = root & 7u;
-    uint64_t offset = 64u + (uint64_t)(root >> 3) * 64u;
-    uint64_t size = kind == 4 ? 64u : kind == 5 ? 128u : 0u;
-    if (!size || offset > (uint64_t)length ||
-        size > (uint64_t)length - offset ||
-        fseek(source, (long)offset, SEEK_SET) != 0 ||
-        fread((uint32_t *)out + 2688, 1, size, source) != size ||
-        fclose(source) != 0) {
-      fprintf(stderr, "invalid serialized root record\n");
-      return 1;
+    if (strcmp(argv[2], "--retail") == 0) {
+      uint32_t root;
+      if (fseek(source, 112, SEEK_SET) != 0 ||
+          fread(&root, sizeof(root), 1, source) != 1)
+        return 1;
+      uint32_t kind = root & 7u;
+      uint64_t offset = 64u + (uint64_t)(root >> 3) * 64u;
+      uint64_t size = kind == 4 ? 64u : kind == 5 ? 128u : 0u;
+      if (!size || offset > (uint64_t)length ||
+          size > (uint64_t)length - offset ||
+          fseek(source, (long)offset, SEEK_SET) != 0 ||
+          fread((uint32_t *)out + 2688, 1, size, source) != size) {
+        fprintf(stderr, "invalid serialized root record\n");
+        return 1;
+      }
+      ((uint32_t *)out)[3000] = 1;
+      ((uint32_t *)out)[3001] = kind == 5;
+    } else {
+      uint32_t leaf_offset, leaf_count;
+      if (fseek(source, 76, SEEK_SET) != 0 ||
+          fread(&leaf_count, 4, 1, source) != 1 ||
+          fseek(source, 116, SEEK_SET) != 0 ||
+          fread(&leaf_offset, 4, 1, source) != 1)
+        return 1;
+      uint64_t start = 64u + (uint64_t)leaf_offset;
+      if ((leaf_offset & 63u) || start > (uint64_t)length ||
+          leaf_count > ((uint64_t)length - start) / 64u) {
+        fprintf(stderr, "invalid serialized leaf range\n");
+        return 1;
+      }
+      unsigned found = 0;
+      for (uint32_t n = 0; n < leaf_count && found < 6; n++) {
+        uint32_t leaf[16];
+        float vertices[12];
+        if (fseek(source, (long)(start + (uint64_t)n * 64u), SEEK_SET) != 0 ||
+            fread(leaf, 4, 16, source) != 16)
+          return 1;
+        unsigned side = found & 1u;
+        unsigned selector = (leaf[15] >> (side * 8)) & 0xffu;
+        if (!(leaf[12] & 0x80u) || (leaf[12] & 0x7fu) ||
+            (selector != 9 && selector != 2 && selector != 4) ||
+            leaf[14] == 0xffffffffu || (leaf[15] >> 16))
+          continue;
+        memcpy(vertices, leaf, sizeof(vertices));
+        int finite = 1;
+        for (unsigned i = 0; i < 12; i++)
+          finite &= isfinite(vertices[i]);
+        if (!finite)
+          continue;
+        unsigned ia = side ? 1 : 0, ib = side ? 3 : 1, ic = 2;
+        float area = (vertices[3 * ib] - vertices[3 * ia]) *
+                         (vertices[3 * ic + 1] - vertices[3 * ia + 1]) -
+                     (vertices[3 * ib + 1] - vertices[3 * ia + 1]) *
+                         (vertices[3 * ic] - vertices[3 * ia]);
+        if (!isfinite(area) || fabsf(area) < .0001f)
+          continue;
+        uint32_t *record = (uint32_t *)out + 2688 + found * 32;
+        memcpy(record, leaf, 64);
+        for (unsigned axis = 0; axis < 3; axis++) {
+          float origin = .5f * vertices[3 * ia + axis] +
+                         .375f * vertices[3 * ib + axis] +
+                         .125f * vertices[3 * ic + axis];
+          if (axis == 2)
+            origin -= 16.f;
+          record[16 + axis] = bits(origin);
+          record[19 + axis] = bits(axis == 2 ? 1.f : 0.f);
+        }
+        record[22] = side;
+        found++;
+      }
+      if (found != 6) {
+        fprintf(stderr, "six supported paired leaves not found\n");
+        return 1;
+      }
+      ((uint32_t *)out)[3000] = 2;
     }
-    ((uint32_t *)out)[3000] = 1;
-    ((uint32_t *)out)[3001] = kind == 5;
+    if (fclose(source) != 0)
+      return 1;
   }
   hsa_signal_t signal;
   CHK(hsa_signal_create(1, 0, NULL, &signal));
@@ -502,7 +567,7 @@ int main(int argc, char **argv) {
       return 1;
     }
   }
-  if (argc == 5) {
+  if (argc == 5 && strcmp(argv[2], "--retail") == 0) {
     static const float origins[8][3] = {
         {.25f, .25f, -4}, {0, 0, -4}, {100, 100, -4}, {0, 0, -4},
         {0, 0, 12},       {0, 0, 3},  {-10, 5, -40},  {5, -10, 40}};
@@ -528,6 +593,23 @@ int main(int argc, char **argv) {
       ok = fwrite(record, sizeof(uint32_t), 48, dump) == 48 &&
            fwrite((uint32_t *)out + 2500 + test * 4, sizeof(uint32_t), 4,
                   dump) == 4;
+    }
+    if (fclose(dump) != 0 || !ok) {
+      fprintf(stderr, "failed to write output\n");
+      return 1;
+    }
+  }
+  if (argc == 5 && strcmp(argv[2], "--retail-triangles") == 0) {
+    FILE *dump = fopen(argv[4], "wb");
+    if (!dump) {
+      perror("open output");
+      return 1;
+    }
+    int ok = fwrite("TXBVT002", 1, 8, dump) == 8;
+    for (unsigned test = 0; test < 6 && ok; test++) {
+      uint32_t *record = (uint32_t *)out + 2688 + test * 32;
+      ok = fwrite(record, 4, 23, dump) == 23 &&
+           fwrite((uint32_t *)out + 2500 + test * 4, 4, 4, dump) == 4;
     }
     if (fclose(dump) != 0 || !ok) {
       fprintf(stderr, "failed to write output\n");
