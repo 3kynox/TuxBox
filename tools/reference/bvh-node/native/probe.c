@@ -54,11 +54,15 @@ int main(int argc, char **argv) {
                       strcmp(argv[2], "--dump-triangles") == 0 ||
                       strcmp(argv[2], "--dump-precision") == 0)) &&
       !(argc == 5 && (strcmp(argv[2], "--retail") == 0 ||
-                      strcmp(argv[2], "--retail-triangles") == 0))) {
+                      strcmp(argv[2], "--retail-triangles") == 0 ||
+                      strcmp(argv[2], "--retail-oblique") == 0 ||
+                      strcmp(argv[2], "--retail-tied") == 0))) {
     fprintf(stderr,
             "usage: %s probe.hsaco [--dump|--dump-triangles|--dump-precision "
             "output.bin | "
-            "--retail|--retail-triangles serialized.bin output.bin]\n",
+            "--retail|--retail-triangles|--retail-oblique|--retail-tied "
+            "serialized.bin "
+            "output.bin]\n",
             argv[0]);
     return 2;
   }
@@ -343,14 +347,23 @@ int main(int argc, char **argv) {
           continue;
         uint32_t *record = (uint32_t *)out + 7680 + found * 32;
         memcpy(record, leaf, 64);
+        static const float directions[6][3] = {{0, 0, 2}, {0, 0, .5f},
+                                               {1, 2, 1}, {2, 1, 1},
+                                               {1, 1, 2}, {-1, -2, -1}};
+        static const float tied_directions[6][3] = {{1, 1, 1},   {1, -1, 1},
+                                                    {-1, 1, 1},  {1, 1, -1},
+                                                    {-1, -1, 1}, {1, -1, -1}};
+        int oblique = strcmp(argv[2], "--retail-oblique") == 0;
+        int tied = strcmp(argv[2], "--retail-tied") == 0;
         for (unsigned axis = 0; axis < 3; axis++) {
+          float direction = oblique ? directions[found][axis]
+                            : tied  ? tied_directions[found][axis]
+                                    : (axis == 2 ? 1.f : 0.f);
           float origin = .5f * vertices[3 * ia + axis] +
                          .375f * vertices[3 * ib + axis] +
-                         .125f * vertices[3 * ic + axis];
-          if (axis == 2)
-            origin -= 16.f;
+                         .125f * vertices[3 * ic + axis] - 16.f * direction;
           record[16 + axis] = bits(origin);
-          record[19 + axis] = bits(axis == 2 ? 1.f : 0.f);
+          record[19 + axis] = bits(direction);
         }
         record[22] = side;
         found++;
@@ -639,7 +652,9 @@ int main(int argc, char **argv) {
       return 1;
     }
   }
-  if (argc == 5 && strcmp(argv[2], "--retail-triangles") == 0) {
+  if (argc == 5 && (strcmp(argv[2], "--retail-triangles") == 0 ||
+                    strcmp(argv[2], "--retail-oblique") == 0 ||
+                    strcmp(argv[2], "--retail-tied") == 0)) {
     FILE *dump = fopen(argv[4], "wb");
     if (!dump) {
       perror("open output");

@@ -30,7 +30,7 @@ def run():
     parser.add_argument("--amd-vulkan", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--strict", action="store_true", help="compile with DXC strict IEEE math")
-    parser.add_argument("--projected-rtz", action="store_true", help="experimental positive-Z finite triangle control")
+    parser.add_argument("--projected-rtz", action="store_true", help="experimental finite interior-hit triangle control")
     args = parser.parse_args()
     data = args.dump.read_bytes()
     is_triangle = data[:8] in (b"TXBVT001", b"TXBVT002", b"TXBVP001")
@@ -48,14 +48,14 @@ def run():
         raise ValueError("projected RTZ control requires triangle input")
     if args.projected_rtz and not args.strict:
         raise ValueError("projected RTZ control requires strict IEEE compilation")
-    if args.projected_rtz and any(case[19:22] != (0, 0, 0x3f800000) for case in cases):
-        raise ValueError("projected RTZ control requires positive-Z unit rays")
     if args.projected_rtz:
         for i, case in enumerate(cases):
             if any(word & 0x7f800000 == 0x7f800000 for word in (*case[:12], *case[16:22], *case[23:27])):
                 raise ValueError(f"projected RTZ case {i} contains nonfinite values or a native miss")
             if case[24] & 0x7fffffff == 0:
                 raise ValueError(f"projected RTZ case {i} has a zero native determinant")
+            if all(word & 0x7fffffff == 0 for word in case[19:22]):
+                raise ValueError(f"projected RTZ case {i} has a zero ray direction")
             values = struct.unpack("<4f", struct.pack("<4I", *case[23:27]))
             t, u, v = (values[j] / values[1] for j in (0, 2, 3))
             if t < 0 or u <= 0 or v <= 0 or u + v >= 1:
@@ -72,7 +72,7 @@ def run():
             if case[22] not in (0, 1):
                 raise ValueError(f"invalid triangle side in case {i}")
             if args.projected_rtz:
-                shader += f"{{ uint node[32] = {{ {node} }}; float4 r = tb_bvh_triangle_rtz(node, {case[22]}u, float3({origin}));"
+                shader += f"{{ uint node[32] = {{ {node} }}; float4 r = tb_bvh_triangle_rtz(node, {case[22]}u, float3({origin}), float3({direction}));"
             else:
                 shader += f"{{ uint node[32] = {{ {node} }}; float4 r = tb_bvh_paired_triangle(node, {case[22]}u, float3({origin}), float3({direction}));"
             shader += "".join(f" output[{4*i+j}] = asuint(r[{j}]);" for j in range(4)) + " }\n"

@@ -4,7 +4,7 @@
   "rust_sha256": "33bb810984e66c93ddc334863cf9c158614534c9afe09bb4cc81a50b47dd559a",
   "validator_sha256": "cff765144d8eb27d635fd0700a5d4102ef41eb1e08444a2206ba7df93dbd9e6d",
   "shader_sha256": "475fbf72ee83146b9ab041ea69d565f5c6e42b41c99ea7b0e63a9588c33cc606",
-  "verification_shader_sha256": "e485ba0f979695ccfa025f671ca2aad97df7ea161bcda26b93aae5eb475d8c66",
+  "verification_shader_sha256": "61d56135dcd80a573f4060209023620bc7be45f2a81036b965bb5652a748d776",
   "guarded_consumer_sha256": "aeed4802261672cbc29821a610ab59399aa1567b04f4db205dbb68c77134a76a",
   "adapters": {
     "AMD": {
@@ -23,7 +23,12 @@
       "gpu_written_source_verified": true,
       "last_dword_mismatch_preserves_shadow": true,
       "guarded_consumer_rejects_mismatch": true,
-      "bounded_views_reject_invalid_sizes": true
+      "bounded_views_reject_invalid_sizes": true,
+      "parallel_verification": true,
+      "large_parallel_body_bytes": 131072,
+      "large_last_dword_mismatch": true,
+      "multidimensional_dispatch": true,
+      "underdispatch_rejected": true
     },
     "NVIDIA": {
       "adapter": "10de:2705",
@@ -41,7 +46,12 @@
       "gpu_written_source_verified": true,
       "last_dword_mismatch_preserves_shadow": true,
       "guarded_consumer_rejects_mismatch": true,
-      "bounded_views_reject_invalid_sizes": true
+      "bounded_views_reject_invalid_sizes": true,
+      "parallel_verification": true,
+      "large_parallel_body_bytes": 131072,
+      "large_last_dword_mismatch": true,
+      "multidimensional_dispatch": true,
+      "underdispatch_rejected": true
     }
   }
 }

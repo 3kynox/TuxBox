@@ -115,6 +115,8 @@ The packaged `CullToVoxelClipmapCS` shader builds a list of objects intersecting
 
 Frosty uses compute shaders to allocate physical shadow pages, choose pages for initialization and merging, and compact the views that need rendering. GeForce and Radeon ran ten packaged shaders and matched every one of the 137,694 output words checked on each GPU. The cases include an exhausted free-page pool, requests in both halves of a 64-lane wave, and selected mip levels from multiple views. Raising the depth texture from zero to one culled all six shadow instances that previously reached the work queue. [Shadow page and view readbacks](../evidence/matrix-awakens/virtual-shadow-pages.json)
 
+The hair-mesh deformation shader passes CPU-modeled checks on Radeon and GeForce for multiple control-point counts, partial output and two groups. This verifies one stage; hair rendering still needs end-to-end validation. [GPU readbacks](../evidence/matrix-awakens/hair-mesh-deformation.json)
+
 Ten reflection trace compaction variants translate their wave32 reductions and prefix scans. Real texture inputs and CPU-modeled outputs pass on Radeon and GeForce for empty, full, mixed and wave-boundary cases across groups of 64 to 1,024 threads. [GPU readbacks](../evidence/matrix-awakens/reflection-compact-wave-sizes.json)
 
 The visualization tile shader compacts viewport-intersecting 8×8 groups. GPU controls cover viewport edges, fractional offsets and floating-point conversion limits. [GPU readbacks](../evidence/matrix-awakens/visualize-create-tiles.json) · [AMD RDNA 2 instruction reference](https://docs.amd.com/api/khub/documents/Et~wpu9g~Ffl7d9q0QZ~Og/content)

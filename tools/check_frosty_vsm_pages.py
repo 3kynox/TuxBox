@@ -168,6 +168,24 @@ def selection(entry, count, extra):
         "pages": count, "selected": len(base), "additional_pages": len(second), "initial_indirect_x": 32}
 
 
+def hair_mesh(count, points, groups, irregular=False):
+    import math
+    def bits(value): return struct.unpack("<I", struct.pack("<f", value))[0]
+    cb = [0] * 64
+    cb[0:2] = [count, points]
+    centres = [bits(float(i % 2)) for i in range(max(1, points)) for _ in range(3)]
+    weights = [[(i + 1) / 16, (i + 2) / 16, (i + 3) / 16] for i in range(points + 4)]
+    vectors = [([1., 0., 0.] if irregular else [1., 1., 1.]) if i % 2 else [0., 0., 0.] for i in range(128 * groups)]
+    seed = [[GUARD] * (4 * 128 * groups)]
+    expected = [seed[0].copy()]
+    for lane in range(min(count, len(vectors))):
+        point = vectors[lane]
+        result = [point[k] + sum(weights[i][k] * math.sqrt(1. + sum((point[j] - float(i % 2)) ** 2 for j in range(3))) for i in range(points)) + weights[points][k]
+                  + sum(weights[points + j + 1][k] * point[j] for j in range(3)) for k in range(3)]
+        expected[0][lane * 4:lane * 4 + 4] = [bits(v) for v in (*result, 1.)]
+    return cb, [centres, [bits(v) for w in weights for v in w], [bits(v) for p in vectors for v in p]], seed, [16], 12, groups, 1, expected, {"count": count, "control_points": points, "groups": groups, "irregular": irregular}
+
+
 def visualize_tiles(gx, gy, offset, extent):
     import math
     def cvt(v):
@@ -342,7 +360,7 @@ def main():
     p.add_argument("--prefix", type=Path)
     p.add_argument("--proton", type=Path)
     p.add_argument("--xshader", type=Path)
-    p.add_argument("--entry", type=int, choices=(257, 728, 248, 249, 259, 507, 509, 512, 513, 517, 1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470, 3477),
+    p.add_argument("--entry", type=int, choices=(1865, 257, 728, 248, 249, 259, 507, 509, 512, 513, 517, 1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470, 3477),
                    help="run the controls for one archive entry")
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
@@ -351,6 +369,10 @@ def main():
     compiler = args.xshader.resolve() if args.xshader else compiler
     data, entries = global_archive(args.mount)
     cases, libraries = {}, {}
+    for name, count, points, groups, irregular in (("empty", 0, 0, 1, False), ("no_points", 128, 0, 1, False),
+        ("one", 37, 1, 1, False), ("three", 128, 3, 1, False), ("seven", 128, 7, 1, False),
+        ("two_groups", 193, 3, 2, False), ("irrational", 128, 3, 1, True)):
+        cases["hair_mesh_" + name] = (1865, hair_mesh(count, points, groups, irregular))
     for name, gx, gy, offset, extent in (
         ("empty", 3, 2, (0., 0.), (0., 0.)),
         ("one", 3, 2, (0., 0.), (1., 1.)),
@@ -478,7 +500,7 @@ def main():
                     words(work / f"{name}.b{i}", constants)
             else:
                 words(work / (name+".cbv"), cb)
-            if entry in (728, 248, 249, 259, 507, 509, 512, 513, 517, 1016, 1243, 1257, 1793, 3477, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470):
+            if entry in (1865, 728, 248, 249, 259, 507, 509, 512, 513, 517, 1016, 1243, 1257, 1793, 3477, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470):
                 for i, records in enumerate(srv):
                     words(work / f"{name}.t{i}", records)
             else:
@@ -533,6 +555,15 @@ def main():
                     if entry == 257 and i == 1:
                         end = 3 + len(metadata["selected"])
                         actual[3:end] = sorted(actual[3:end])
+                    if entry == 1865 and metadata["irregular"]:
+                        # Shader f32 sqrt/FMA rounding may differ by a few ULPs.
+                        def close(a, b):
+                            if a == b: return True
+                            if a == GUARD or b == GUARD: return False
+                            fa = struct.unpack("<f", struct.pack("<I", a))[0]
+                            fb = struct.unpack("<f", struct.pack("<I", b))[0]
+                            return abs(fa - fb) <= 2e-6
+                        actual = [x if close(x, y) else y for x, y in zip(array, actual)]
                     if entry == 1223:
                         actual = unordered_wave_ranges(actual, array, metadata["initial"], metadata["selected_pages"])
                     diffs.extend([i, j, x, y] for j,(x,y) in enumerate(zip(array,actual)) if x != y)

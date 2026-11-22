@@ -50,8 +50,9 @@ def main():
         dxc = Path(find_dxc(None))
         subprocess.run([dxc, '-T', 'cs_6_0', '-E', 'main', '-O3', '-Fh', work / 'owned_shadow_dxil.h',
                         '-Vn', 'owned_shadow_dxil', folder / 'owned_shadow.hlsl'], check=True)
-        subprocess.run([dxc, '-T', 'cs_6_0', '-E', 'main', '-O3', '-Fh', work / 'verified_shadow_dxil.h',
-                        '-Vn', 'verified_shadow_dxil', folder / 'verified_shadow.hlsl'], check=True)
+        for stage in ('initialize', 'compare', 'commit', 'finalize'):
+            subprocess.run([dxc, '-T', 'cs_6_0', '-E', stage, '-O3', '-Fh', work / f'verified_{stage}_dxil.h',
+                            '-Vn', f'verified_{stage}_dxil', folder / 'verified_shadow.hlsl'], check=True)
         subprocess.run([dxc, '-T', 'cs_6_0', '-E', 'main', '-O3', '-Fh', work / 'guarded_shadow_dxil.h',
                         '-Vn', 'guarded_shadow_dxil', folder / 'guarded_shadow.hlsl'], check=True)
         compiler = Toolchain()
@@ -71,12 +72,12 @@ def main():
             adapter = next((line.removeprefix('adapter=') for line in receipt.splitlines() if line.startswith('adapter=')), None)
             if adapter is None or not adapter.lower().startswith('1002:' if name == 'AMD' else '10de:'):
                 raise ValueError(f'{name} unexpected adapter {adapter!r}')
-            required = ('immutable_gpu_snapshot=1', 'malformed_rejected=1', 'blocked_gpu_retained=1', 'two_fence_retirement=1', 'two_gpu_queues=1', 'default_heap_gpu_copy=1', 'completed_list_copy_replay=1', 'closed_list_retention=1', 'inflight_copy_after_list_reset=1', 'validated_source_update=1', 'inflight_update_rejected=1', 'gpu_written_source_verified=1', 'last_dword_mismatch_preserves_shadow=1', 'guarded_consumer_rejects_mismatch=1', 'bounded_views_reject_invalid_sizes=1')
+            required = ('immutable_gpu_snapshot=1', 'malformed_rejected=1', 'blocked_gpu_retained=1', 'two_fence_retirement=1', 'two_gpu_queues=1', 'default_heap_gpu_copy=1', 'completed_list_copy_replay=1', 'closed_list_retention=1', 'inflight_copy_after_list_reset=1', 'validated_source_update=1', 'inflight_update_rejected=1', 'gpu_written_source_verified=1', 'last_dword_mismatch_preserves_shadow=1', 'guarded_consumer_rejects_mismatch=1', 'bounded_views_reject_invalid_sizes=1', 'parallel_verification=1', 'large_parallel_body=131072', 'large_last_dword_mismatch=1', 'multidimensional_dispatch=1', 'underdispatch_rejected=1')
             if any(item not in receipt.splitlines() for item in required):
                 raise ValueError(f'{name} missing control receipt: {receipt}')
             report['adapters'][name] = {'adapter': adapter, 'immutable_after_source_mutation': True,
                                          'malformed_rejected': True, 'blocked_gpu_retained': True,
-                                         'two_fence_retirement': True, 'two_gpu_queues': True, 'default_heap_gpu_copy': True, 'completed_list_copy_replay': True, 'closed_list_retention': True, 'inflight_copy_after_list_reset': True, 'validated_source_update': True, 'inflight_update_rejected': True, 'gpu_written_source_verified': True, 'last_dword_mismatch_preserves_shadow': True, 'guarded_consumer_rejects_mismatch': True, 'bounded_views_reject_invalid_sizes': True}
+                                         'two_fence_retirement': True, 'two_gpu_queues': True, 'default_heap_gpu_copy': True, 'completed_list_copy_replay': True, 'closed_list_retention': True, 'inflight_copy_after_list_reset': True, 'validated_source_update': True, 'inflight_update_rejected': True, 'gpu_written_source_verified': True, 'last_dword_mismatch_preserves_shadow': True, 'guarded_consumer_rejects_mismatch': True, 'bounded_views_reject_invalid_sizes': True, 'parallel_verification': True, 'large_parallel_body_bytes': 131072, 'large_last_dword_mismatch': True, 'multidimensional_dispatch': True, 'underdispatch_rejected': True}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

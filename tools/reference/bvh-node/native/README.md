@@ -73,14 +73,17 @@ the requested JSON report. `--strict` additionally compiles the HLSL with
 DXC strict IEEE math. For the tested Frosty sphere leaves, both GPU HLSL
 results differ from native by up to three ULP in the finite same-sign output
 words, with or without `--strict`; do not treat the helper as bit exact.
+For the same six leaves with varied ray directions, use `--retail-oblique`
+or `--retail-tied` in place of `--retail-triangles`.
 
 The separate `rtz_triangle.hlsl` experiment uses a ray-relative projected
 edge formulation with round-toward-zero after each operation. It matches the
-native words on the tested positive-Z unit-ray hits, including these six
-leaves. To try it, add `--strict --projected-rtz` to the differential command.
-It uses binary64 intermediates and currently covers only finite, uncompressed
-TRI0/TRI1 hits for positive-Z unit rays. It is expensive, does not implement
-miss or edge handling, and is not connected to the runtime. This experiment is
+native words on the sampled finite interior hits, including oblique directions,
+different magnitudes and tied dominant axes. To try it, add `--strict --projected-rtz`
+to the differential command. It uses binary64 intermediates
+and currently covers only finite, uncompressed TRI0/TRI1 interior hits. It is
+expensive, does not implement miss or edge handling, and is not connected to
+the runtime. This experiment is
 informed by [AMD's public ray-triangle description](https://patents.google.com/patent/US20200193684A1/en);
 the tested results do not establish equivalence for other rays or inputs.
 
@@ -90,6 +93,9 @@ building the native probe:
 ```sh
 LD_LIBRARY_PATH="$HSA_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" python tools/check_native_rtz_sweep.py --probe /tmp/tuxbox-bvh-probe --code /tmp/tuxbox-bvh-probe.hsaco --proton /path/to/proton --prefix-amd /path/to/amd-prefix --prefix-nvidia /path/to/nvidia-prefix --amd-vulkan /path/to/radv.json --output /tmp/tuxbox-bvh-rtz-sweep.json
 ```
+
+Add `--oblique` for varied directions and magnitudes, or `--tied` for tied
+dominant axes. The default uses positive-Z unit rays.
 
 `--dump-precision /tmp/tuxbox-bvh-precision.bin` provides a game-independent
 reproducer: it varies one triangle coordinate by 0–15 float ULPs and dumps

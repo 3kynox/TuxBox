@@ -2,7 +2,10 @@
 #include "../independent-shaders/context.h"
 #include <algorithm>
 #include "owned_shadow_dxil.h"
-#include "verified_shadow_dxil.h"
+#include "verified_initialize_dxil.h"
+#include "verified_compare_dxil.h"
+#include "verified_commit_dxil.h"
+#include "verified_finalize_dxil.h"
 #include "guarded_shadow_dxil.h"
 using namespace shader_control;
 extern "C" int tb_shadow_create(ID3D12Device*, const unsigned char*, size_t, void**);
@@ -166,22 +169,22 @@ int main() {
         readback->Unmap(0, &none);
         if (!identical) throw std::runtime_error("replayed GPU copy differed");
         // GPU-source control: an earlier copy populates the source after Close.
-        // A single bounded GPU thread verifies every DWORD against the validated
+        // A parallel GPU threads verify every DWORD against the validated
         // private snapshot before copying any bytes into the shadow.
         updated[64] ^= 0x5a;
-        if ((size & 3) || size > 65536) throw std::runtime_error("verification control size unsupported");
+        if ((size & 3) || size > 64 * 1024 * 1024) throw std::runtime_error("verification control size unsupported");
         ID3D12Resource* shadow_resource{}; ID3D12Resource* validation_resource{}; UINT64 validation_address{};
         if (tb_shadow_gpu_resources(handle, &shadow_resource, &validation_resource, &validation_address) || !shadow_resource || !validation_resource || !validation_address)
             throw std::runtime_error("verification resources");
         auto guest_upload = buffer(ctx.device.Get(), static_cast<UINT>(size + 256), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
         auto guest_gpu = buffer(ctx.device.Get(), static_cast<UINT>(size + 128), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        auto verify_status = buffer(ctx.device.Get(), 28, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        auto verify_status = buffer(ctx.device.Get(), 36, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
         auto verify_output = buffer(ctx.device.Get(), 64, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-        auto verify_readback = buffer(ctx.device.Get(), 92, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+        auto verify_readback = buffer(ctx.device.Get(), 100, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
         auto verify_body_readback = buffer(ctx.device.Get(), static_cast<UINT>(size), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
         // Separate raw views deliberately include source, validation and
         // destination ranges one DWORD short for the negative controls.
-        D3D12_DESCRIPTOR_HEAP_DESC verify_heap_desc{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 22, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0};
+        D3D12_DESCRIPTOR_HEAP_DESC verify_heap_desc{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 26, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0};
         ComPtr<ID3D12DescriptorHeap> verify_heap;
         check(ctx.device->CreateDescriptorHeap(&verify_heap_desc, IID_PPV_ARGS(&verify_heap)), "verification heap");
         const UINT verify_stride = ctx.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
@@ -201,7 +204,7 @@ int main() {
             ctx.device->CreateShaderResourceView(validation_resource, &verify_srv, verify_cpu);
             verify_cpu.ptr += verify_stride;
         }
-        for (UINT n = 0; n < 7; ++n) {
+        for (UINT n = 0; n < 9; ++n) {
             D3D12_UNORDERED_ACCESS_VIEW_DESC view{};
             view.Format = DXGI_FORMAT_R32_TYPELESS;
             view.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
@@ -223,16 +226,24 @@ int main() {
             verify_params[n].DescriptorTable = {1, &verify_ranges[n]};
         }
         verify_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-        verify_params[2].Constants.Num32BitValues = 1;
+        verify_params[2].Constants.Num32BitValues = 3;
         D3D12_ROOT_SIGNATURE_DESC verify_desc{3, verify_params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
         ComPtr<ID3DBlob> verify_blob;
         check(D3D12SerializeRootSignature(&verify_desc, D3D_ROOT_SIGNATURE_VERSION_1, &verify_blob, nullptr), "verification root serialization");
         ComPtr<ID3D12RootSignature> verify_root;
         check(ctx.device->CreateRootSignature(0, verify_blob->GetBufferPointer(), verify_blob->GetBufferSize(), IID_PPV_ARGS(&verify_root)), "verification root");
         D3D12_COMPUTE_PIPELINE_STATE_DESC verify_pd{}; verify_pd.pRootSignature = verify_root.Get();
-        verify_pd.CS = {verified_shadow_dxil, sizeof(verified_shadow_dxil)};
-        ComPtr<ID3D12PipelineState> verify_pso;
-        check(ctx.device->CreateComputePipelineState(&verify_pd, IID_PPV_ARGS(&verify_pso)), "verification pipeline");
+        const D3D12_SHADER_BYTECODE verify_codes[] = {
+            {verified_initialize_dxil, sizeof(verified_initialize_dxil)},
+            {verified_compare_dxil, sizeof(verified_compare_dxil)},
+            {verified_commit_dxil, sizeof(verified_commit_dxil)},
+            {verified_finalize_dxil, sizeof(verified_finalize_dxil)},
+        };
+        ComPtr<ID3D12PipelineState> verify_pso[4];
+        for (UINT n = 0; n < 4; ++n) {
+            verify_pd.CS = verify_codes[n];
+            check(ctx.device->CreateComputePipelineState(&verify_pd, IID_PPV_ARGS(&verify_pso[n])), "verification pipeline");
+        }
         D3D12_ROOT_PARAMETER guarded_params[3]{};
         guarded_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
         guarded_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
@@ -256,23 +267,32 @@ int main() {
         transition(verify_list.Get(), guest_gpu.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         transition(verify_list.Get(), shadow_resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         verify_list->SetComputeRootSignature(verify_root.Get());
-        verify_list->SetPipelineState(verify_pso.Get());
         ID3D12DescriptorHeap* verify_heaps[] = {verify_heap.Get()};
         verify_list->SetDescriptorHeaps(1, verify_heaps);
         auto verify_gpu = verify_heap->GetGPUDescriptorHandleForHeapStart();
         const UINT verify_sizes[] = {static_cast<UINT>(size), static_cast<UINT>(size), static_cast<UINT>(size),
-            static_cast<UINT>(size), 0, static_cast<UINT>(size - 1), static_cast<UINT>(size + 4)};
-        for (UINT n = 0; n < 7; ++n) {
+            static_cast<UINT>(size), 0, static_cast<UINT>(size - 1), static_cast<UINT>(size + 4),
+            static_cast<UINT>(size), static_cast<UINT>(size)};
+        for (UINT n = 0; n < 9; ++n) {
             const UINT input_pair = n == 1 ? 1 : n == 2 ? 2 : 0;
             auto inputs = verify_gpu; inputs.ptr += UINT64(verify_stride) * (2 * input_pair);
             auto outputs = verify_gpu; outputs.ptr += UINT64(verify_stride) * (8 + 2 * n);
             verify_list->SetComputeRootDescriptorTable(0, inputs);
             verify_list->SetComputeRootDescriptorTable(1, outputs);
-            verify_list->SetComputeRoot32BitConstant(2, verify_sizes[n], 0);
-            verify_list->Dispatch(1, 1, 1);
-            D3D12_RESOURCE_BARRIER uav{};
-            uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-            verify_list->ResourceBarrier(1, &uav);
+            const UINT groups = static_cast<UINT>((size + 255) / 256);
+            const UINT groups_x = std::min(groups, 65535u);
+            const UINT groups_y = (groups + groups_x - 1) / groups_x;
+            const UINT actual_x = n == 7 ? groups_x - 1 : groups_x;
+            const UINT constants[] = {verify_sizes[n], n == 8 ? 0u : actual_x, groups_y};
+            verify_list->SetComputeRoot32BitConstants(2, 3, constants, 0);
+            for (UINT stage = 0; stage < 4; ++stage) {
+                verify_list->SetPipelineState(verify_pso[stage].Get());
+                verify_list->Dispatch(stage == 1 || stage == 2 ? actual_x : 1,
+                                      stage == 1 || stage == 2 ? groups_y : 1, 1);
+                D3D12_RESOURCE_BARRIER uav{};
+                uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+                verify_list->ResourceBarrier(1, &uav);
+            }
         }
         transition(verify_list.Get(), shadow_resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         transition(verify_list.Get(), verify_status.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -283,9 +303,9 @@ int main() {
         verify_list->SetComputeRootUnorderedAccessView(2, verify_output->GetGPUVirtualAddress());
         verify_list->Dispatch(1, 1, 1);
         transition(verify_list.Get(), verify_status.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
-        verify_list->CopyBufferRegion(verify_readback.Get(), 0, verify_status.Get(), 0, 28);
+        verify_list->CopyBufferRegion(verify_readback.Get(), 0, verify_status.Get(), 0, 36);
         transition(verify_list.Get(), verify_output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
-        verify_list->CopyBufferRegion(verify_readback.Get(), 28, verify_output.Get(), 0, 64);
+        verify_list->CopyBufferRegion(verify_readback.Get(), 36, verify_output.Get(), 0, 64);
         transition(verify_list.Get(), shadow_resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
         verify_list->CopyBufferRegion(verify_body_readback.Get(), 0, shadow_resource, 0, size);
         transition(verify_list.Get(), shadow_resource, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -294,13 +314,13 @@ int main() {
         std::memcpy(source_data.data() + 256, updated.data() + 64, size);
         upload(guest_upload.Get(), source_data.data(), source_data.size());
         auto inspect_verification = [&](UINT expected_status) {
-            D3D12_RANGE read{0,92}, no_write{}; void* bytes{};
+            D3D12_RANGE read{0,100}, no_write{}; void* bytes{};
             check(verify_readback->Map(0, &read, &bytes), "verification readback");
-            UINT statuses[7]{}; std::memcpy(statuses, bytes, sizeof(statuses));
+            UINT statuses[9]{}; std::memcpy(statuses, bytes, sizeof(statuses));
             std::array<UINT,16> failure_marker{}; failure_marker.fill(0xdeadbeefu);
             const void* expected_output = expected_status == 1 ? static_cast<const void*>(expected.data()) : static_cast<const void*>(failure_marker.data());
-            bool same = statuses[0] == expected_status && std::all_of(statuses + 1, statuses + 7, [](UINT status) { return status == 3; }) &&
-                std::memcmp(static_cast<unsigned char*>(bytes) + 28, expected_output, 64) == 0;
+            bool same = statuses[0] == expected_status && std::all_of(statuses + 1, statuses + 9, [](UINT status) { return status == 3; }) &&
+                std::memcmp(static_cast<unsigned char*>(bytes) + 36, expected_output, 64) == 0;
             verify_readback->Unmap(0, &no_write);
             D3D12_RANGE full{0, static_cast<SIZE_T>(size)};
             check(verify_body_readback->Map(0, &full, &bytes), "verification body readback");
@@ -368,7 +388,112 @@ int main() {
         check(pending_gate->Signal(1), "unblock pending copy");
         wait(pending_done.Get(), 1);
         if (tb_shadow_try_release(pending_handle) != 1) throw std::runtime_error("pending shadow not retired");
-        std::fprintf(receipt, "gpu_written_source_verified=1\nlast_dword_mismatch_preserves_shadow=1\nguarded_consumer_rejects_mismatch=1\nbounded_views_reject_invalid_sizes=1\ninflight_copy_after_list_reset=1\nvalidated_source_update=1\ninflight_update_rejected=1\nimmutable_gpu_snapshot=1\nmalformed_rejected=1\nblocked_gpu_retained=1\ntwo_fence_retirement=1\ntwo_gpu_queues=1\ndefault_heap_gpu_copy=1\ncompleted_list_copy_replay=1\nclosed_list_retention=1\nbody_bytes=%llu\n", size);
+        // Synthetic 128 KiB body: preserve the verified sphere graph, append
+        // unused blocks, and update the serialized and BVH length fields.
+        auto large = data;
+        constexpr UINT large_body = 128 * 1024;
+        large.resize(64 + large_body, 0);
+        const UINT64 large_total = large.size(), large_bytes = large_body;
+        const UINT large_blocks_minus_one = large_body / 64 - 1;
+        std::memcpy(large.data() + 32, &large_total, 8);
+        std::memcpy(large.data() + 40, &large_bytes, 8);
+        std::memcpy(large.data() + 68, &large_blocks_minus_one, 4);
+        void* large_handle{};
+        if (tb_shadow_create(ctx.device.Get(), large.data(), large.size(), &large_handle) != 0)
+            throw std::runtime_error("large validated shadow creation");
+        UINT64 large_address{}, large_size{}, large_validation_address{};
+        ID3D12Resource *large_shadow{}, *large_validation{};
+        if (tb_shadow_info(large_handle, &large_address, &large_size) || large_size != large_body ||
+            tb_shadow_gpu_resources(large_handle, &large_shadow, &large_validation, &large_validation_address))
+            throw std::runtime_error("large shadow information");
+        auto large_source_upload = buffer(ctx.device.Get(), large_body, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
+        auto large_source = buffer(ctx.device.Get(), large_body, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        auto large_status = buffer(ctx.device.Get(), 4, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        auto large_readback = buffer(ctx.device.Get(), large_body + 4, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+        D3D12_DESCRIPTOR_HEAP_DESC large_hd{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 4, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0};
+        ComPtr<ID3D12DescriptorHeap> large_heap;
+        check(ctx.device->CreateDescriptorHeap(&large_hd, IID_PPV_ARGS(&large_heap)), "large heap");
+        auto large_cpu = large_heap->GetCPUDescriptorHandleForHeapStart();
+        D3D12_SHADER_RESOURCE_VIEW_DESC large_srv{};
+        large_srv.Format = DXGI_FORMAT_R32_TYPELESS;
+        large_srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        large_srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        large_srv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+        large_srv.Buffer.NumElements = large_body / 4;
+        ctx.device->CreateShaderResourceView(large_source.Get(), &large_srv, large_cpu);
+        large_cpu.ptr += verify_stride;
+        ctx.device->CreateShaderResourceView(large_validation, &large_srv, large_cpu);
+        large_cpu.ptr += verify_stride;
+        D3D12_UNORDERED_ACCESS_VIEW_DESC large_uav{};
+        large_uav.Format = DXGI_FORMAT_R32_TYPELESS;
+        large_uav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        large_uav.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+        large_uav.Buffer.NumElements = large_body / 4;
+        ctx.device->CreateUnorderedAccessView(large_shadow, nullptr, &large_uav, large_cpu);
+        large_cpu.ptr += verify_stride;
+        large_uav.Buffer.NumElements = 1;
+        ctx.device->CreateUnorderedAccessView(large_status.Get(), nullptr, &large_uav, large_cpu);
+        ComPtr<ID3D12CommandAllocator> large_allocator; ComPtr<ID3D12GraphicsCommandList> large_list;
+        check(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&large_allocator)), "large allocator");
+        check(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, large_allocator.Get(), nullptr, IID_PPV_ARGS(&large_list)), "large list");
+        if (tb_shadow_retain_recording(large_handle) != 0) throw std::runtime_error("large recording hold");
+        transition(large_list.Get(), large_source.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+        large_list->CopyBufferRegion(large_source.Get(), 0, large_source_upload.Get(), 0, large_body);
+        transition(large_list.Get(), large_source.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        transition(large_list.Get(), large_shadow, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        large_list->SetComputeRootSignature(verify_root.Get());
+        ID3D12DescriptorHeap* large_heaps[] = {large_heap.Get()}; large_list->SetDescriptorHeaps(1, large_heaps);
+        auto large_gpu = large_heap->GetGPUDescriptorHandleForHeapStart();
+        large_list->SetComputeRootDescriptorTable(0, large_gpu);
+        large_gpu.ptr += UINT64(verify_stride) * 2;
+        large_list->SetComputeRootDescriptorTable(1, large_gpu);
+        constexpr UINT large_groups = (large_body + 255) / 256;
+        constexpr UINT large_groups_x = 16, large_groups_y = large_groups / large_groups_x;
+        const UINT large_constants[] = {large_body, large_groups_x, large_groups_y};
+        large_list->SetComputeRoot32BitConstants(2, 3, large_constants, 0);
+        for (UINT stage = 0; stage < 4; ++stage) {
+            large_list->SetPipelineState(verify_pso[stage].Get());
+            large_list->Dispatch(stage == 1 || stage == 2 ? large_groups_x : 1,
+                                 stage == 1 || stage == 2 ? large_groups_y : 1, 1);
+            D3D12_RESOURCE_BARRIER uav{}; uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+            large_list->ResourceBarrier(1, &uav);
+        }
+        transition(large_list.Get(), large_status.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        large_list->CopyBufferRegion(large_readback.Get(), 0, large_status.Get(), 0, 4);
+        transition(large_list.Get(), large_shadow, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        large_list->CopyBufferRegion(large_readback.Get(), 4, large_shadow, 0, large_body);
+        transition(large_list.Get(), large_shadow, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        check(large_list->Close(), "close large list");
+        upload(large_source_upload.Get(), large.data() + 64, large_body);
+        if (tb_shadow_hold(large_handle, complete.Get(), 5)) throw std::runtime_error("large fence hold");
+        ID3D12CommandList* large_lists[] = {large_list.Get()};
+        ctx.queue->ExecuteCommandLists(1, large_lists);
+        check(ctx.queue->Signal(complete.Get(), 5), "large signal"); wait(complete.Get(), 5);
+        auto inspect_large = [&](UINT want) {
+            D3D12_RANGE read{0, large_body + 4}, no_write{}; void* bytes{};
+            check(large_readback->Map(0, &read, &bytes), "large readback");
+            UINT status{}; std::memcpy(&status, bytes, 4);
+            bool matches = std::memcmp(static_cast<unsigned char*>(bytes) + 4, large.data() + 64, large_body) == 0;
+            large_readback->Unmap(0, &no_write);
+            if (status != want || !matches) throw std::runtime_error("large parallel verification mismatch");
+        };
+        inspect_large(1);
+        ComPtr<ID3D12CommandAllocator> large_reset_allocator; ComPtr<ID3D12GraphicsCommandList> large_reset;
+        check(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&large_reset_allocator)), "large reset allocator");
+        check(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, large_reset_allocator.Get(), nullptr, IID_PPV_ARGS(&large_reset)), "large reset list");
+        transition(large_reset.Get(), large_status.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        submit_and_wait(ctx.device.Get(), ctx.queue.Get(), large_reset.Get());
+        auto altered_large = large;
+        altered_large.back() ^= 0x5a;
+        upload(large_source_upload.Get(), altered_large.data() + 64, large_body);
+        if (tb_shadow_hold(large_handle, complete.Get(), 6)) throw std::runtime_error("large replay hold");
+        ctx.queue->ExecuteCommandLists(1, large_lists);
+        check(ctx.queue->Signal(complete.Get(), 6), "large replay signal"); wait(complete.Get(), 6);
+        inspect_large(2);
+        large_list.Reset();
+        if (tb_shadow_release_recording(large_handle) || tb_shadow_try_release(large_handle) != 1)
+            throw std::runtime_error("large shadow retirement");
+        std::fprintf(receipt, "large_parallel_body=131072\nlarge_last_dword_mismatch=1\nmultidimensional_dispatch=1\nunderdispatch_rejected=1\ngpu_written_source_verified=1\nlast_dword_mismatch_preserves_shadow=1\nguarded_consumer_rejects_mismatch=1\nparallel_verification=1\nbounded_views_reject_invalid_sizes=1\ninflight_copy_after_list_reset=1\nvalidated_source_update=1\ninflight_update_rejected=1\nimmutable_gpu_snapshot=1\nmalformed_rejected=1\nblocked_gpu_retained=1\ntwo_fence_retirement=1\ntwo_gpu_queues=1\ndefault_heap_gpu_copy=1\ncompleted_list_copy_replay=1\nclosed_list_retention=1\nbody_bytes=%llu\n", size);
     } catch (const std::exception& e) { std::fprintf(receipt, "error=%s\n", e.what()); result = 1; }
     return std::fclose(receipt) ? 2 : result;
 }
