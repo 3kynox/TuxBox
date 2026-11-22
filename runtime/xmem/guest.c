@@ -158,8 +158,8 @@ static int write_watch(void)
     SYSTEM_INFO info;
     GetSystemInfo(&info);
     SIZE_T page = info.dwPageSize;
-    volatile BYTE *base = VirtualAlloc(NULL, 4 * page,
-                                       MEM_COMMIT | MEM_RESERVE | MEM_WRITE_WATCH, PAGE_READWRITE);
+    volatile BYTE *base = XMemVirtualAlloc(NULL, 4 * page,
+        MEM_COMMIT | MEM_RESERVE | MEM_WRITE_WATCH | MEM_TOP_DOWN, 1, PAGE_READWRITE);
     REQUIRE(base);
     base[7] = 1;
     base[2 * page + 7] = 2;
@@ -209,6 +209,14 @@ static int write_watch(void)
     REQUIRE(GetLastError() == ERROR_NOT_SUPPORTED);
     XMemSetOption(NULL);
     REQUIRE(GetLastError() == ERROR_INVALID_PARAMETER);
+    REQUIRE(VirtualFree((void *)base, 0, MEM_RELEASE));
+    base = XMemVirtualAlloc(NULL, 4 * page, MEM_RESERVE | MEM_WRITE_WATCH, 1, PAGE_NOACCESS);
+    REQUIRE(base);
+    REQUIRE(XMemVirtualAlloc((void *)base, 4 * page, MEM_COMMIT, 1, PAGE_READWRITE) == base);
+    base[3 * page] = 1;
+    count = 4; granularity = 0;
+    REQUIRE(!XMemGetWriteWatch(0, (void *)base, 4 * page, output.pages, &count, &granularity));
+    REQUIRE(count == 1 && output.pages[0] == (void *)(base + 3 * page));
     REQUIRE(VirtualFree((void *)base, 0, MEM_RELEASE));
     return 0;
 }
@@ -415,7 +423,7 @@ int wmain(int argc, wchar_t **argv)
     REQUIRE(app_local_provider());
     if (watch_only) {
         REQUIRE(!write_watch());
-        const char result[] = "xmem-watch PASS initial=2 reset=2 next=1 guards=2 invalid=1 pause=2 resume=3\n";
+        const char result[] = "xmem-watch PASS initial=2 reset=2 next=1 guards=2 invalid=1 pause=2 resume=3 allocations=2\n";
         if (report && (fputs(result, report) == EOF || fclose(report))) return 2;
         fputs(result, stdout);
         return 0;

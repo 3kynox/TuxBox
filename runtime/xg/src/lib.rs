@@ -24,6 +24,111 @@ pub struct BufferDesc {
     options: u32,
 }
 
+#[repr(C)]
+pub struct TileShape {
+    width: u32,
+    height: u32,
+    depth: u32,
+}
+
+/// Format storage in bytes per element and pixels per element, for the
+/// color formats already supported by TuxBox's texture-layout provider.
+fn tile_format(format: u32) -> Option<(u32, u32)> {
+    Some(match format {
+        1..=4 => (16, 1),
+        9..=18 => (8, 1),
+        23..=39 | 41..=43 | 87 | 88 | 90..=93 => (4, 1),
+        48..=54 | 56..=59 => (2, 1),
+        60..=65 => (1, 1),
+        70..=72 | 79..=81 => (8, 4),
+        73..=78 | 82..=84 | 94..=99 => (16, 4),
+        _ => return None,
+    })
+}
+
+/// Compute the 64 KiB tile dimensions for supported buffers and 2D formats.
+///
+/// # Safety
+/// Each non-null output must point to a writable `TileShape`.
+#[unsafe(export_name = "XGComputeTileShape")]
+unsafe extern "system" fn compute_tile_shape(
+    dimension: u32,
+    format: u32,
+    bytes_per_element: u32,
+    samples: u32,
+    pixels: *mut TileShape,
+    elements: *mut TileShape,
+) -> i32 {
+    if dimension != 3 && samples != 1 {
+        return E_INVALIDARG;
+    }
+    let (element_bytes, block) = match (dimension, format) {
+        (1, 0) if bytes_per_element <= 1 => (1, 0),
+        (1, _) => return E_INVALIDARG,
+        (2 | 4, _) => return E_NOTIMPL,
+        (3, 0) => (bytes_per_element, 0),
+        (3, _) => match tile_format(format) {
+            Some(format) => format,
+            None => return E_NOTIMPL,
+        },
+        _ => return E_NOTIMPL,
+    };
+    let (mut width, mut height) = if dimension == 1 {
+        (65536, 1)
+    } else {
+        match element_bytes {
+            1 => (256, 256),
+            2 => (256, 128),
+            4 => (128, 128),
+            8 => (128, 64),
+            16 => (64, 64),
+            _ => return E_INVALIDARG,
+        }
+    };
+    if dimension == 3 {
+        match samples {
+            1 => (),
+            2 => height /= 2,
+            4 => {
+                width /= 2;
+                height /= 2;
+            }
+            8 => {
+                width /= 2;
+                height /= 4;
+            }
+            _ => return E_INVALIDARG,
+        }
+    }
+    // Native writes the element shape first; this also preserves the result
+    // when a caller deliberately aliases the two output pointers.
+    unsafe {
+        if !elements.is_null() {
+            elements.write(TileShape {
+                width,
+                height,
+                depth: 1,
+            });
+        }
+        if !pixels.is_null() {
+            pixels.write(if block == 0 {
+                TileShape {
+                    width: 0,
+                    height: 0,
+                    depth: 0,
+                }
+            } else {
+                TileShape {
+                    width: width * block,
+                    height: height * block,
+                    depth: 1,
+                }
+            });
+        }
+    }
+    S_OK
+}
+
 /// Compute a buffer's linear allocation layout.
 ///
 /// # Safety

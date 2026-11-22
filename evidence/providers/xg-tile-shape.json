@@ -1,0 +1,28 @@
+{
+  "scope": "XGComputeTileShape ordinal 7 for buffers and a bounded set of 2D color formats; HRESULT, output and guards compared against supplied Xbox XG DLL. 1D/3D texture tile shapes remain unsupported.",
+  "host": "1793301796 experimental-11.0-20261027b-x86_64",
+  "guest_sha256": "005ae30375f639df683db07c2217b7a393c1c962f8d7df02f8e392269a544468",
+  "guest_source_sha256": "f4c7de4486efb072984b0f50b1c8bf76e83b949723d05e83a2fbfeef990a0c9c",
+  "xmem_sha256": "9b3a3c2435f8f90e1dc30067cb72de6e7b2a516c38fc6fe42f13d7eeaef6babd",
+  "cases": 7310,
+  "checks": [
+    "78 color and block-compressed formats",
+    "unknown-format explicit element sizes",
+    "1, 2, 4 and 8 samples plus invalid sample counts",
+    "buffer, 1D, 2D and 3D dimensions",
+    "null and aliased output pointers",
+    "output guards and no writes on invalid arguments"
+  ],
+  "runs": {
+    "original": {
+      "dll_sha256": "fee85ef80b6fe47edaa083270933c08a37f9e27e7541f86f731daecf7ead1493",
+      "guest_receipt": "xg-tile PASS 7310 cases, nullable and aliased outputs",
+      "result_sha256": "e9205a40cc998aab6fb2cb5dbcec2840f479738fad4660dcd4becb5f1a05a446"
+    },
+    "tuxbox": {
+      "dll_sha256": "6cc89f57e7e90d83f812008f333290f88cfea86331bc8b53bd3432e689350675",
+      "guest_receipt": "xg-tile PASS 7310 cases, nullable and aliased outputs",
+      "result_sha256": "e9205a40cc998aab6fb2cb5dbcec2840f479738fad4660dcd4becb5f1a05a446"
+    }
+  }
+}

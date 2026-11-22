@@ -8,7 +8,7 @@ use windows_sys::Win32::System::Memory::{
     VirtualAlloc,
 };
 
-use windows_sys::Win32::System::SystemServices::MEM_TOP_DOWN;
+use windows_sys::Win32::System::SystemServices::{MEM_TOP_DOWN, MEM_WRITE_WATCH};
 
 /// Console query result layout; its partition metadata is not yet supported.
 #[repr(C)]
@@ -147,12 +147,11 @@ pub unsafe extern "system" fn virtual_alloc(
         }
     }
     let operation = allocation_type & !MEM_TOP_DOWN;
-    if profile != 1
-        || !matches!(
-            (operation, protect),
-            (MEM_RESERVE, PAGE_NOACCESS) | (MEM_COMMIT, PAGE_READWRITE)
-        )
-    {
+    let plain = matches!((operation, protect),
+        (MEM_RESERVE, PAGE_NOACCESS) | (MEM_COMMIT, PAGE_READWRITE));
+    let watched = (operation == MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH && protect == PAGE_READWRITE)
+        || (operation == MEM_RESERVE | MEM_WRITE_WATCH && protect == PAGE_NOACCESS);
+    if profile != 1 || !(plain || watched) {
         let description = format!(
             "TuxBox: unsupported XMemVirtualAlloc address={address:p} bytes={bytes} type={allocation_type:#x} profile={profile:#x} protect={protect:#x}\0"
         );

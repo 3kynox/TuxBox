@@ -1,5 +1,5 @@
 {
-  "scope": "XMemGetWriteWatch ordinal 17, XMemResumeWriteWatch ordinal 24, and the supported write-watch suspension option (0x10000) in XMemSetOption ordinal 27. Other console options are not implemented.",
+  "scope": "XMemVirtualAlloc write-watch profile 1, XMemGetWriteWatch ordinal 17, XMemResumeWriteWatch ordinal 24, and the supported write-watch suspension option (0x10000) in XMemSetOption ordinal 27. Other console options are not implemented.",
   "reference_dll_sha256": "adc182acae5340b0618a3d57a239ed2e8deb305dbefc49439cb8a2d06c7ce812",
   "native_control": "python tools/check_xmem_watch_native.py /path/to/xmem.dll",
   "native_method": "Runs the hash-pinned console query, option and resume routines in a temporary mapped PE. Its imported GetWriteWatch is replaced with a native six-argument stub, and the harness checks the paused and resumed transitions.",
@@ -7,18 +7,21 @@
   "guest_checks": [
     "Reserve and commit four Windows write-watch pages, write two and compare the XMem query against the host GetWriteWatch result and surrounding guards.",
     "Reset through XMemGetWriteWatch, modify a different page, check the new result and compare invalid flag behavior with the host. Verify name and ordinal 17 identity.",
-    "Set suspension option 0x10000: paused queries return 1003 without writes, resume fails while suspension is requested, clearing the low 32-bit option value leaves queries paused until successful resume. Verify ordinals 24 and 27 and reject unsupported options."
+    "Set suspension option 0x10000: paused queries return 1003 without writes, resume fails while suspension is requested, clearing the low 32-bit option value leaves queries paused until successful resume. Verify ordinals 24 and 27 and reject unsupported options.",
+    "Allocate write-watch regions via XMemVirtualAlloc in both reserve+commit and reserve-then-commit modes; modify pages and check the dirty-page result."
   ],
   "limits": [
     "Only option ID 0x10000 is supported. Other IDs return ERROR_NOT_SUPPORTED and are not claimed as complete XMemSetOption behavior.",
-    "The control allocates pages through desktop VirtualAlloc. The existing XMemVirtualAlloc implementation does not yet support the write-watch allocation profile.",
-    "The native reference control uses a stub GetWriteWatch. Console memory manager integration and cross-thread console behavior have not been measured."
+    "XMemVirtualAlloc supports only the two checked CPU write-watch profiles; other page-protection and Xbox-specific modes remain unsupported.",
+    "The native reference controls use stub GetWriteWatch and NtAllocateVirtualMemoryEx. Real console OS allocation and cross-thread behavior have not been measured."
   ],
   "source_sha256": {
     "tools/check_xmem_watch_native.py": "c6cbb5bff68b6009f77112c117e57a68cecb22e1f8c4e95d2843541568e503e2",
     "tools/reference/xmem-tag/watch_native.c": "1a795453d2b1a393001070274af3cc517ff8ae4ef4e94f062200860c589413ba",
-    "runtime/xmem/guest.c": "9e4fb9576e01bd3397c9ce3262eef88dc81eb677e3ca83537136d4265f36c652",
-    "runtime/xmem/src/virtual_memory.rs": "b5262797339ed1fd857895df5cce08f2bcca390f04d975e9a70f723e7820bb5b"
+    "tools/check_xmem_virtual_watch_native.py": "0cf60bf7f1cdf6172b06ee08c4399390faa4216bed38838994c92de353b93695",
+    "tools/reference/xmem-tag/virtual_watch_native.c": "d87bde04f5bf44c31c1b70c55e3e7acb494849fcd5d6661616148765266d3715",
+    "runtime/xmem/guest.c": "0ad47d0f524b89b897986d0a85b94edde49797107478f263fbcda42fcccba2b3",
+    "runtime/xmem/src/virtual_memory.rs": "429870bab949874daf0e558fa27e42e03b337624e661bae915831c69831d4a3b"
   },
   "run": {
     "schema": 1,
@@ -31,15 +34,15 @@
     "backend": "proton",
     "provider": "1793301796 experimental-11.0-20261027b-x86_64",
     "binaries_sha256": {
-      "xmem-smoke/xmem-smoke.exe": "fa48d59ce1fe83da6728615102e73650503ee821d352bdfb82d5231b1fc07303",
-      "xmem-smoke/xmem.dll": "b044b7d37537d8c975a91a97fdcb9e538d437978c1e5eea94539efe8d55ec619"
+      "xmem-smoke/xmem-smoke.exe": "4ffbe18b1c03eeb18fc507b9ce5fd9b0a20b7f0dc19a14883ce3332ef8524df3",
+      "xmem-smoke/xmem.dll": "3903f6a91dce22d65e064a5cc281fe557a6bbacb7306f1f44edef0152607bc20"
     },
     "checks": [
       {
         "gate": "xmem-watch",
         "passed": true,
         "exit_code": 0,
-        "receipt": "xmem-watch PASS initial=2 reset=2 next=1 guards=2 invalid=1 pause=2 resume=3"
+        "receipt": "xmem-watch PASS initial=2 reset=2 next=1 guards=2 invalid=1 pause=2 resume=3 allocations=2"
       },
       {
         "gate": "xmem-hooks",
@@ -72,5 +75,8 @@
         "receipt": "xmem-pages PASS cpu-pages=2 remapped-bytes=131072 stale-and-foreign-rejected=1"
       }
     ]
-  }
+  },
+  "native_allocation_control": "python tools/check_xmem_virtual_watch_native.py /path/to/xmem.dll",
+  "native_allocation_result": "xmem-native-virtual-watch PASS profiles=4 flags=preserved",
+  "native_allocation_method": "Invokes the hash-pinned supplied allocator with standard NT mode and controlled NtAllocateVirtualMemoryEx and memset callbacks. For reserve plus commit with PAGE_READWRITE, and reserve only with PAGE_NOACCESS, MEM_WRITE_WATCH passes through unchanged both with and without MEM_TOP_DOWN. The NT callback is a stub; native success-path OS allocation was not executed."
 }
