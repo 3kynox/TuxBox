@@ -1,31 +1,38 @@
-//! Subsurface indirect setup, Frosty global entries 847 and 856. One 8x8 group produces
+//! Subsurface indirect setup for selected Frosty global shaders. One 8x8 group produces
 //! one flag word. Both append elections are explicitly intersected with VCC,
 //! which this kernel sets once to (local_y * 8 + local_x == 0).
 use super::{compute_group, packed_root::matches_program, Enc, Insn, Opnd, ShaderExtract, Stage};
 
 pub(super) fn prepare(ex: &ShaderExtract, insns: &mut [Insn]) -> bool {
-    let depth_only = matches_program(&ex.isa, 1008, 0x95a3dfc1f02859bd);
+    // The first two shaders additionally classify each tile into one of two
+    // append lists. All three use the same lane-zero reservation sequence.
+    let variant = [
+        (1008, 0x95a3dfc1f02859bd, 0x080, 0x258, 0x290),
+        (1308, 0xfaf384b3946cc27a, 0x080, 0x384, 0x3bc),
+        (1212, 0x954cfb3db0dccf9c, 0x080, 0x324, 0x35c),
+    ].into_iter().find(|&(len, hash, _, _, _)| matches_program(&ex.isa, len, hash));
     if ex.stage != Stage::Compute || compute_group(ex) != [8, 8, 1]
         || ex.entry.as_deref() != Some("SetupIndirectCS")
-        || !(depth_only || matches_program(&ex.isa, 1104, 0x3bc35cb76f547697))
+        || !(variant.is_some() || matches_program(&ex.isa, 1104, 0x3bc35cb76f547697))
     {
         return false;
     }
     for ins in insns {
-        if depth_only {
-            if [0x080, 0x258].contains(&ins.offset) {
+        if let Some((_, _, first_sync, second_sync, election)) = variant {
+            if [first_sync, second_sync].contains(&ins.offset) {
                 ins.mnemonic = "tb_subsurface_group_sync".into();
-            } else if [0x288, 0x298, 0x2d4, 0x2e4, 0x350, 0x360, 0x39c, 0x3ac].contains(&ins.offset) {
+            } else if [election - 8, election + 8, election + 0x44, election + 0x54,
+                       election + 0xc0, election + 0xd0, election + 0x10c, election + 0x11c].contains(&ins.offset) {
                 ins.enc = Enc::Vop1;
                 ins.op = 1;
                 ins.mnemonic = "v_mov_b32".into();
                 ins.src = vec![Opnd::ConstInt(0)];
-            } else if [0x290, 0x358].contains(&ins.offset) {
+            } else if [election, election + 0xc8].contains(&ins.offset) {
                 ins.enc = Enc::Sop1;
                 ins.op = 3;
                 ins.mnemonic = "s_mov_b32".into();
                 ins.src = vec![Opnd::ConstInt(0)];
-            } else if [0x2e0, 0x3a8].contains(&ins.offset) {
+            } else if [election + 0x50, election + 0x118].contains(&ins.offset) {
                 ins.enc = Enc::Sop1;
                 ins.op = 3;
                 ins.mnemonic = "s_mov_b32".into();
