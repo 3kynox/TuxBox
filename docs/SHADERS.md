@@ -203,6 +203,8 @@ The five remaining global raster programs contain pixel-shader EXEC elections: t
 
 These programs remain untranslated. Desktop pixel shaders cannot request a fixed 64-lane wave, and replacing a wave reservation with individual atomics can select a different subset when a list overflows. Helper invocations and downstream list ordering also need verification before enabling a translation.
 
+A synthetic pixel draw used 32-lane waves on the tested NVIDIA GPU and 64-lane waves on Radeon. Both exposed helper-lane neighbors. The control checks host allocation and guards; it does not establish the Xbox shader's selected subset. [Host GPU results](../evidence/matrix-awakens/pixel-wave-hosts.json)
+
 ## Pixel shader stencil export
 
 Frosty’s global pixel shaders 1748 and 1763 read visibility data and write depth and a stencil byte for each surviving pixel. Radeon supports this output directly. On the tested RTX, TuxBox routes the stencil byte to an extra integer render target and copies it back to the depth/stencil texture. This path handles a single-sample texture with full-byte replacement on a passing fragment. In two draws per shader, all 128 depth and stencil pairs matched on each GPU, including pixels discarded by the shader and pixels rejected by the depth test. [NVIDIA readbacks](../evidence/matrix-awakens/stencil-export-nvidia.json) · [Radeon readbacks](../evidence/matrix-awakens/stencil-export-amd.json)
