@@ -93,6 +93,13 @@ runtime. This experiment is
 informed by [AMD's public ray-triangle description](https://patents.google.com/patent/US20200193684A1/en);
 the tested results do not establish equivalence for other rays or inputs.
 
+An optional `--wide-fallback` in the edge and performance controls uses
+binary64 only for exceptional-range operations and constructs float32 bits
+explicitly. It matches the sampled extreme-scale and underflow controls on
+both GPUs, but has not established behavior for every floating-point input or
+device capability. Its sample microbenchmark is slower than the float-only
+variant; neither variant is enabled for games.
+
 For a repeatable broader check, run the generated synthetic sweep after
 building the native probe:
 
@@ -107,7 +114,7 @@ dominant axes, `--miss` for offset rays, `--edge` for triangle-edge rays, or
 
 To replay native edge, degenerate, or extreme-scale cases using runtime-fed
 GPU data, generate a dump with `--dump-edges`, `--dump-degenerate`,
-`--dump-scales`, or `--dump-mixed`, then pass it to `tools/check_native_bvh_edges.py` with the
+`--dump-scales`, `--dump-mixed`, or `--dump-underflow`, then pass it to `tools/check_native_bvh_edges.py` with the
 same Proton and prefix options as the differential tool above. The scale
 comparison currently returns nonzero because of the documented mismatches.
 The mixed-exponent comparison also returns nonzero: three of ten sampled

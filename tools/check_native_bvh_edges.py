@@ -31,9 +31,10 @@ def main():
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--offset", type=int, default=0)
     p.add_argument("--limit", type=int)
+    p.add_argument("--wide-fallback", action="store_true", help="test experimental exceptional-range fallback")
     args = p.parse_args()
     raw = args.dump.read_bytes()
-    if raw[:8] not in (b"TXBVE001", b"TXBVD001", b"TXBVS001", b"TXBVM001", b"TXBVT002") or (len(raw) - 8) % (27 * 4):
+    if raw[:8] not in (b"TXBVE001", b"TXBVD001", b"TXBVS001", b"TXBVM001", b"TXBVU001", b"TXBVT002") or (len(raw) - 8) % (27 * 4):
         raise ValueError("invalid native edge dump")
     total = (len(raw) - 8) // (27 * 4)
     stop = min(total, args.offset + args.limit) if args.limit is not None else total
@@ -53,17 +54,22 @@ def main():
 }\n'''
     scope = {b"TXBVT002": "serialized-leaf edges", b"TXBVD001": "parallel and degenerate triangles",
              b"TXBVS001": "extreme triangle scales", b"TXBVM001": "mixed-exponent triangle scales",
+             b"TXBVU001": "underflow-boundary triangle scales",
              b"TXBVE001": "synthetic triangle edges"}[raw[:8]]
     report = {"scope": f"Dynamic seeded-UAV {scope}: native gfx1036 versus float32 RTZ candidate; no general equivalence claim",
               "native_dump_sha256": hashlib.sha256(raw).hexdigest(), "offset": args.offset,
-              "cases": len(cases), "hlsl_sha256": hashlib.sha256(source.encode()).hexdigest(), "adapters": {}}
+              "wide_fallback": args.wide_fallback, "cases": len(cases),
+              "hlsl_sha256": hashlib.sha256(source.encode()).hexdigest(), "adapters": {}}
     with TemporaryDirectory(prefix="tuxbox-bvh-edges-") as directory:
         root = Path(directory)
         hlsl, cso = root / "edge.hlsl", root / "edge.cso"
         hlsl.write_text(source)
         dxc = Path(find_dxc(None))
-        subprocess.run([dxc, "-T", "cs_6_0", "-E", "main", "-Gis", "-D", "TUXBOX_RTZ_FLOAT32=1",
-                        hlsl, "-Fo", cso], check=True)
+        command = [dxc, "-T", "cs_6_0", "-E", "main", "-Gis", "-D", "TUXBOX_RTZ_FLOAT32=1",
+                   hlsl, "-Fo", cso]
+        if args.wide_fallback:
+            command += ["-D", "TUXBOX_RTZ_WIDE_FALLBACK=1"]
+        subprocess.run(command, check=True)
         subprocess.run([dxc.with_name("dxv"), cso], check=True)
         report["dxil_sha256"] = hashlib.sha256(cso.read_bytes()).hexdigest()
         toolchain = Toolchain()

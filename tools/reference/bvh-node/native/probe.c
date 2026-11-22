@@ -143,16 +143,18 @@ static const int mixed_exponents[10][3] = {
     {100, -100, 0}, {120, -120, 0}, {110, -100, 0}, {-100, 100, 0},
     {100, 0, -100}, {0, 100, -100}, {-120, 120, 0}, {60, -60, 0},
     {0, 0, -120},   {0, 0, 100}};
-static int dump_mixed(FILE *file, const uint32_t *out) {
-  if (fwrite("TXBVM001", 1, 8, file) != 8)
+static const int underflow_exponents[10][3] = {
+    {-63, -64, 0}, {-63, -63, 0}, {-62, -63, 0},   {-30, -96, 0}, {-80, -46, 0},
+    {-126, 0, 0},  {-125, 0, 0},  {-100, -30, 20}, {0, 0, -126},  {0, 0, 125}};
+static int dump_mixed(FILE *file, const uint32_t *out, int underflow) {
+  if (fwrite(underflow ? "TXBVU001" : "TXBVM001", 1, 8, file) != 8)
     return 0;
   for (unsigned i = 0; i < 10; i++) {
     const uint32_t *node = out + 8192 + i * 16;
     float sx, sy, sz;
-    uint32_t z = (uint32_t)(mixed_exponents[i][2] + 127) << 23;
     memcpy(&sx, node + 3, 4);
     memcpy(&sy, node + 7, 4);
-    memcpy(&sz, &z, 4);
+    memcpy(&sz, node + 11, 4);
     float origin[3] = {sx * .25f, sy * .25f, -sz};
     float direction[3] = {0, 0, 1};
     if (!write_edge_record(file, node, origin, direction, out + 2852 + i * 4))
@@ -169,7 +171,8 @@ int main(int argc, char **argv) {
                       strcmp(argv[2], "--dump-edges") == 0 ||
                       strcmp(argv[2], "--dump-degenerate") == 0 ||
                       strcmp(argv[2], "--dump-scales") == 0 ||
-                      strcmp(argv[2], "--dump-mixed") == 0)) &&
+                      strcmp(argv[2], "--dump-mixed") == 0 ||
+                      strcmp(argv[2], "--dump-underflow") == 0)) &&
       !(argc == 5 && (strcmp(argv[2], "--retail") == 0 ||
                       strcmp(argv[2], "--retail-triangles") == 0 ||
                       strcmp(argv[2], "--retail-oblique") == 0 ||
@@ -180,7 +183,8 @@ int main(int argc, char **argv) {
     fprintf(stderr,
             "usage: %s probe.hsaco "
             "[--dump|--dump-triangles|--dump-precision|--dump-fractional|--"
-            "dump-edges|--dump-degenerate|--dump-scales|--dump-mixed "
+            "dump-edges|--dump-degenerate|--dump-scales|--dump-mixed|--dump-"
+            "underflow "
             "output.bin | "
             "--retail|--retail-triangles|--retail-oblique|--retail-tied|--"
             "retail-miss|--retail-edge|--retail-nearedge "
@@ -542,8 +546,13 @@ int main(int argc, char **argv) {
   }
   for (unsigned i = 0; i < 10; i++) {
     uint32_t *node = (uint32_t *)out + 8192 + i * 16;
-    node[3] = ((uint32_t)(mixed_exponents[i][0] + 127) << 23) + 1u;
-    node[7] = ((uint32_t)(mixed_exponents[i][1] + 127) << 23) + 3u;
+    const int (*exponents)[3] =
+        argc == 4 && strcmp(argv[2], "--dump-underflow") == 0
+            ? underflow_exponents
+            : mixed_exponents;
+    node[3] = ((uint32_t)(exponents[i][0] + 127) << 23) + 1u;
+    node[7] = ((uint32_t)(exponents[i][1] + 127) << 23) + 3u;
+    node[11] = (uint32_t)(exponents[i][2] + 127) << 23;
     node[15] = 9;
   }
   hsa_signal_t signal;
@@ -755,7 +764,9 @@ int main(int argc, char **argv) {
     } else if (strcmp(argv[2], "--dump-scales") == 0) {
       ok = dump_scales(dump, out);
     } else if (strcmp(argv[2], "--dump-mixed") == 0) {
-      ok = dump_mixed(dump, out);
+      ok = dump_mixed(dump, out, 0);
+    } else if (strcmp(argv[2], "--dump-underflow") == 0) {
+      ok = dump_mixed(dump, out, 1);
     } else {
       int fractional_dump = strcmp(argv[2], "--dump-fractional") == 0;
       int precision = strcmp(argv[2], "--dump-precision") == 0;

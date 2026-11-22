@@ -29,6 +29,7 @@ def main():
     parser.add_argument("--prefix-nvidia", type=Path, required=True)
     parser.add_argument("--amd-vulkan", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--wide-fallback", action="store_true", help="test experimental exceptional-range fallback")
     args = parser.parse_args()
     source = ROOT / "tools/reference/bvh-node/perf"
     with TemporaryDirectory(prefix="tuxbox-bvh-perf-") as directory:
@@ -46,8 +47,11 @@ def main():
                                 capture_output=True, text=True, env=env)
         dxc = Path(find_dxc(None))
         cso = work / "f32.cso"
-        subprocess.run([dxc, "-T", "cs_6_0", "-E", "main", "-Gis", "-D", "TUXBOX_RTZ_FLOAT32=1",
-                        source / "compute.hlsl", "-Fo", cso], check=True)
+        command = [dxc, "-T", "cs_6_0", "-E", "main", "-Gis", "-D", "TUXBOX_RTZ_FLOAT32=1",
+                   source / "compute.hlsl", "-Fo", cso]
+        if args.wide_fallback:
+            command += ["-D", "TUXBOX_RTZ_WIDE_FALLBACK=1"]
+        subprocess.run(command, check=True)
         subprocess.run([dxc.with_name("dxv"), cso], check=True)
         toolchain = Toolchain()
         obj = toolchain.compile(source / "guest.cpp", work,
@@ -56,7 +60,7 @@ def main():
         exe = work / "perf.exe"
         toolchain.link(exe, obj, "d3d12.lib", "dxgi.lib", "kernel32.lib")
         report = {"scope": "Synthetic single triangle, 65536 dynamic rays with 1024 distinct origins; strict float32 candidate, GPU timestamps include UAV barriers. Not a game benchmark or a general accuracy proof.",
-                  "native_agent": native.stdout.strip(), "native_sha256": hashlib.sha256((work / "native.bin").read_bytes()).hexdigest(),
+                  "wide_fallback": args.wide_fallback, "native_agent": native.stdout.strip(), "native_sha256": hashlib.sha256((work / "native.bin").read_bytes()).hexdigest(),
                   "dxil_sha256": hashlib.sha256(cso.read_bytes()).hexdigest(), "adapters": {}}
         for name, prefix in (("AMD", args.prefix_amd), ("NVIDIA", args.prefix_nvidia)):
             os.environ.update(VKD3D_FILTER_DEVICE_NAME=name, DXVK_FILTER_DEVICE_NAME=name)

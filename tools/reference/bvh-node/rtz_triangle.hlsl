@@ -4,12 +4,46 @@
 // binary64 intermediate. The optional float-only candidate is experimental;
 // neither path establishes full ISA fidelity.
 #ifdef TUXBOX_RTZ_FLOAT32
+#ifdef TUXBOX_RTZ_WIDE_FALLBACK
+// Experimental exceptional-range path. Converting binary64 through IEEE bits
+// avoids the dynamic double-to-float mismatch observed on the tested Radeon.
+bool tb_rtz_wide(float x) {
+    uint bits = asuint(x) & 0x7fffffffu;
+    return bits != 0 && (bits < 0x30800000u || bits > 0x4e800000u);
+}
+float tb_rtz_bits(double value) {
+    uint low, high;
+    asuint(value, low, high);
+    uint sign = high & 0x80000000u;
+    int exponent = int((high >> 20) & 0x7ffu) - 1023;
+    if (exponent > 127) return asfloat(sign | 0x7f7fffffu);
+    if (exponent < -126) return 0.0;
+    uint fraction = ((high & 0xfffffu) << 3) | (low >> 29);
+    return asfloat(sign | (uint(exponent + 127) << 23) | fraction);
+}
+float tb_rtz_wide_add(float a, float b) {
+    uint ab = asuint(a), bb = asuint(b);
+    uint am = ab & 0x7fffffffu, bm = bb & 0x7fffffffu;
+    if (am == 0) return b;
+    if (bm == 0) return a;
+    uint ae = (am >> 23) & 255u, be = (bm >> 23) & 255u;
+    if (ae > 0 && be > 0 && (int(ae) - int(be) >= 53 || int(be) - int(ae) >= 53)) {
+        uint big = am > bm ? ab : bb;
+        if (((ab ^ bb) & 0x80000000u) != 0) big -= 1u;
+        return asfloat(big);
+    }
+    return tb_rtz_bits((double)a + (double)b);
+}
+#endif
 float tb_rtz_adjust(float rounded, float residual) {
     if ((rounded > 0.0 && residual < 0.0) || (rounded < 0.0 && residual > 0.0))
         return asfloat(asuint(rounded) - 1u);
     return rounded;
 }
 float tb_rtz_add(float a, float b) {
+#ifdef TUXBOX_RTZ_WIDE_FALLBACK
+    if (tb_rtz_wide(a) || tb_rtz_wide(b)) return tb_rtz_wide_add(a, b);
+#endif
     precise float sum = a + b;
     precise float recoveredB = sum - a;
     precise float residual = (a - (sum - recoveredB)) + (b - recoveredB);
@@ -17,6 +51,9 @@ float tb_rtz_add(float a, float b) {
 }
 float tb_rtz_sub(float a, float b) { return tb_rtz_add(a, -b); }
 float tb_rtz_mul(float a, float b) {
+#ifdef TUXBOX_RTZ_WIDE_FALLBACK
+    if (tb_rtz_wide(a) || tb_rtz_wide(b)) return tb_rtz_bits((double)a * (double)b);
+#endif
     precise float product = a * b;
     precise float splitA = 4097.0 * a;
     precise float highA = splitA - (splitA - a);
@@ -101,5 +138,8 @@ float4 tb_bvh_triangle_rtz(uint node[32], uint side, float3 origin, float3 direc
     if (w == 0.0 && !tb_rtz_edge_owned(pa, pb, pc, direction[axis])) miss = true;
     if (miss)
         numerator = asfloat(0x7f800000u | (asuint(denominator) & 0x80000000u));
+#ifdef TUXBOX_RTZ_WIDE_FALLBACK
+    if (numerator == 0.0) numerator = 0.0;
+#endif
     return float4(numerator, denominator, bary[selector & 3u], bary[(selector >> 2) & 3u]);
 }
