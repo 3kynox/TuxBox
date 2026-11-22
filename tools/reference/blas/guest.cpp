@@ -191,9 +191,11 @@ static ComPtr<ID3D12GraphicsCommandList> guest_list(ID3D12Device* guest, ID3D12C
 #include "card_candidate_dxil.h"
 #include "zero_aabb_dxil.h"
 #include "sidecar_bounds_dxil.h"
+#include "sidecar_map_dxil.h"
 #include "inline219_dxil.h"
 #include "card_tile_probe.h"
 #include "zero_aabb_probe.h"
+#include "sphere_sidecar_probe.h"
 #endif
 #ifdef TUXBOX_SCREEN_GATHER_PROBE
 #include "screen_gather_probe.h"
@@ -675,6 +677,7 @@ static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, 
 #ifdef TUXBOX_CARD_TILE_PROBE
     if (!xbox) {
         probe_zero_aabb(owner.Get(), queue.Get(), receipt);
+        probe_sphere_sidecar(owner.Get(), queue.Get(), receipt);
         for (UINT entry : {218u,1064u}) for (bool active : {false,true})
             probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,entry,active);
         probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,1064,true,true);

@@ -185,7 +185,7 @@ def main():
         work = Path(tmp)
         subprocess.run([find_dxc(None), "-T", "cs_6_5", "-E", "main", "-O3", "-Fh", "query_dxil.h",
                         "-Vn", "query_dxil", str(src / "query.hlsl")], cwd=work, check=True)
-        probe_flags, ray_inputs = [], {}
+        probe_flags, ray_inputs, graph_rejections = [], {}, []
         if args.shadow_tlas:
             probe_flags.append("/DTUXBOX_SHADOW_TLAS_PROBE")
         if args.ambiguous_as:
@@ -222,6 +222,8 @@ def main():
                             "-Vn", "zero_aabb_dxil", src / "zero_aabb.hlsl"], check=True)
             subprocess.run([find_dxc(None), "-T", "cs_6_0", "-E", "main", "-O3", "-Fh", work / "sidecar_bounds_dxil.h",
                             "-Vn", "sidecar_bounds_dxil", src / "sidecar_bounds.hlsl"], check=True)
+            subprocess.run([find_dxc(None), "-T", "cs_6_0", "-E", "main", "-O3", "-Fh", work / "sidecar_map_dxil.h",
+                            "-Vn", "sidecar_map_dxil", src / "sidecar_map.hlsl"], check=True)
             candidate_source = work / "inline219_probe.hlsl"
             candidate_source.write_text((ROOT / "tools/reference/bvh-node/rtz_triangle.hlsl").read_text() + "\n" +
                                         (src / "inline219_candidate.hlsl").read_text() + "\n" +
@@ -237,6 +239,38 @@ def main():
                 sphere = MESHES["sphere"]
                 sphere_data = read_asset(args.ray_archive, sphere)
                 serialized = sphere_data[sphere.blas_offset:sphere.blas_offset + sphere.blas_size]
+                sphere_serialized = work / "sphere-sidecar.serialized"
+                sphere_serialized.write_bytes(serialized)
+                sphere_generator = work / "sphere-sidecar-generator"
+                subprocess.run(["rustc", "--edition=2024", "-A", "dead_code", "-O",
+                                src / "sphere_sidecar.rs", "-o", sphere_generator], check=True)
+                subprocess.run([sphere_generator, sphere_serialized, work], check=True)
+                invalid_dir = work / "invalid-sidecar"
+                invalid_dir.mkdir()
+                root = struct.unpack_from("<I", serialized, 64 + 48)[0]
+                if root & 7 != 4:
+                    raise ValueError("sphere sidecar control expects a BOX16 root")
+                root_offset = 64 + (root >> 3) * 64
+                children = struct.unpack_from("<4I", serialized, root_offset)
+                child = next(i for i, value in enumerate(children) if value != 0xffffffff)
+                mutations = {}
+                bad = bytearray(serialized)
+                struct.pack_into("<I", bad, 64 + 48, (root & ~7) | 2)
+                mutations["unsupported_root_type"] = bad
+                bad = bytearray(serialized)
+                struct.pack_into("<I", bad, root_offset + child * 4, root)
+                mutations["root_cycle"] = bad
+                bad = bytearray(serialized)
+                struct.pack_into("<H", bad, root_offset + 16 + child * 12 + 6, 0x7e00)
+                mutations["nan_child_bound"] = bad
+                mutations["truncated"] = serialized[:-64]
+                bad_path = invalid_dir / "bad.serialized"
+                for name, bad in mutations.items():
+                    bad_path.write_bytes(bad)
+                    rejected = subprocess.run([sphere_generator, bad_path, invalid_dir], capture_output=True)
+                    if rejected.returncode == 0 or (invalid_dir / "sphere-sidecar-directory.bin").exists():
+                        raise ValueError(f"invalid sphere graph was not rejected: {name}")
+                    graph_rejections.append(name)
                 leaf_offset = struct.unpack_from("<I", serialized, 64 + 52)[0]
                 leaf_count = struct.unpack_from("<I", serialized, 64 + 12)[0]
                 for index in range(leaf_count):
@@ -325,6 +359,9 @@ def main():
         result = {"guest_sha256": digest(exe), "host": host.version, "runs": {}}
         if (work / "sidecar-retail-leaf.bin").exists():
             result["sidecar_retail_leaf_sha256"] = digest(work / "sidecar-retail-leaf.bin")
+        if graph_rejections:
+            result["sphere_sidecar_graph_rejections"] = graph_rejections
+            result["sphere_sidecar_serialized_sha256"] = digest(work / "sphere-sidecar.serialized")
         if args.single_build:
             result["xbox_build_slot"] = 117
         if ray_inputs:
