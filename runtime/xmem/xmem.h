@@ -11,6 +11,8 @@ __declspec(dllimport) void *WINAPI XMemAlloc(SIZE_T bytes, UINT64 attributes);
 __declspec(dllimport) void WINAPI XMemFree(void *memory, UINT64 attributes);
 __declspec(dllimport) void *WINAPI XMemAllocDefault(SIZE_T bytes, UINT64 attributes);
 __declspec(dllimport) void WINAPI XMemFreeDefault(void *memory, UINT64 attributes);
+__declspec(dllimport) HANDLE WINAPI XMemGetTitleHeap(void);
+__declspec(dllimport) HANDLE WINAPI XMemCreateWin32Heap(UINT64 flags, void *base);
 typedef void *(WINAPI *XMEM_ALLOC_HOOK)(SIZE_T bytes, UINT64 attributes);
 typedef void (WINAPI *XMEM_FREE_HOOK)(void *memory, UINT64 attributes);
 __declspec(dllimport) void WINAPI XMemSetAllocationHooks(XMEM_ALLOC_HOOK allocate, XMEM_FREE_HOOK release);

@@ -208,8 +208,8 @@
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox Rust CPU memory provider.",
-      "scope": "Nine exports cover heap allocation, working-set statistics, virtual memory, and the CPU side of the title\u2019s 64 KiB physical-page profile. The guest preserves 131,072 bytes across unmap and remap in reversed page order. XMemMakeTag matches the supplied routine on 5,120 inputs. XMemVirtualQuery explicitly reports unsupported pending a verified Xbox success path. Allocation and free calls route through installed callbacks; a local reference control checks argument forwarding and restoring defaults. XMemGetWriteWatch and XMemResumeWriteWatch match the checked suspension transitions and host dirty-page query. The checked write-watch allocation profiles are exercised end-to-end on the CPU. Scatter mapping supports provider-owned CPU pages with remapping and guard checks. Profile 1 accepts checked CPU reserve/commit and ordinary protection combinations. Ordinary CPU heap routing covers the tested attribute fields, including zero. The tested CPU virtual allocation profile includes executable and guard protections.",
-      "remaining": "GPU-visible backing, concurrent aliases, the Xbox partition allocator, additional allocation profiles and retail validation remain open. XMemVirtualQuery console metadata and success-path reference comparison remain open. Memory profiling callbacks and concurrent guest callback lifetime remain unverified. Other XMemSetOption IDs and untested Xbox allocation profiles remain unsupported; console concurrency has not been compared. Scatter mapping has not been compared against the console NT success path and does not support GPU backing or simultaneous aliases. Xbox partition heap, special alignment and allocation-failure behavior remain unverified.",
+      "scope": "Nine exports cover heap allocation, working-set statistics, virtual memory, and the CPU side of the title\u2019s 64 KiB physical-page profile. The guest preserves 131,072 bytes across unmap and remap in reversed page order. XMemMakeTag matches the supplied routine on 5,120 inputs. XMemVirtualQuery explicitly reports unsupported pending a verified Xbox success path. Allocation and free calls route through installed callbacks; a local reference control checks argument forwarding and restoring defaults. XMemGetWriteWatch and XMemResumeWriteWatch match the checked suspension transitions and host dirty-page query. The checked write-watch allocation profiles are exercised end-to-end on the CPU. Scatter mapping supports provider-owned CPU pages with remapping and guard checks. Profile 1 accepts checked CPU reserve/commit and ordinary protection combinations. Ordinary CPU heap routing covers the tested attribute fields, including zero. The tested CPU virtual allocation profile includes executable and guard protections. The host title heap interoperates with XMem default allocation; ordinary private heap modes are supported.",
+      "remaining": "GPU-visible backing, concurrent aliases, the Xbox partition allocator, additional allocation profiles and retail validation remain open. XMemVirtualQuery console metadata and success-path reference comparison remain open. Memory profiling callbacks and concurrent guest callback lifetime remain unverified. Other XMemSetOption IDs and untested Xbox allocation profiles remain unsupported; console concurrency has not been compared. Scatter mapping has not been compared against the console NT success path and does not support GPU backing or simultaneous aliases. Xbox partition heap, special alignment and allocation-failure behavior remain unverified. XMemCreateWin32Heap custom-base and Xbox partition modes remain unsupported; title heap is host-backed.",
       "evidence": [
         "runtime/xmem/xmem.def",
         "runtime/xmem/README.md",
@@ -223,7 +223,8 @@
         "evidence/providers/xmem-watch.json",
         "evidence/providers/xmem-scatter.json",
         "evidence/providers/xmem-virtual-cpu.json",
-        "evidence/providers/xmem-heap-profiles.json"
+        "evidence/providers/xmem-heap-profiles.json",
+        "evidence/providers/xmem-heaps.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/xmem.dll",
@@ -246,7 +247,8 @@
           "XMemSetAllocationHooks",
           "XMemGetWriteWatch",
           "XMemResumeWriteWatch",
-          "XMemMapPhysicalPagesScatter"
+          "XMemMapPhysicalPagesScatter",
+          "XMemGetTitleHeap"
         ],
         "notes": "The physical-page controls validate CPU data and ownership for flags 0x20400000. The packaged DLL could not initialize xbthunk on either Proton build."
       },

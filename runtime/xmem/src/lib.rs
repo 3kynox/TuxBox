@@ -7,7 +7,7 @@ use std::sync::RwLock;
 
 use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, SetLastError};
 use windows_sys::Win32::System::Memory::{
-    GetProcessHeap, HeapAlloc, HeapFree, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
+    GetProcessHeap, HeapAlloc, HeapCreate, HeapFree, HEAP_NO_SERIALIZE, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
     VirtualAlloc, VirtualFree,
 };
 use windows_sys::Win32::System::ProcessStatus::{
@@ -30,6 +30,38 @@ struct AllocationHooks {
 // Publish the pair together and release the read lock before invoking a guest
 // callback, so a callback can replace hooks without deadlocking.
 static ALLOCATION_HOOKS: RwLock<Option<AllocationHooks>> = RwLock::new(None);
+
+/// Return this provider's host-backed title heap handle.
+#[unsafe(export_name = "XMemGetTitleHeap")]
+pub extern "system" fn get_title_heap() -> *mut c_void {
+    // SAFETY: GetProcessHeap takes no arguments and returns this process's heap.
+    unsafe { GetProcessHeap() }
+}
+
+/// Create an ordinary CPU heap with the observed title-partition flags.
+/// Partition-specific and caller-supplied backing modes remain unsupported.
+#[unsafe(export_name = "XMemCreateWin32Heap")]
+pub extern "system" fn create_win32_heap(flags: u64, base: *mut c_void) -> *mut c_void {
+    let mode = flags & !0x8000;
+    if mode > 7 {
+        unsafe { SetLastError(ERROR_INVALID_PARAMETER) };
+        return ptr::null_mut();
+    }
+    if mode & 2 != 0 && (mode != 2 || base.is_null() || (base as usize) & 0xfff != 0) {
+        unsafe { SetLastError(ERROR_INVALID_PARAMETER) };
+        return ptr::null_mut();
+    }
+    let host_flags = match mode {
+        0 => HEAP_NO_SERIALIZE,
+        4 => 0,
+        _ => {
+            unsafe { SetLastError(ERROR_NOT_SUPPORTED) };
+            return ptr::null_mut();
+        }
+    };
+    // SAFETY: A zero initial and maximum size requests a private growable heap.
+    unsafe { HeapCreate(host_flags, 0, 0) }
+}
 
 /// Install callbacks as a pair. A null allocator restores both defaults.
 ///

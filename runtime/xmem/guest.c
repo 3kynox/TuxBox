@@ -373,6 +373,38 @@ static int heap_profiles(void)
     return 0;
 }
 
+static int title_and_private_heaps(void)
+{
+    HMODULE module = GetModuleHandleW(L"xmem.dll");
+    REQUIRE(GetProcAddress(module, "XMemGetTitleHeap") == GetProcAddress(module, MAKEINTRESOURCEA(14)));
+    REQUIRE(GetProcAddress(module, "XMemCreateWin32Heap") == GetProcAddress(module, MAKEINTRESOURCEA(4)));
+    HANDLE title = XMemGetTitleHeap();
+    REQUIRE(title && title == GetProcessHeap());
+    BYTE *a = HeapAlloc(title, 0, 37);
+    REQUIRE(a && HeapValidate(title, 0, a));
+    memset(a, 0x56, 37);
+    XMemFreeDefault(a, 0);
+    BYTE *b = XMemAllocDefault(41, 0);
+    REQUIRE(b && HeapValidate(title, 0, b));
+    REQUIRE(HeapFree(title, 0, b));
+
+    const UINT64 flags[] = {0, 4, 0x8000, 0x8004};
+    for (unsigned i = 0; i < sizeof flags / sizeof flags[0]; ++i) {
+        HANDLE heap = XMemCreateWin32Heap(flags[i], (void *)0x10000);
+        REQUIRE(heap && heap != title);
+        BYTE *block = HeapAlloc(heap, 0, 113);
+        REQUIRE(block && HeapValidate(heap, 0, block));
+        memset(block, (int)i, 113);
+        REQUIRE(block[0] == i && block[112] == i);
+        REQUIRE(HeapFree(heap, 0, block));
+        REQUIRE(HeapDestroy(heap));
+    }
+    REQUIRE(!XMemCreateWin32Heap(2, NULL) && GetLastError() == ERROR_INVALID_PARAMETER);
+    REQUIRE(!XMemCreateWin32Heap(2, (void *)0x10000) && GetLastError() == ERROR_NOT_SUPPORTED);
+    REQUIRE(!XMemCreateWin32Heap(8, NULL) && GetLastError() == ERROR_INVALID_PARAMETER);
+    return 0;
+}
+
 static int allocation_pair(Allocation allocate, Release release)
 {
     const UINT64 heap_attributes[] = {0x04800092, 0x04800040, 0x04800078, 0x04820000};
@@ -528,13 +560,21 @@ int wmain(int argc, wchar_t **argv)
     BOOL scatter_only = argc >= 2 && !wcscmp(argv[1], L"--scatter");
     BOOL cpu_profiles_only = argc >= 2 && !wcscmp(argv[1], L"--virtual-cpu");
     BOOL heap_only = argc >= 2 && !wcscmp(argv[1], L"--heap-profiles");
-    if (pages_only || query_only || tag_only || hooks_only || watch_only || scatter_only || cpu_profiles_only || heap_only) { --argc; ++argv; }
+    BOOL heaps_only = argc >= 2 && !wcscmp(argv[1], L"--heaps");
+    if (pages_only || query_only || tag_only || hooks_only || watch_only || scatter_only || cpu_profiles_only || heap_only || heaps_only) { --argc; ++argv; }
     if (!(argc == 1 || (argc == 3 && wcscmp(argv[1], L"--report") == 0))) {
-        fputs("usage: xmem-smoke.exe [--pages|--query|--tags|--hooks|--watch|--scatter|--virtual-cpu|--heap-profiles] [--report FILE]\n", stderr);
+        fputs("usage: xmem-smoke.exe [--pages|--query|--tags|--hooks|--watch|--scatter|--virtual-cpu|--heap-profiles|--heaps] [--report FILE]\n", stderr);
         return 2;
     }
     if (argc == 3 && _wfopen_s(&report, argv[2], L"wb") != 0) return 2;
     REQUIRE(app_local_provider());
+    if (heaps_only) {
+        REQUIRE(!title_and_private_heaps());
+        const char result[] = "xmem-heaps PASS title=1 private=4 invalid=2\n";
+        if (report && (fputs(result, report) == EOF || fclose(report))) return 2;
+        fputs(result, stdout);
+        return 0;
+    }
     if (heap_only) {
         REQUIRE(!heap_profiles());
         const char result[] = "xmem-heap-profiles PASS attributes=40 alloc=80 free=80\n";

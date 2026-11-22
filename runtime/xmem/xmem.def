@@ -3,9 +3,11 @@ EXPORTS
     XMemAlloc @1
     XMemAllocDefault @2
     XMemAllocatePhysicalPages @3
+    XMemCreateWin32Heap @4
     XMemFree @6
     XMemFreeDefault @7
     XMemFreePhysicalPages @8
+    XMemGetTitleHeap @14
     XMemGetWorkingSetStatistics @16
     XMemGetWriteWatch @17
     XMemMakeTag @20

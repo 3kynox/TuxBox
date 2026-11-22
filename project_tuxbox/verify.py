@@ -211,6 +211,9 @@ def verify(host, output, adapter, selected=None, samples=1):
                   r"raw=16 zlib=16 guards=2 errors=2 cancellation=1 autosubmit=64 PASS",
                   providers={"xcrdapi/xcrdapi.dll": ("DStorageGetFactory",)})
         if "xmem" in selected:
+            check("xmem-heaps", "xmem-smoke/xmem-smoke.exe", ["--heaps", "--report"],
+                  r"xmem-heaps PASS title=1 private=4 invalid=2",
+                  providers={"xmem-smoke/xmem.dll": ("XMemGetTitleHeap", "XMemCreateWin32Heap", "XMemAllocDefault", "XMemFreeDefault")})
             check("xmem-heap-profiles", "xmem-smoke/xmem-smoke.exe", ["--heap-profiles", "--report"],
                   r"xmem-heap-profiles PASS attributes=40 alloc=80 free=80",
                   providers={"xmem-smoke/xmem.dll": ("XMemAlloc", "XMemFree", "XMemAllocDefault", "XMemFreeDefault")})
@@ -360,6 +363,7 @@ GATE_LABELS = {
     "xmem-scatter": "CPU scattered physical-page mapping",
     "xmem-virtual-cpu": "CPU virtual-memory allocation profiles",
     "xmem-heap-profiles": "CPU heap attribute profiles",
+    "xmem-heaps": "CPU title and private heap creation",
     "invalid-route": "Invalid input exit status", "xmem-default": "Xbox memory allocation and working set",
     "d3d12-signatures": "Root signature 1.0 and 1.1 serialization, deserialization and errors",
     "d3d12-exports": "Blob, debug interface, four DXGIX entry points and Series CPU memory clear",
