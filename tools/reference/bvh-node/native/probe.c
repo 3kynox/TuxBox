@@ -235,6 +235,10 @@ int main(int argc, char **argv) {
       }
     }
   }
+  float degenerate[12] = {0, 0, 0, 1, 0, 0, 2, 0, 0, 0, 0, 0};
+  uint32_t *degenerate_node = (uint32_t *)out + 2816;
+  memcpy(degenerate_node, degenerate, sizeof(degenerate));
+  degenerate_node[15] = 9;
   hsa_signal_t signal;
   CHK(hsa_signal_create(1, 0, NULL, &signal));
   uint64_t index = hsa_queue_load_write_index_relaxed(queue);
@@ -337,6 +341,39 @@ int main(int argc, char **argv) {
             failed = 1;
         }
   printf("oblique_edges=108\n");
+  static const unsigned tied_masks[3][6][2] = {
+      {{3, 2}, {3, 2}, {3, 2}, {2, 3}, {3, 2}, {2, 3}},
+      {{5, 4}, {5, 4}, {5, 4}, {4, 5}, {5, 4}, {4, 5}},
+      {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}}};
+  for (unsigned shape = 0; shape < 3; shape++)
+    for (unsigned d = 0; d < 6; d++)
+      for (unsigned facing = 0; facing < 2; facing++)
+        for (unsigned point = 0; point < 3; point++) {
+          unsigned i = ((shape * 6 + d) * 2 + facing) * 3 + point;
+          uint32_t t = ((uint32_t *)out)[1472 + 4 * i];
+          int hit = (t & 0x7fffffffu) != 0x7f800000u;
+          if (hit != ((tied_masks[shape][d][facing] >> point) & 1))
+            failed = 1;
+        }
+  static const uint32_t special[36] = {
+      0x7f800000, 0,          0xbf800000, 0,          0x7f800000, 0,
+      0,          0,          0x7f800000, 0,          0xbf800000, 0,
+      0x7f800000, 0,          0x3f000000, 0xbe800000, 0x7f800000, 0,
+      0,          0,          0x7f800000, 0,          0,          0,
+      0x7f800000, 0,          0x3f800000, 0,          0x7f800000, 0,
+      0,          0x3f800000, 0x7f800000, 0,          0xbf000000, 0x3e800000};
+  for (unsigned i = 0; i < 36; i++)
+    if (((uint32_t *)out)[1904 + i] != special[i])
+      failed = 1;
+  printf("tied_edges=108 parallel_and_degenerate=9\n");
+  static const uint32_t special_float[20] = {
+      0x7f800000, 0,          0,          0,          0x7f800000, 0,          0,
+      0,          0xff800000, 0xffc00000, 0xff800000, 0xff800000, 0x7f800000, 0,
+      0,          0,          0x7f800000, 0x3f800000, 0,          0};
+  for (unsigned i = 0; i < 20; i++)
+    if (((uint32_t *)out)[1940 + i] != special_float[i])
+      failed = 1;
+  printf("nonfinite_and_subnormal=5\n");
   if (failed) {
     fprintf(stderr, "instruction probe failed or timed out\n");
     return 1;

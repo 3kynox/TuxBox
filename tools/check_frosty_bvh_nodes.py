@@ -74,11 +74,11 @@ def triangle_reference(origin, direction, a, b, c):
     determinant = dot(e1, p)
     t, i, j = dot(e2, q), dot(v, p), dot(direction, q)
     if not determinant:
-        return [math.inf, 1.0, i, j]
+        return [math.inf, 0.0, i, j]
     u, v = i / determinant, j / determinant
     missed = t / determinant < 0 or u < 0 or v < 0 or u + v > 1
     axis = max(range(3), key=lambda x: abs(direction[x]))
-    if all(abs(direction[axis]) > abs(direction[i]) for i in range(3) if i != axis):
+    if abs(direction[axis]) > 0:
         x, y = (axis + 1) % 3, (axis + 2) % 3
         def project(point):
             return (point[x] - direction[x] * point[axis] / direction[axis],
@@ -182,10 +182,10 @@ def main():
         ((0.25, 0.25, 1), (0, 0, -1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
         ((2, 2, -1), (0, 0, 1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
         ((0.25, 0.25, 1), (0, 0, 1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
-        ((0.25, 0.25, -1), (0, 0, 1), (0, 0, 0), (0, 1, 0), (1, 0, 0)),
+        ((0.25, 0.25, -1), (0, 0, 1), (0, 0, 0), (1, 0, 0), (2, 0, 0)),
         ((0.5, 0.5, 0), (0, 0, 1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
         ((0.25, 0.25, -1), (1, 0, 0), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
-        ((0.25, 0.25, -1), (0, 0, 1), (0, 0, 0), (1, 0, 0), (2, 0, 0)),
+        ((-0.5, -0.5, -1), (1, 1, 1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
         ((2, 2, -1), (0, 0, 1), (0, 0, 0), (2, 0, 0), (0, 2, 0)),
         ((2, 2, 1), (0, 0, -1), (0, 0, 0), (2, 0, 0), (0, 2, 0)),
         ((0, 0.5, -1), (0, 0, 1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),

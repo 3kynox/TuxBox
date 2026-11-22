@@ -17,6 +17,6 @@
       "guard_words": 192
     }
   },
-  "hlsl_sha256": "bf6a11bba966ce31177e88cd09b40427603b7cad8e7d300cc36b3c1acbcd5490",
-  "dxil_sha256": "d30cc6c3ae3468d016cf732ea1a6494ee339de117d402c5ea4d410366d1b0ad4"
+  "hlsl_sha256": "dbf3d9090a52b7e19c0f4ce19a83e9a6ebfc8627b86793707bc3512c0e1200e2",
+  "dxil_sha256": "ac74e0897793ca5045850fb02e1a120d257a51077be462c392fb2e03ba8872a2"
 }

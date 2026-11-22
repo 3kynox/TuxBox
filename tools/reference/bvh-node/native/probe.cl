@@ -104,6 +104,55 @@ __kernel void probe(__global unsigned *out) {
       }
     }
   }
+  const float3 tied[6] = {(float3)(1, 1, 1),   (float3)(1, -1, 1),
+                          (float3)(-1, 1, 1),  (float3)(1, 1, -1),
+                          (float3)(-1, -1, 1), (float3)(1, -1, -1)};
+  for (uint shape = 0; shape < 3; shape++)
+    for (uint d = 0; d < 6; d++)
+      for (uint facing = 0; facing < 2; facing++)
+        for (uint p = 0; p < 3; p++) {
+          float3 ray = tied[d] * (facing ? -1.f : 1.f);
+          float3 hit = (float3)(points[shape][p].x, points[shape][p].y, 0.f);
+          uint base = shape == 0 ? 2304 : 2496 + (shape - 1) * 96;
+          uint index = ((shape * 6 + d) * 2 + facing) * 3 + p;
+          *(__global uint4 *)(out + 1472 + 4 * index) =
+              intersect(((ulong)(out + base)) >> 3, (float4)(hit - ray, 0.f),
+                        (float4)(ray, 0.f), inverse);
+        }
+  ulong regular = ((ulong)(out + 2176)) >> 3,
+        degenerate = ((ulong)(out + 2816)) >> 3;
+  *(__global uint4 *)(out + 1904) = intersect(
+      regular, (float4)(.25f, .25f, -1, 0), (float4)(1, 0, 0, 0), inverse);
+  *(__global uint4 *)(out + 1908) = intersect(
+      regular, (float4)(.25f, .25f, 0, 0), (float4)(1, 0, 0, 0), inverse);
+  *(__global uint4 *)(out + 1912) =
+      intersect(regular, (float4)(2, 2, -1, 0), (float4)(1, 0, 0, 0), inverse);
+  *(__global uint4 *)(out + 1916) = intersect(
+      degenerate, (float4)(.25f, .25f, -1, 0), (float4)(0, 0, 1, 0), inverse);
+  *(__global uint4 *)(out + 1920) = intersect(
+      degenerate, (float4)(.25f, 0, -1, 0), (float4)(0, 0, 1, 0), inverse);
+  *(__global uint4 *)(out + 1924) = intersect(
+      degenerate, (float4)(.25f, 0, 0, 0), (float4)(1, 0, 0, 0), inverse);
+  *(__global uint4 *)(out + 1928) = intersect(
+      regular, (float4)(.25f, .25f, -1, 0), (float4)(-1, 0, 0, 0), inverse);
+  *(__global uint4 *)(out + 1932) = intersect(
+      regular, (float4)(.25f, .25f, -1, 0), (float4)(0, -1, 0, 0), inverse);
+  *(__global uint4 *)(out + 1936) = intersect(
+      degenerate, (float4)(.25f, .25f, -1, 0), (float4)(0, 0, -1, 0), inverse);
+  *(__global uint4 *)(out + 1940) =
+      intersect(regular, (float4)(.25f, .25f, -1, 0),
+                (float4)(0, 0, as_float(1u), 0), inverse);
+  *(__global uint4 *)(out + 1944) =
+      intersect(regular, (float4)(.25f, .25f, -1, 0),
+                (float4)(0, 0, as_float(0x00800000u), 0), inverse);
+  *(__global uint4 *)(out + 1948) =
+      intersect(regular, (float4)(.25f, .25f, -1, 0),
+                (float4)(0, 0, as_float(0x7f800000u), 0), inverse);
+  *(__global uint4 *)(out + 1952) = intersect(
+      regular, (float4)(.25f, .25f, -1, 0), (float4)(0, 0, 0, 0), inverse);
+  *(__global uint4 *)(out + 1956) =
+      intersect(regular, (float4)(.25f, .25f, as_float(0xff800000u), 0),
+                (float4)(0, 0, 1, 0), inverse);
   for (uint test = 0; test < 24; test++) {
     __global uint *record = out + 3008 + test * 48;
     float4 origin = (float4)(as_float(record[32]), as_float(record[33]),

@@ -51,8 +51,8 @@ uint4 tb_bvh_boxes(uint node[32], bool box16, float3 origin,
 // Returns unremapped t numerator, determinant, and two barycentric
 // numerators. For non-degenerate ordinary misses, gfx1036 preserves the
 // determinant and uses an infinity with the same sign for the numerator.
-// Edge ownership is tested for finite rays with a unique dominant axis;
-// dominant-axis ties, special values and degenerate inputs remain unverified.
+// Edge ownership is tested for finite rays; general special values and
+// arithmetic behavior near degenerate inputs remain unverified.
 bool tb_bvh_edge_owned(float3 a, float3 b, float3 inside, float3 direction, uint axis) {
     uint x = (axis + 1) % 3, y = (axis + 2) % 3;
     float2 slope = float2(direction[x], direction[y]) / direction[axis];
@@ -77,17 +77,15 @@ float4 tb_bvh_triangle(float3 origin, float3 direction,
     float iNumerator = dot(fromVertex, p);
     float jNumerator = dot(direction, q);
     if (determinant == 0.0)
-        return float4(asfloat(0x7f800000u), 1.0, iNumerator, jNumerator);
+        return float4(asfloat(0x7f800000u), 0.0, iNumerator, jNumerator);
     float t = tNumerator / determinant;
     float i = iNumerator / determinant;
     float j = jNumerator / determinant;
     bool missed = t < 0.0 || i < 0.0 || j < 0.0 || i + j > 1.0;
     float3 magnitude = abs(direction);
-    uint axis = magnitude.x > magnitude.y && magnitude.x > magnitude.z ? 0u :
-                magnitude.y > magnitude.x && magnitude.y > magnitude.z ? 1u : 2u;
-    bool uniqueAxis = magnitude[axis] > magnitude[(axis + 1) % 3] &&
-                      magnitude[axis] > magnitude[(axis + 2) % 3];
-    if (uniqueAxis) {
+    uint axis = magnitude.x >= magnitude.y && magnitude.x >= magnitude.z ? 0u :
+                magnitude.y >= magnitude.z ? 1u : 2u;
+    if (magnitude[axis] > 0.0) {
         if (i == 0.0 && !tb_bvh_edge_owned(a, c, b, direction, axis)) missed = true;
         if (j == 0.0 && !tb_bvh_edge_owned(a, b, c, direction, axis)) missed = true;
         if (i + j == 1.0 && !tb_bvh_edge_owned(b, c, a, direction, axis)) missed = true;

@@ -4,6 +4,7 @@
 
 pub(crate) mod page_list;
 mod compact_views;
+mod compact_hwrt_rays;
 mod distance_field_requests;
 
 use std::fmt::Write;
@@ -243,6 +244,9 @@ pub(super) fn hlsl(shader: &ShaderExtract) -> Option<String> {
         return Some(format!("[numthreads({x}, {y}, {z})]\nvoid main() {{}}\n"));
     }
     if let Some(source) = distance_field_requests::translate(shader) {
+        return Some(source);
+    }
+    if let Some(source) = compact_hwrt_rays::translate(shader) {
         return Some(source);
     }
     if let Some(source) = compact_views::translate(shader) {

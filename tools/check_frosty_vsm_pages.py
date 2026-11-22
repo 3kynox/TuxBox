@@ -168,6 +168,21 @@ def selection(entry, count, extra):
         "pages": count, "selected": len(base), "additional_pages": len(second), "initial_indirect_x": 32}
 
 
+def compact_hwrt_rays(entry, count, sparse, groups=1):
+    counts = [count if not sparse or lane in (0, 2, 31, 32, 33, 63) else 0 for lane in range(64)]
+    records = [[0x12340000 + lane, 0x43210000 + lane, 0xabc00000 | (lane % 4),
+                0x24680000 + lane, 0x13570000 + lane] for lane in range(64 * groups)]
+    mask, flag = {507: (1, 1), 509: (0, 0), 512: (1, 0), 513: (3, 1)}[entry]
+    selected = [lane for lane in range(64 * groups) if lane < counts[lane % 64] and (records[lane][2] & mask) == flag]
+    seed = [[3] + [GUARD] * 15, [GUARD] * (5 * 150)]
+    expected = [row.copy() for row in seed]
+    expected[0][0] += len(selected)
+    for index, lane in enumerate(selected, 3):
+        expected[1][5 * index:5 * index + 5] = records[lane]
+    return [0] * 64, [counts, [v for record in records for v in record]], seed, [4, 20], 4, groups, 1, expected, {
+        "selected": selected, "count": count, "sparse_counts": sparse, "groups": groups}
+
+
 def distance_field_requests(active, count, capacity, start):
     cb = [0] * 64
     cb[44:46] = [count, capacity]
@@ -256,7 +271,7 @@ def main():
     p.add_argument("--prefix", type=Path)
     p.add_argument("--proton", type=Path)
     p.add_argument("--xshader", type=Path)
-    p.add_argument("--entry", type=int, choices=(517, 1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470, 3477),
+    p.add_argument("--entry", type=int, choices=(507, 509, 512, 513, 517, 1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470, 3477),
                    help="run the controls for one archive entry")
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
@@ -265,6 +280,11 @@ def main():
     compiler = args.xshader.resolve() if args.xshader else compiler
     data, entries = global_archive(args.mount)
     cases, libraries = {}, {}
+    for entry in (507, 509, 512, 513):
+        for name, count, sparse, groups in (("empty", 0, False, 1), ("full", 64, False, 1),
+                                    ("partial", 33, False, 1), ("sparse", 64, True, 1),
+                                    ("two_groups", 128, False, 2)):
+            cases[f"hwrt_{entry}_" + name] = (entry, compact_hwrt_rays(entry, count, sparse, groups))
     for name, active, count, capacity, start in (
         ("empty", [], 64, 100, 3),
         ("zero_count", [0, 2, 31, 32, 33, 63], 0, 100, 3),
@@ -363,7 +383,7 @@ def main():
                     words(work / f"{name}.b{i}", constants)
             else:
                 words(work / (name+".cbv"), cb)
-            if entry in (517, 1016, 1243, 1257, 1793, 3477, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470):
+            if entry in (507, 509, 512, 513, 517, 1016, 1243, 1257, 1793, 3477, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470):
                 for i, records in enumerate(srv):
                     words(work / f"{name}.t{i}", records)
             else:
@@ -398,6 +418,11 @@ def main():
                             if actual[272] in winners:
                                 array = array.copy()
                                 array[272] = actual[272]
+                    if entry in (507, 509, 512, 513) and i == 1 and metadata["groups"] > 1:
+                        # Groups reserve contiguous blocks in unspecified order.
+                        first, end = 15, 15 + 5 * len(metadata["selected"])
+                        actual[first:end] = [word for row in sorted(
+                            [actual[j:j + 5] for j in range(first, end, 5)]) for word in row]
                     if entry == 1223:
                         actual = unordered_wave_ranges(actual, array, metadata["initial"], metadata["selected_pages"])
                     diffs.extend([i, j, x, y] for j,(x,y) in enumerate(zip(array,actual)) if x != y)
