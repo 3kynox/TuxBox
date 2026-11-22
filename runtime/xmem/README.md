@@ -1,6 +1,6 @@
 # Xbox memory provider
 
-The [Rust provider](src/lib.rs) implements two CPU allocation forms. `XMemAlloc` and `XMemFree` (ordinals 1 and 6) use the default allocation path when no hooks are installed. The default exports retain ordinals 2 and 7. Both pairs passed the alignment, write and release checks on Proton Experimental and GE-Proton. Custom allocator hooks and GPU-visible mappings are pending. [Console export inventory](../../evidence/library-status.json) · [Valve test](../../evidence/providers/xmem-valve.json) · [GE test](../../evidence/providers/xmem-ge.json)
+The [Rust provider](src/lib.rs) implements CPU allocation and physical-page profiles. `XMemAlloc` and `XMemFree` use the default path when no hooks are installed; the default exports remain separately callable. Guest callbacks, their arguments and reset behavior have been checked against the supplied DLL. GPU-visible mappings remain open. [Allocation hooks](../../evidence/providers/xmem-hooks.json) · [Console export inventory](../../evidence/library-status.json)
 
 | Attributes | Guest request | CPU backing | Verified alignment |
 | --- | ---: | --- | ---: |
@@ -22,6 +22,8 @@ Frosty's CPU binned allocator calls `XMemVirtualAlloc` (ordinal 31) with profile
 Frosty uses `XMemAllocatePhysicalPages` (ordinal 3), `XMemMapPhysicalPages` (21), and `XMemFreePhysicalPages` (8) with 64 KiB pages and allocation flags `0x20400000`. TuxBox gives each page an owned token, saves its bytes when unmapped, and restores them at the next mapping. The guest remaps two pages in reversed order, checks every byte, and checks that stale, duplicate and foreign mappings are rejected. Run `python tuxbox.py verify --only xmem` to exercise both memory paths. [Page implementation](src/physical_pages.rs) · [Guest results](../../evidence/providers/xmem-pages.json)
 
 These checks cover the CPU path. The packaged DLL stopped before the guest started because its `xbthunk.dll` dependency uses a privilege operation unavailable on either tested Proton build. GPU access, simultaneous aliases, Xbox partition allocation and retail use of the replacement pages remain open. [Package ABI and title call sites](../../evidence/matrix-awakens/xmem-physical-pages.json)
+
+The provider also supports checked CPU scatter remapping, write-watch queries and suspension, ordinary host-backed title/private heaps, and selected virtual-allocation protections. `XMemVirtualQuery` reports unsupported until the Xbox metadata and success path can be verified. These paths do not provide GPU memory or Xbox partition accounting. [Scatter](../../evidence/providers/xmem-scatter.json) · [Write watch](../../evidence/providers/xmem-watch.json) · [Heaps](../../evidence/providers/xmem-heaps.json) · [Virtual query](../../evidence/providers/xmem-query.json)
 
 ## Build and run
 

@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -8,6 +9,14 @@ from project_tuxbox.progress_map import export_progress, culling_readbacks, libr
 
 
 class ProgressMapTests(unittest.TestCase):
+    def test_library_summary_matches_inventory(self):
+        root = Path(__file__).resolve().parents[1]
+        rows = json.loads((root / "evidence/library-status.json").read_text())["libraries"]
+        counts = Counter(row["status"] for row in rows)
+        document = (root / "docs/LIBRARIES.md").read_text()
+        for state, symbol in (("complete", "🟢"), ("partial", "🟡"), ("incomplete", "🔴")):
+            self.assertIn(f"| {symbol} {state.capitalize()} | {counts[state]} |", document)
+
     def test_compute_survey_requires_matching_archive_and_valid_counts(self):
         inventory = json.loads((Path(__file__).resolve().parents[1] /
                                 "evidence/matrix-awakens/shader-inventory.json").read_text())
