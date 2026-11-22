@@ -115,6 +115,8 @@ The packaged `CullToVoxelClipmapCS` shader builds a list of objects intersecting
 
 Frosty uses compute shaders to allocate physical shadow pages, choose pages for initialization and merging, and compact the views that need rendering. GeForce and Radeon ran ten packaged shaders and matched every one of the 137,694 output words checked on each GPU. The cases include an exhausted free-page pool, requests in both halves of a 64-lane wave, and selected mip levels from multiple views. Raising the depth texture from zero to one culled all six shadow instances that previously reached the work queue. [Shadow page and view readbacks](../evidence/matrix-awakens/virtual-shadow-pages.json)
 
+The distance-field streaming request shader compacts changed nonzero mip requests into a bounded queue. Radeon and GeForce match CPU controls for full, sparse, partial and capacity-limited groups. [GPU readbacks](../evidence/matrix-awakens/distance-field-requests.json)
+
 ## Nanite instance culling
 
 Frosty calls `InstanceCull` to decide which scene instances enter Nanite’s work queue. Its 64-lane Xbox workgroup counts visible instances, reserves space in the queue, and writes each instance ID in lane order. TuxBox also handles the path that writes small projected instances directly into the visibility texture. Frosty’s first-boot profile includes the variant requested by the title, global entry 3444. [Retail comparison and list of variants](../evidence/matrix-awakens/instance-cull-retail.json)

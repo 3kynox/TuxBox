@@ -36,6 +36,17 @@ static hsa_status_t each_region(hsa_region_t r, void *p) {
   }
   return HSA_STATUS_SUCCESS;
 }
+static uint32_t next_random(uint32_t *state) {
+  *state = *state * 1664525u + 1013904223u;
+  return *state;
+}
+static float smaller(float a, float b) { return a < b ? a : b; }
+static float larger(float a, float b) { return a > b ? a : b; }
+static uint32_t bits(float value) {
+  uint32_t result;
+  memcpy(&result, &value, 4);
+  return result;
+}
 int main(int argc, char **argv) {
   if (argc != 2) {
     fprintf(stderr, "usage: %s probe.hsaco\n", argv[0]);
@@ -96,7 +107,7 @@ int main(int argc, char **argv) {
   CHK(hsa_executable_symbol_get_info(
       sym, HSA_EXECUTABLE_SYMBOL_INFO_KERNEL_KERNARG_SEGMENT_SIZE, &arg_size));
   void *out, *args;
-  CHK(hsa_memory_allocate(region, 8192, &out));
+  CHK(hsa_memory_allocate(region, 20480, &out));
   if ((uintptr_t)out % 256 != 0) {
     fprintf(stderr, "HSA allocation is not 256-byte aligned\n");
     return 1;
@@ -105,8 +116,8 @@ int main(int argc, char **argv) {
   CHK(hsa_memory_allocate(region, arg_size, &args));
   CHK(hsa_amd_agents_allow_access(1, &gpu, NULL, args));
   *(void **)args = out;
-  memset(out, 0, 8192);
-  uint32_t *node = (uint32_t *)out + 1024;
+  memset(out, 0, 20480);
+  uint32_t *node = (uint32_t *)out + 2048;
   node[0] = 0x9;
   node[1] = 0x12;
   node[2] = 0x1b;
@@ -114,19 +125,19 @@ int main(int argc, char **argv) {
   float bounds[24] = {10, 10, 2, 12, 12, 4, -1, -1, 2, 1, 1, 4,
                       -1, -1, 2, 1,  1,  4, -1, -1, 2, 1, 1, 4};
   memcpy(node + 4, bounds, sizeof(bounds));
-  uint32_t *halfnode = (uint32_t *)out + 1088;
+  uint32_t *halfnode = (uint32_t *)out + 2112;
   memcpy(halfnode, node, 16);
   _Float16 *halfbounds = (_Float16 *)(halfnode + 4);
   for (int i = 0; i < 24; i++)
     halfbounds[i] = bounds[i];
-  uint32_t *tri = (uint32_t *)out + 1152;
+  uint32_t *tri = (uint32_t *)out + 2176;
   float verts[12] = {0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0};
   memcpy(tri, verts, sizeof(verts));
   tri[12] = 0x80;
   tri[13] = 1;
   tri[14] = 2;
   tri[15] = 0x0909;
-  uint32_t *scaled = (uint32_t *)out + 1216;
+  uint32_t *scaled = (uint32_t *)out + 2240;
   float scaled_verts[12] = {0, 0, 0, 2, 0, 0, 0, 2, 0, 2, 2, 0};
   memcpy(scaled, scaled_verts, sizeof(scaled_verts));
   scaled[12] = 0x80;
@@ -140,7 +151,7 @@ int main(int argc, char **argv) {
                                           {{0, 0, 0}, {1, 1, 0}, {-1, 1, 0}}};
   for (unsigned shape = 0; shape < 3; shape++) {
     for (unsigned p = 0; p < 6; p++) {
-      unsigned base = shape == 0 ? 1280 : 1472 + (shape - 1) * 96;
+      unsigned base = shape == 0 ? 2304 : 2496 + (shape - 1) * 96;
       uint32_t *dst = (uint32_t *)out + base + p * 16;
       for (unsigned v = 0; v < 3; v++)
         memcpy(dst + v * 3, vertices[shape][permutations[p][v]],
@@ -151,10 +162,77 @@ int main(int argc, char **argv) {
   const unsigned selectors[3] = {9, 2, 4};
   for (unsigned side = 0; side < 2; side++) {
     for (unsigned r = 0; r < 3; r++) {
-      uint32_t *dst = (uint32_t *)out + 1376 + (side * 3 + r) * 16;
+      uint32_t *dst = (uint32_t *)out + 2400 + (side * 3 + r) * 16;
       memcpy(dst, tri, 64);
       unsigned shift = side * 8;
       dst[15] = (0x0909u & ~(0xffu << shift)) | (selectors[r] << shift);
+    }
+  }
+  // Seeded finite, exactly representable inputs. Each child is placed around
+  // the ray, with some deliberately missed, invalid, or clipped by extent.
+  uint32_t random_expected[24][4];
+  uint32_t seed = 0x74757862u;
+  static const float inverses[6] = {-4.f, -2.f, -1.f, 1.f, 2.f, 4.f};
+  for (unsigned test = 0; test < 24; test++) {
+    uint32_t *record = (uint32_t *)out + 3008 + test * 48;
+    float origin[3], inverse[3], keys[4];
+    for (unsigned axis = 0; axis < 3; axis++) {
+      origin[axis] = (float)((int)(next_random(&seed) % 9) - 4);
+      inverse[axis] = inverses[next_random(&seed) % 6];
+      record[32 + axis] = bits(origin[axis]);
+      record[35 + axis] = bits(inverse[axis]);
+    }
+    float extent = (test % 3 == 0) ? 3.f : 16.f;
+    int sort = test % 3 != 1;
+    record[38] = bits(extent);
+    record[39] = sort;
+    record[40] = test & 1;
+    for (unsigned child = 0; child < 4; child++) {
+      record[child] = 9 + child * 9;
+      if (child == 3 && test % 4 == 0)
+        record[child] = 0xffffffffu;
+      float lower[3], upper[3];
+      float at = (float)(1 + next_random(&seed) % 7);
+      for (unsigned axis = 0; axis < 3; axis++) {
+        float center = origin[axis] + at / inverse[axis];
+        if (child == 2 && axis == 0 && test % 2 == 0)
+          center += 24.f;
+        lower[axis] = center - 1.f;
+        upper[axis] = center + 1.f;
+        if (test & 1) {
+          ((float *)(record + 4 + child * 6))[axis] = lower[axis];
+          ((float *)(record + 4 + child * 6))[axis + 3] = upper[axis];
+        } else {
+          ((_Float16 *)(record + 4 + child * 3))[axis] = (_Float16)lower[axis];
+          ((_Float16 *)(record + 4 + child * 3))[axis + 3] =
+              (_Float16)upper[axis];
+        }
+      }
+      float near = 0.f, far = extent;
+      for (unsigned axis = 0; axis < 3; axis++) {
+        float t0 = (lower[axis] - origin[axis]) * inverse[axis];
+        float t1 = (upper[axis] - origin[axis]) * inverse[axis];
+        near = larger(near, smaller(t0, t1));
+        far = smaller(far, larger(t0, t1));
+      }
+      random_expected[test][child] = near <= far ? record[child] : 0xffffffffu;
+      keys[child] = near;
+    }
+    if (sort) {
+      static const unsigned left[5] = {0, 1, 0, 2, 1},
+                            right[5] = {2, 3, 1, 3, 2};
+      for (unsigned i = 0; i < 5; i++) {
+        unsigned a = left[i], b = right[i];
+        if (random_expected[test][a] == 0xffffffffu ||
+            (random_expected[test][b] != 0xffffffffu && keys[b] < keys[a])) {
+          uint32_t temp = random_expected[test][a];
+          random_expected[test][a] = random_expected[test][b];
+          random_expected[test][b] = temp;
+          float key = keys[a];
+          keys[a] = keys[b];
+          keys[b] = key;
+        }
+      }
     }
   }
   hsa_signal_t signal;
@@ -231,6 +309,34 @@ int main(int argc, char **argv) {
     if (((uint32_t *)out)[344 + i] != remap[i])
       failed = 1;
   printf("permuted_edges=216 paired_remaps=6\n");
+  unsigned random_hits = 0;
+  for (unsigned test = 0; test < 24; test++) {
+    for (unsigned lane = 0; lane < 4; lane++) {
+      uint32_t got = ((uint32_t *)out)[944 + test * 4 + lane];
+      if (got != random_expected[test][lane])
+        failed = 1;
+      if (got != 0xffffffffu)
+        random_hits++;
+    }
+  }
+  printf("random_box_cases=24 hit_lanes=%u\n", random_hits);
+  if (random_hits == 0)
+    failed = 1;
+  static const unsigned oblique_masks[3][6][2] = {
+      {{4, 4}, {3, 2}, {1, 3}, {5, 5}, {2, 2}, {3, 1}},
+      {{2, 2}, {5, 4}, {3, 1}, {3, 3}, {4, 4}, {1, 3}},
+      {{4, 4}, {3, 3}, {5, 1}, {4, 4}, {3, 3}, {1, 5}}};
+  for (unsigned shape = 0; shape < 3; shape++)
+    for (unsigned d = 0; d < 6; d++)
+      for (unsigned facing = 0; facing < 2; facing++)
+        for (unsigned point = 0; point < 3; point++) {
+          unsigned index = ((shape * 6 + d) * 2 + facing) * 3 + point;
+          uint32_t t = ((uint32_t *)out)[1040 + 4 * index];
+          int hit = (t & 0x7fffffffu) != 0x7f800000u;
+          if (hit != ((oblique_masks[shape][d][facing] >> point) & 1))
+            failed = 1;
+        }
+  printf("oblique_edges=108\n");
   if (failed) {
     fprintf(stderr, "instruction probe failed or timed out\n");
     return 1;

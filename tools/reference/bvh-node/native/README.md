@@ -11,8 +11,10 @@ establish general opcode equivalence or game compatibility.
 On gfx1036 the ordinary misses in this fixture preserve the signed determinant
 and return infinity with the same sign. The control checks all six permutations
 of three triangles against both Z-axis ray directions at their three edge
-midpoints and three vertices (216 cases). The scalar shader matches the tested
-Z-axis edge ownership; other ray directions and special values remain
+midpoints and three vertices (216 cases), and checks 108 oblique-ray edge
+cases. A seeded set of 24 finite BOX16/BOX32 inputs is compared with CPU box
+calculations. The scalar shader matches the tested unique-dominant-axis edge
+ownership; tied axes, special values, and general numerical equivalence remain
 unverified. The control also checks all three observed barycentric selectors
 on each paired triangle type using unequal barycentrics. These cases do not
 establish general instruction equivalence.

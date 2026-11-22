@@ -168,6 +168,31 @@ def selection(entry, count, extra):
         "pages": count, "selected": len(base), "additional_pages": len(second), "initial_indirect_x": 32}
 
 
+def distance_field_requests(active, count, capacity, start):
+    cb = [0] * 64
+    cb[44:46] = [count, capacity]
+    assets, requests = [0] * (64 * 9), [0] * 64
+    for lane in range(64):
+        prior = 1 + lane % 3
+        assets[lane * 9] = prior << 30
+        requests[lane] = (prior % 3) + 1 if lane in active else prior
+    # Reject a zero resident mip and a zero requested mip independently.
+    assets[5 * 9] = 0
+    requests[5] = 2
+    requests[6] = 0
+    seed = [[GUARD] * 270]
+    seed[0][0] = start
+    expected = [seed[0].copy()]
+    chosen = [lane for lane in range(min(count, 64)) if lane in active and lane not in (5, 6)]
+    expected[0][0] += len(chosen)
+    for offset, lane in enumerate(chosen):
+        index = start + offset
+        if index < capacity:
+            expected[0][2 * index + 1:2 * index + 3] = [lane, requests[lane]]
+    return cb, [assets, requests], seed, [4], 4, 1, 1, expected, {
+        "selected": chosen, "count": count, "capacity": capacity, "initial": start}
+
+
 def visibility_instance(visible, occluders, protected=None, post=False, stats_variant=False, no_hzb=False):
     # Exercise the packaged shader with an actual depth texture and visibility UAVs.
     with TemporaryDirectory(dir=ROOT / "build") as tmp:
@@ -231,7 +256,7 @@ def main():
     p.add_argument("--prefix", type=Path)
     p.add_argument("--proton", type=Path)
     p.add_argument("--xshader", type=Path)
-    p.add_argument("--entry", type=int, choices=(1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470, 3477),
+    p.add_argument("--entry", type=int, choices=(517, 1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470, 3477),
                    help="run the controls for one archive entry")
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
@@ -240,6 +265,16 @@ def main():
     compiler = args.xshader.resolve() if args.xshader else compiler
     data, entries = global_archive(args.mount)
     cases, libraries = {}, {}
+    for name, active, count, capacity, start in (
+        ("empty", [], 64, 100, 3),
+        ("zero_count", [0, 2, 31, 32, 33, 63], 0, 100, 3),
+        ("zero_capacity", [0, 2, 31, 32, 33, 63], 64, 0, 3),
+        ("sparse", [0, 2, 31, 32, 33, 63], 64, 100, 3),
+        ("partial", [0, 2, 31, 32, 33, 63], 33, 100, 3),
+        ("capacity", [0, 2, 31, 32, 33, 63], 64, 6, 3),
+        ("full", list(range(64)), 64, 100, 3),
+    ):
+        cases["distance_" + name] = (517, distance_field_requests(active, count, capacity, start))
     for name, active, count, small in (
         ("empty", [], 64, []),
         ("sparse", [0, 2, 31, 32, 33, 63], 64, []),
@@ -328,7 +363,7 @@ def main():
                     words(work / f"{name}.b{i}", constants)
             else:
                 words(work / (name+".cbv"), cb)
-            if entry in (1016, 1243, 1257, 1793, 3477, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470):
+            if entry in (517, 1016, 1243, 1257, 1793, 3477, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470):
                 for i, records in enumerate(srv):
                     words(work / f"{name}.t{i}", records)
             else:

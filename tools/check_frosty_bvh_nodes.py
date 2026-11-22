@@ -77,12 +77,18 @@ def triangle_reference(origin, direction, a, b, c):
         return [math.inf, 1.0, i, j]
     u, v = i / determinant, j / determinant
     missed = t / determinant < 0 or u < 0 or v < 0 or u + v > 1
-    if direction[0] == direction[1] == 0 and direction[2] != 0:
+    axis = max(range(3), key=lambda x: abs(direction[x]))
+    if all(abs(direction[axis]) > abs(direction[i]) for i in range(3) if i != axis):
+        x, y = (axis + 1) % 3, (axis + 2) % 3
+        def project(point):
+            return (point[x] - direction[x] * point[axis] / direction[axis],
+                    point[y] - direction[y] * point[axis] / direction[axis])
         def owns_edge(start, end, inside):
+            start, end, inside = map(project, (start, end, inside))
             nx, ny = start[1] - end[1], end[0] - start[0]
             if nx * (inside[0] - start[0]) + ny * (inside[1] - start[1]) < 0:
                 nx, ny = -nx, -ny
-            return nx > 0 or (nx == 0 and ny * direction[2] < 0)
+            return nx > 0 or (nx == 0 and ny * direction[axis] < 0)
         missed |= u == 0 and not owns_edge(a, c, b)
         missed |= v == 0 and not owns_edge(a, b, c)
         missed |= u + v == 1 and not owns_edge(b, c, a)
@@ -188,6 +194,7 @@ def main():
         ((0.5, 0.5, 1), (0, 0, -1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
         ((-0.5, 0.5, -1), (0, 0, 1), (0, 0, 0), (1, 1, 0), (-1, 1, 0)),
         ((0, 1, -1), (0, 0, 1), (0, 0, 0), (1, 1, 0), (-1, 1, 0)),
+        ((-0.5, -1.5, -1), (1, 2, 1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
     ]
     if retail_triangle:
         center = tuple(sum(vertex[axis] for vertex in retail_triangle) / 3 for axis in range(3))

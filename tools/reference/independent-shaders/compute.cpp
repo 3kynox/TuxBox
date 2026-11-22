@@ -32,6 +32,14 @@ static void dispatch(Context &ctx, FILE *receipt, const std::string &name, UINT 
     std::array<UINT, words> initial{};
     for (UINT i = 0; i < words; ++i)
         initial[i] = 0x76540000u + i;
+    // Optional per-case seed data is copied into the default heap on the GPU.
+    // Existing controls without a seed retain the original guarded pattern.
+    std::ifstream input(name + ".seed", std::ios::binary);
+    if (input) {
+        input.read(reinterpret_cast<char *>(initial.data()), sizeof(initial));
+        if (input.gcount() != sizeof(initial) || input.peek() != std::char_traits<char>::eof())
+            throw std::runtime_error("invalid compute seed " + name);
+    }
     upload(seed.Get(), initial.data(), sizeof(initial));
     D3D12_DESCRIPTOR_HEAP_DESC hd{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1,
                                   D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0};

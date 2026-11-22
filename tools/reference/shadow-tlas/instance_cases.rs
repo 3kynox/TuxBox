@@ -56,6 +56,53 @@ fn main() {
             0x12345600,
         ),
     ];
+    let mut cases = cases.to_vec();
+    let tiny = f32::MIN_POSITIVE;
+    cases.extend([
+        (
+            [[1., tiny, 0., 0.], [0., 1., 0., 0.], [0., 0., 1., 0.]],
+            0xff000010,
+            0x12345600,
+        ),
+        (
+            [[1., -tiny, 0., -1.], [0., 1., tiny, 1.], [0., 0., 1., 0.]],
+            0xff000011,
+            0x12345600,
+        ),
+        (
+            [[1., 1., 0., 2.], [0., 1., -1., -2.], [0., 0., 1., 0.]],
+            0xff000012,
+            0x12345600,
+        ),
+        (
+            [
+                [1., 0., 0., 16777216.],
+                [0., 1., 0., -16777216.],
+                [0., 0., 1., 0.],
+            ],
+            0xff000013,
+            0x12345600,
+        ),
+    ]);
+    let mut state = 0x98765432u32;
+    let mut next = || {
+        state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+        state
+    };
+    for _ in 0..32 {
+        let mut matrix = [[0.0f32; 4]; 3];
+        for (row, values) in matrix.iter_mut().enumerate() {
+            for (col, value) in values[..3].iter_mut().enumerate() {
+                *value = if row == col {
+                    2.0 + (next() % 12) as f32 * 0.25
+                } else {
+                    (next() % 9) as f32 * 0.125 - 0.5
+                };
+            }
+            values[3] = (next() % 2001) as f32 - 1000.0;
+        }
+        cases.push((matrix, 0xff000001, 0x12345600));
+    }
     let blas = Blas {
         bounds: Bounds {
             min: [-1.; 3],
@@ -79,10 +126,14 @@ fn main() {
         input[13] = instance.contribution_and_flags;
         input[14] = address as u32;
         input[15] = (address >> 32) as u32;
-        let (status, output) = match build(instance, blas, index as u32, 0x33) {
-            Ok(Some(value)) => (1, value.words),
-            Ok(None) => (0, [0; 32]),
-            Err(_) => (2, [0; 32]),
+        let (status, output, bounds) = match build(instance, blas, index as u32, 0x33) {
+            Ok(Some(value)) => (
+                1,
+                value.words,
+                [value.bounds.min, value.bounds.max].concat(),
+            ),
+            Ok(None) => (0, [0; 32], vec![0.; 6]),
+            Err(_) => (2, [0; 32], vec![0.; 6]),
         };
         for n in input {
             print!("{n:08x} ");
@@ -90,6 +141,9 @@ fn main() {
         print!("{status:08x} ");
         for n in output {
             print!("{n:08x} ");
+        }
+        for v in bounds {
+            print!("{:08x} ", v.to_bits());
         }
         println!();
     }

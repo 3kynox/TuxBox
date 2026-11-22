@@ -1,7 +1,7 @@
 // Experimental per-instance encoder. This is a standalone control and is not
 // wired into the runtime. The caller supplies already-validated BLAS metadata.
 // Float32 matrix inversion can diverge from the CPU reference for ill-conditioned
-// transforms; conservative bounds and GPU-produced input are not covered here.
+// transforms; metadata provenance and runtime queue integration remain open.
 // Status: 0 = disabled, 1 = encoded, 2 = invalid/unsupported input.
 uint tb_encode_instance(uint src[16], uint root, uint compression, uint index,
                         uint parent, out uint dst[32]) {
@@ -35,5 +35,55 @@ uint tb_encode_instance(uint src[16], uint root, uint compression, uint index,
     dst[16] = asuint(t.x); dst[17] = asuint(t.y); dst[18] = asuint(t.z);
     for (uint n = 0; n < 9; ++n) dst[19+n] = asuint(inv[n]);
     dst[28] = index; dst[29] = parent; dst[30] = compression;
+    return 1;
+}
+
+// Outward interval rounding around each FP32 operation. Values in the
+// subnormal range are widened to the smallest normal magnitude so that FTZ
+// cannot shrink the interval. Overflow is rejected rather than clamped.
+float tb_down(float v) {
+    if (abs(v) <= 1.17549435e-38f) return -1.17549435e-38f;
+    return asfloat(v > 0 ? asuint(v) - 1 : asuint(v) + 1);
+}
+float tb_up(float v) {
+    if (abs(v) <= 1.17549435e-38f) return 1.17549435e-38f;
+    return asfloat(v > 0 ? asuint(v) + 1 : asuint(v) - 1);
+}
+bool tb_input_finite_normal_or_zero(float v) {
+    uint bits = asuint(v) & 0x7fffffffu;
+    return bits < 0x7f800000u && (bits == 0 || bits >= 0x00800000u);
+}
+// Status 1 = conservative bounds, 2 = unsupported input or overflow.
+uint tb_instance_bounds(uint src[16], float3 objectMin, float3 objectMax,
+                        out float3 worldMin, out float3 worldMax) {
+    worldMin = 0; worldMax = 0;
+    for (uint k = 0; k < 3; ++k) {
+        if (!tb_input_finite_normal_or_zero(objectMin[k]) ||
+            !tb_input_finite_normal_or_zero(objectMax[k]) || objectMin[k] > objectMax[k]) return 2;
+    }
+    for (uint row = 0; row < 3; ++row) {
+        float origin = asfloat(src[row*4+3]);
+        if (!tb_input_finite_normal_or_zero(origin)) return 2;
+        float lo = origin, hi = origin;
+        for (uint col = 0; col < 3; ++col) {
+            float coefficient = asfloat(src[row*4+col]);
+            if (!tb_input_finite_normal_or_zero(coefficient)) return 2;
+            float p = coefficient < 0 ? objectMax[col] : objectMin[col];
+            float q = coefficient < 0 ? objectMin[col] : objectMax[col];
+            // precise prohibits contraction of a product and following sum.
+            precise float lowProduct = coefficient * p;
+            precise float highProduct = coefficient * q;
+            if (!isfinite(lowProduct) || !isfinite(highProduct)) return 2;
+            float lowTerm = coefficient == 0 || p == 0 ? 0 : tb_down(lowProduct);
+            float highTerm = coefficient == 0 || q == 0 ? 0 : tb_up(highProduct);
+            precise float lower = lo + lowTerm;
+            precise float upper = hi + highTerm;
+            if (!isfinite(lower) || !isfinite(upper)) return 2;
+            lo = lowTerm == 0 ? lo : tb_down(lower);
+            hi = highTerm == 0 ? hi : tb_up(upper);
+            if (!isfinite(lo) || !isfinite(hi)) return 2;
+        }
+        worldMin[row] = lo; worldMax[row] = hi;
+    }
     return 1;
 }

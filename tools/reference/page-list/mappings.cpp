@@ -48,6 +48,7 @@ static void dispatch(Context &ctx, const std::string &name, UINT entry, UINT gro
     const std::vector<UINT> srvs = no_hzb ? std::vector<UINT>{16,16,16,800,4} : post_instance ? std::vector<UINT>{16,16,16,4,800,4,8,4} : single_instance ? std::vector<UINT>{16,16,16,4,800,4} : cluster ? std::vector<UINT>{16,16,16,4,4,4,4,16,4,800,4}
                                            : instance ? std::vector<UINT>{16,16,16,4,4,4,4,800,8,4}
                                            : cards ? std::vector<UINT>{16, 4, 4, 4}
+                                           : entry == 517 ? std::vector<UINT>{4, 4}
                                            : entry == 1016 ? std::vector<UINT>{8, 4, 4}
                                            : entry == 2138 ? std::vector<UINT>{16}
                                            : cached ? std::vector<UINT>{4, 4, 4, 8, 4, 4}
