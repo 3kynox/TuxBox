@@ -1,4 +1,4 @@
-// Consecutive scalar register writes all observe the same EXEC bit. Keep them in
+// Consecutive per-lane VGPR writes all observe the same EXEC bit. Keep them in
 // one predicated region. Resource, control-flow and mask-changing statements
 // always close the region before they execute.
 fn assignment(line: &str) -> Option<&str> {
@@ -94,4 +94,35 @@ pub(super) fn group(body: &str) -> String {
         output.push_str("    }\n");
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::group;
+
+    #[test]
+    fn adjacent_pixel_register_writes_keep_order_and_exec_boundaries() {
+        const GUARD: &str = "    if (exec_lo & 1u) ";
+        let first = format!("{GUARD}v3 = asuint(asfloat(v2) + 1.0);");
+        let second = format!("{GUARD}v2 = asuint(max(asfloat(v3), 0.0));");
+        let grouped = "    if (exec_lo & 1u) {\n        v3 = asuint(asfloat(v2) + 1.0);\n        v2 = asuint(max(asfloat(v3), 0.0));\n    }\n";
+        // Each instruction separates two runs of pure ALU. In particular,
+        // derivatives and quad/wave operations must see their original EXEC.
+        for boundary in [
+            "    exec_lo = s4;",
+            "    if (!exec_lo) { discard; }",
+            "    if (jT) {",
+            "    }",
+            "    if (exec_lo & 1u) v3 = QuadReadLaneAt(v2, 1u);",
+            "    if (exec_lo & 1u) v3 = WaveActiveSum(v2);",
+            "    if (exec_lo & 1u) v3 = asuint(ddx(asfloat(v2)));",
+            "    if (exec_lo & 1u) v3 = tex.Load(v2);",
+            "    if (exec_lo & 1u) v3 = cache[v2];",
+            "    if (exec_lo & 1u) InterlockedAdd(cache[v2], v3);",
+            "    if (exec_lo & 1u) target.x = v3;",
+        ] {
+            let body = format!("{first}\n{second}\n{boundary}\n{first}\n{second}\n");
+            assert_eq!(group(&body), format!("{grouped}{boundary}\n{grouped}"));
+        }
+    }
 }

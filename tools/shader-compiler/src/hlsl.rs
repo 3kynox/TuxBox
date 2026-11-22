@@ -995,9 +995,10 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     em.live = live_in.clone();
     em.view_cull = view_cull;
     em.emit_body(is_ps)?;
-    if ex.stage == Stage::Compute
-        && (packed_root::matches_program(&ex.isa, 60424, 0xc449ec66f2170fb3)
-            || packed_root::matches_program(&ex.isa, 56932, 0x5504968d23557c53))
+    if ex.stage == Stage::Pixel
+        || (ex.stage == Stage::Compute
+            && (packed_root::matches_program(&ex.isa, 60424, 0xc449ec66f2170fb3)
+                || packed_root::matches_program(&ex.isa, 56932, 0x5504968d23557c53)))
     {
         em.body = exec_group::group(&em.body);
     }

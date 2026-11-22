@@ -44,47 +44,9 @@
   },
   "host": "Linux x86-64",
   "proton": "1793301796 experimental-11.0-20261027b-x86_64",
-  "compiler_sha256": "e4d2f24b6acb9c12dc6d4da2c8f3b4bf0f6ee3991dac671e3cfd12783b76e0e1",
+  "compiler_sha256": "14bf0bb7659602d596c87a26a6716878a5af181638361fda457e2f115f6a88b3",
   "dxc_sha256": "3dfc856b76291ffc7e45e21fd37ab80e85b34101de76a03253df6608785c92a0",
   "dxv_sha256": "33778294d67143d9f81526f4759c66d5a67a95ea9873448ef3595650a643cbd3",
-  "cold": {
-    "wall_seconds": 335.848,
-    "total_compiled": 2433,
-    "total_reused": 19,
-    "chase": {
-      "programs": {
-        "checked": 2000,
-        "compiled": 1992
-      },
-      "links": {
-        "checked": 228,
-        "compiled": 228
-      }
-    },
-    "log_sha256": "92f78df6dac156d46e11e408d5dd9c0cce2135577d18615e88e6f562e127a93a",
-    "gpu_helper_started": true,
-    "profile_sha256": "e5c0409be7c51e1d8551ce660a60c9ce5ac96c1b20a44aada922217cd7fea173"
-  },
-  "warm": {
-    "wall_seconds": 2.105,
-    "total_compiled": 0,
-    "total_reused": 2509,
-    "chase": {
-      "programs": {
-        "checked": 2056,
-        "compiled": 0
-      },
-      "links": {
-        "checked": 229,
-        "compiled": 0
-      }
-    },
-    "log_sha256": "bf9d3d8e580d07cbd8b166c0627c4b823b943de599bf2ae4d1b3a6cc95926ef5",
-    "gpu_helper_started": false
-  },
-  "runtime_cache_fingerprint": "c86fb5f9aa99d7709a46879ce0c8b6cad5a40e6c2a7896c47e6807964f8b96ab",
-  "runtime_cache_entries": 2277,
-  "runtime_output_manifest_sha256": "5ad72a63a759e34ffb31dff90103b8bfe6076c56bceb9026323aaac162d735b7",
   "gpu_pipelines": {
     "scope": "Separate offscreen Proton processes created the six compute pipelines through Xbox device slot 62, with the same DXIL and root as the retail run. Cold started with empty driver and vkd3d caches. Warm reused both after removing the helper receipt to require pipeline creation again. Timings cover the pipeline creation calls.",
     "provider_sha256": "69a64840b95534400cf96e4a0acb494c2496fc8628a4fbba2c13030fd341259b",
@@ -211,7 +173,9 @@
           "native_pipeline_call_ms": 1101.046
         }
       }
-    }
+    },
+    "compiler_sha256": "e4d2f24b6acb9c12dc6d4da2c8f3b4bf0f6ee3991dac671e3cfd12783b76e0e1",
+    "compute_dxil_verified_unchanged_with": "14bf0bb7659602d596c87a26a6716878a5af181638361fda457e2f115f6a88b3"
   },
   "temporal_aa_retail": {
     "prior_menu_snapshots": {
@@ -395,41 +359,155 @@
           }
         ]
       }
+    },
+    "compiler_sha256": "e4d2f24b6acb9c12dc6d4da2c8f3b4bf0f6ee3991dac671e3cfd12783b76e0e1"
+  },
+  "runtime_cache_fingerprint": "144803717fa330d38cae827f4ca21c06cbd36b79f660d0c389f3322fcb00088c",
+  "runtime_cache_entries": 2277,
+  "runtime_output_manifest_sha256": "ae30ad94c6b73d7615e600a6efb6a6d1f2f51aa22bf3dc163a32bf52420211eb",
+  "portable_cache": {
+    "by_source": {
+      "files": 216,
+      "manifest_sha256": "545c1d73be1e5266811892b1e9a5c59eaf7f2c7187e372c20226e93723b6ff36",
+      "receipt_sha256": "ec4e46ffb8a5b5f09eb9991b53bab50b0d74d60bd9e58e9d1cc2c347cb1cd0d6"
+    },
+    "by_gs_ps": {
+      "files": 4,
+      "manifest_sha256": "22b37b6b310414ef76d4d2b45421838653212631fa20fa9f6c4a314810dcd578",
+      "receipt_sha256": "05f0ec0b92cd7b193193e58300a1fd2027ba85b1d7919d1abcecf81a4f2650ce"
+    },
+    "by_vs_ps": {
+      "files": 4,
+      "manifest_sha256": "345e0ac330392168c7d46365eb208ca81efcac9168f87defecfcf36732df37bf",
+      "receipt_sha256": "9092472d1e62979c159465484f0ddf03c3f3d317181c9a99c671018a78f99d79"
+    },
+    "runtime/144803717fa330d38cae827f4ca21c06cbd36b79f660d0c389f3322fcb00088c": {
+      "files": 2277,
+      "manifest_sha256": "ae30ad94c6b73d7615e600a6efb6a6d1f2f51aa22bf3dc163a32bf52420211eb"
     }
   },
-  "scope": "The normal stock Proton prepare-only CLI started with empty shader, vkd3d and NVIDIA driver caches. The cold trial checked 2,452 entries, including menu/gameplay overlaps, and built six compute pipelines. The first cached repeat checked that same profile. The shooting tutorial supplied another 56 material programs and one linked pair. The incremental pass and final cached repeat used the same prefix and all 2,509 entries. No game process ran in these preparation trials.",
-  "warm_2452": {
-    "wall_seconds": 2.44,
-    "total_compiled": 0,
-    "total_reused": 2452,
-    "chase": {
-      "programs": {
-        "checked": 2000,
-        "compiled": 0
-      },
-      "links": {
-        "checked": 228,
-        "compiled": 0
-      }
-    },
-    "log_sha256": "f6f58b3fa600e86f4d2f847bca192a646c1406a6e8c35baca017d38b9e47efc2",
-    "gpu_helper_started": false
+  "output_changes_from_previous_compiler": {
+    "by_source": 68,
+    "by_gs_ps": 0,
+    "by_vs_ps": 0,
+    "runtime_sources": 1069,
+    "runtime_link_outputs": 0,
+    "runtime_link_input_hashes": 207
   },
-  "incremental": {
-    "wall_seconds": 5.194,
-    "total_compiled": 57,
-    "total_reused": 2452,
+  "startup_profile_sha256": "18ccfa909c6488c350552507cbf832eb855c14993572608f6f6a72eb40ee361e",
+  "menu_profile_sha256": "f46c1133a8ec3d25ed96c5838a6cb43e82eaac7424ce1b81e94208816a678420",
+  "cold": {
+    "wall_seconds": 230.109,
+    "total_compiled": 2490,
+    "total_reused": 19,
     "chase": {
       "programs": {
         "checked": 2056,
-        "compiled": 56
+        "compiled": 2048
       },
       "links": {
         "checked": 229,
-        "compiled": 1
+        "compiled": 229
       }
     },
-    "log_sha256": "a6136cd589b02191d38b1b0e9ceef688e6ba9210cf99622fce09fd93346c9d75",
+    "log_sha256": "69468f2b96c796e0bf9e4e7289b217812bc4344c8e8b18b31b70195e25a12427",
+    "gpu_helper_started": true
+  },
+  "warm": {
+    "wall_seconds": 2.11,
+    "total_compiled": 0,
+    "total_reused": 2509,
+    "chase": {
+      "programs": {
+        "checked": 2056,
+        "compiled": 0
+      },
+      "links": {
+        "checked": 229,
+        "compiled": 0
+      }
+    },
+    "log_sha256": "c11d9542d5a2ec30be97988d34b2d9f45a61eb6a8bb03a2a2bbbc1274c3d4865",
     "gpu_helper_started": false
+  },
+  "scope": "The stock Proton prepare-only CLI prepared the complete 2,509-entry gameplay profile in a fresh prefix with empty portable, vkd3d and NVIDIA caches. The repeat used the same prefix and caches. Both passes include overlaps between the menu and gameplay sets. No game process ran in these preparation trials.",
+  "previous_preparation": {
+    "compiler_sha256": "e4d2f24b6acb9c12dc6d4da2c8f3b4bf0f6ee3991dac671e3cfd12783b76e0e1",
+    "dxc_sha256": "3dfc856b76291ffc7e45e21fd37ab80e85b34101de76a03253df6608785c92a0",
+    "dxv_sha256": "33778294d67143d9f81526f4759c66d5a67a95ea9873448ef3595650a643cbd3",
+    "profile_sha256": "a9ef891b6e350d155307443118776609ecc9e700972b355bd2dc1019be3a2c1c",
+    "cold": {
+      "wall_seconds": 335.848,
+      "total_compiled": 2433,
+      "total_reused": 19,
+      "chase": {
+        "programs": {
+          "checked": 2000,
+          "compiled": 1992
+        },
+        "links": {
+          "checked": 228,
+          "compiled": 228
+        }
+      },
+      "log_sha256": "92f78df6dac156d46e11e408d5dd9c0cce2135577d18615e88e6f562e127a93a",
+      "gpu_helper_started": true,
+      "profile_sha256": "e5c0409be7c51e1d8551ce660a60c9ce5ac96c1b20a44aada922217cd7fea173"
+    },
+    "warm_2452": {
+      "wall_seconds": 2.44,
+      "total_compiled": 0,
+      "total_reused": 2452,
+      "chase": {
+        "programs": {
+          "checked": 2000,
+          "compiled": 0
+        },
+        "links": {
+          "checked": 228,
+          "compiled": 0
+        }
+      },
+      "log_sha256": "f6f58b3fa600e86f4d2f847bca192a646c1406a6e8c35baca017d38b9e47efc2",
+      "gpu_helper_started": false
+    },
+    "incremental": {
+      "wall_seconds": 5.194,
+      "total_compiled": 57,
+      "total_reused": 2452,
+      "chase": {
+        "programs": {
+          "checked": 2056,
+          "compiled": 56
+        },
+        "links": {
+          "checked": 229,
+          "compiled": 1
+        }
+      },
+      "log_sha256": "a6136cd589b02191d38b1b0e9ceef688e6ba9210cf99622fce09fd93346c9d75",
+      "gpu_helper_started": false
+    },
+    "warm": {
+      "wall_seconds": 2.105,
+      "total_compiled": 0,
+      "total_reused": 2509,
+      "chase": {
+        "programs": {
+          "checked": 2056,
+          "compiled": 0
+        },
+        "links": {
+          "checked": 229,
+          "compiled": 0
+        }
+      },
+      "log_sha256": "bf9d3d8e580d07cbd8b166c0627c4b823b943de599bf2ae4d1b3a6cc95926ef5",
+      "gpu_helper_started": false
+    },
+    "runtime_cache_fingerprint": "c86fb5f9aa99d7709a46879ce0c8b6cad5a40e6c2a7896c47e6807964f8b96ab",
+    "runtime_cache_entries": 2277,
+    "runtime_output_manifest_sha256": "5ad72a63a759e34ffb31dff90103b8bfe6076c56bceb9026323aaac162d735b7",
+    "scope": "The normal stock Proton prepare-only CLI started with empty shader, vkd3d and NVIDIA driver caches. The cold trial checked 2,452 entries, including menu/gameplay overlaps, and built six compute pipelines. The first cached repeat checked that same profile. The shooting tutorial supplied another 56 material programs and one linked pair. The incremental pass and final cached repeat used the same prefix and all 2,509 entries. No game process ran in these preparation trials."
   }
 }

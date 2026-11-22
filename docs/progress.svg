@@ -146,8 +146,8 @@
     <rect x="229" y="172" width="84.0" height="7" fill="#2ecc71" />
     <text x="463" y="181" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">19,634 / 19,634</text>
     <rect x="722" y="172" width="94" height="7" fill="#272733" />
-    <rect x="722" y="172" width="4.191082802547771" height="7" fill="#e2bc8c" />
-    <text x="954" y="181" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">42 / 942</text>
+    <rect x="722" y="172" width="4.16895459345301" height="7" fill="#e2bc8c" />
+    <text x="954" y="181" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">42 / 947</text>
     <text x="694" y="181" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">42</text>
     <rect x="18" y="188" width="936" height="1" fill="#272733" />
     <text x="18" y="208" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Mesh</text>
@@ -168,8 +168,8 @@
     <rect x="229" y="226" width="83.64403879064461" height="7" fill="#e2bc8c" />
     <text x="463" y="235" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">12,219 / 12,271</text>
     <rect x="722" y="226" width="94" height="7" fill="#272733" />
-    <rect x="722" y="226" width="5.895023858214042" height="7" fill="#e2bc8c" />
-    <text x="954" y="235" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">92 / 1,467</text>
+    <rect x="722" y="226" width="5.886997957794418" height="7" fill="#e2bc8c" />
+    <text x="954" y="235" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">92 / 1,469</text>
     <text x="694" y="235" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">93</text>
     <rect x="18" y="242" width="936" height="1" fill="#272733" />
     <text x="18" y="262" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Geometry</text>
@@ -214,7 +214,7 @@
     <text x="463" y="370" fill="#a0a0b1" font-size="15" text-anchor="end" font-weight="normal">—</text>
     <text x="954" y="370" fill="#a0a0b1" font-size="15" text-anchor="end" font-weight="normal">—</text>
     <text x="694" y="370" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">0</text>
-    <text x="18" y="397" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Standalone DXIL passed for 2531/2531 tested programs among 2531 distinct title requests.</text>
+    <text x="18" y="397" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Standalone DXIL passed for 2538/2538 tested programs among 2538 distinct title requests.</text>
     <text x="18" y="418" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Gameplay shader warmup · 2,056 programs and 229 linked pairs ready before playing</text>
     <text x="18" y="439" fill="#a0a0b1" font-size="14" text-anchor="start" font-weight="normal">Ray-tracing entries contain serialized state objects. Their translation has a separate path.</text>
   </g>
