@@ -28,6 +28,7 @@ PROVIDERS = {"d3d12": "d3d12-smoke/d3d12_xs.dll", "dxc-utils": "dxc-utils/dxcomp
              "xgameruntime": "xgameruntime/xgameruntime.dll", "gameconfig": "gameconfig/gameconfighelper.dll"}
 POINTER = OUTPUT / "frosty-native/latest-independent"
 ENGINE_INI = Path("Frosty/Config/UserEngine.ini")
+XG_PATH = Path("Mount") / BIN / "xg_xs.dll"
 
 
 def publish(path, data):
@@ -42,6 +43,12 @@ def verify_staged_files(work):
     if Path((work / "stage").read_text().strip()) != stage:
         raise ValueError("The package location differs from the prepared working directory")
     files = json.loads((work / "providers.json").read_text())
+    marker = work / "inputs.json"
+    if marker.exists():
+        mode = json.loads(marker.read_text()).get("xg_provider", "packaged")
+        expected_origin = {"packaged": "Packaged Xbox XG", "tuxbox": "TuxBox xg"}.get(mode)
+        if expected_origin is None or files.get(str(XG_PATH), {}).get("origin") != expected_origin:
+            raise ValueError("The staged XG provider does not match the preparation selection")
     original = {Path(name).name.lower() for name, info in files.items() if info["origin"] == "Original retail package"}
     if original != SHIPPED:
         raise ValueError("Reprepare the working copy to record all five original retail binaries")
@@ -54,7 +61,61 @@ def verify_staged_files(work):
         raise ValueError(f"Unexpected retail binary set: {sorted(binaries ^ expected)}")
 
 
-def prepare(source, packaged_os, work, proton, windows_dxc, *, select=True):
+def stage_xg_provider(tools, packaged_os, work, guest_bin, *, use_tuxbox):
+    if use_tuxbox:
+        build_target(tools, "xg", None)
+        source = OUTPUT / "xg-provider/xg_xs.dll"
+        origin = "TuxBox xg"
+    else:
+        source = packaged_os / "Windows/System32/xg_xs.dll"
+        origin = "Packaged Xbox XG"
+    expected = digest(source)
+    dest = guest_bin / "xg_xs.dll"
+    manifest = work / "providers.json"
+    if manifest.is_file():
+        previous = json.loads(manifest.read_text()).get(str(XG_PATH))
+        if not previous or previous.get("origin") != origin or previous.get("sha256") != expected:
+            raise ValueError("The XG provider changed; prepare a new working directory")
+        if not dest.is_file() or digest(dest) != previous["sha256"]:
+            raise ValueError("The staged XG provider differs from its preparation record")
+    shutil.copyfile(source, dest)
+    if digest(dest) != expected:
+        raise ValueError("The staged XG provider does not match its source")
+    return {"origin": origin, "sha256": expected}
+
+
+def refresh_xg(work):
+    """Explicitly replace a verified TuxBox XG build in an existing work directory."""
+    import fcntl
+
+    with (work / "launch.lock").open("a+b") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if json.loads((work / "inputs.json").read_text()).get("xg_provider") != "tuxbox":
+            raise ValueError("XG refresh requires an existing TuxBox XG working directory")
+        verify_staged_files(work)
+        tools = Toolchain()
+        build_target(tools, "xg", None)
+        source = OUTPUT / "xg-provider/xg_xs.dll"
+        expected = digest(source)
+        destination = work / XG_PATH
+        temp = None
+        try:
+            with NamedTemporaryFile(dir=destination.parent, delete=False) as out, source.open("rb") as src:
+                temp = Path(out.name)
+                shutil.copyfileobj(src, out)
+            if digest(temp) != expected:
+                raise ValueError("The refreshed XG provider does not match its source")
+            files = json.loads((work / "providers.json").read_text())
+            files[str(XG_PATH)] = {"origin": "TuxBox xg", "sha256": expected}
+            temp.replace(destination)
+            publish(work / "providers.json", json.dumps(files, indent=2) + "\n")
+        finally:
+            if temp is not None:
+                temp.unlink(missing_ok=True)
+    print(f"Refreshed TuxBox XG in {work}; sha256 {expected}")
+
+
+def prepare(source, packaged_os, work, proton, windows_dxc, *, select=True, use_tuxbox_xg=False):
     import fcntl
 
     plan = json.loads(FROSTY_PLAN.read_text())
@@ -69,13 +130,15 @@ def prepare(source, packaged_os, work, proton, windows_dxc, *, select=True):
     work.mkdir(parents=True, exist_ok=True)
     stage, prefix = work / "Mount", work / "prefix"
     settings = {"source": str(source), "packaged_os": str(packaged_os), "proton": str(proton)}
+    if use_tuxbox_xg:
+        settings["xg_provider"] = "tuxbox"
     marker = work / "inputs.json"
     lock = work / "launch.lock"
     with lock.open("a+b") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if marker.is_file():
             if json.loads(marker.read_text()) != settings:
-                raise ValueError("This directory belongs to a different package or Proton installation")
+                raise ValueError("This directory belongs to a different package, Proton installation, or XG selection")
         elif any(path != lock for path in work.iterdir()):
             raise ValueError("Use an empty directory or an existing independent Frosty setup")
         else:
@@ -84,6 +147,8 @@ def prepare(source, packaged_os, work, proton, windows_dxc, *, select=True):
             subprocess.run(["cp", "-a", "--reflink=auto", "--", str(source) + "/.", stage], check=True)
             (work / "package-copied").touch()
         tools = Toolchain()
+        guest_bin = stage / BIN
+        xg_record = stage_xg_provider(tools, packaged_os, work, guest_bin, use_tuxbox=use_tuxbox_xg)
         for target in PROVIDERS:
             build_target(tools, target, find_dxc(None) if target == "d3d12" else None)
         host = Host("proton", proton, prefix)
@@ -95,7 +160,6 @@ def prepare(source, packaged_os, work, proton, windows_dxc, *, select=True):
                 raise ValueError(f"This prefix maps G: to {drive.resolve()}")
         else:
             drive.symlink_to(stage, target_is_directory=True)
-        guest_bin = stage / BIN
         system = prefix / "drive_c/windows/system32"
         files = {}
 
@@ -116,8 +180,7 @@ def prepare(source, packaged_os, work, proton, windows_dxc, *, select=True):
             dest = folder / name
             shutil.copyfile(OUTPUT / relative, dest)
             record(dest, f"TuxBox {target}")
-        shutil.copyfile(packaged_os / "Windows/System32/xg_xs.dll", guest_bin / "xg_xs.dll")
-        record(guest_bin / "xg_xs.dll", "Packaged Xbox XG")
+        files[str(XG_PATH)] = xg_record
         for name in ("dxcompiler.dll", "dxil.dll"):
             dest = guest_bin / name
             if windows_dxc.is_dir():
@@ -149,6 +212,7 @@ def main():
     parser.add_argument("source", type=Path, nargs="?", help="original Frosty Mount directory")
     checks = parser.add_mutually_exclusive_group()
     checks.add_argument("--check", action="store_true", help="verify the staged binaries and check for old graphics overrides")
+    checks.add_argument("--refresh-xg", action="store_true", help="rebuild and explicitly refresh XG in a verified TuxBox-XG working directory")
     # The launcher already holds launch.lock during this check.
     checks.add_argument("--check-launch", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--packaged-os", type=Path, help="default: EmbeddedXvd beside Mount")
@@ -156,17 +220,21 @@ def main():
     parser.add_argument("--windows-dxc", type=Path, help="Microsoft DXC Windows release zip or bin/x64 directory")
     parser.add_argument("--proton", type=Path, help="installed Proton distribution")
     parser.add_argument("--no-select", action="store_true", help="keep the current default working directory")
+    parser.add_argument("--tuxbox-xg", action="store_true", help="build and stage TuxBox XG in a new working directory")
     args = parser.parse_args()
     try:
         if args.check or args.check_launch:
             verify_staged_files(args.work.resolve())
+            return
+        if args.refresh_xg:
+            refresh_xg(args.work.resolve())
             return
         if not args.source or not args.windows_dxc:
             parser.error("preparation requires the original Mount directory and --windows-dxc")
         source = args.source.resolve()
         prepare(source, (args.packaged_os or source.parent / "EmbeddedXvd").resolve(), args.work.resolve(),
                 proton_installation(args.proton or os.getenv("PROTONPATH")), args.windows_dxc.resolve(),
-                select=not args.no_select)
+                select=not args.no_select, use_tuxbox_xg=args.tuxbox_xg)
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         parser.exit(1, f"Frosty preparation failed: {exc}\n")
 
