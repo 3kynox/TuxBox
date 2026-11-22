@@ -10,6 +10,7 @@ EXPORTS
     XMemGetWriteWatch @17
     XMemMakeTag @20
     XMemMapPhysicalPages @21
+    XMemMapPhysicalPagesScatter @22
     XMemResumeWriteWatch @24
     XMemSetAllocationHooks @25
     XMemSetOption @27

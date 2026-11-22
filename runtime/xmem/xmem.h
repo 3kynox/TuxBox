@@ -48,6 +48,8 @@ __declspec(dllimport) UINT64 WINAPI XMemMakeTag(UINT32 fourcc);
 
 __declspec(dllimport) BOOL WINAPI XMemAllocatePhysicalPages(UINT64 flags, SIZE_T *count, UINT64 *tokens);
 __declspec(dllimport) void *WINAPI XMemMapPhysicalPages(void *base, SIZE_T count, const UINT64 *tokens);
+__declspec(dllimport) BOOL WINAPI XMemMapPhysicalPagesScatter(void *const *addresses, SIZE_T count,
+                                                              const UINT64 *tokens);
 __declspec(dllimport) BOOL WINAPI XMemFreePhysicalPages(SIZE_T count, const UINT64 *tokens);
 
 #endif

@@ -269,3 +269,79 @@ pub unsafe extern "system" fn map(
         }
     }
 }
+
+/// Map or unmap individually addressed 64 KiB pages owned by this provider.
+///
+/// # Safety
+/// The caller supplies a nonnull array of `count` aligned page addresses and,
+/// if nonnull, `count` aligned page tokens. Arrays must remain readable outside
+/// the mapped ranges. The caller must own and serialize access to each range.
+#[unsafe(export_name = "XMemMapPhysicalPagesScatter")]
+pub unsafe extern "system" fn map_scatter(
+    addresses: *const *mut c_void,
+    count: usize,
+    tokens: *const u64,
+) -> i32 {
+    if addresses.is_null() || !addresses.is_aligned() {
+        return failure(ERROR_INVALID_PARAMETER);
+    }
+    if count == 0 {
+        return 1;
+    }
+    if count > isize::MAX as usize / size_of::<usize>() || !tokens.is_aligned() {
+        return failure(ERROR_INVALID_PARAMETER);
+    }
+    // SAFETY: The caller supplies separate, initialized arrays of count items.
+    let input = unsafe { slice::from_raw_parts(addresses, count) };
+    let mut pages = Vec::new();
+    if pages.try_reserve_exact(count).is_err() {
+        return failure(ERROR_NOT_ENOUGH_MEMORY);
+    }
+    let mut unique = HashSet::new();
+    if unique.try_reserve(count).is_err() {
+        return failure(ERROR_NOT_ENOUGH_MEMORY);
+    }
+    for &address in input {
+        let at = address as usize;
+        if at == 0 || !at.is_multiple_of(PAGE) || at.checked_add(PAGE).is_none() || !unique.insert(at) {
+            return failure(ERROR_INVALID_PARAMETER);
+        }
+        pages.push(at);
+    }
+    let mut pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
+    let mut associated = Vec::new();
+    if associated.try_reserve_exact(count).is_err() {
+        return failure(ERROR_NOT_ENOUGH_MEMORY);
+    }
+    if tokens.is_null() {
+        for &at in &pages {
+            let Some(&token) = pool.mappings.get(&at) else { return failure(ERROR_INVALID_ADDRESS); };
+            associated.push(token);
+        }
+        for (index, &at) in pages.iter().enumerate() {
+            if let Err(error) = pool.unmap(at, PAGE) {
+                for prior in (0..index).rev() {
+                    if pool.map(pages[prior], PAGE, &associated[prior..prior + 1]).is_err() {
+                        return failure(ERROR_INVALID_ADDRESS);
+                    }
+                }
+                return failure(error);
+            }
+        }
+    } else {
+        // SAFETY: The caller supplies count readable tokens, checked above.
+        let values = unsafe { slice::from_raw_parts(tokens, count) };
+        if let Err(error) = pool.validate_unmapped(values) { return failure(error); }
+        for (index, (&at, &token)) in pages.iter().zip(values).enumerate() {
+            if let Err(error) = pool.map(at, PAGE, core::slice::from_ref(&token)) {
+                for prior in (0..index).rev() {
+                    if pool.unmap(pages[prior], PAGE).is_err() {
+                        return failure(ERROR_INVALID_ADDRESS);
+                    }
+                }
+                return failure(error);
+            }
+        }
+    }
+    1
+}

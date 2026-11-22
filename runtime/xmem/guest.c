@@ -407,6 +407,53 @@ static int physical_pages(void)
     return 0;
 }
 
+static int scattered_pages(void)
+{
+    const SIZE_T page = 65536;
+    HMODULE module = GetModuleHandleW(L"xmem.dll");
+    REQUIRE(GetProcAddress(module, "XMemMapPhysicalPagesScatter") == GetProcAddress(module, MAKEINTRESOURCEA(22)));
+    BYTE *base = VirtualAlloc(NULL, 8 * page, MEM_RESERVE, PAGE_NOACCESS);
+    REQUIRE(base);
+    SIZE_T count = 3;
+    UINT64 tokens[3];
+    REQUIRE(XMemAllocatePhysicalPages(0x20400000, &count, tokens) && count == 3);
+    void *mapped[] = {base, base + 3 * page, base + 6 * page};
+    REQUIRE(XMemMapPhysicalPagesScatter(mapped, 0, tokens));
+    REQUIRE(!XMemMapPhysicalPagesScatter(NULL, 0, tokens));
+    REQUIRE(XMemMapPhysicalPagesScatter(mapped, 3, tokens));
+    for (unsigned i = 0; i < 3; ++i) {
+        REQUIRE(page_state(mapped[i], MEM_COMMIT));
+        memset(mapped[i], (int)(0x31 + i), page);
+    }
+    REQUIRE(page_state(base + page, MEM_RESERVE) && page_state(base + 2 * page, MEM_RESERVE));
+    void *duplicate[] = {mapped[0], mapped[0]};
+    REQUIRE(!XMemMapPhysicalPagesScatter(duplicate, 2, NULL));
+    REQUIRE(page_state(mapped[0], MEM_COMMIT));
+    REQUIRE(XMemMapPhysicalPagesScatter(mapped, 3, NULL));
+    for (unsigned i = 0; i < 3; ++i) REQUIRE(page_state(mapped[i], MEM_RESERVE));
+    void *reverse[] = {base + page, base + 4 * page, base + 7 * page};
+    UINT64 reversed[] = {tokens[2], tokens[1], tokens[0]};
+    UINT64 duplicates[] = {tokens[0], tokens[0], tokens[2]};
+    REQUIRE(!XMemMapPhysicalPagesScatter(reverse, 3, duplicates));
+    // A late failure must restore earlier mappings and their page contents.
+    BYTE *foreign = VirtualAlloc(base + 2 * page, page, MEM_COMMIT, PAGE_READWRITE);
+    REQUIRE(foreign == base + 2 * page);
+    foreign[0] = 0x5a;
+    void *mixed[] = {reverse[0], reverse[1], foreign};
+    REQUIRE(!XMemMapPhysicalPagesScatter(mixed, 3, reversed));
+    REQUIRE(page_state(reverse[0], MEM_RESERVE) && page_state(reverse[1], MEM_RESERVE) && foreign[0] == 0x5a);
+    REQUIRE(VirtualFree(foreign, page, MEM_DECOMMIT));
+    REQUIRE(XMemMapPhysicalPagesScatter(reverse, 3, reversed));
+    for (unsigned i = 0; i < 3; ++i) {
+        BYTE *p = reverse[i];
+        for (SIZE_T n = 0; n < page; ++n) REQUIRE(p[n] == 0x33 - i);
+    }
+    REQUIRE(XMemMapPhysicalPagesScatter(reverse, 3, NULL));
+    REQUIRE(XMemFreePhysicalPages(3, tokens));
+    REQUIRE(VirtualFree(base, 0, MEM_RELEASE));
+    return 0;
+}
+
 int wmain(int argc, wchar_t **argv)
 {
     BOOL pages_only = argc >= 2 && !wcscmp(argv[1], L"--pages");
@@ -414,13 +461,21 @@ int wmain(int argc, wchar_t **argv)
     BOOL tag_only = argc >= 2 && !wcscmp(argv[1], L"--tags");
     BOOL hooks_only = argc >= 2 && !wcscmp(argv[1], L"--hooks");
     BOOL watch_only = argc >= 2 && !wcscmp(argv[1], L"--watch");
-    if (pages_only || query_only || tag_only || hooks_only || watch_only) { --argc; ++argv; }
+    BOOL scatter_only = argc >= 2 && !wcscmp(argv[1], L"--scatter");
+    if (pages_only || query_only || tag_only || hooks_only || watch_only || scatter_only) { --argc; ++argv; }
     if (!(argc == 1 || (argc == 3 && wcscmp(argv[1], L"--report") == 0))) {
-        fputs("usage: xmem-smoke.exe [--pages|--query|--tags|--hooks|--watch] [--report FILE]\n", stderr);
+        fputs("usage: xmem-smoke.exe [--pages|--query|--tags|--hooks|--watch|--scatter] [--report FILE]\n", stderr);
         return 2;
     }
     if (argc == 3 && _wfopen_s(&report, argv[2], L"wb") != 0) return 2;
     REQUIRE(app_local_provider());
+    if (scatter_only) {
+        REQUIRE(!scattered_pages());
+        const char result[] = "xmem-scatter PASS pages=3 remapped-bytes=196608 duplicates=2 guards=2 rollback=1\n";
+        if (report && (fputs(result, report) == EOF || fclose(report))) return 2;
+        fputs(result, stdout);
+        return 0;
+    }
     if (watch_only) {
         REQUIRE(!write_watch());
         const char result[] = "xmem-watch PASS initial=2 reset=2 next=1 guards=2 invalid=1 pause=2 resume=3 allocations=2\n";

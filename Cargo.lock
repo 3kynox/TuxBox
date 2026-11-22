@@ -118,6 +118,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "tuxbox-pixevt"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "tuxbox-xaudio"
 version = "0.1.0"
 dependencies = [

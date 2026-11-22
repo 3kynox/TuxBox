@@ -9,7 +9,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT / "build"
-TARGETS = ("route", "graphics", "frontpanel", "xmem", "acphal", "xgameruntime", "xcrdapi", "dxc-utils", "xg", "gameconfig", "gamechat", "gameinput",
+TARGETS = ("route", "graphics", "frontpanel", "pixevt", "xmem", "acphal", "xgameruntime", "xcrdapi", "dxc-utils", "xg", "gameconfig", "gamechat", "gameinput",
            "mfreadwrite", "xaudio", "aac", "d3d12", "lanes")
 # rustc --print native-static-libs for the Windows MSVC target with +crt-static.
 RUST_STD_LIBS = ("kernel32.lib", "ntdll.lib", "userenv.lib", "ws2_32.lib", "dbghelp.lib",
@@ -141,6 +141,11 @@ def build_target(tools, target, dxc, d3d12_reference=None):
         out = OUTPUT / "graphics"
         obj = tools.compile(ROOT / "graphics/desktop_clear.cpp", out)
         tools.link(out / "desktop-clear.exe", obj, "dxgi.lib", "d3d12.lib", "kernel32.lib")
+    elif target == "pixevt":
+        src, out = ROOT / "runtime/pixevt", OUTPUT / "pixevt"
+        out.mkdir(parents=True, exist_ok=True)
+        tools.link(out / "pixevt.dll", tools.rust_library("tuxbox-pixevt"), *RUST_STD_LIBS,
+                   exports=src / "pixevt.def")
     elif target == "frontpanel":
         src, out = ROOT / "runtime/frontpanel", OUTPUT / "frontpanel"
         out.mkdir(parents=True, exist_ok=True)
