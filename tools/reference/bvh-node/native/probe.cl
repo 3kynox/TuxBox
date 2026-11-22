@@ -185,6 +185,9 @@ __kernel void probe(__global unsigned *out) {
           intersect(node, (float4)(x, x, -1.f, 0), (float4)(0, 0, 1.f, 0),
                     (float4)(1, 1, 1, 0));
     }
+  *(__global uint4 *)(out + 2800) =
+      intersect(((ulong)(out + 7552)) >> 3, (float4)(.2f, .3f, -1.f, 0.f),
+                (float4)(.1f, .2f, 1.f, 0.f), (float4)(1.f, 1.f, 1.f, 0.f));
   if (out[3000] == 1u) {
     const float4 origins[8] = {
         (float4)(.25f, .25f, -4.f, 0.f), (float4)(0, 0, -4, 0),

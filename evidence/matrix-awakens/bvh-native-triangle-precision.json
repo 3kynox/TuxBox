@@ -262,5 +262,6 @@
   "dxil_sha256": "7f36203797b139b2c709f7c2ff9c09d46ea7cebc0367315f59195b1ee8a9db24",
   "result": "mismatch",
   "note": "Eight odd-coordinate ULP cases differ in determinant and distance numerator; native also validates 64 origin/coordinate combinations. This is synthetic data and not a full opcode equivalence test.",
-  "native_origin_cases": 64
+  "native_origin_cases": 64,
+  "constant_folded_limitation": "HLSL node and ray inputs were compiled as constants and DXC may have folded arithmetic. These results do not establish dynamic GPU arithmetic equivalence; use controls with dynamic inputs."
 }

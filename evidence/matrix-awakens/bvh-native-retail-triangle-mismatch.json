@@ -203,5 +203,6 @@
   "serialized_source_sha256": "38bd71be9dd00e74952a9612f87f7df37a1617ca9f9847bb531b40bc5a4ad6af",
   "result": "mismatch",
   "note": "All six cases differ in raw output on both HLSL adapters; in these finite same-sign outputs the largest raw ULP difference is 3. DXC -Gis produced the same results. No hardware-exact or full traversal claim.",
-  "strict_ieee_same_results": true
+  "strict_ieee_same_results": true,
+  "constant_folded_limitation": "HLSL node and ray inputs were compiled as constants and DXC may have folded arithmetic. These results do not establish dynamic GPU arithmetic equivalence; use controls with dynamic inputs."
 }

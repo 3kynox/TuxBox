@@ -50,15 +50,19 @@ def main():
     parser.add_argument("--prefix-nvidia", type=Path, required=True)
     parser.add_argument("--amd-vulkan", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--float-rtz", action="store_true", help="test the float32-only RTZ candidate")
     direction = parser.add_mutually_exclusive_group()
     direction.add_argument("--oblique", action="store_true", help="use varied ray directions and magnitudes")
     direction.add_argument("--tied", action="store_true", help="use tied dominant ray axes")
+    direction.add_argument("--miss", action="store_true", help="offset rays to exercise misses")
     args = parser.parse_args()
     random_source = random.Random(219091)
     rays = ("varied ray directions and magnitudes" if args.oblique else
-            "tied dominant ray axes" if args.tied else "positive-Z unit rays")
-    result = {"scope": f"48 seeded synthetic paired triangle hits, {rays}, native gfx1036 instruction versus experimental HLSL; not general traversal or opcode equivalence",
-              "seed": 219091, "batches": [], "cases": 0, "mismatches": 0}
+            "tied dominant ray axes" if args.tied else
+            "offset varied directions" if args.miss else "positive-Z unit rays")
+    result = {"scope": f"48 seeded synthetic paired triangle cases, {rays}, native gfx1036 instruction versus dynamic-input experimental HLSL; not general traversal or opcode equivalence",
+              "seed": 219091, "float_rtz": args.float_rtz, "batches": [], "cases": 0, "native_hits": 0,
+              "native_misses": 0, "mismatches": 0}
     with TemporaryDirectory(prefix="tuxbox-bvh-rtz-sweep-") as directory:
         root = Path(directory)
         for batch in range(8):
@@ -66,17 +70,29 @@ def main():
             dump = root / f"{batch}.bin"
             report = root / f"{batch}.json"
             source.write_bytes(make_blas(random_source))
-            mode = "--retail-oblique" if args.oblique else "--retail-tied" if args.tied else "--retail-triangles"
+            mode = ("--retail-oblique" if args.oblique else "--retail-tied" if args.tied else
+                    "--retail-miss" if args.miss else "--retail-triangles")
             native = subprocess.run([str(args.probe), str(args.code), mode,
                                      str(source), str(dump)], capture_output=True, text=True)
             if native.returncode:
                 raise RuntimeError(f"native batch {batch} failed: {native.stderr[-1000:]}")
+            data = dump.read_bytes()
+            if data[:8] != b"TXBVT002" or len(data) != 8 + 6 * 27 * 4:
+                raise ValueError(f"invalid native output in batch {batch}")
+            for case in range(6):
+                numerator = struct.unpack_from("<I", data, 8 + case * 27 * 4 + 23 * 4)[0]
+                if numerator & 0x7fffffff == 0x7f800000:
+                    result["native_misses"] += 1
+                else:
+                    result["native_hits"] += 1
             command = [sys.executable, str(ROOT / "tools/check_native_bvh_hlsl.py"),
                        "--dump", str(dump), "--proton", str(args.proton),
                        "--prefix-amd", str(args.prefix_amd), "--prefix-nvidia", str(args.prefix_nvidia),
-                       "--strict", "--projected-rtz", "--output", str(report)]
+                       "--strict", "--projected-rtz", "--dynamic", "--output", str(report)]
             if args.amd_vulkan:
                 command += ["--amd-vulkan", str(args.amd_vulkan)]
+            if args.float_rtz:
+                command.append("--float-rtz")
             checked = subprocess.run(command, capture_output=True, text=True, cwd=ROOT)
             if not report.exists():
                 raise RuntimeError(f"HLSL batch {batch} failed: {checked.stderr[-1000:]}")

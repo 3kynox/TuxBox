@@ -15,5 +15,6 @@
       "guard_words": 360
     }
   },
-  "dxil_sha256": "fbb5ff10220343d78c67580720e9e800d8e724f8cbd7d03e666078b29212d84e"
+  "dxil_sha256": "fbb5ff10220343d78c67580720e9e800d8e724f8cbd7d03e666078b29212d84e",
+  "constant_folded_limitation": "HLSL node and ray inputs were compiled as constants and DXC may have folded arithmetic. These results do not establish dynamic GPU arithmetic equivalence; use controls with dynamic inputs."
 }

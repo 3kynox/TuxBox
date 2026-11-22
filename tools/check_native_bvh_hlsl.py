@@ -8,6 +8,7 @@ game assets are required. This checks only the cases present in that dump.
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import struct
@@ -30,14 +31,21 @@ def run():
     parser.add_argument("--amd-vulkan", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--strict", action="store_true", help="compile with DXC strict IEEE math")
-    parser.add_argument("--projected-rtz", action="store_true", help="experimental finite interior-hit triangle control")
+    parser.add_argument("--projected-rtz", action="store_true", help="experimental finite triangle control away from edges")
+    parser.add_argument("--float-rtz", action="store_true", help="test experimental float32-only RTZ candidate")
+    parser.add_argument("--dynamic", action="store_true", default=True,
+                        help="prevent constant folding using the runtime thread ID (default)")
+    parser.add_argument("--allow-constant-folding", dest="dynamic", action="store_false",
+                        help="reproduce older constant-input controls; does not test dynamic GPU arithmetic")
     args = parser.parse_args()
     data = args.dump.read_bytes()
-    is_triangle = data[:8] in (b"TXBVT001", b"TXBVT002", b"TXBVP001")
+    is_triangle = data[:8] in (b"TXBVT001", b"TXBVT002", b"TXBVP001", b"TXBVF001")
     if is_triangle and len(data) == 8 + 6 * 27 * 4:
         cases = [struct.unpack_from("<27I", data, 8 + i * 27 * 4) for i in range(6)]
     elif data[:8] == b"TXBVP001" and len(data) == 8 + 16 * 27 * 4:
         cases = [struct.unpack_from("<27I", data, 8 + i * 27 * 4) for i in range(16)]
+    elif data[:8] == b"TXBVF001" and len(data) == 8 + 27 * 4:
+        cases = [struct.unpack_from("<27I", data, 8)]
     elif data[:8] == b"TXBVH001" and len(data) == 8 + 48 * 52 * 4:
         cases = [struct.unpack_from("<52I", data, 8 + i * 52 * 4) for i in range(48)]
     elif data[:8] == b"TXBVR001" and len(data) == 8 + 8 * 52 * 4:
@@ -46,29 +54,39 @@ def run():
         raise ValueError("invalid native oracle dump")
     if args.projected_rtz and not is_triangle:
         raise ValueError("projected RTZ control requires triangle input")
+    if args.float_rtz and not args.projected_rtz:
+        raise ValueError("float-only RTZ requires projected RTZ mode")
     if args.projected_rtz and not args.strict:
         raise ValueError("projected RTZ control requires strict IEEE compilation")
     if args.projected_rtz:
         for i, case in enumerate(cases):
-            if any(word & 0x7f800000 == 0x7f800000 for word in (*case[:12], *case[16:22], *case[23:27])):
-                raise ValueError(f"projected RTZ case {i} contains nonfinite values or a native miss")
+            if any(word & 0x7f800000 == 0x7f800000 for word in (*case[:12], *case[16:22], *case[24:27])):
+                raise ValueError(f"projected RTZ case {i} contains nonfinite inputs or outputs")
             if case[24] & 0x7fffffff == 0:
                 raise ValueError(f"projected RTZ case {i} has a zero native determinant")
             if all(word & 0x7fffffff == 0 for word in case[19:22]):
                 raise ValueError(f"projected RTZ case {i} has a zero ray direction")
             values = struct.unpack("<4f", struct.pack("<4I", *case[23:27]))
+            if math.isnan(values[0]):
+                raise ValueError(f"projected RTZ case {i} has a NaN native numerator")
             t, u, v = (values[j] / values[1] for j in (0, 2, 3))
-            if t < 0 or u <= 0 or v <= 0 or u + v >= 1:
+            if u == 0 or v == 0 or u + v == 1:
+                raise ValueError(f"projected RTZ case {i} is on a triangle edge")
+            if math.isfinite(t) and (t < 0 or u < 0 or v < 0 or u + v > 1):
                 raise ValueError(f"projected RTZ case {i} is not an interior hit")
     shader = (ROOT / "tools/reference/bvh-node/node.hlsl").read_text()
     if args.projected_rtz:
         shader += "\n" + (ROOT / "tools/reference/bvh-node/rtz_triangle.hlsl").read_text()
-    shader += "\nRWBuffer<uint> output : register(u0);\n[numthreads(1,1,1)] void main() {\n"
+    shader += "\nRWBuffer<uint> output : register(u0);\n[numthreads(1,1,1)] void main(uint3 tid : SV_DispatchThreadID) {\n"
+    def raw(word):
+        return f"(0x{word:08x}u ^ tid.x)" if args.dynamic else f"0x{word:08x}u"
+    def float_word(word):
+        return f"asfloat({raw(word)})"
     for i, case in enumerate(cases):
         if is_triangle:
-            node = ", ".join(f"0x{word:08x}u" for word in (*case[:16], *([0] * 16)))
-            origin = ", ".join(f"asfloat(0x{word:08x}u)" for word in case[16:19])
-            direction = ", ".join(f"asfloat(0x{word:08x}u)" for word in case[19:22])
+            node = ", ".join(raw(word) for word in (*case[:16], *([0] * 16)))
+            origin = ", ".join(float_word(word) for word in case[16:19])
+            direction = ", ".join(float_word(word) for word in case[19:22])
             if case[22] not in (0, 1):
                 raise ValueError(f"invalid triangle side in case {i}")
             if args.projected_rtz:
@@ -77,10 +95,10 @@ def run():
                 shader += f"{{ uint node[32] = {{ {node} }}; float4 r = tb_bvh_paired_triangle(node, {case[22]}u, float3({origin}), float3({direction}));"
             shader += "".join(f" output[{4*i+j}] = asuint(r[{j}]);" for j in range(4)) + " }\n"
         else:
-            node = ", ".join(f"0x{word:08x}u" for word in case[:32])
-            origin = ", ".join(f"asfloat(0x{word:08x}u)" for word in case[32:35])
-            inverse = ", ".join(f"asfloat(0x{word:08x}u)" for word in case[35:38])
-            extent = f"asfloat(0x{case[38]:08x}u)"
+            node = ", ".join(raw(word) for word in case[:32])
+            origin = ", ".join(float_word(word) for word in case[32:35])
+            inverse = ", ".join(float_word(word) for word in case[35:38])
+            extent = float_word(case[38])
             if case[39] not in (0, 1) or case[40] not in (0, 1):
                 raise ValueError(f"invalid descriptor in case {i}")
             half = "false" if case[40] else "true"
@@ -89,11 +107,13 @@ def run():
             shader += "".join(f" output[{4*i+j}] = r[{j}];" for j in range(4)) + " }\n"
     shader += "}\n"
     scope = ("serialized BLAS paired triangle" if data[:8] == b"TXBVT002" else
+             "synthetic fractional-direction triangle" if data[:8] == b"TXBVF001" else
              "synthetic triangle precision" if data[:8] == b"TXBVP001" else
              "synthetic paired triangle") if is_triangle else (
         "serialized BLAS root" if data[:8] == b"TXBVR001" else "synthetic BOX16/BOX32")
     report = {"scope": f"{scope} cases: native gfx1036 instruction output versus HLSL, not a general opcode equivalence proof",
-              "projected_rtz": args.projected_rtz, "cases": len(cases), "native_dump_sha256": hashlib.sha256(data).hexdigest(),
+              "projected_rtz": args.projected_rtz, "float_rtz": args.float_rtz, "dynamic": args.dynamic,
+              "cases": len(cases), "native_dump_sha256": hashlib.sha256(data).hexdigest(),
               "hlsl_sha256": hashlib.sha256(shader.encode()).hexdigest(), "adapters": {}}
     with TemporaryDirectory(prefix="tuxbox-bvh-native-diff-") as directory:
         work = Path(directory)
@@ -103,6 +123,8 @@ def run():
         dxc_args = [dxc, "-T", "cs_6_0", "-E", "main", hlsl, "-Fo", cso]
         if args.strict:
             dxc_args.append("-Gis")
+        if args.float_rtz:
+            dxc_args += ["-D", "TUXBOX_RTZ_FLOAT32=1"]
         subprocess.run(dxc_args, check=True)
         subprocess.run([dxc.with_name("dxv"), cso], check=True)
         report["dxil_sha256"] = hashlib.sha256(cso.read_bytes()).hexdigest()

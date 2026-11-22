@@ -6,7 +6,8 @@ use super::{compute_group, packed_root::matches_program, r, Emitter, Insn, Opnd,
 pub(super) fn recognize(ex: &ShaderExtract) -> bool {
     if ex.stage == Stage::Compute && compute_group(ex) == [8, 8, 1]
         && ex.entry.as_deref() == Some("ScreenProbeConvertToIrradianceCS")
-        && matches_program(&ex.isa, 3624, 0x63d66671fc0a1366)
+        && (matches_program(&ex.isa, 3624, 0x63d66671fc0a1366)
+            || matches_program(&ex.isa, 3412, 0x12fe7f4e4ffe1884))
     {
         return true;
     }

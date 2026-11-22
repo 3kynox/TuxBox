@@ -263,6 +263,7 @@ def main():
     if len(expected) * 4 > 192:
         raise ValueError("control exceeds the guarded UAV")
     report = {"scope": "Finite-input BVH node math compared with CPU calculations; no native instruction oracle",
+              "constant_folded_limitation": "HLSL node and ray inputs were compiled as constants and DXC may have folded arithmetic. These results do not establish dynamic GPU arithmetic equivalence; use controls with dynamic inputs.",
               "serialized_sha256": source_hash, "box_cases": len(boxes),
               "triangle_cases": len(triangles) + len(paired_cases), "adapters": {}}
     with TemporaryDirectory(prefix="tuxbox-bvh-node-") as directory:

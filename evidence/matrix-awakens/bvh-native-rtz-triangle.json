@@ -621,5 +621,6 @@
     }
   },
   "cases_per_adapter": 184,
-  "mismatches": 0
+  "mismatches": 0,
+  "constant_folded_limitation": "HLSL node and ray inputs were compiled as constants and DXC may have folded arithmetic. These results do not establish dynamic GPU arithmetic equivalence; use controls with dynamic inputs."
 }

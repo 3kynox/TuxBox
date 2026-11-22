@@ -21,8 +21,8 @@ infinite inverse direction at slab interiors, boundaries and exterior points.
 Another 90 cases exercise descriptor box growth against one- and two-step
 floating-point gaps at five positive distances. The scalar helper still only
 supports zero growth; other growth behavior needs broader validation.
-The scalar shader matches the tested parallel-slab and edge ownership
-and zero-determinant results; general special-value behavior and numerical
+Earlier scalar shader comparisons used constant inputs, so compiler folding
+could bypass GPU arithmetic. General special-value behavior and numerical
 equivalence remain unverified. The control checks all three observed barycentric selectors
 on each paired triangle type using unequal barycentrics. These cases do not
 establish general instruction equivalence.
@@ -52,7 +52,9 @@ python tools/check_native_bvh_hlsl.py --dump /tmp/tuxbox-bvh-cases.bin --proton 
 
 `--amd-vulkan` is optional when the default Vulkan driver exposes Radeon.
 The result checks these cases only and does not establish full traversal or
-instruction equivalence.
+instruction equivalence. The tool uses runtime-dependent values by default to
+prevent constant folding. Older receipts used constant inputs and cannot prove
+dynamic GPU arithmetic equivalence.
 
 For six paired-triangle cases with unequal barycentrics, generate the dump
 with `--dump-triangles /tmp/tuxbox-bvh-triangles.bin` instead. Pass that file
@@ -70,20 +72,22 @@ selects six supported paired leaves with finite vertices and nonzero projected
 area; pass the resulting local dump to the differential tool. The tool returns
 a nonzero exit status when any raw word differs and writes the mismatches to
 the requested JSON report. `--strict` additionally compiles the HLSL with
-DXC strict IEEE math. For the tested Frosty sphere leaves, both GPU HLSL
-results differ from native by up to three ULP in the finite same-sign output
-words, with or without `--strict`; do not treat the helper as bit exact.
+DXC strict IEEE math. Earlier constant-input comparisons of the original
+scalar helper differed from native by up to three ULP for the tested Frosty
+sphere leaves, with or without `--strict`; do not treat the helper as bit exact.
 For the same six leaves with varied ray directions, use `--retail-oblique`
 or `--retail-tied` in place of `--retail-triangles`.
 
 The separate `rtz_triangle.hlsl` experiment uses a ray-relative projected
-edge formulation with round-toward-zero after each operation. It matches the
-native words on the sampled finite interior hits, including oblique directions,
-different magnitudes and tied dominant axes. To try it, add `--strict --projected-rtz`
-to the differential command. It uses binary64 intermediates
-and currently covers only finite, uncompressed TRI0/TRI1 interior hits. It is
-expensive, does not implement miss or edge handling, and is not connected to
-the runtime. This experiment is
+edge formulation with round-toward-zero after each operation. The original
+binary64 implementation mismatches native on dynamically evaluated AMD inputs
+even when constant-input controls match. An experimental float32 split-product
+variant is selected with `--strict --projected-rtz --float-rtz`; it matches
+the sampled dynamic-input finite hits and misses in
+`evidence/matrix-awakens/bvh-native-rtz-dynamic.json`. Its split-product
+arithmetic is not validated for overflow or underflow. Edge ownership, extreme
+values, numerical behavior outside the tested inputs, and performance remain
+unverified. Neither variant is connected to the runtime. This experiment is
 informed by [AMD's public ray-triangle description](https://patents.google.com/patent/US20200193684A1/en);
 the tested results do not establish equivalence for other rays or inputs.
 
@@ -94,8 +98,9 @@ building the native probe:
 LD_LIBRARY_PATH="$HSA_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" python tools/check_native_rtz_sweep.py --probe /tmp/tuxbox-bvh-probe --code /tmp/tuxbox-bvh-probe.hsaco --proton /path/to/proton --prefix-amd /path/to/amd-prefix --prefix-nvidia /path/to/nvidia-prefix --amd-vulkan /path/to/radv.json --output /tmp/tuxbox-bvh-rtz-sweep.json
 ```
 
-Add `--oblique` for varied directions and magnitudes, or `--tied` for tied
-dominant axes. The default uses positive-Z unit rays.
+Add `--oblique` for varied directions and magnitudes, `--tied` for tied
+dominant axes, or `--miss` for offset rays. Add `--float-rtz` for the
+float32 split-product variant. The default uses positive-Z unit rays.
 
 `--dump-precision /tmp/tuxbox-bvh-precision.bin` provides a game-independent
 reproducer: it varies one triangle coordinate by 0–15 float ULPs and dumps
@@ -104,13 +109,18 @@ helper on the tested GPUs. The native control also tests four ray origins for
 each triangle and shows that the hardware determinant can change with origin,
 so rounding the final determinant alone cannot reproduce its behavior.
 
+`--dump-fractional /tmp/tuxbox-bvh-fractional.bin` emits a single synthetic
+fractional-direction native result. With dynamic inputs this reproduces an
+AMD-only mismatch in the binary64 reference; the float32 split-product
+candidate matches the native words on the tested Radeon and GeForce.
+
 The descriptor encodes a zero base, full 42-bit range, closest-first sorting
 and barycentric triangle return mode. Except for the dedicated growth cases,
 box growth is zero. The HSA host
 checks that its GPU is gfx1036 and that the allocation meets the node alignment
 before dispatch. The result is specific to the chosen inputs and GPU. Compare
-with `tools/check_frosty_bvh_nodes.py`, whose corresponding synthetic cases
-also run through D3D12 on Radeon and GeForce.
+with `tools/check_frosty_bvh_nodes.py`; its earlier constant-input comparisons
+do not establish dynamic GPU arithmetic equivalence.
 
 To inspect immediate BVH descriptor setup from a user-supplied cooked shader,
 run the standalone Rust inspector from the project root. It recognises the

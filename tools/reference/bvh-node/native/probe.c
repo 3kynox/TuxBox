@@ -52,15 +52,19 @@ int main(int argc, char **argv) {
   if (argc != 2 &&
       !(argc == 4 && (strcmp(argv[2], "--dump") == 0 ||
                       strcmp(argv[2], "--dump-triangles") == 0 ||
-                      strcmp(argv[2], "--dump-precision") == 0)) &&
+                      strcmp(argv[2], "--dump-precision") == 0 ||
+                      strcmp(argv[2], "--dump-fractional") == 0)) &&
       !(argc == 5 && (strcmp(argv[2], "--retail") == 0 ||
                       strcmp(argv[2], "--retail-triangles") == 0 ||
                       strcmp(argv[2], "--retail-oblique") == 0 ||
-                      strcmp(argv[2], "--retail-tied") == 0))) {
+                      strcmp(argv[2], "--retail-tied") == 0 ||
+                      strcmp(argv[2], "--retail-miss") == 0))) {
     fprintf(stderr,
-            "usage: %s probe.hsaco [--dump|--dump-triangles|--dump-precision "
+            "usage: %s probe.hsaco "
+            "[--dump|--dump-triangles|--dump-precision|--dump-fractional "
             "output.bin | "
-            "--retail|--retail-triangles|--retail-oblique|--retail-tied "
+            "--retail|--retail-triangles|--retail-oblique|--retail-tied|--"
+            "retail-miss "
             "serialized.bin "
             "output.bin]\n",
             argv[0]);
@@ -353,7 +357,8 @@ int main(int argc, char **argv) {
         static const float tied_directions[6][3] = {{1, 1, 1},   {1, -1, 1},
                                                     {-1, 1, 1},  {1, 1, -1},
                                                     {-1, -1, 1}, {1, -1, -1}};
-        int oblique = strcmp(argv[2], "--retail-oblique") == 0;
+        int miss = strcmp(argv[2], "--retail-miss") == 0;
+        int oblique = strcmp(argv[2], "--retail-oblique") == 0 || miss;
         int tied = strcmp(argv[2], "--retail-tied") == 0;
         for (unsigned axis = 0; axis < 3; axis++) {
           float direction = oblique ? directions[found][axis]
@@ -362,6 +367,8 @@ int main(int argc, char **argv) {
           float origin = .5f * vertices[3 * ia + axis] +
                          .375f * vertices[3 * ib + axis] +
                          .125f * vertices[3 * ic + axis] - 16.f * direction;
+          if (miss && axis == 0)
+            origin += 300.f;
           record[16 + axis] = bits(origin);
           record[19 + axis] = bits(direction);
         }
@@ -384,6 +391,13 @@ int main(int argc, char **argv) {
     precision[3] = 0x3f800000u + test;
     precision[15] = 9;
   }
+  uint32_t *fractional_node = (uint32_t *)out + 7552;
+  float fractional_vertices[12] = {0, 0,      0, 1.127f, 0, 0,
+                                   0, 1.133f, 0, 1,      1, 0};
+  memcpy(fractional_node, fractional_vertices, sizeof(fractional_vertices));
+  fractional_node[12] = 0x80;
+  fractional_node[14] = 1;
+  fractional_node[15] = 0x0909;
   hsa_signal_t signal;
   CHK(hsa_signal_create(1, 0, NULL, &signal));
   uint64_t index = hsa_queue_load_write_index_relaxed(queue);
@@ -569,6 +583,11 @@ int main(int argc, char **argv) {
       if (got != want)
         failed = 1;
     }
+  static const uint32_t fractional_expected[4] = {0xbfa37127u, 0xbfa37127u,
+                                                  0xbeae075eu, 0xbf104188u};
+  for (unsigned i = 0; i < 4; i++)
+    if (((uint32_t *)out)[2800 + i] != fractional_expected[i])
+      failed = 1;
   printf("triangle_precision=64\n");
   if (failed) {
     fprintf(stderr, "instruction probe failed or timed out\n");
@@ -580,27 +599,39 @@ int main(int argc, char **argv) {
       perror("open output");
       return 1;
     }
+    int fractional_dump = strcmp(argv[2], "--dump-fractional") == 0;
     int precision = strcmp(argv[2], "--dump-precision") == 0;
-    int triangles = precision || strcmp(argv[2], "--dump-triangles") == 0;
-    const char *magic = precision   ? "TXBVP001"
-                        : triangles ? "TXBVT001"
-                                    : "TXBVH001";
+    int triangles = precision || fractional_dump ||
+                    strcmp(argv[2], "--dump-triangles") == 0;
+    const char *magic = fractional_dump ? "TXBVF001"
+                        : precision     ? "TXBVP001"
+                        : triangles     ? "TXBVT001"
+                                        : "TXBVH001";
     int ok = fwrite(magic, 1, 8, dump) == 8;
-    for (unsigned test = 0; test < (precision   ? 16u
-                                    : triangles ? 6u
-                                                : 48u) &&
+    for (unsigned test = 0; test < (fractional_dump ? 1u
+                                    : precision     ? 16u
+                                    : triangles     ? 6u
+                                                    : 48u) &&
                             ok;
          test++) {
       if (triangles) {
-        unsigned side = precision ? 0 : test / 3;
-        uint32_t input = precision ? 7296 + test * 16 : 3424 + test * 16;
-        float origin[3] = {side ? .75f : .25f,
-                           precision ? .25f
-                           : side    ? .625f
-                                     : .125f,
+        unsigned side = (precision || fractional_dump) ? 0 : test / 3;
+        uint32_t input = fractional_dump ? 7552
+                         : precision     ? 7296 + test * 16
+                                         : 3424 + test * 16;
+        float origin[3] = {fractional_dump ? .2f
+                           : side          ? .75f
+                                           : .25f,
+                           fractional_dump ? .3f
+                           : precision     ? .25f
+                           : side          ? .625f
+                                           : .125f,
                            -1.f};
-        uint32_t output = precision ? 2540 + test * 4 : 344 + test * 4;
-        float direction[3] = {0.f, 0.f, 1.f};
+        uint32_t output = fractional_dump ? 2800
+                          : precision     ? 2540 + test * 4
+                                          : 344 + test * 4;
+        float direction[3] = {fractional_dump ? .1f : 0.f,
+                              fractional_dump ? .2f : 0.f, 1.f};
         ok =
             fwrite((uint32_t *)out + input, sizeof(uint32_t), 16, dump) == 16 &&
             fwrite(origin, sizeof(float), 3, dump) == 3 &&
@@ -654,7 +685,8 @@ int main(int argc, char **argv) {
   }
   if (argc == 5 && (strcmp(argv[2], "--retail-triangles") == 0 ||
                     strcmp(argv[2], "--retail-oblique") == 0 ||
-                    strcmp(argv[2], "--retail-tied") == 0)) {
+                    strcmp(argv[2], "--retail-tied") == 0 ||
+                    strcmp(argv[2], "--retail-miss") == 0)) {
     FILE *dump = fopen(argv[4], "wb");
     if (!dump) {
       perror("open output");

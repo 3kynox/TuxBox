@@ -18,5 +18,6 @@
   "dxil_sha256": "7bb028949536d59e1f4c91613afd81b9d5b0847fec759efd9a4940ed327faa27",
   "serialized_source_sha256": "38bd71be9dd00e74952a9612f87f7df37a1617ca9f9847bb531b40bc5a4ad6af",
   "root_node_type": "BOX16",
-  "hit_lanes": 19
+  "hit_lanes": 19,
+  "constant_folded_limitation": "HLSL node and ray inputs were compiled as constants and DXC may have folded arithmetic. These results do not establish dynamic GPU arithmetic equivalence; use controls with dynamic inputs."
 }

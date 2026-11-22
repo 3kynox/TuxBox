@@ -316,6 +316,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         total_nodes += nodes;
     }
     let rays_path = args.next();
+    if rays_path.as_deref() == Some(std::ffi::OsStr::new("--export-shadow-tlas")) {
+        let output = args.next().ok_or("missing synthetic TLAS output path")?;
+        if args.next().is_some() {
+            return Err("unexpected synthetic TLAS argument".into());
+        }
+        let scene =
+            sphere_scene(body, true).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        fs::write(output, scene)?;
+        return Ok(());
+    }
     let hits_path = args.next();
     let option = args.next();
     let shadow_tlas = option.as_ref().is_some_and(|arg| arg == "--shadow-tlas");

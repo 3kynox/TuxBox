@@ -1,7 +1,36 @@
-// Experimental scalar control for finite, nonzero-direction rays hitting
+// Experimental scalar control for finite, nonzero-direction rays testing
 // uncompressed TRI0/TRI1 leaves. It is deliberately not a runtime path.
-// Each single-precision operation is rounded toward zero using a binary64
-// intermediate. This is expensive and does not establish full ISA fidelity.
+// Each single-precision operation is rounded toward zero. The default uses a
+// binary64 intermediate. The optional float-only candidate is experimental;
+// neither path establishes full ISA fidelity.
+#ifdef TUXBOX_RTZ_FLOAT32
+float tb_rtz_adjust(float rounded, float residual) {
+    if ((rounded > 0.0 && residual < 0.0) || (rounded < 0.0 && residual > 0.0))
+        return asfloat(asuint(rounded) - 1u);
+    return rounded;
+}
+float tb_rtz_add(float a, float b) {
+    precise float sum = a + b;
+    precise float recoveredB = sum - a;
+    precise float residual = (a - (sum - recoveredB)) + (b - recoveredB);
+    return tb_rtz_adjust(sum, residual);
+}
+float tb_rtz_sub(float a, float b) { return tb_rtz_add(a, -b); }
+float tb_rtz_mul(float a, float b) {
+    precise float product = a * b;
+    precise float splitA = 4097.0 * a;
+    precise float highA = splitA - (splitA - a);
+    precise float lowA = a - highA;
+    precise float splitB = 4097.0 * b;
+    precise float highB = splitB - (splitB - b);
+    precise float lowB = b - highB;
+    precise float error1 = product - highA * highB;
+    precise float error2 = error1 - lowA * highB;
+    precise float error3 = error2 - highA * lowB;
+    precise float residual = lowA * lowB - error3;
+    return tb_rtz_adjust(product, residual);
+}
+#else
 float tb_rtz(double value) {
     float rounded = (float)value;
     if (abs((double)rounded) > abs(value))
@@ -11,6 +40,7 @@ float tb_rtz(double value) {
 float tb_rtz_add(float a, float b) { return tb_rtz((double)a + (double)b); }
 float tb_rtz_sub(float a, float b) { return tb_rtz((double)a - (double)b); }
 float tb_rtz_mul(float a, float b) { return tb_rtz((double)a * (double)b); }
+#endif
 float tb_rtz_cross2(float2 a, float2 b) {
     return tb_rtz_sub(tb_rtz_mul(a.x, b.y), tb_rtz_mul(a.y, b.x));
 }
@@ -44,5 +74,12 @@ float4 tb_bvh_triangle_rtz(uint node[32], uint side, float3 origin, float3 direc
     float numerator = tb_rtz_add(tb_rtz_add(tb_rtz_mul(u, x[axis]), tb_rtz_mul(v, y[axis])), tb_rtz_mul(w, z[axis]));
     uint selector = (node[15] >> (8 * side)) & 0xffu;
     float bary[3] = {su, sv, sw};
+    bool miss = (numerator < 0.0 && denominator > 0.0) ||
+                (numerator > 0.0 && denominator < 0.0);
+    [unroll] for (uint i = 0; i < 3; ++i)
+        miss = miss || (bary[i] < 0.0 && denominator > 0.0) ||
+                       (bary[i] > 0.0 && denominator < 0.0);
+    if (miss)
+        numerator = asfloat(0x7f800000u | (asuint(denominator) & 0x80000000u));
     return float4(numerator, denominator, bary[selector & 3u], bary[(selector >> 2) & 3u]);
 }
