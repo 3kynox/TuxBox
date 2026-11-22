@@ -13,6 +13,44 @@ pub struct Computer {
     plane: Plane,
 }
 
+/// Buffer layout descriptor consumed by the Xbox XG library.
+#[repr(C)]
+pub struct BufferDesc {
+    size: u32,
+    reserved_04: u32,
+    flags: u32,
+    reserved_0c: u32,
+    options: u32,
+}
+
+/// Compute a buffer's linear allocation layout.
+///
+/// # Safety
+/// Valid non-null pointers must refer to a readable descriptor and a writable,
+/// disjoint `Layout`, respectively.
+#[unsafe(export_name = "XGComputeBufferLayout")]
+unsafe extern "system" fn compute_buffer_layout(desc: *const BufferDesc, out: *mut Layout) -> i32 {
+    if desc.is_null() || out.is_null() {
+        return E_INVALIDARG;
+    }
+    let desc = unsafe { &*desc };
+    if desc.size == 0
+        || desc.flags & 0xffff_f900 != 0
+        || desc.options & 0xf385_6d0a != 0
+        || (desc.options & 0x0400_0000 != 0 && desc.size & 0xffff != 0)
+    {
+        return E_INVALIDARG;
+    }
+    unsafe {
+        out.write_bytes(0, 1);
+        (*out).bytes = u64::from(desc.size);
+        (*out).alignment = if desc.options & 0x0c00_0000 != 0 { 65536 } else { 4 };
+        (*out).mips = 1;
+        (*out).dimension = 1;
+    }
+    S_OK
+}
+
 type Unsupported = unsafe extern "system" fn() -> !;
 
 #[repr(C)]

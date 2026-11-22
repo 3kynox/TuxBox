@@ -11,8 +11,8 @@
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox Rust device and command providers with desktop D3D12 root-signature serialization.",
-      "scope": "Two Xbox device profiles, eight feature queries, GPU heaps, guest-backed textures, queues, indirect compute, direct and indirect mesh dispatch, descriptor and query operations, and 32 identifiers. Frosty creates 680-byte mesh pipelines and 712-byte graphics pipelines through ID3D12Device2 and presents 3840 × 2160 frames. A fresh Proton prefix running the checkout-built providers displays the menu and video preview, opens Settings and enters the Wake Up sequence. GPU tests cover indexed draws, depth/stencil writes, NV12 plane copies, and whole and regional copies into a tiled RGBA8 texture with guest-memory writeback and alias readback.",
-      "remaining": "Seven PE functions, additional Xbox interface methods and pipeline subobjects, and more retail shaders remain open. Guest-backed color textures still need render-target and UAV writes. Using distinct overlapping layouts in the same GPU write batch remains unsupported.",
+      "scope": "Two Xbox device profiles, eight feature queries, GPU heaps, guest-backed textures, queues, indirect compute, direct and indirect mesh dispatch, descriptor and query operations, and 32 identifiers. Frosty creates 680-byte mesh pipelines and 712-byte graphics pipelines through ID3D12Device2 and presents 3840 \u00d7 2160 frames. A fresh Proton prefix running the checkout-built providers displays the menu and video preview, opens Settings and enters the Wake Up sequence. GPU tests cover indexed draws, depth/stencil writes, NV12 plane copies, and whole and regional copies into a tiled RGBA8 texture with guest-memory writeback and alias readback. The framebuffer-preservation size getter matches the supplied DLL in its initial state.",
+      "remaining": "Six PE functions, additional Xbox interface methods and pipeline subobjects, and more retail shaders remain open. Guest-backed color textures still need render-target and UAV writes. Using distinct overlapping layouts in the same GPU write batch remains unsupported. Virtual-memory configuration accepts no valid requests yet; the initial framebuffer-size check does not cover a configured state.",
       "evidence": [
         "runtime/d3d12/README.md",
         "evidence/matrix-awakens/retail-chase-cinematic.json",
@@ -51,7 +51,8 @@
         "evidence/matrix-awakens/command-list-copy.json",
         "evidence/matrix-awakens/mesh-command-list-nvidia.json",
         "evidence/matrix-awakens/mesh-command-list-radeon.json",
-        "evidence/matrix-awakens/nanite-mesh-retail.json"
+        "evidence/matrix-awakens/nanite-mesh-retail.json",
+        "evidence/providers/d3d12-memory-config.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/d3d12_xs.dll",
@@ -138,7 +139,8 @@
           "IID_IDXGISwapChain",
           "IID_IDXGISwapChain1",
           "IID_IGraphicsUnknown",
-          "WKPDID_D3DDebugObjectNameW"
+          "WKPDID_D3DDebugObjectNameW",
+          "GetFrameBufferPreserveMemorySizeBytes"
         ],
         "notes": "Fifteen of 22 functions and all 32 data exports have verified behavior. The original DLL returns DXGI_ERROR_UNSUPPORTED for four legacy DXGIX exports. Rendering coverage is tracked through separate device and command-list tests. D3D12ZeroMemoryX was checked in CPU mode."
       },
@@ -206,8 +208,8 @@
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox Rust CPU memory provider.",
-      "scope": "Nine exports cover heap allocation, working-set statistics, virtual memory, and the CPU side of the title’s 64 KiB physical-page profile. The guest preserves 131,072 bytes across unmap and remap in reversed page order.",
-      "remaining": "GPU-visible backing, concurrent aliases, the Xbox partition allocator, additional allocation profiles and retail validation remain open.",
+      "scope": "Nine exports cover heap allocation, working-set statistics, virtual memory, and the CPU side of the title\u2019s 64 KiB physical-page profile. The guest preserves 131,072 bytes across unmap and remap in reversed page order. XMemMakeTag matches the supplied routine on 5,120 inputs. XMemVirtualQuery explicitly reports unsupported pending a verified Xbox success path.",
+      "remaining": "GPU-visible backing, concurrent aliases, the Xbox partition allocator, additional allocation profiles and retail validation remain open. XMemVirtualQuery console metadata and success-path reference comparison remain open.",
       "evidence": [
         "runtime/xmem/xmem.def",
         "runtime/xmem/README.md",
@@ -215,7 +217,8 @@
         "evidence/providers/xmem-valve.json",
         "evidence/providers/xmem-ge.json",
         "evidence/matrix-awakens/xmem-physical-pages.json",
-        "evidence/providers/xmem-pages.json"
+        "evidence/providers/xmem-pages.json",
+        "evidence/providers/xmem-query.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/xmem.dll",
@@ -233,7 +236,8 @@
           "XMemFreePhysicalPages",
           "XMemGetWorkingSetStatistics",
           "XMemMapPhysicalPages",
-          "XMemVirtualAlloc"
+          "XMemVirtualAlloc",
+          "XMemMakeTag"
         ],
         "notes": "The physical-page controls validate CPU data and ownership for flags 0x20400000. The packaged DLL could not initialize xbthunk on either Proton build."
       },
@@ -265,7 +269,7 @@
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox texture address computer.",
-      "scope": "Computes linear and 4 KiB tiled 2D textures, array slices and packed mip chains. TuxBox and the supplied DLL matched on 9,231,018 texel or block addresses across 78 formats and 156 layouts. A separate check includes eight descriptors from Frosty.",
+      "scope": "Computes linear and 4 KiB tiled 2D textures, array slices and packed mip chains. TuxBox and the supplied DLL matched on 9,231,018 texel or block addresses across 78 formats and 156 layouts. A separate check includes eight descriptors from Frosty. XGComputeBufferLayout matches the supplied DLL on 967 buffer descriptors, including invalid arguments and full output guards.",
       "remaining": "Further formats and tiling modes, 3D textures, multisampling and subresource copies. Calling an unimplemented texture computer method terminates the guest.",
       "evidence": [
         "runtime/xg-layout/src/lib.rs",
@@ -274,7 +278,8 @@
         "evidence/providers/valve.json",
         "evidence/providers/ge.json",
         "evidence/providers/xg-formats.json",
-        "evidence/providers/xg-placement-layouts.json"
+        "evidence/providers/xg-placement-layouts.json",
+        "evidence/providers/xg-buffer-layout.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/xg_xs.dll",
@@ -282,7 +287,8 @@
         "total": 21,
         "data_exports": [],
         "verified": [
-          "XGCreateTextureComputer"
+          "XGCreateTextureComputer",
+          "XGComputeBufferLayout"
         ]
       },
       "inventory": {
@@ -536,7 +542,7 @@
       "group": "Input and audio",
       "status": "partial",
       "provider": "TuxBox Rust chat session, user roster and outgoing frame provider.",
-      "scope": "Thirteen exports cover sessions, encoding bitrate, remote users, user context and outgoing endpoint announcements. Nine are among Frosty’s 15 delay imports. The guest checks payloads, endpoint IDs and borrowed frame lifetimes against the packaged DLL.",
+      "scope": "Thirteen exports cover sessions, encoding bitrate, remote users, user context and outgoing endpoint announcements. Nine are among Frosty\u2019s 15 delay imports. The guest checks payloads, endpoint IDs and borrowed frame lifetimes against the packaged DLL.",
       "remaining": "Local users, microphone capture, audio encoding, incoming packets and network transport remain open.",
       "evidence": [
         "runtime/gamechat/guest.c",
@@ -679,7 +685,7 @@
       "group": "Media",
       "status": "partial",
       "provider": "TuxBox transform adapter around the supplied H.264 decoder.",
-      "scope": "The registered H.264 transform returns D3D12 samples for both 1024 × 512 menu previews.",
+      "scope": "The registered H.264 transform returns D3D12 samples for both 1024 \u00d7 512 menu previews.",
       "remaining": "The supplied codec and additional output formats and transform modes.",
       "evidence": [
         "evidence/matrix-awakens/h264-valve.json"

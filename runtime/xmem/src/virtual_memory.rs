@@ -1,12 +1,42 @@
 //! CPU virtual memory requests observed in Frosty's binned allocator.
 use core::{ffi::c_void, ptr};
-use windows_sys::Win32::Foundation::{ERROR_NOT_SUPPORTED, SetLastError};
+use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, HANDLE, SetLastError};
 use windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringA;
 use windows_sys::Win32::System::Memory::{
-    MEM_COMMIT, MEM_RESERVE, PAGE_NOACCESS, PAGE_READWRITE, VirtualAlloc,
+    MEM_COMMIT, MEM_RESERVE, MEMORY_BASIC_INFORMATION, PAGE_NOACCESS, PAGE_READWRITE, VirtualAlloc,
 };
 
 use windows_sys::Win32::System::SystemServices::MEM_TOP_DOWN;
+
+/// Console query result layout; its partition metadata is not yet supported.
+#[repr(C)]
+pub struct VirtualInfo {
+    memory: MEMORY_BASIC_INFORMATION,
+    console_flags: u64,
+    console_tag: u64,
+}
+
+/// Reject virtual-memory queries until their console metadata is supported.
+///
+/// # Safety
+/// `information` must be null or point to 64 writable bytes.
+#[unsafe(export_name = "XMemVirtualQuery")]
+pub unsafe extern "system" fn virtual_query(
+    _process: HANDLE,
+    _address: *const c_void,
+    information: *mut VirtualInfo,
+) -> i32 {
+    if information.is_null() {
+        unsafe { SetLastError(ERROR_INVALID_PARAMETER) };
+        return 0;
+    }
+    // The console augments State, RegionSize and the last 16 bytes with
+    // partition, access and allocation-tag information. Reporting host-only
+    // information as a successful query can mislead callers about a mapping.
+    // Leave the complete output untouched until that metadata is available.
+    unsafe { SetLastError(ERROR_NOT_SUPPORTED) };
+    0
+}
 
 /// Reserve or commit CPU memory for the binned allocator and physical-page apertures.
 ///

@@ -92,6 +92,21 @@ static bool check_blob(HMODULE module) {
     return bytes[0] == 0x49 && bytes[256] == 0x49 && blob->Release() == 0;
 }
 
+#if defined(ORD_GetFrameBufferPreserveMemorySizeBytes) && defined(ORD_D3D12ConfigureVirtualMemoryX)
+static bool check_memory_config_invalid(HMODULE module) {
+    using GetSize = UINT (WINAPI*)();
+    using Configure = HRESULT (WINAPI*)(const UINT*);
+    auto get_size = reinterpret_cast<GetSize>(lookup(module, "GetFrameBufferPreserveMemorySizeBytes",
+                                                       ORD_GetFrameBufferPreserveMemorySizeBytes));
+    auto configure = reinterpret_cast<Configure>(lookup(module, "D3D12ConfigureVirtualMemoryX",
+                                                        ORD_D3D12ConfigureVirtualMemoryX));
+    const UINT bad_flags[] = {2, 0, 123};
+    const UINT bad_count[] = {0, 34, 123};
+    return get_size && configure && get_size() == 0 && configure(nullptr) == E_INVALIDARG &&
+           configure(bad_flags) == E_INVALIDARG && configure(bad_count) == E_INVALIDARG && get_size() == 0;
+}
+#endif
+
 #ifdef ORD_D3D12ZeroMemoryX
 static bool check_zero_memory(HMODULE module) {
     struct Range { void* address; SIZE_T bytes; };
@@ -141,6 +156,9 @@ int wmain(int argc, wchar_t** argv) {
     if (!module || !check_debug(module)) { std::fputs("Debug interface failed\n", stderr); return 1; }
     if (!check_dxgix(module)) { std::fputs("Legacy DXGIX calls failed\n", stderr); return 1; }
     if (!check_blob(module)) { std::fputs("Blob checks failed\n", stderr); return 1; }
+#if defined(ORD_GetFrameBufferPreserveMemorySizeBytes) && defined(ORD_D3D12ConfigureVirtualMemoryX)
+    if (!check_memory_config_invalid(module)) { std::fputs("Memory configuration checks failed\n", stderr); return 1; }
+#endif
 #ifdef ORD_D3D12ZeroMemoryX
     if (!check_zero_memory(module)) { std::fputs("CPU memory clear failed\n", stderr); return 1; }
     const char* summary = "d3d12-exports PASS debug=1 blob=1 dxgix=4 cpu_clear=1\n";

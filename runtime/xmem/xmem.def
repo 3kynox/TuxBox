@@ -7,5 +7,7 @@ EXPORTS
     XMemFreeDefault @7
     XMemFreePhysicalPages @8
     XMemGetWorkingSetStatistics @16
+    XMemMakeTag @20
     XMemMapPhysicalPages @21
     XMemVirtualAlloc @31
+    XMemVirtualQuery @32

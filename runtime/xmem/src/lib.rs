@@ -17,6 +17,26 @@ use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 const PLACEMENT: u64 = 0x3080_4000;
 
+/// Encode the four-byte tag in the console allocation tag's high word.
+#[unsafe(export_name = "XMemMakeTag")]
+pub extern "system" fn make_tag(fourcc: u32) -> u64 {
+    if fourcc == 0 {
+        return 0;
+    }
+    let mut word = 0u32;
+    for (index, byte) in fourcc.to_le_bytes().into_iter().enumerate() {
+        let value = match byte {
+            b'a'..=b'z' => byte - b'a',
+            b'A'..=b'Z' => byte - b'A' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'$' => 62,
+            _ => 63,
+        };
+        word |= u32::from(value) << (8 + 6 * index);
+    }
+    u64::from(word) << 32
+}
+
 fn process_heap_attributes(attributes: u64) -> bool {
     // The two packaged D3D drivers use 0x92 for startup allocations, 0x40
     // for the blob object and 0x78 for its bytes. The packaged media decoders

@@ -124,6 +124,60 @@ static int virtual_reserve_commit(void)
     return 0;
 }
 
+static int virtual_query(void)
+{
+    _Static_assert(sizeof(XMEM_VIRTUAL_INFO) == 64, "Xbox virtual query result size");
+    _Static_assert(offsetof(XMEM_VIRTUAL_INFO, console_flags) == 48, "Xbox metadata offset");
+    struct { UINT64 before; XMEM_VIRTUAL_INFO info; UINT64 after; } out;
+    SYSTEM_INFO system;
+    GetSystemInfo(&system);
+    BYTE *base = VirtualAlloc(NULL, 2 * system.dwPageSize, MEM_RESERVE, PAGE_NOACCESS);
+    REQUIRE(base);
+    HMODULE module = GetModuleHandleW(L"xmem.dll");
+    REQUIRE(GetProcAddress(module, "XMemVirtualQuery") == GetProcAddress(module, MAKEINTRESOURCEA(32)));
+    REQUIRE(VirtualAlloc(base + system.dwPageSize, system.dwPageSize, MEM_COMMIT, PAGE_READONLY));
+    BYTE sentinel[sizeof out]; memset(sentinel, 0xa5, sizeof sentinel);
+    for (int i = 0; i < 2; ++i) {
+        memset(&out, 0xa5, sizeof out);
+        REQUIRE(!XMemVirtualQuery(GetCurrentProcess(), base + i * system.dwPageSize, &out.info));
+        REQUIRE(GetLastError() == ERROR_NOT_SUPPORTED && !memcmp(&out, sentinel, sizeof out));
+    }
+    REQUIRE(!XMemVirtualQuery(GetCurrentProcess(), base, NULL));
+    REQUIRE(GetLastError() == ERROR_INVALID_PARAMETER);
+    REQUIRE(VirtualFree(base, 0, MEM_RELEASE));
+    memset(&out, 0xa5, sizeof out);
+    REQUIRE(!XMemVirtualQuery(GetCurrentProcess(), base, &out.info));
+    REQUIRE(GetLastError() == ERROR_NOT_SUPPORTED && !memcmp(&out, sentinel, sizeof out));
+    return 0;
+}
+
+static int allocation_tags(void)
+{
+    HMODULE module = GetModuleHandleW(L"xmem.dll");
+    REQUIRE(GetProcAddress(module, "XMemMakeTag") == GetProcAddress(module, MAKEINTRESOURCEA(20)));
+    REQUIRE(XMemMakeTag(0) == 0);
+    REQUIRE(XMemMakeTag(0x41414141u) == 0x69a69a0000000000ULL);
+    UINT64 hash = 14695981039346656037ULL;
+    unsigned count = 0;
+    for (unsigned shift = 0; shift < 32; shift += 8) {
+        for (unsigned c = 0; c < 256; ++c) {
+            UINT32 value = (0x41414141u & ~(0xffu << shift)) | (c << shift);
+            UINT64 tag = XMemMakeTag(value);
+            for (int i = 0; i < 8; ++i) { hash ^= (tag >> (8 * i)) & 255; hash *= 1099511628211ULL; }
+            ++count;
+        }
+    }
+    UINT32 seed = 0x6d2b79f5;
+    for (unsigned i = 0; i < 4096; ++i) {
+        seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+        UINT64 tag = XMemMakeTag(seed);
+        for (int j = 0; j < 8; ++j) { hash ^= (tag >> (8 * j)) & 255; hash *= 1099511628211ULL; }
+        ++count;
+    }
+    REQUIRE(count == 5120 && hash == 0xd4bf30c57509b176ULL);
+    return 0;
+}
+
 typedef void *(WINAPI *Allocation)(SIZE_T, UINT64);
 typedef void (WINAPI *Release)(void *, UINT64);
 
@@ -228,13 +282,29 @@ static int physical_pages(void)
 int wmain(int argc, wchar_t **argv)
 {
     BOOL pages_only = argc >= 2 && !wcscmp(argv[1], L"--pages");
-    if (pages_only) { --argc; ++argv; }
+    BOOL query_only = argc >= 2 && !wcscmp(argv[1], L"--query");
+    BOOL tag_only = argc >= 2 && !wcscmp(argv[1], L"--tags");
+    if (pages_only || query_only || tag_only) { --argc; ++argv; }
     if (!(argc == 1 || (argc == 3 && wcscmp(argv[1], L"--report") == 0))) {
-        fputs("usage: xmem-smoke.exe [--pages] [--report FILE]\n", stderr);
+        fputs("usage: xmem-smoke.exe [--pages|--query|--tags] [--report FILE]\n", stderr);
         return 2;
     }
     if (argc == 3 && _wfopen_s(&report, argv[2], L"wb") != 0) return 2;
     REQUIRE(app_local_provider());
+    if (tag_only) {
+        REQUIRE(!allocation_tags());
+        const char result[] = "xmem-tags PASS count=5120 hash=d4bf30c57509b176\n";
+        if (report && (fputs(result, report) == EOF || fclose(report))) return 2;
+        fputs(result, stdout);
+        return 0;
+    }
+    if (query_only) {
+        REQUIRE(!virtual_query());
+        const char result[] = "xmem-query PASS unsupported=3 guards=2 null=1\n";
+        if (report && (fputs(result, report) == EOF || fclose(report))) return 2;
+        fputs(result, stdout);
+        return 0;
+    }
     if (pages_only) {
         REQUIRE(!physical_pages());
         const char result[] = "xmem-pages PASS cpu-pages=2 remapped-bytes=131072 stale-and-foreign-rejected=1\n";

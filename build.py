@@ -112,7 +112,8 @@ def d3d12_exports(src, out, reference):
             if slot is None:
                 # The frame ABI guest imports the device IID. Additional SDK IDs
                 # vary with the GDK build. D3D12ZeroMemoryX is Series-specific.
-                if (flags == ["DATA"] and name != "IID_ID3D12Device") or name == "D3D12ZeroMemoryX":
+                if (flags == ["DATA"] and name != "IID_ID3D12Device") or name in {
+                        "D3D12ZeroMemoryX", "GetFrameBufferPreserveMemorySizeBytes", "D3D12ConfigureVirtualMemoryX"}:
                     continue
                 raise ValueError(f"{reference.name} lacks {name}, required by the D3D12 guests")
             if ("DATA" in flags) != (slot in data):

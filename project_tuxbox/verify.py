@@ -211,6 +211,12 @@ def verify(host, output, adapter, selected=None, samples=1):
                   r"raw=16 zlib=16 guards=2 errors=2 cancellation=1 autosubmit=64 PASS",
                   providers={"xcrdapi/xcrdapi.dll": ("DStorageGetFactory",)})
         if "xmem" in selected:
+            check("xmem-tags", "xmem-smoke/xmem-smoke.exe", ["--tags", "--report"],
+                  r"xmem-tags PASS count=5120 hash=d4bf30c57509b176",
+                  providers={"xmem-smoke/xmem.dll": ("XMemMakeTag",)})
+            check("xmem-query", "xmem-smoke/xmem-smoke.exe", ["--query", "--report"],
+                  r"xmem-query PASS unsupported=3 guards=2 null=1",
+                  providers={"xmem-smoke/xmem.dll": ("XMemVirtualQuery",)})
             check("xmem-default", "xmem-smoke/xmem-smoke.exe", ["--report"],
                   re.escape("xmem-default: PASS (allocator pairs 1/6 and 2/7, ordinary and 64 KiB allocations, "
                             "host working set v2, virtual reserve/commit)"),
@@ -332,6 +338,8 @@ GATE_LABELS = {
     "guest-factories": "Xbox 0x20004 and default factories, compute queues and process debug flags",
     "route-RRRRDD": "Upper route and guest output", "route-LDDRRRR": "Lower route and collision",
     "xmem-pages": "CPU page allocation, remapping and release",
+    "xmem-query": "Unsupported virtual query rejection",
+    "xmem-tags": "Memory allocation tag encoding",
     "invalid-route": "Invalid input exit status", "xmem-default": "Xbox memory allocation and working set",
     "d3d12-signatures": "Root signature 1.0 and 1.1 serialization, deserialization and errors",
     "d3d12-exports": "Blob, debug interface, four DXGIX entry points and Series CPU memory clear",

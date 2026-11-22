@@ -29,6 +29,15 @@ __declspec(dllimport) BOOL WINAPI XMemGetWorkingSetStatistics(UINT flags, XMEM_T
 __declspec(dllimport) void *WINAPI XMemVirtualAlloc(void *address, SIZE_T bytes, DWORD allocation_type,
                                                   UINT64 profile, DWORD protection);
 
+typedef struct XMEM_VIRTUAL_INFO {
+    MEMORY_BASIC_INFORMATION memory;
+    UINT64 console_flags;
+    UINT64 console_tag;
+} XMEM_VIRTUAL_INFO;
+__declspec(dllimport) BOOL WINAPI XMemVirtualQuery(HANDLE process, const void *address,
+                                                   XMEM_VIRTUAL_INFO *information);
+__declspec(dllimport) UINT64 WINAPI XMemMakeTag(UINT32 fourcc);
+
 __declspec(dllimport) BOOL WINAPI XMemAllocatePhysicalPages(UINT64 flags, SIZE_T *count, UINT64 *tokens);
 __declspec(dllimport) void *WINAPI XMemMapPhysicalPages(void *base, SIZE_T count, const UINT64 *tokens);
 __declspec(dllimport) BOOL WINAPI XMemFreePhysicalPages(SIZE_T count, const UINT64 *tokens);

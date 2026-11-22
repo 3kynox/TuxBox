@@ -4,6 +4,8 @@ The map now tracks **61 Xbox-facing DLLs** found in Frosty's Xbox system image a
 
 The scan parsed all **245 system-image DLLs** and **4 game-folder DLLs** with no errors. It selected libraries by Xbox, GameCore, Durango, Game OS, PIX, or console-support metadata; known Xbox, Xtf, and PIX families; and the Xbox-facing DLLs already tracked by this project. The inventory records binary hashes, file descriptions and versions, exports and ordinals, imported symbols, reverse importers, and the static path from Frosty's executable. Export names that are aliases for one ordinal count once. Export coverage is a useful translation measure, but it does not count methods on COM objects or prove that every title path works.
 
+Use `python tools/library_gaps.py xmem.dll xg_xs.dll` to list the unverified exports and Frosty's direct imports. Add `--all` to include verified entries, or compare a built provider with `python tools/library_gaps.py xmem.dll --provider /path/to/xmem.dll`. The comparison checks names and ordinals separately; an exported symbol is not necessarily implemented or behaviorally tested. `--json` produces machine-readable results.
+
 | Status | Libraries | What it means |
 | --- | ---: | --- |
 | 🟢 Complete | 1 | All identified exports and Xbox-facing behavior for the reviewed build are implemented and verified. |
@@ -97,7 +99,7 @@ Static import edges also show shared dependencies: the `xgs12_10*` drivers impor
 
 ## Current Frosty gates
 
-Frosty displays its menu and video preview in a fresh Proton prefix. TuxBox supplies D3D12, GameInput, storage, memory and the media adapters. The title’s system image supplies XG and its HEVC, H.264 and AAC decoders. The Xbox queue presents a 3840 × 2160 buffer. Keyboard input opened Settings and started the Wake Up sequence. [Staged and loaded libraries](../evidence/matrix-awakens/independent-menu.json) · [Graphics trace](../evidence/matrix-awakens/tuxbox-menu-startup.json) · [Menu background](../evidence/matrix-awakens/menu-background.json)
+In an earlier reduced-settings run, Frosty displayed its menu and video preview in a fresh Proton prefix. TuxBox supplied D3D12, GameInput, storage, memory and media adapters; the title’s system image supplied XG and the HEVC, H.264 and AAC decoders. Keyboard input opened Settings and started the Wake Up sequence. With the original graphics settings, the latest recorded run presented a black frame and stopped during Lumen shader creation. [Earlier run](../evidence/matrix-awakens/independent-menu.json) · [Original-settings run](../evidence/matrix-awakens/packaged-renderer.json)
 
 The new Rust AcpHal builds the seven functions Frosty imports. The earlier launch reported an unresolved `AcpHalReleaseShapeContexts`, and three static callers check its result. AcpHal behavior and GPU-visible XMem pages remain open. [AcpHal call sites](../evidence/matrix-awakens/acphal-call-sites.json) · [XMem call sites](../evidence/matrix-awakens/xmem-physical-pages.json)
 

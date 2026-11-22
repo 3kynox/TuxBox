@@ -86,6 +86,38 @@ pub extern "system" fn tuxbox_dxgix_unsupported() -> HRESULT {
     DXGI_ERROR_UNSUPPORTED
 }
 
+/// TuxBox does not yet enable the Xbox framebuffer-preservation allocation.
+/// Its size remains zero while valid virtual-memory configurations are rejected.
+#[unsafe(export_name = "GetFrameBufferPreserveMemorySizeBytes")]
+pub extern "system" fn framebuffer_preserve_memory_size_bytes() -> u32 {
+    0
+}
+
+/// Check the known Xbox virtual-memory configuration header.
+///
+/// # Safety
+/// A non-null record must be readable for at least two 32-bit fields.
+#[unsafe(export_name = "D3D12ConfigureVirtualMemoryX")]
+pub unsafe extern "system" fn configure_virtual_memory(record: *const u32) -> HRESULT {
+    if record.is_null() {
+        return E_INVALIDARG;
+    }
+    // SAFETY: The caller supplies a readable two-DWORD header. The original
+    // function rejects unknown flags and more than 33 entries before reading
+    // the rest of the record.
+    let flags = unsafe { record.read_unaligned() };
+    if flags & !1 != 0 {
+        return E_INVALIDARG;
+    }
+    let entries = unsafe { record.add(1).read_unaligned() };
+    if entries > 33 {
+        return E_INVALIDARG;
+    }
+    // A valid request requires the Xbox graphics driver's virtual-memory
+    // operation. Do not claim success or change guest outputs without it.
+    E_NOTIMPL
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct MemoryRange {

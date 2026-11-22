@@ -1,0 +1,27 @@
+{
+  "scope": "Initial framebuffer-preservation size and invalid virtual-memory configuration. Valid console requests require a driver and remain unsupported by TuxBox.",
+  "reference_sha256": "e8279440c6980eba9ba42de1e189870407c7665cf2b3fc1fb683ac07cf07f780",
+  "provider_sha256": "382c2381e75bcac77922ec5ff5627758d30e4f0f0d776cc7e8a918b9265985a6",
+  "xmem_sha256": "95e4070d9686eda5160f22135d488cd36b56686169abdf96e6b3cb9637ac5964",
+  "guest_sha256": "4fb66fed650a35d2dbbad4b177578e18471a856cbece2fbb58c3b42de604ee39",
+  "host": "1793301796 experimental-11.0-20261027b-x86_64",
+  "runs": {
+    "reference": {
+      "initial": "0",
+      "null": "E_INVALIDARG",
+      "invalid_flags": "E_INVALIDARG",
+      "invalid_count": "E_INVALIDARG",
+      "after_invalid": "0",
+      "outputs_unchanged": "1"
+    },
+    "provider": {
+      "initial": "0",
+      "null": "E_INVALIDARG",
+      "invalid_flags": "E_INVALIDARG",
+      "invalid_count": "E_INVALIDARG",
+      "after_invalid": "0",
+      "outputs_unchanged": "1",
+      "valid": "E_NOTIMPL"
+    }
+  }
+}
