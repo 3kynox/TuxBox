@@ -575,18 +575,28 @@ def shader_checks(evidence, data):
     return notes
 
 
+def independent_counts(data):
+    measurement = data.get("independent_emitter")
+    if measurement is None:
+        return {}
+    counts = Counter(p["stage"] for p in measurement["programs"])
+    return {row["stage"]: counts[row["stage"]] for row in data["stages"] if row["unique_dxbc"]}
+
+
 def shader_table(evidence):
     data = read_json(evidence / "matrix-awakens/shader-inventory.json")
     if not data:
         return "No retail shader inventory recorded."
+    independent = independent_counts(data)
     lines = ["Frosty shader coverage",
-             f"{'Shader stage':<16} {'Packaged':>9} {'HLSL / unique DXBC':>21} {'In profile':>11} {'Profiled / requested':>23}"]
+             f"{'Shader stage':<16} {'Packaged':>9} {'HLSL / unique DXBC':>21} {'TuxBox only':>12} "
+             f"{'In profile':>11} {'Profiled / requested':>23}"]
     for row in data["stages"]:
         emitted = row["hlsl_emitted"]
         hlsl = f"{emitted:,}/{row['unique_dxbc']:,}" if emitted is not None else "—"
         observed = f"{row['requested_in_profile']}/{row['requested_dxbc']}" if row["requested_dxbc"] else "—"
         lines.append(f"{row['stage']:<16} {row['global'] + row['material']:>9,} {hlsl:>21} "
-                     f"{row['profiled_dxbc']:>11} {observed:>23}")
+                     f"{independent.get(row['stage'], '—'):>12} {row['profiled_dxbc']:>11} {observed:>23}")
     lines.append(f"The preparation profile includes {data['linked_variants']} additional linked variants.")
     lines.extend(shader_checks(evidence, data))
     for material in data.get("menu_materials", ()):
@@ -609,6 +619,7 @@ def draw_shaders(svg, y, evidence):
     if not data:
         return y
     rows = data["stages"]
+    independent = independent_counts(data)
     checks = shader_checks(evidence, data)
     height = 195 + 27 * len(rows) + 21 * len(checks)
     group = section(svg, PAD, y, "Frosty shader coverage")
@@ -618,18 +629,20 @@ def draw_shaders(svg, y, evidence):
     sources = sum(row["profiled_dxbc"] for row in rows)
     text(group, INNER-18, 68, f"{packages:,} shipped entries · {sources} in profile · "
          f"{data['linked_variants']} linked variants", 14, MUTED, anchor="end")
-    text(group, 18, 97, "HLSL counts unique source programs the translator can read and emit as desktop shader code.", 14, MUTED)
+    text(group, 18, 97, "HLSL counts all translated programs. TuxBox only counts those translated with the legacy emitter disabled.", 14, MUTED)
     text(group, 18, 118, "Requests are distinct programs seen in captured title runs. A pipeline can request a shader before drawing.", 14, MUTED)
-    columns = [(18, "Stage"), (263, "Packaged"), (561, "HLSL / unique DXBC"), (694, "In profile"), (INNER-18, "In profile / requested")]
+    columns = [(18, "Stage"), (211, "Packaged"), (463, "HLSL / unique DXBC"), (584, "TuxBox only"),
+               (694, "In profile"), (INNER-18, "In profile / requested")]
     for x, label in columns:
         text(group, x, 151, label, 14, AQUA, anchor="start" if x == 18 else "end")
     for index, row in enumerate(rows):
         top = 164 + 27*index
         rect(group, 18, top-3, INNER-36, 1, LINE)
         text(group, 18, top+17, row["stage"], 15)
-        text(group, 263, top+17, f"{row['global']+row['material']:,}", 15, TEXT, anchor="end")
+        text(group, 211, top+17, f"{row['global']+row['material']:,}", 15, TEXT, anchor="end")
+        text(group, 584, top+17, independent.get(row["stage"], "—"), 15, TEXT, anchor="end")
         for x, width, right, value, total in (
-                (299, 98, 561, row["hlsl_emitted"], row["unique_dxbc"]),
+                (229, 84, 463, row["hlsl_emitted"], row["unique_dxbc"]),
                 (722, 94, INNER-18, row["requested_in_profile"], row["requested_dxbc"])):
             if value is None or not total:
                 text(group, right, top+17, "—", 15, MUTED, anchor="end")

@@ -1,41 +1,36 @@
-//! Xbox Series shader container extraction.
-//!
-//! Fortnite XSX ships each shader as a DXBC container whose portable DXIL bitcode has
-//! been stripped (`NOBC`) and replaced, inside the `DXIL` chunk, with an Xbox-native
-//! `XDAT` payload. The real shader is zlib-compressed inside `XDAT`; inflating it yields
-//! an `FSSM` container whose body is **native RDNA2 microcode** (gfx10xx, Series X|S).
-//!
-//! Chain:  `DXBC → DXIL chunk → XDAT → zlib → FSSM → RDNA2 ISA`
-//!
-//! Scarlett FidelityFX also ships native compute programs in an ACCC/FSPX section directory.
-//! This module parses both formats and returns the raw ISA plus the surrounding metadata.
-//! All parsing is bounds-checked and never panics on malformed input (returns `Err`).
-//! Reverse-engineered from dumped Fortnite shaders and the GDK UMD `xgs12_10.dll`; see
-//! `docs/FORTNITE_ANALYSIS.md`. Field offsets inferred empirically are validated against
-//! RDNA2 markers before use, so a wrong guess fails loudly rather than yielding garbage.
+//! Read Xbox shader containers and translate their native programs for desktop D3D12.
 
-mod fspx;
+mod compute_hlsl;
+mod constant_pixel;
+mod fssm;
+#[cfg(feature = "legacy-hlsl")]
 pub mod hlsl;
+#[cfg(feature = "legacy-hlsl")]
 pub mod meta;
-pub mod decls;
+mod native_compute;
+mod psv;
 pub mod rdna2;
+mod rootsig;
+mod xdat;
 
-/// Little-endian readers with explicit bounds checks.
-fn u32_at(b: &[u8], off: usize) -> Result<u32, String> {
-    b.get(off..off + 4)
-        .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
-        .ok_or_else(|| format!("u32 read out of bounds at {off:#x} (len {})", b.len()))
-}
-fn fourcc_at(b: &[u8], off: usize) -> Result<[u8; 4], String> {
-    b.get(off..off + 4)
-        .map(|s| [s[0], s[1], s[2], s[3]])
-        .ok_or_else(|| format!("fourcc read out of bounds at {off:#x}"))
-}
-
+use tuxbox_dxbc::{parse_signature_part, SigElement};
 pub use tuxbox_dxbc::{Chunk, Dxbc};
 
-/// Program type from the DXIL program header (D3D12_SHADER_VERSION_TYPE).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Emits a pixel shader whose exports and live samples can be determined statically.
+pub fn independent_pixel_hlsl(shader: &ShaderExtract) -> Option<String> {
+    constant_pixel::hlsl(shader)
+}
+
+/// Translate a standalone shader when its complete behavior is supported by TuxBox.
+pub fn independent_hlsl(shader: &ShaderExtract) -> Option<String> {
+    match shader.stage {
+        Stage::Pixel => independent_pixel_hlsl(shader),
+        Stage::Compute => compute_hlsl::hlsl(shader),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stage {
     Pixel,
     Vertex,
@@ -47,369 +42,206 @@ pub enum Stage {
     Amplification,
     Unknown(u16),
 }
-impl Stage {
-    fn from_program_version(pv: u32) -> Stage {
-        match (pv >> 16) & 0xffff {
-            0 => Stage::Pixel,
-            1 => Stage::Vertex,
-            2 => Stage::Geometry,
-            3 => Stage::Hull,
-            4 => Stage::Domain,
-            5 => Stage::Compute,
-            13 => Stage::Mesh,
-            14 => Stage::Amplification,
-            x => Stage::Unknown(x as u16),
+
+impl From<u16> for Stage {
+    fn from(kind: u16) -> Self {
+        match kind {
+            0 => Self::Pixel,
+            1 => Self::Vertex,
+            2 => Self::Geometry,
+            3 => Self::Hull,
+            4 => Self::Domain,
+            5 => Self::Compute,
+            13 => Self::Mesh,
+            14 => Self::Amplification,
+            other => Self::Unknown(other),
         }
     }
 }
 
-/// The fully-extracted shader: native RDNA2 ISA plus the metadata we understand.
-#[derive(Debug, Clone)]
+/// Native code, launch configuration and Direct3D interface for one stage.
+#[derive(Clone, Debug)]
 pub struct ShaderExtract {
     pub stage: Stage,
-    /// Shader model major.minor from the DXIL program header, or (0, 0) when absent.
     pub shader_model: (u32, u32),
-    /// Whether the DXIL bitcode slot was the `NOBC` placeholder (some middleware retains DXIL).
-    pub bitcode_stripped: bool,
-    /// Compute configuration from section 0 of an ACCC/FSPX executable, when present.
-    pub fspx_config: Option<[u32; 7]>,
-    /// SPI_PS_INPUT_ENA from the original PS09 graphics configuration when
-    /// a homebrew DXBC carrier supplies its TBGP chunk.
-    pub ps09_pixel_inputs: Option<u32>,
-    /// Inflated FSSM container bytes (empty for FSPX).
-    pub fssm: Vec<u8>,
-    /// Entry-point name recovered from FSSM, if found.
+    /// Feature requirements declared in the container's SFI0 part.
+    pub required_features: Option<u64>,
     pub entry: Option<String>,
-    /// Native RDNA2 ISA bytes (the shader program, s_endpgm-terminated).
     pub isa: Vec<u8>,
-    /// Offset of the ISA within the FSSM blob.
-    pub isa_offset_in_fssm: usize,
-    /// The 16-byte ISA-section preamble. Some compute ABIs store group dimensions in dwords 1..3.
-    pub isa_preamble: [u32; 4],
-    /// Compute dimensions from PSVRuntimeInfo2 or later.
-    pub psv_threads: Option<[u32; 3]>,
-    /// The program followed by any constant data embedded after it in the code section.
+    /// Includes any constants addressed relative to the program counter.
     pub isa_data: Vec<u8>,
-    /// Presence of the standard signature/validation/root-sig chunks in the outer DXBC.
+    pub isa_offset_in_fssm: usize,
+    pub isa_preamble: [u32; 4],
+    pub fssm: Vec<u8>,
+    pub bitcode_stripped: bool,
+    pub fspx_config: Option<[u32; 7]>,
+    pub ps09_pixel_inputs: Option<u32>,
+    pub psv_threads: Option<[u32; 3]>,
+    pub input_sig: Vec<SigElement>,
+    pub output_sig: Vec<SigElement>,
+    pub primitive_sig: Vec<SigElement>,
     pub has_input_sig: bool,
     pub has_output_sig: bool,
-    pub has_psv0: bool,
     pub has_root_sig: bool,
-    /// Parsed D3D-side metadata (empty/None when the chunk is absent or malformed).
-    pub input_sig: Vec<meta::SigElement>,
-    pub output_sig: Vec<meta::SigElement>,
-    pub resources: Vec<meta::PsvResource>,
-    /// Geometry-shader info from PSV0 (only meaningful for `Stage::Geometry`).
-    pub gs_info: Option<meta::GsInfo>,
-    pub mesh_info: Option<meta::MeshInfo>,
-    pub primitive_sig: Vec<meta::SigElement>,
-    pub root_sig: Option<meta::RootSig>,
-}
-
-/// RDNA2 SOPP opcodes we key on to locate/validate the ISA.
-const S_ENDPGM: u32 = 0xBF81_0000; // SOPP op=1
-const S_CODE_END: u32 = 0xBF9F_0000; // SOPP op=0x1f, used as code padding
-fn is_sopp(w: u32) -> bool {
-    (w >> 23) == 0x17f
+    pub has_psv0: bool,
+    pub resources: Vec<psv::PsvResource>,
+    pub gs_info: Option<psv::GsInfo>,
+    pub mesh_info: Option<psv::MeshInfo>,
+    pub root_sig: Option<rootsig::RootSig>,
 }
 
 struct NativeProgram {
     stage: Stage,
     sm: (u32, u32),
     bitcode_stripped: bool,
+    entry: Option<String>,
     fssm: Vec<u8>,
     isa: Vec<u8>,
+    isa_data: Vec<u8>,
     isa_off: usize,
     isa_preamble: [u32; 4],
-    isa_data: Vec<u8>,
     fspx_config: Option<[u32; 7]>,
 }
 
-/// Extract the native RDNA2 ISA (and metadata) from a full shader DXBC blob.
-pub fn extract(dxbc: &[u8]) -> Result<ShaderExtract, String> {
-    let container = Dxbc::parse(dxbc)?;
-    let chunk_body = |cc: &[u8; 4]| container.chunk(cc).map(|c| &dxbc[c.offset..c.offset + c.size]);
-    let native = if let Some(body) = chunk_body(b"DXIL") {
-        extract_dxil(body)?
-    } else {
-        let body = chunk_body(b"ACCC").ok_or("no DXIL or ACCC chunk")?;
-        let threads = chunk_body(b"PSV0").and_then(meta::parse_compute_threads)
-            .ok_or("ACCC needs compute PSV dimensions")?;
-        fspx::extract(body, threads)?
-    };
-    let NativeProgram {
-        stage, sm, bitcode_stripped, fssm, isa, isa_off, isa_preamble, isa_data, fspx_config,
-    } = native;
-    let entry = find_entry_name(&fssm);
-
-    Ok(ShaderExtract {
-        stage,
-        shader_model: sm,
-        bitcode_stripped,
-        fspx_config,
-        ps09_pixel_inputs: match chunk_body(b"TBGP") {
-            Some(body) if stage == Stage::Pixel && body.len() == 380 => {
-                Some(u32::from_le_bytes(body[88..92].try_into().unwrap()))
-            }
-            Some(_) => return Err("unrecognized PS09 graphics configuration".into()),
-            None => None,
-        },
-        entry,
-        isa,
-        isa_offset_in_fssm: isa_off,
-        isa_preamble,
-        psv_threads: if stage == Stage::Compute { chunk_body(b"PSV0").and_then(meta::parse_compute_threads) } else { None },
-        isa_data,
-        fssm,
-        has_input_sig: container.chunk(b"ISG1").is_some() || container.chunk(b"ISGN").is_some(),
-        has_output_sig: container.chunk(b"OSG1").is_some() || container.chunk(b"OSGN").is_some(),
-        has_psv0: container.chunk(b"PSV0").is_some(),
-        has_root_sig: container.chunk(b"RTS0").is_some(),
-        input_sig: chunk_body(b"ISG1").and_then(|b| meta::parse_signature(b).ok()).unwrap_or_default(),
-        output_sig: chunk_body(b"OSG1").and_then(|b| meta::parse_signature(b).ok()).unwrap_or_default(),
-        resources: chunk_body(b"PSV0").and_then(|b| meta::parse_psv0(b).ok()).unwrap_or_default(),
-        gs_info: chunk_body(b"PSV0").and_then(meta::parse_psv0_gs),
-        mesh_info: chunk_body(b"PSV0").and_then(meta::parse_mesh_info),
-        primitive_sig: if stage == Stage::Mesh {
-            meta::parse_signature(chunk_body(b"PSG1").ok_or("mesh primitive signature missing")?)?
-        } else { Vec::new() },
-        root_sig: chunk_body(b"RTS0").and_then(|b| meta::parse_rts0(b).ok()),
-    })
-}
-
-fn extract_dxil(body: &[u8]) -> Result<NativeProgram, String> {
-    // DxilProgramHeader: ProgramVersion u32, SizeInUint32 u32, then DxilBitcodeHeader
-    // { DxilMagic 'DXIL', DxilVersion, BitcodeOffset, BitcodeSize }. XDAT follows (off 24).
-    let program_version = u32_at(body, 0)?;
-    let stage = Stage::from_program_version(program_version);
-    let sm = ((program_version >> 4) & 0xf, program_version & 0xf);
-    let bc_off = u32_at(body, 16)? as usize; // from start of DxilBitcodeHeader (body+8)
-    let bc = body.get(8 + bc_off..8 + bc_off + 4).unwrap_or(&[]);
-    let bitcode_stripped = bc == b"NOBC";
-
-    let xdat = body.get(24..).ok_or("DXIL chunk too small for XDAT")?;
-    if fourcc_at(xdat, 0)? != *b"XDAT" {
-        return Err(format!(
-            "expected XDAT at DXIL+24, found {:?}",
-            String::from_utf8_lossy(&fourcc_at(xdat, 0)?)
-        ));
-    }
-
-    // The shader is a zlib stream inside XDAT. The XDAT section table layout is only
-    // partially understood, so locate the stream robustly by scanning for the zlib
-    // header (0x78 0x9c / 0x78 0xda / 0x78 0x01); inflate self-terminates. Pick the
-    // first blob that inflates to an FSSM container.
-    //
-    // A shader can carry several FSSM programs (observed on vertex shaders: one variant
-    // that leaves through `s_setpc_b64` — a hardware-pipeline continuation form using LDS
-    // and a barrier — and one standalone program ending in `s_endpgm`). The standalone
-    // Some ES programs also end with `s_endpgm` after passing vertices through LDS.
-    // The vertex emitter handles fetch-shader chains and explicit vertex exports.
-    // When an ES variant uses neither form, prefer a standalone vertex program.
-    let variants = find_and_inflate_fssm(xdat)?;
-    let mut chosen = None;
-    let mut last_err = String::from("no FSSM program found");
-    let multiple_vertex_programs = stage == Stage::Vertex && variants.len() > 1;
-    for v in variants {
-        match locate_isa(&v) {
-            Ok((isa, off)) => {
-                if !multiple_vertex_programs || has_vertex_outputs(&isa) {
-                    chosen = Some((v, isa, off));
-                    break;
-                }
-                if chosen.is_none() {
-                    chosen = Some((v, isa, off));
-                }
-            }
-            Err(e) => last_err = e,
-        }
-    }
-    let (fssm, isa, isa_off) = chosen.ok_or(last_err)?;
-    // Program plus any constant tables embedded after it (up to the s_code_end padding or
-    // the end of the ISA section): PC-relative `s_load`s read from here.
-    let isa_data = {
-        let sect_end = (u32_at(&fssm, 0xc0).unwrap_or(0) as usize + u32_at(&fssm, 0xc8).unwrap_or(0) as usize)
-            .min(fssm.len())
-            .max(isa_off + isa.len());
-        let mut end = isa_off + isa.len();
-        while end + 4 <= sect_end && u32_at(&fssm, end).unwrap_or(S_CODE_END) != S_CODE_END {
-            end += 4;
-        }
-        fssm[isa_off..end.min(fssm.len())].to_vec()
-    };
-    let isa_preamble = {
-        let mut p = [0u32; 4];
-        if isa_off >= 16 {
-            for (i, v) in p.iter_mut().enumerate() {
-                *v = u32_at(&fssm, isa_off - 16 + i * 4).unwrap_or(0);
-            }
-        }
-        p
-    };
-    Ok(NativeProgram {
-        stage, sm, bitcode_stripped, fssm, isa, isa_off, isa_preamble, isa_data, fspx_config: None,
-    })
-}
-
-fn has_vertex_outputs(isa: &[u8]) -> bool {
+fn feeds_rasterizer(code: &[u8]) -> bool {
     use rdna2::{Enc, Opnd};
-
-    rdna2::instructions(isa).enumerate().any(|(i, ins)| {
-        // The merged fetch ABI writes its output registers to LDS for the GS.
-        let fetch = i < 16 && ins.mnemonic == "s_swappc_b64"
-            && ins.dst == [Opnd::Sgpr(12)] && ins.src == [Opnd::Sgpr(12)];
-        fetch || (ins.enc == Enc::Exp && (ins.aux.imm == 12 || (32..64).contains(&ins.aux.imm)))
-    })
-}
-
-/// Scan a blob for zlib streams and return every one that inflates to an `FSSM` container
-/// (in file order).
-fn find_and_inflate_fssm(xdat: &[u8]) -> Result<Vec<Vec<u8>>, String> {
-    let mut last_err = String::from("no zlib stream found in XDAT");
-    let mut found = Vec::new();
-    let mut i = 8; // past "XDAT" + version
-    while i + 2 < xdat.len() {
-        if xdat[i] == 0x78 && matches!(xdat[i + 1], 0x01 | 0x9c | 0xda) {
-            match miniz_oxide::inflate::decompress_to_vec_zlib(&xdat[i..]) {
-                Ok(out) if out.len() >= 8 && &out[0..4] == b"FSSM" => found.push(out),
-                Ok(out) => last_err = format!("inflated {} bytes but magic={:?}", out.len(), &out[0..4.min(out.len())]),
-                Err(e) => last_err = format!("inflate at {i:#x} failed: {e:?}"),
+    for (number, ins) in rdna2::instructions(code).enumerate() {
+        match ins.enc {
+            // POS0 or PARAM exports. A merged stage can call a separate
+            // fetch program through the s[12:13] pair before producing outputs.
+            Enc::Exp if ins.aux.imm == 12 || (32..64).contains(&ins.aux.imm) => return true,
+            Enc::Sop1
+                if number < 16
+                    && ins.mnemonic == "s_swappc_b64"
+                    && ins.dst == [Opnd::Sgpr(12)]
+                    && ins.src == [Opnd::Sgpr(12)] =>
+            {
+                return true
             }
+            _ => {}
         }
-        i += 1;
-    }
-    if found.is_empty() { Err(last_err) } else { Ok(found) }
-}
-
-/// Locate the RDNA2 ISA section inside an FSSM blob.
-///
-/// The FSSM header holds a section descriptor whose 64-bit offset/size (observed at
-/// +0xc0 / +0xc8) brackets the ISA. We read it, then VALIDATE that the range both
-/// contains `s_endpgm` and is dword-aligned RDNA2; if that fails we fall back to a
-/// marker-based scan (first SOPP-dense run ending at `s_endpgm`). Either way the
-/// returned bytes are checked to contain `s_endpgm`, so we never return non-ISA.
-fn locate_isa(fssm: &[u8]) -> Result<(Vec<u8>, usize), String> {
-    if fssm.get(0..4) != Some(b"FSSM") {
-        return Err("not an FSSM container".into());
-    }
-    // Candidate from the header descriptor (empirical offsets).
-    if let (Ok(off64), Ok(size_lo)) = (u32_at(fssm, 0xc0), u32_at(fssm, 0xc8)) {
-        let off = off64 as usize;
-        let size = size_lo as usize;
-        if off >= 0x40 && size >= 8 && off + size <= fssm.len() {
-            let sect = &fssm[off..off + size];
-            if range_contains_endpgm(sect) {
-                // The ISA section begins with a 16-byte preamble (dword0 = code offset,
-                // dwords 1..3 = 0) before the executable RDNA2 code. Skip it when present.
-                let (code, code_off) = strip_isa_preamble(sect, off);
-                return Ok((trim_to_endpgm(code), code_off));
-            }
-        }
-    }
-    // Fallback: find the dword-aligned s_endpgm, then walk back over SOPP/other code.
-    let mut end = None;
-    let mut p = 0;
-    while p + 4 <= fssm.len() {
-        if u32::from_le_bytes([fssm[p], fssm[p + 1], fssm[p + 2], fssm[p + 3]]) == S_ENDPGM {
-            end = Some(p + 4);
-            break;
-        }
-        p += 4;
-    }
-    let end = end.ok_or("no s_endpgm found in FSSM — not RDNA2?")?;
-    // Walk backward while the words look like plausible code (nonzero, or SOPP).
-    let mut start = end - 4;
-    while start >= 4 {
-        let w = u32::from_le_bytes([fssm[start - 4], fssm[start - 3], fssm[start - 2], fssm[start - 1]]);
-        if w == 0 && !is_sopp(w) {
-            break;
-        }
-        start -= 4;
-    }
-    Ok((fssm[start..end].to_vec(), start))
-}
-
-/// Strip the 16-byte ISA-section preamble (dword0 = code offset, dwords 1..3 zero) that
-/// precedes the executable RDNA2 code. Returns the code slice and its absolute FSSM offset.
-fn strip_isa_preamble(sect: &[u8], sect_off: usize) -> (&[u8], usize) {
-    if sect.len() >= 24 {
-        let w = |o: usize| u32::from_le_bytes([sect[o], sect[o + 1], sect[o + 2], sect[o + 3]]);
-        // Graphics: dwords 1..3 are zero. Compute: dwords 1..3 are the thread-group size.
-        // In both cases the code proper starts with the driver hash marker, a VOP3
-        // `v_nop` (0xD580....) whose second dword is 0x03FE..../0x03FF.....
-        let zeros = w(4) == 0 && w(8) == 0 && w(12) == 0;
-        let marker = (w(16) >> 16) == 0xd580 && (w(20) >> 17) == 0x1ff;
-        if zeros || marker {
-            return (&sect[16..], sect_off + 16);
-        }
-    }
-    (sect, sect_off)
-}
-
-fn range_contains_endpgm(sect: &[u8]) -> bool {
-    let mut p = 0;
-    while p + 4 <= sect.len() {
-        let w = u32::from_le_bytes([sect[p], sect[p + 1], sect[p + 2], sect[p + 3]]);
-        if w == S_ENDPGM {
-            return true;
-        }
-        p += 4;
     }
     false
 }
 
-/// Include all reachable forward branch targets before trimming end-of-program padding.
-fn trim_to_endpgm(sect: &[u8]) -> Vec<u8> {
-    let mut max_target = 0i64;
-    let mut code_end = sect.len();
-    for ins in rdna2::instructions(sect) {
-        if ins.raw[0] == S_CODE_END {
-            code_end = ins.offset;
-            break;
-        }
-        if ins.enc != rdna2::Enc::Sopp {
-            continue;
-        }
-        if matches!(ins.op, 2 | 4..=9) {
-            max_target = max_target.max(ins.offset as i64 + 4 + ins.aux.imm * 4);
-        } else if ins.op == 1 && ins.offset as i64 >= max_target {
-            return sect[..ins.offset + 4].to_vec();
-        }
+fn native_dxil(body: &[u8]) -> Result<NativeProgram, String> {
+    let (header, _) = body
+        .split_at_checked(24)
+        .ok_or("truncated DXIL program header")?;
+    let fields = header.as_chunks::<4>().0;
+    if &fields[2] != b"DXIL" {
+        return Err("missing DXIL bitcode header".into());
     }
-    // Preserve the raw end-marker fallback for streams with unknown instruction lengths.
-    let mut last_end = None;
-    let mut p = 0;
-    while p + 4 <= code_end {
-        let w = u32::from_le_bytes([sect[p], sect[p + 1], sect[p + 2], sect[p + 3]]);
-        if w == S_ENDPGM {
-            last_end = Some(p + 4);
-        }
-        p += 4;
-    }
-    match last_end {
-        Some(e) => sect[..e].to_vec(),
-        None => sect.to_vec(),
-    }
-}
-
-/// Find the entry-point name (observed as an ASCII run near the FSSM tail, e.g. "Main").
-fn find_entry_name(fssm: &[u8]) -> Option<String> {
-    // Scan for a short printable ASCII run that looks like an identifier.
-    let mut best: Option<String> = None;
-    let mut cur = Vec::new();
-    for &b in fssm {
-        if b.is_ascii_alphanumeric() || b == b'_' {
-            cur.push(b);
-        } else {
-            if cur.len() >= 3 && cur.len() <= 64 && cur[0].is_ascii_alphabetic() {
-                let s = String::from_utf8_lossy(&cur).into_owned();
-                // Prefer a name that isn't obviously a chunk fourcc.
-                if !matches!(s.as_str(), "FSSM" | "XDAT" | "DXBC" | "DXIL" | "NOBC") {
-                    best = Some(s);
+    let version = u32::from_le_bytes(fields[0]);
+    let size = (u32::from_le_bytes(fields[1]) as usize)
+        .checked_mul(4)
+        .ok_or("invalid DXIL size")?;
+    let program = body.get(..size).ok_or("DXIL program exceeds part")?;
+    let bitcode = program
+        .get(8..)
+        .and_then(|p| p.get(u32::from_le_bytes(fields[4]) as usize..))
+        .and_then(|p| p.get(..u32::from_le_bytes(fields[5]) as usize))
+        .ok_or("invalid DXIL bitcode range")?;
+    let stage = Stage::from((version >> 16) as u16);
+    let variants = xdat::programs(program.get(24..).ok_or("invalid XDAT program size")?)?;
+    let choose_vertex = stage == Stage::Vertex && variants.len() > 1;
+    let mut first = None;
+    let mut error = String::from("XDAT contains no executable shader");
+    for bytes in variants {
+        match fssm::decode(&bytes) {
+            Ok(decoded) => {
+                let preferred = !choose_vertex || feeds_rasterizer(&decoded.isa);
+                if preferred || first.is_none() {
+                    first = Some((bytes, decoded));
+                }
+                if preferred {
+                    break;
                 }
             }
-            cur.clear();
+            Err(reason) => error = reason,
         }
     }
-    best
+    let (fssm, decoded) = first.ok_or(error)?;
+    Ok(NativeProgram {
+        stage,
+        sm: ((version >> 4) & 15, version & 15),
+        bitcode_stripped: bitcode == b"NOBC",
+        entry: decoded.entry,
+        isa: decoded.isa,
+        isa_data: decoded.isa_data,
+        isa_off: decoded.isa_offset,
+        isa_preamble: decoded.preamble,
+        fssm,
+        fspx_config: None,
+    })
+}
+
+/// Extracts the native stage and the metadata used to compile and link it.
+pub fn extract(bytes: &[u8]) -> Result<ShaderExtract, String> {
+    let container = Dxbc::parse(bytes)?;
+    let part = |tag: &[u8; 4]| {
+        container
+            .chunk(tag)
+            .map(|c| &bytes[c.offset..c.offset + c.size])
+    };
+    let signature = |tags: &[&[u8; 4]]| -> Result<Option<Vec<SigElement>>, String> {
+        tags.iter()
+            .find_map(|tag| part(tag).map(|payload| parse_signature_part(tag, payload)))
+            .transpose()
+    };
+    let validation = part(b"PSV0");
+    let threads = validation.and_then(psv::parse_compute_threads);
+    let code = match (part(b"DXIL"), part(b"ACCC")) {
+        (Some(payload), _) => native_dxil(payload)?,
+        (_, Some(payload)) => {
+            native_compute::extract(payload, threads.ok_or("missing compute group dimensions")?)?
+        }
+        _ => return Err("DXBC contains no native Xbox program".into()),
+    };
+    let ps09_pixel_inputs = match part(b"TBGP") {
+        Some(config) if code.stage == Stage::Pixel && config.len() == 380 => {
+            Some(u32::from_le_bytes(config[88..92].try_into().unwrap()))
+        }
+        Some(_) => return Err("invalid PS09 pixel configuration".into()),
+        None => None,
+    };
+    let inputs = signature(&[b"ISG1", b"ISGN"])?;
+    let outputs = signature(&[b"OSG1", b"OSG5", b"OSGN"])?;
+    let primitive_sig = if code.stage == Stage::Mesh {
+        signature(&[b"PSG1"])?.ok_or("missing mesh primitive signature")?
+    } else {
+        Vec::new()
+    };
+    let root = part(b"RTS0");
+    Ok(ShaderExtract {
+        stage: code.stage,
+        shader_model: code.sm,
+        required_features: part(b"SFI0")
+            .and_then(|p| p.try_into().ok())
+            .map(u64::from_le_bytes),
+        entry: code.entry,
+        isa: code.isa,
+        isa_data: code.isa_data,
+        isa_offset_in_fssm: code.isa_off,
+        isa_preamble: code.isa_preamble,
+        fssm: code.fssm,
+        bitcode_stripped: code.bitcode_stripped,
+        fspx_config: code.fspx_config,
+        ps09_pixel_inputs,
+        psv_threads: threads,
+        has_input_sig: inputs.is_some(),
+        has_output_sig: outputs.is_some(),
+        input_sig: inputs.unwrap_or_default(),
+        output_sig: outputs.unwrap_or_default(),
+        primitive_sig,
+        has_psv0: validation.is_some(),
+        resources: validation
+            .map(psv::parse_psv0)
+            .transpose()?
+            .unwrap_or_default(),
+        gs_info: validation.and_then(psv::parse_psv0_gs),
+        mesh_info: validation.and_then(psv::parse_mesh_info),
+        has_root_sig: root.is_some(),
+        root_sig: root.map(rootsig::parse_rts0).transpose()?,
+    })
 }

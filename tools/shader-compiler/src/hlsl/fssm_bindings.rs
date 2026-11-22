@@ -1,11 +1,11 @@
-//! Native structured-buffer strides in the FSSM 1.1 compute binding table.
+//! Native structured-buffer strides in the FSSM 1.1 resource binding table.
 use crate::{meta::PsvResource, ShaderExtract, Stage};
 
 pub(super) fn structured_words(ex: &ShaderExtract, slot: u32, uav: bool) -> Result<u32, String> {
     if ex.stage != Stage::Compute {
         return Err("FSSM compute binding table requires a compute stage".into());
     }
-    stride_words(&ex.fssm, &ex.resources, slot, uav).ok_or_else(|| {
+    stride_words(&ex.fssm, &ex.resources, ex.stage, slot, uav).ok_or_else(|| {
         format!(
             "invalid FSSM structured-buffer stride for {}{slot}",
             if uav { 'u' } else { 't' }
@@ -13,11 +13,18 @@ pub(super) fn structured_words(ex: &ShaderExtract, slot: u32, uav: bool) -> Resu
     })
 }
 
-fn stride_words(fssm: &[u8], resources: &[PsvResource], slot: u32, uav: bool) -> Option<u32> {
-    let (psv_type, class, descriptor) = if uav {
-        (8, 0x303, 0x30704)
-    } else {
-        (5, 0x300, 0x404)
+pub(super) fn stride_words(
+    fssm: &[u8],
+    resources: &[PsvResource],
+    stage: Stage,
+    slot: u32,
+    uav: bool,
+) -> Option<u32> {
+    let (psv_type, class, descriptor) = match (stage, uav) {
+        (Stage::Compute, false) => (5, 0x300, 0x404),
+        (Stage::Compute, true) => (8, 0x303, 0x30704),
+        (Stage::Pixel, false) => (5, 0x300, 0x804),
+        _ => return None,
     };
     // Raw buffers and images carry a size here as well. The independent PSV
     // binding determines whether this field describes a structured element.
@@ -97,10 +104,22 @@ mod tests {
             lower: slot,
             upper: slot,
         });
-        assert_eq!(stride_words(&data, &bindings, 3, false), Some(200));
-        assert_eq!(stride_words(&data, &bindings, 1, true), Some(11));
-        assert_eq!(stride_words(&data, &bindings, 0, false), None);
-        assert_eq!(stride_words(&data, &bindings, 1, false), None);
+        assert_eq!(
+            stride_words(&data, &bindings, Stage::Compute, 3, false),
+            Some(200)
+        );
+        assert_eq!(
+            stride_words(&data, &bindings, Stage::Compute, 1, true),
+            Some(11)
+        );
+        assert_eq!(
+            stride_words(&data, &bindings, Stage::Compute, 0, false),
+            None
+        );
+        assert_eq!(
+            stride_words(&data, &bindings, Stage::Compute, 1, false),
+            None
+        );
 
         let binding = &bindings[..1];
         for row in [
@@ -108,18 +127,49 @@ mod tests {
             [0x300, 24, 3, 799, 0x404],
             [0x300, 24, 3, 800, 0x408],
         ] {
-            assert_eq!(stride_words(&fixture(&[row]), binding, 3, false), None);
+            assert_eq!(
+                stride_words(&fixture(&[row]), binding, Stage::Compute, 3, false),
+                None
+            );
         }
         assert_eq!(
-            stride_words(&fixture(&[rows[0]; 2]), binding, 3, false),
+            stride_words(&fixture(&[rows[0]; 2]), binding, Stage::Compute, 3, false),
             None
         );
         assert_eq!(
-            stride_words(&data[..data.len() - 1], binding, 3, false),
+            stride_words(&data[..data.len() - 1], binding, Stage::Compute, 3, false),
             None
         );
         let mut out_of_range = data;
         out_of_range[0xf0..0xf8].copy_from_slice(&u64::MAX.to_le_bytes());
-        assert_eq!(stride_words(&out_of_range, binding, 3, false), None);
+        assert_eq!(
+            stride_words(&out_of_range, binding, Stage::Compute, 3, false),
+            None
+        );
+    }
+
+    #[test]
+    fn pixel_srv_stride_includes_unread_fields() {
+        // These MainPS inputs only fetch the first word or vector of each record.
+        let data = fixture(&[[0x300, 0, 0, 16, 0x804], [0x300, 16, 2, 32, 0x804]]);
+        let resources = [0, 2].map(|slot| PsvResource {
+            res_type: 5,
+            space: 0,
+            lower: slot,
+            upper: slot,
+        });
+        assert_eq!(
+            stride_words(&data, &resources, Stage::Pixel, 0, false),
+            Some(4)
+        );
+        assert_eq!(
+            stride_words(&data, &resources, Stage::Pixel, 2, false),
+            Some(8)
+        );
+        assert_eq!(
+            stride_words(&data, &resources, Stage::Compute, 0, false),
+            None
+        );
+        assert_eq!(stride_words(&data, &resources, Stage::Pixel, 0, true), None);
     }
 }

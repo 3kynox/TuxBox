@@ -66,8 +66,8 @@ pub(super) fn resources(em: &mut Emitter<'_>) -> Result<(), String> {
             return Err("post-pass instance culling counters exceed their structure".into());
         }
         *width = reflected;
+        em.reflected_strides.insert((uav, slot));
     }
-    em.reflected_strides = true;
     em.tbuf_ty.insert((false, 7), 1);
     for (i, op) in em
         .insns

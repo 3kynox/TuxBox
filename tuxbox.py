@@ -53,7 +53,7 @@ def launch_game(args):
                         return 0 if supported else 1
             log.status("Starting game")
             start = monotonic()
-            code = host.run_game(exe, args.arguments, log).returncode
+            code = host.run_game(exe, args.arguments, log, mangohud=args.mangohud).returncode
         except KeyboardInterrupt:
             log.status("Launch interrupted")
             return 130
@@ -73,6 +73,8 @@ def main():
     run = subs.add_parser("run", help="launch a prepared x64 executable or manifest entry")
     run.add_argument("--app-id", help="select a manifest entry by its Id")
     run.add_argument("--log-file", type=Path, metavar="PATH", help="append the live game log to this file")
+    run.add_argument("--mangohud", action="store_true",
+                     help="show Vulkan performance metrics and record frame times beside the game log on Linux")
     preparation = run.add_mutually_exclusive_group()
     preparation.add_argument("--prepare-only", action="store_true", help="prepare supported shader caches and exit")
     preparation.add_argument("--no-shader-prep", action="store_true", help="skip shader preparation for this launch")

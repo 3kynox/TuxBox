@@ -1,4 +1,4 @@
-use super::{Device, Out, compute, identity, wrap_pageable};
+use super::{Device, Out, compute, identity, rectangle, wrap_pageable};
 use crate::proxy::check_output;
 use core::{ffi::c_void, mem::ManuallyDrop};
 use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL};
@@ -41,9 +41,13 @@ pub(super) unsafe extern "system" fn create_pipeline(
     // reference on the guest object. Release only the new native reference.
     let mut native_desc = unsafe { core::ptr::read(desc) };
     native_desc.pRootSignature = ManuallyDrop::new(root.cloned());
-    let native = unsafe {
-        this.native
-            .CreateGraphicsPipelineState::<ID3D12PipelineState>(&native_desc)
+    let native = if native_desc.PrimitiveTopologyType.0 == rectangle::PIPELINE_TYPE {
+        unsafe { rectangle::create_pipeline(&this.native, &mut native_desc) }
+    } else {
+        unsafe {
+            this.native
+                .CreateGraphicsPipelineState::<ID3D12PipelineState>(&native_desc)
+        }
     };
     unsafe { ManuallyDrop::drop(&mut native_desc.pRootSignature) };
     unsafe {

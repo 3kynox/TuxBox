@@ -5,6 +5,10 @@ edition = "2021"
 license = "Apache-2.0"
 description = "Translate Xbox Series shader programs for the TuxBox host shader cache"
 
+[features]
+default = ["legacy-hlsl"]
+legacy-hlsl = []
+
 [[bin]]
 name = "xshader"
 path = "src/main.rs"

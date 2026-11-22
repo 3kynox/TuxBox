@@ -6,12 +6,43 @@ The progress map shows which shader stages TuxBox can translate and which progra
 | --- | --- |
 | Packaged | Entries in the two shader archives shipped with this build. |
 | HLSL / unique DXBC | Distinct non-ray programs for which the checkout compiler emitted HLSL. Desktop compilation, GPU results and visible rendering each need their own check. |
+| TuxBox only | Distinct programs that the independent compiler emitted with legacy translation disabled. The survey compares its HLSL and profile with the regular build. |
 | In profile | Distinct native programs listed in the launcher's menu and opening cinematic preparation profile. The linked vertex/geometry variants are counted separately. |
 | In profile / requested | Profiled programs among the distinct hashes recorded by TuxBox during the sampled runs. Other scenes and graphics settings can request different shaders. |
 
 The green code on the camera plane uses material shader map **136**. The verified main-menu trace includes its vertex shader at material entry 2 and pixel shader at entry 3530. The post-process filter uses map **66**, including pixel shader 1461. The inventory lists each map member, its archive index, stage and the runs that requested it. A request identifies a program used to create a pipeline. Checking a draw or a captured frame establishes whether that pipeline produced visible output. The packaged ray-tracing entries use Xbox serialized state objects and have their own translation path. [Rendered menu](../evidence/matrix-awakens/green-code-menu.webp) · [Cooked material references](../evidence/matrix-awakens/menu-materials.json) · [Ray-state samples](../evidence/matrix-awakens/retail-shaders.json)
 
-All 19,634 distinct vertex shaders now translate to HLSL. GPU readbacks check the cubemap shadow shader’s vertex outputs and the compute instructions used by 94 newly translated programs. Across 19 traces covering startup, Nanite, the playable chase and city free roam, all 2,217 observed programs passed standalone DXIL validation. The default first-boot profile includes 177 of those programs. The larger chase profile also prepares shaders that compiled on demand during play. [Cubemap shadow readback](../evidence/matrix-awakens/cubemap-shadow-vertex.json) · [Clip-distance outputs](../evidence/matrix-awakens/clip-distance-vertex.json) · [Compute instruction checks](../evidence/matrix-awakens/compute-instructions.json)
+All 19,634 distinct vertex shaders now translate to HLSL. GPU readbacks check the cubemap shadow shader’s vertex outputs and the compute instructions used by 94 newly translated programs. Across 23 traces covering startup, Nanite, the chase on stock Proton and the fork, and city free roam, all 2,433 observed programs passed standalone DXIL validation. The default first-boot profile includes 177 of those programs. The larger chase profile also prepares shaders that compiled on demand during play. [Cubemap shadow readback](../evidence/matrix-awakens/cubemap-shadow-vertex.json) · [Clip-distance outputs](../evidence/matrix-awakens/clip-distance-vertex.json) · [Compute instruction checks](../evidence/matrix-awakens/compute-instructions.json)
+
+## Independent translation
+
+TuxBox’s independent Rust compiler translates 99 of Frosty’s 12,271 distinct pixel shaders and seven of its 3,233 compute shaders. The pixel shaders write constant colors to one or more targets, preserve rasterized depth, or discard every sample. Three compute programs initialize specific words in structured buffers. The other four perform empty dispatches. All 106 passed readback checks on GeForce and Radeon, including untouched pixels and buffer words. The gameplay compiler still uses TomBox-derived HLSL generation for the rest of Frosty’s supported programs. [GPU results](../evidence/matrix-awakens/independent-shader-gpu.json) · [Compute instructions and strides](../evidence/matrix-awakens/independent-compute.json) · [Source attribution](REFERENCES.md#shader-compiler-attribution)
+
+A cold rebuild validated all 223 prepared entries and linked variants. Four pixel programs and two linked vertex programs changed. The two updated pairs created depth-only pipelines with their original root signatures on both GPUs. [Prepared shader comparison](../evidence/matrix-awakens/independent-shader-profile.json)
+
+Build the independent compiler into a separate directory to test a raw Xbox shader. It reports an error when a program needs an unsupported operation. This command compiles the supplied bytes directly and does not read the game’s shader cache.
+
+```sh
+cargo build --locked --release --no-default-features \
+    --manifest-path tools/shader-compiler/Cargo.toml --target x86_64-unknown-linux-gnu \
+    --target-dir build/independent-compiler
+build/independent-compiler/x86_64-unknown-linux-gnu/release/xshader \
+    shader.dxbc --hlsl-out shader.hlsl --profile-out shader.profile
+```
+
+## Vertex fetch
+
+Three of Frosty’s vertex shaders give us expected positions and texture coordinates directly from their Xbox instructions. Global entry 1007 copies the input position and sets W to one. Entry 2450 passes through the full position and a pair of texture coordinates. Entry 2751 scales and flips coordinates into clip space. On stock Proton, the current gameplay compiler produced the expected bytes for all three with separate buffers and with interleaved attributes, on GeForce and Radeon. Deliberately swapping the two texture coordinates failed both layouts for entry 2450. This is a baseline for replacing the legacy vertex emitter. [Readbacks and reproduction](../evidence/matrix-awakens/vertex-fetch.json)
+
+Frosty’s menu material at entry 2 illustrates the overlap with AnyPS5’s instruction profile. LLVM 23.1.5 decodes the shader’s call at byte offset `0x18` as `s_swappc_b64 s[4:5], s[4:5]` on both `gfx1013` and `gfx1030`. At `0x1cc`, the former recognizes `v_mad_f32` and the latter rejects the instruction encoding. TuxBox uses AMD’s GFX10.1 and GFX10.3 tables together. The Xbox shader signature and input layout supply the evidence for how a game binds its vertex data. [Menu material inventory](../evidence/matrix-awakens/menu-materials.json) · [Opcode table](../tools/shader-compiler/src/rdna2/opcodes.rs) · [AnyPS5 research notes](REFERENCES.md)
+
+## Street materials and scene instances
+
+Both the earlier run and the Proton fork run with the independent emitters show missing character surfaces in the rooftop scene. The standing character’s head and torso are absent in both captures. [Earlier rooftop frame](../evidence/matrix-awakens/rooftop-before.jpg) · [Current rooftop frame](../evidence/matrix-awakens/rooftop-independent.jpg)
+
+Frosty's pixel shaders read triangle facing and fragment position from registers selected by the Xbox shader. TuxBox now supplies the front-face flag and packs the enabled position components in hardware order. On Radeon and NVIDIA, the same two-sided material produced the expected light front and dark back. A second material produced the expected depth values at both test distances. All 667 affected pixel programs requested during the recorded chase and city run passed DXIL validation. [Pixel shader GPU readbacks](../evidence/matrix-awakens/pixel-raster-inputs.json)
+
+Material and compute shaders also need the byte distance between records in a structured buffer. TuxBox reads that distance from the Xbox binding metadata where available. In a GPU test, Frosty's scene-update shader previously wrote 64 of 128 primitive IDs and overwrote 64 adjacent IDs. It now writes all 128 requested IDs and preserves all 128 adjacent IDs. [Scene-update GPU readback](../evidence/matrix-awakens/scene-primitive-ids.json)
 
 ## Mesh shaders
 
@@ -107,6 +138,6 @@ python tools/map_frosty_shaders.py /path/to/Mount \
   --index build/frosty-shaders.csv --output build/frosty-shaders.json
 ```
 
-The CSV contains one row for every shipped entry. It records the Unreal shader ID, native DXBC SHA-256 when present, map memberships, preparation status and trace labels. To repeat the frontend survey, replace `--reuse-survey` with `--compiler build/shader-compiler/x86_64-unknown-linux-gnu/release/xshader` after building the Linux compiler. This also fills in the per-entry `hlsl_emitted` CSV column. Add `--dxc /path/to/dxc` to compile the distinct observed programs and check their output with the adjacent `dxv` executable. The CSV records those results under `standalone_dxil_validated`. Reusing a survey carries forward the aggregate results for matching archive hashes and the measured results for known requests.
+The CSV contains one row for every shipped entry. It records the Unreal shader ID, native DXBC SHA-256 when present, map memberships, preparation status and trace labels. To repeat the frontend survey, replace `--reuse-survey` with `--compiler build/shader-compiler/x86_64-unknown-linux-gnu/release/xshader` after building the Linux compiler. This also fills in the per-entry `hlsl_emitted` CSV column. Add `--dxc /path/to/dxc` to compile the distinct observed programs and check their output with the adjacent `dxv` executable. The CSV records those results under `standalone_dxil_validated`. Add `--independent-compiler build/independent-compiler/x86_64-unknown-linux-gnu/release/xshader` to compare both compilers on every distinct program and fill the `independent_hlsl` column. With DXC enabled, this also validates all independently emitted programs, including ones that have yet to appear in a trace. Reusing a survey carries forward the aggregate results for matching archive hashes and the measured results for known requests.
 
 To publish updated counts, run the mapper with all the trace labels you want to cover, use `evidence/matrix-awakens/shader-inventory.json` as the output, then regenerate the SVG with `python tuxbox.py status --svg docs/progress.svg`.

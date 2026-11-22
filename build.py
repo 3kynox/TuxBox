@@ -263,6 +263,8 @@ def build_target(tools, target, dxc, d3d12_reference=None):
             ("triangle", "VSMain", "vs_6_0", "triangle_vs", "triangle_vs"),
             ("triangle", "VSFromBuffer", "vs_6_0", "triangle_input_vs", "triangle_input_vs"),
             ("triangle", "PSMain", "ps_6_0", "triangle_ps", "triangle_ps"),
+            ("rectangle", "VSMain", "vs_6_0", "rectangle_vs", "rectangle_vs"),
+            ("rectangle", "PSMain", "ps_6_0", "rectangle_ps", "rectangle_ps"),
             ("mesh_groups", "mesh", "ms_6_5", "mesh_ms", "mesh_ms"),
             ("mesh_groups", "mesh", "ms_6_5", "mesh_ms_payload", "mesh_ms_payload"),
             ("mesh_groups", "amplify", "as_6_5", "mesh_as", "mesh_as"),

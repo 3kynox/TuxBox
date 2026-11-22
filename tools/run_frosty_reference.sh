@@ -8,6 +8,8 @@ verify_layout=no
 replay_options=()
 extra_variables=(TOMBOX_LOG)
 export TOMBOX_LOG=${TOMBOX_LOG:-NUL}
+# Historical layouts can select a different renderer and still need console CBV offsets.
+export TUXBOX_REFERENCE_CBV=1
 if [[ ${1:-} == --tuxbox-d3d12 ]]; then
     shift
     pointer="$repo/build/frosty-native/latest-tuxbox-d3d12"

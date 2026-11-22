@@ -48,8 +48,6 @@ static void run(FILE *f) {
   check(guest->CreateRootSignature(0, blob->GetBufferPointer(),
                                    blob->GetBufferSize(), IID_PPV_ARGS(&root)),
         "root");
-  ComPtr<ID3D12Device> dev;
-  check(root->GetDevice(IID_PPV_ARGS(&dev)), "owner");
   std::ifstream in("film-cbv.cso", std::ios::binary);
   std::vector<char> shader{std::istreambuf_iterator<char>{in},
                            std::istreambuf_iterator<char>{}};
@@ -57,8 +55,10 @@ static void run(FILE *f) {
   pd.pRootSignature = root.Get();
   pd.CS = {shader.data(), shader.size()};
   ComPtr<ID3D12PipelineState> pso;
-  check(dev->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso)),
-        "control PSO");
+  using Pipeline = HRESULT(WINAPI *)(ID3D12Device *, const D3D12_COMPUTE_PIPELINE_STATE_DESC *,
+                                     UINT, const void *, REFIID, void **);
+  check(frame_abi::method<Pipeline>(guest.Get(), 62)(guest.Get(), &pd, 0, nullptr, IID_PPV_ARGS(&pso)),
+        "guest compute pipeline");
   auto cpuHeap = descriptorHeap(guest.Get(), false),
        gpuHeap = descriptorHeap(guest.Get(), true);
   using Handle = UINT64(WINAPI *)(ID3D12DescriptorHeap *);
@@ -69,12 +69,12 @@ static void run(FILE *f) {
        gpu = start(gpuHeap.Get(), 10);
   auto type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   UINT step = guest->GetDescriptorHandleIncrementSize(type);
-  auto cb = buffer(dev.Get(), variants * region, D3D12_HEAP_TYPE_UPLOAD,
+  auto cb = buffer(guest.Get(), variants * region, D3D12_HEAP_TYPE_UPLOAD,
                    D3D12_RESOURCE_STATE_GENERIC_READ);
-  auto output = buffer(dev.Get(), variants * view, D3D12_HEAP_TYPE_DEFAULT,
+  auto output = buffer(guest.Get(), variants * view, D3D12_HEAP_TYPE_DEFAULT,
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-  auto read = buffer(dev.Get(), variants * view, D3D12_HEAP_TYPE_READBACK,
+  auto read = buffer(guest.Get(), variants * view, D3D12_HEAP_TYPE_READBACK,
                      D3D12_RESOURCE_STATE_COPY_DEST);
   std::array<UINT, variants * region / sizeof(UINT)> values{};
   values.fill(0xcade0123);
@@ -102,16 +102,23 @@ static void run(FILE *f) {
   ComPtr<ID3D12CommandAllocator> allocator;
   ComPtr<ID3D12GraphicsCommandList> list;
   D3D12_COMMAND_QUEUE_DESC q{};
-  check(dev->CreateCommandQueue(&q, IID_PPV_ARGS(&queue)), "queue");
-  check(dev->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&allocator)),
+  check(guest->CreateCommandQueue(&q, IID_PPV_ARGS(&queue)), "queue");
+  check(guest->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&allocator)),
         "allocator");
-  check(dev->CreateCommandList(0, q.Type, allocator.Get(), pso.Get(),
-                               IID_PPV_ARGS(&list)),
-        "list");
-  list->SetDescriptorHeaps(1, gpuHeap.GetAddressOf());
-  list->SetComputeRootSignature(root.Get());
+  const UINT list_desc[] = {D3D12_COMMAND_LIST_TYPE_DIRECT, 0, 1, 0};
+  check(frame_abi::method<frame_abi::CreateList>(guest.Get(), 73)(
+            guest.Get(), list_desc, allocator.Get(), nullptr, IID_PPV_ARGS(&list)),
+        "guest command list");
+  check(allocator->Reset(), "reset allocator");
+  check(list->Reset(allocator.Get(), pso.Get()), "reset command list");
+  using BindHeaps = void(WINAPI *)(ID3D12GraphicsCommandList *, UINT, ID3D12DescriptorHeap *const *);
+  using BindRoot = void(WINAPI *)(ID3D12GraphicsCommandList *, ID3D12RootSignature *);
+  using BindTable = void(WINAPI *)(ID3D12GraphicsCommandList *, UINT, D3D12_GPU_DESCRIPTOR_HANDLE);
+  frame_abi::method<BindHeaps>(list.Get(), 32)(list.Get(), 1, gpuHeap.GetAddressOf());
+  frame_abi::method<BindRoot>(list.Get(), 33)(list.Get(), root.Get());
+  auto bind_table = frame_abi::method<BindTable>(list.Get(), 35);
   for (UINT i = 0; i < variants; ++i) {
-    list->SetComputeRootDescriptorTable(0, {gpu + step * i * 2});
+    bind_table(list.Get(), 0, {gpu + step * i * 2});
     list->Dispatch(1, 1, 1);
   }
   transition(list.Get(), output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -127,7 +134,7 @@ static void run(FILE *f) {
     values[first + 4 * 38 + 3] = bits(1.f / 1240);
   }
   upload(cb.Get(), values.data(), sizeof(values));
-  submit_and_wait(dev.Get(), queue.Get(), list.Get());
+  submit_and_wait(guest.Get(), queue.Get(), list.Get());
   void *data{};
   D3D12_RANGE range{0, variants * view}, none{};
   check(read->Map(0, &range, &data), "readback");

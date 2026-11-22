@@ -335,7 +335,7 @@ struct Emitter<'a> {
     samp_cmp: BTreeSet<u32>,
     uav: BTreeMap<u32, u32>,       // slot -> dim
     sbuf: BTreeMap<(bool, u32), u32>, // (is_uav, slot) -> element dwords used
-    reflected_strides: bool,
+    reflected_strides: BTreeSet<(bool, u32)>,
     /// PersistentClusterCull's validated buffer layout and cross-group UAV queue.
     persistent_queue: bool,
     raw: BTreeSet<(bool, u32)>,
@@ -798,6 +798,17 @@ pub fn translate_stencil_target(ex: &ShaderExtract, slot: u32) -> Result<Transla
 
 fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_order: &[String],
     stencil_target: Option<u32>) -> Result<Translated, String> {
+    if stencil_target.is_none() {
+        if let Some(hlsl) = crate::independent_hlsl(ex) {
+            let compute = ex.stage == Stage::Compute;
+            return Ok(Translated {
+                hlsl, entry: "main", profile: if compute { "cs_5_0" } else { "ps_5_0" },
+                needs_barycentrics: false, typed_int64_atomics: false, required_wave_size: None,
+                portable_compute_group: if compute { ex.psv_threads } else { None },
+                ps_input_interp: InputInterp::default(),
+            });
+        }
+    }
     if ex.stage == Stage::Mesh {
         return mesh::translate(ex, feeds_ps);
     }
@@ -970,6 +981,16 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     if ex.entry.as_deref() == Some("MicropolyRasterize") && ex.stage == Stage::Compute {
         micropoly::prepare(&mut em)?;
     }
+    // A single field access can leave most of an instance or material record
+    // unread. Use the full native stride for indexing and byte-offset helpers.
+    if matches!(ex.stage, Stage::Pixel | Stage::Compute) {
+        for (&(uav, slot), width) in &mut em.sbuf {
+            if let Some(words) = fssm_bindings::stride_words(&ex.fssm, &ex.resources, ex.stage, slot, uav) {
+                *width = words;
+                em.reflected_strides.insert((uav, slot));
+            }
+        }
+    }
     let live_in = em.live_in();
     em.live = live_in.clone();
     em.view_cull = view_cull;
@@ -1047,6 +1068,7 @@ pub fn translate_valu_probe(words: &[u32], nvgprs: u32) -> Result<String, String
     let ex = ShaderExtract {
         stage: Stage::Compute,
         shader_model: (6, 0),
+        required_features: None,
         bitcode_stripped: true,
         fspx_config: None,
         ps09_pixel_inputs: None,
@@ -1144,6 +1166,7 @@ pub fn translate_mem_probe(words: &[u32], nvgprs: u32) -> Result<(String, MemPro
     let ex = ShaderExtract {
         stage: Stage::Compute,
         shader_model: (6, 0),
+        required_features: None,
         bitcode_stripped: true,
         fspx_config: None,
         ps09_pixel_inputs: None,
@@ -1256,7 +1279,7 @@ impl<'a> Emitter<'a> {
             samp_cmp: BTreeSet::new(),
             uav: BTreeMap::new(),
             sbuf: BTreeMap::new(),
-            reflected_strides: false,
+            reflected_strides: BTreeSet::new(),
             persistent_queue: false,
             raw: BTreeSet::new(),
             tbuf: BTreeSet::new(),
@@ -1860,7 +1883,8 @@ impl<'a> Emitter<'a> {
     /// hardware multiplies the element index by the descriptor's stride. D3D12 instead takes
     /// the stride from the HLSL element type (observed: a translation declaring a 12-byte
     /// element for the 16-byte primitive-data buffer read the wrong rows), so the declared
-    /// element has to be the real one. It is not recoverable in general. What the PC build
+    /// element has to be the real one. Use a validated native stride when available. For
+    /// shaders without one, the fallback uses observed access extents. What the PC build
     /// of the same game shows for 801 buffers bound at the same register: stride 16 for
     /// every buffer the Xbox code touches with extents of 8..28 bytes, 64 for extents of 64.
     /// Hence: extents of 8..28 bytes -> 16-byte elements (larger offsets address following
@@ -1871,7 +1895,7 @@ impl<'a> Emitter<'a> {
     /// A heuristic (TECHNICAL_DEBT).
     fn sbuf_words(&self, key: (bool, u32)) -> u32 {
         let raw = self.sbuf.get(&key).copied().unwrap_or(1).max(1);
-        if self.persistent_queue || self.micropoly_vote.is_some() || self.reflected_strides {
+        if self.persistent_queue || self.micropoly_vote.is_some() || self.reflected_strides.contains(&key) {
             return raw;
         }
         // Unreal's instance-culling work item packs two uints per record. Both
@@ -6367,21 +6391,36 @@ void main(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {{");
                     _ => return Err(format!("unsupported PS09 pixel input mask {mask:#x}")),
                 }
             } else {
+                use crate::meta::{pixel_system_vgpr, PixelSystemInput};
                 let layer = ex.input_sig.iter().position(|e| e.sysval == 4 && e.rw_mask != 0);
                 let ancillary = layer.and_then(|field| {
-                    crate::meta::ancillary_vgpr(&ex.fssm).map(|slot| (format!("v{slot}"), field))
+                    pixel_system_vgpr(&ex.fssm, PixelSystemInput::Ancillary).map(|slot| (format!("v{slot}"), field))
                 });
                 if let Some(ei) = ex.input_sig.iter().position(|e| e.sysval == 1) {
                     let p = format!("i.i{ei}");
-                    let exprs = [format!("{p}.x"), format!("{p}.y"), format!("{p}.z"), format!("1.0 / {p}.w")];
-                    let positions = crate::meta::position_vgprs(&ex.fssm, ex.input_sig[ei].rw_mask)
-                        .unwrap_or([Some(2), Some(3), Some(4), Some(5)]);
+                    let positions = crate::meta::position_vgprs(&ex.fssm, ex.input_sig[ei].rw_mask);
+                    // POS_W_FLOAT is the interpolated clip W, matching D3D SV_Position.w.
+                    // Native shaders issue a reciprocal themselves when they need 1/W.
+                    let w = if positions.is_some() { format!("{p}.w") } else { format!("1.0 / {p}.w") };
+                    let exprs = [format!("{p}.x"), format!("{p}.y"), format!("{p}.z"), w];
+                    let positions = positions.unwrap_or([Some(2), Some(3), Some(4), Some(5)]);
                     for (slot, expr) in positions.into_iter().zip(&exprs) {
                         let Some(slot) = slot else { continue; };
                         let v = format!("v{slot}");
                         if self.live.contains(&v) && !ancillary.as_ref().is_some_and(|(reg, _)| *reg == v) {
                             let _ = writeln!(init, "    {v} = asuint({expr});");
                         }
+                    }
+                }
+                if let (Some(slot), Some(field)) = (
+                    pixel_system_vgpr(&ex.fssm, PixelSystemInput::FrontFace),
+                    ex.input_sig.iter().position(|e| e.sysval == 9 && e.rw_mask != 0),
+                ) {
+                    let reg = format!("v{slot}");
+                    if self.live.contains(&reg) {
+                        // Conventional DX pixel programs consume the integer facing
+                        // predicate. The FSSM register is zero on a back-facing primitive.
+                        let _ = writeln!(init, "    {reg} = i.i{field} != 0u ? 0xffffffffu : 0u;");
                     }
                 }
                 if let Some((reg, field)) = ancillary.filter(|(reg, _)| self.live.contains(reg)) {

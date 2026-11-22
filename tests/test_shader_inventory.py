@@ -2,6 +2,7 @@ import csv
 import json
 from pathlib import Path
 import struct
+import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -45,12 +46,13 @@ class ShaderInventoryTests(unittest.TestCase):
             plan = {"executable_sha256": digest(title), "shaders": [{"archive": "global", "entry": 0,
                     "dxbc_sha256": source, "profile": "vs_6_0"}]}
             index = root / "index.csv"
-            compiler, dxc, dxv = (root / tool for tool in ("xshader", "dxc", "dxv"))
-            for tool in (compiler, dxc, dxv):
+            compiler, independent, dxc, dxv = (root / tool for tool in ("xshader", "strict-xshader", "dxc", "dxv"))
+            for tool in (compiler, independent, dxc, dxv):
                 tool.write_text(tool.name)
 
             def run(command):
-                if command[0] == compiler:
+                if command[0] in (compiler, independent):
+                    Path(command[command.index("--hlsl-out") + 1]).write_text("void main() {}")
                     Path(command[command.index("--profile-out") + 1]).write_text("vs_6_0")
                 return True
 
@@ -58,9 +60,27 @@ class ShaderInventoryTests(unittest.TestCase):
                  patch.dict("project_tuxbox.shader_inventory.ARCHIVES",
                             {"global": (0, pak.stat().st_size, digest(pak)), "material": (0, pak.stat().st_size, digest(pak))},
                             clear=True), patch("project_tuxbox.shader_inventory.decoder"), \
-                 patch("project_tuxbox.shader_inventory.survey_command", side_effect=run) as calls:
-                result = inventory(root, plan, [], {"chase": chase, "menu": log}, compiler, index=index, dxc=dxc)
-            self.assertEqual([call.args[0][0] for call in calls.call_args_list], [compiler, dxc, dxv])
+                 patch("project_tuxbox.shader_inventory.survey_command", side_effect=run) as calls, \
+                 patch("project_tuxbox.shader_inventory.subprocess.run") as identify:
+                identify.return_value = subprocess.CompletedProcess([], 0, b"independent\nlegacy\n")
+                with self.assertRaisesRegex(ValueError, "no-default-features"):
+                    inventory(root, plan, [], {}, compiler, independent_compiler=compiler)
+                identify.return_value = subprocess.CompletedProcess([], 0, b"independent\n")
+                result = inventory(root, plan, [], {"chase": chase, "menu": log}, compiler, index=index, dxc=dxc,
+                                   independent_compiler=independent)
+                self.assertEqual([call.args[0][0] for call in calls.call_args_list], [independent, compiler, dxc, dxv])
+
+                def disagree(command):
+                    ok = run(command)
+                    if command[0] == compiler:
+                        Path(command[command.index("--hlsl-out") + 1]).write_text("different shader")
+                    return ok
+
+                calls.side_effect = disagree
+                with self.assertRaisesRegex(ValueError, "compilers disagree"):
+                    inventory(root, plan, [], {}, compiler, independent_compiler=independent)
+            self.assertEqual(result["independent_emitter"], {"compiler_sha256": digest(independent),
+                             "programs": [{"source_sha256": source, "stage": "Vertex", "standalone_dxil_validated": True}]})
             self.assertEqual(result["desktop_tools"]["dxv_sha256"], digest(dxv))
             stages = {row["stage"]: row for row in result["stages"]}
             self.assertEqual(stages["Vertex"]["global"], 2)
@@ -83,6 +103,8 @@ class ShaderInventoryTests(unittest.TestCase):
             self.assertEqual(rows[0]["shader_maps"], "0")
             self.assertEqual(rows[1]["shader_maps"], "")
             self.assertEqual(rows[1]["standalone_dxil_validated"], "True")
+            self.assertEqual(rows[1]["independent_hlsl"], "True")
+            self.assertEqual(rows[2]["independent_hlsl"], "")
             evidence = root / "evidence/matrix-awakens"
             evidence.mkdir(parents=True)
             (evidence / "shader-inventory.json").write_text(json.dumps(result))
@@ -128,6 +150,10 @@ class ShaderInventoryTests(unittest.TestCase):
         use_frontend_survey(report, previous)
         self.assertEqual(report["stages"][0]["hlsl_emitted"], 1)
         self.assertEqual(report["compiler_sha256"], "compiler")
+        self.assertNotIn("independent_emitter", report)
+        previous["independent_emitter"] = {"compiler_sha256": "strict", "programs": []}
+        use_frontend_survey(report, previous)
+        self.assertEqual(report["independent_emitter"], previous["independent_emitter"])
         with self.assertRaisesRegex(ValueError, "another build"):
             use_frontend_survey(report, dict(previous, archives={}))
         with self.assertRaisesRegex(ValueError, "source count"):

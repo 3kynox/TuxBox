@@ -26,6 +26,7 @@ pub(crate) mod indirect;
 pub(crate) mod media;
 pub(crate) mod placement;
 pub(crate) mod queries;
+pub(crate) mod rectangle;
 mod shader_cache;
 pub(crate) mod stencil;
 mod stream;

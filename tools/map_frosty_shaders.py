@@ -20,12 +20,14 @@ def main():
     frontend.add_argument("--compiler", type=Path, help="survey the checkout compiler's HLSL output on each unique DXBC")
     frontend.add_argument("--reuse-survey", type=Path, metavar="JSON",
                           help="reuse per-stage frontend measurements from a matching archive inventory")
+    parser.add_argument("--independent-compiler", type=Path,
+                        help="check a build without legacy-hlsl against the regular compiler on every distinct program")
     parser.add_argument("--dxc", type=Path, help="with --compiler, compile observed sources and validate DXIL with the sibling dxv")
     parser.add_argument("--index", type=Path, help="write a CSV with every shipped entry and shader map membership")
     parser.add_argument("--output", type=Path, required=True, help="write a JSON summary and observed source list")
     args = parser.parse_args()
-    if args.dxc and not args.compiler:
-        parser.error("--dxc requires --compiler")
+    if (args.dxc or args.independent_compiler) and not args.compiler:
+        parser.error("--dxc and --independent-compiler require --compiler")
     traces = {}
     for value in args.trace:
         name, separator, path = value.partition("=")
@@ -38,7 +40,7 @@ def main():
         if material_map["title_sha256"] != plan["executable_sha256"]:
             raise ValueError("Menu materials belong to a different build")
         report = inventory(args.mount, plan, options.get("linked_shaders", []), traces, args.compiler,
-                           args.index, material_map["materials"], args.dxc)
+                           args.index, material_map["materials"], args.dxc, args.independent_compiler)
         if args.reuse_survey:
             use_frontend_survey(report, json.loads(args.reuse_survey.read_text()))
         args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -6,7 +6,7 @@ Some streets, vehicles and buildings have missing surfaces. Driver pipeline crea
 
 ## Run with TuxBox on Linux
 
-Start with the original `Mount` and matching `EmbeddedXvd` directories. Install the project’s Rust, xwin, clang-cl and lld-link build tools, Vulkan headers, liblz4, umu-run and Proton. Shader preparation uses the Linux DXC tools `dxc` and `dxv`. The guest also uses the Windows x64 DXC release. The example accepts its zip file directly. Choose a working directory on the game’s filesystem to take advantage of copy-on-write. [Build prerequisites](../examples/lanes/README.md#build-requirements) · [Microsoft DXC v1.8.2505.1](https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.8.2505.1)
+Start with the original `Mount` and matching `EmbeddedXvd` directories. Install Valve’s Proton Experimental from Steam, then install umu-run, Vulkan headers, liblz4 and the project’s Rust, xwin, clang-cl and lld-link build tools. Shader preparation uses the Linux DXC tools `dxc` and `dxv`. The guest also uses the Windows x64 DXC release. The example accepts its zip file directly. Choose a working directory on the game’s filesystem to take advantage of copy-on-write. [Build prerequisites](../examples/lanes/README.md#build-requirements) · [Microsoft DXC v1.8.2505.1](https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.8.2505.1)
 
 ```sh
 python tools/prepare_frosty.py /path/to/Mount \
@@ -16,7 +16,15 @@ python tools/prepare_frosty.py /path/to/Mount \
 journalctl --user -fu tuxbox-frosty.service -o cat
 ```
 
+The Linux launcher uses TuxBox’s Vulkan layer with stock Proton to handle Xbox constant-buffer offsets. On Steam’s Proton Experimental build 26306234, the launcher read all 3,072 expected words at 16 offsets on both the RTX 4070 Ti SUPER and Radeon. With the layer disabled, the RTX read 768 correct words and Radeon read all 3,072. These measurements cover buffer reads in a compute dispatch. [Stock Proton results](../evidence/matrix-awakens/stock-proton-cbv.json)
+
 The reduced-effects profile renders the 3D scene at 1280 × 720 inside the game’s 3840 × 2160 output. The first chase run used this profile with sound disabled. The repeat run used the launcher’s normal audio setting. To reproduce the muted run, launch with `./tools/run_frosty.sh --desktop -DisablePlugins=XboxCommonGDKMoviePlayer -nosound`.
+
+To see Frosty’s Nanite buildings and road surfaces, use the desktop launcher with the geometry switch. It applies to this launch only. The default still uses the conventional meshes tested through the full chase.
+
+```sh
+./tools/run_frosty.sh --desktop --nanite
+```
 
 Press **Enter** on **Start Chase**. When the tutorial appears, use the left stick to switch targets and **RT** to shoot. On keyboard, **WASD** maps to the left stick and **F** to RT. The repeat run used a virtual Xbox 360 controller through Linux and Proton. [Manual shot](../evidence/matrix-awakens/chase-shot-impact.jpg) · [Input events](../evidence/matrix-awakens/chase-gameplay.json)
 
@@ -34,11 +42,29 @@ The chase exercises two Xbox graphics operations beyond the menu. The allocator 
 
 When the driver rejects a vertex or geometry shader whose outputs occupy different registers from the pixel shader’s inputs, TuxBox rebuilds that pairing and caches it. An earlier retail run compiled 175 individual shaders and 33 shader pairs on demand before hitting slot 84 in Wake Up. [Wake Up frame](../evidence/matrix-awakens/shader-linked-wake-up.webp) · [Earlier retail run](../evidence/matrix-awakens/shader-linked-chase.json) · [Cold and warm pipeline checks](../evidence/matrix-awakens/runtime-shader-links.json)
 
+### Test a Proton fork
+
+Give each Proton build its own working directory so its prefix and media libraries stay paired. Prepare the fork with `--proton /path/to/proton-build/dist --no-select` alongside the usual preparation arguments. Then launch it with `./tools/run_frosty.sh --desktop --work /path/to/fork-work`. The launcher uses the Proton installation recorded in that directory. [Fork patches and build instructions](../tools/proton/README.md)
+
+The Linux fork starts from the Valve Experimental release used for the chase. Its vkd3d-proton change handles 16-byte offsets in descriptor-table constant buffers. A build advertising `cbv_16_byte_alignment` in its `tuxbox-features` file uses that option automatically. Stock builds use the existing Vulkan layer. In the offset test the RTX 4070 Ti SUPER read all 3,072 words correctly with the fork option enabled, up from 768. Radeon read all 3,072 in both modes. The full fork reached Frosty’s menu on the RTX 4070 Ti SUPER with MangoHud enabled. [Desktop capture](../evidence/matrix-awakens/proton-menu.jpg) · [Valve source revision](https://github.com/ValveSoftware/Proton/tree/871b0bf1402dd9632a16495a2def7036161e771c) · [GPU readbacks](../evidence/matrix-awakens/proton-cbv.json)
+
+On the fork, Frosty reached the shooting tutorial with the independent pixel and compute emitters enabled alongside the legacy fallback. With the menu cache prepared, the Switch Targets and Shoot prompts were visible about 25 minutes after selecting Start Chase. Seventeen distinct pixel programs requested by the title matched the independent compiler’s DXIL in the cache. The run had multi-second stalls and missing surfaces. On window close, the guest reported `DXGI_ERROR_ACCESS_LOST` and exited with code 1. After the session the chase cache reused all 1,701 entries on a repeat prepare-only check. [Tutorial capture](../evidence/matrix-awakens/independent-chase-tutorial.jpg) · [Run and cache measurements](../evidence/matrix-awakens/independent-chase.json)
+
+### Measure performance
+
+Launch with `./tools/run_frosty.sh --desktop`. With MangoHud installed, the game shows FPS, frame time, CPU and GPU load, RAM and VRAM. The live console prints the capture folder beside `tuxbox.log`. MangoHud starts recording one sample per present after one second. When the game exits, TuxBox writes `summary.json` with the frame count, average FPS and median, p95, p99 and maximum frame time in milliseconds for each recording. Higher frame times mean longer waits between frames. [MangoHud logging](https://github.com/flightlessmango/MangoHud/blob/v0.8.4/README.md#fps-logging)
+
+Use **Left Shift + F2** to stop or start a recording at a scene boundary. For chase comparisons, record the same chase section with the same graphics profile and report whether the shader and driver caches were warm. Set `TUXBOX_MANGOHUD=0` for a comparison with the overlay disabled. On multi-GPU systems you can select the GPU used for hardware counters with `TUXBOX_MANGOHUD_PCI` set to its PCI address (for example, `0000:01:00.0`).
+
 ## Nanite mesh rendering
 
 Frosty creates its 680-byte Nanite mesh pipeline on both NVIDIA and Radeon. The opening pipeline pairs global mesh shader 3194 with visibility pixel shader 2853. TuxBox prepares both at first boot. The packaged shaders also ran together in a separate Xbox draw test with known cluster data. [Retail traces](../evidence/matrix-awakens/nanite-mesh-retail.json) · [Mesh shader coverage](SHADERS.md#mesh-shaders)
 
-The default launch uses conventional geometry for the menu and the playable chase. The mesh trials set `r.Nanite=1` and `r.Nanite.MeshShaderRasterization=1` in a separate copy of the reduced-effects configuration. An earlier RTX 4070 Ti SUPER run stopped when a pixel shader tried to write a stencil value for each fragment. TuxBox now handles that operation on this GPU. Both packaged shader variants passed an Xbox draw test that compared every depth and stencil value with the expected result. [RTX stencil readbacks](../evidence/matrix-awakens/stencil-export-nvidia.json)
+Frosty shades visible Nanite tiles using screen rectangles. The Xbox GPU takes three corners for each rectangle. TuxBox supplies the fourth and interpolates its attributes. The original tile vertex shader selected two tiles in the GPU test. All 72 covered pixels and 184 surrounding pixels matched on both Radeon and NVIDIA. [Rectangle GPU readbacks](../evidence/providers/screen-rectangles.json)
+
+In the desktop Sandbox test, the central tower, building fronts, sidewalks and parked cars became visible in the same plaza. Surface gaps, character rendering and long frame stalls remain visible. [Before](../evidence/matrix-awakens/city-nanite-before.jpg) · [After](../evidence/matrix-awakens/city-nanite-after.jpg) · [Capture settings and measurements](../evidence/matrix-awakens/city-nanite-shading.json)
+
+The Nanite pass also writes a stencil value for each fragment. Both packaged shader variants passed an Xbox draw test that compared every depth and stencil value with the expected result. [RTX stencil readbacks](../evidence/matrix-awakens/stencil-export-nvidia.json)
 
 On Radeon the game presented a 3840 × 2160 frame, created its instance- and cluster-culling pipelines, then created the `MicropolyRasterize` pipeline at global entry 3246. Frosty then used graphics command-list slot 96 to request its default asynchronous compute budget. TuxBox accepts that request. The Radeon run subsequently loaded the Construct map with Nanite enabled. The GPU checks cover the default budget and rejection of unsupported values. [Radeon command-list checks](../evidence/providers/async-compute-budget-amd.json) · [NVIDIA command-list checks](../evidence/providers/async-compute-budget-nvidia.json) [Mesh pipeline results](../evidence/matrix-awakens/nanite-mesh-retail.json) · [Cluster culling](../evidence/matrix-awakens/persistent-cluster-retail.json) · [Micropolygon rasterization and slot 96](../evidence/matrix-awakens/micropoly-retail.json)
 

@@ -239,14 +239,24 @@ def prepare_shaders(pak, plan, cache, progress=None, *, linked=False, exact_sour
         return compiled, len(outputs) - compiled
 
 
-def matching_tuxbox_provider(provider, sha):
+def matching_tuxbox_provider(provider, sha=None):
+    if not provider.is_file():
+        return False
     if provider.parts[-5:-1] == ("Mount", "Frosty", "Binaries", "XSX"):
         work = provider.parents[4]
         manifest = work / "providers.json"
         if manifest.is_file():
             record = json.loads(manifest.read_text()).get(str(provider.relative_to(work)), {})
-            return record.get("origin") == "TuxBox d3d12" and record.get("sha256") == sha
-    return TUXBOX_PROVIDER.is_file() and sha == digest(TUXBOX_PROVIDER)
+            return record.get("origin") == "TuxBox d3d12" and record.get("sha256") == (sha or digest(provider))
+    # The packaged sample keeps its own copy across rebuilds of the development DLL.
+    for built in (TUXBOX_PROVIDER, ROOT / "build/lanes/d3d12_xs.dll"):
+        if built.is_file() and provider.stat().st_size == built.stat().st_size:
+            if sha is None and provider.samefile(built):
+                return True
+            sha = sha or digest(provider)
+            if sha == digest(built):
+                return True
+    return False
 
 
 def tuxbox_plan(profile_path, raw_plan, include_menu):
@@ -283,7 +293,7 @@ def prepare_for_launch(executable, host):
         return False
     plan = json.loads(profile.read_text())
     provider = executable.with_name(plan["provider"])
-    if not provider.is_file() or not matching_tuxbox_provider(provider, digest(provider)):
+    if not matching_tuxbox_provider(provider):
         return False
     mode = os.environ.get("TUXBOX_SHADER_PREP")
     plan, source_profile = tuxbox_plan(profile, plan, mode in ("menu", "chase"))

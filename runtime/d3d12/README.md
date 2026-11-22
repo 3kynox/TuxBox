@@ -56,6 +56,17 @@ python tuxbox.py verify --only d3d12-features --only d3d12-queries --only d3d12-
   --only d3d12-guids --only d3d12-exports --only d3d12-frame-events --only guest-frame --only lanes
 ```
 
+## Screen rectangles
+
+Xbox screen rectangles supply three corners per primitive. TuxBox reconstructs the fourth corner before rasterization. The draw guest checks two rectangles with different corner orders, interpolated texture coordinates, primitive and instance IDs, and the pixels outside both rectangles. It exercises a descriptor pipeline with a direct draw and a stream pipeline with an indexed indirect draw. [Radeon and NVIDIA readbacks](../../evidence/providers/screen-rectangles.json) · [Xbox GDK rectangle example](https://github.com/microsoft/Xbox-GDK-Samples/blob/main/Samples/Graphics/PointSprites/Shaders/RenderRectListQuadVS.hlsl)
+
+Build the guest with `python build.py d3d12`. Place the Windows x64 `dxcompiler.dll` and `dxil.dll` from the DXC distribution beside `build/d3d12-smoke/d3d12-draw.exe`. On Linux, select the Proton installation and test prefix with `PROTONPATH` and `WINEPREFIX`, then run both modes with the adapter's PCI ID.
+
+```sh
+umu-run build/d3d12-smoke/d3d12-draw.exe --rect --adapter 10de:2705
+umu-run build/d3d12-smoke/d3d12-draw.exe --rect-stream --adapter 10de:2705
+```
+
 ## Guest devices and frames
 
 A retail executable imports `D3D12XboxCreateDevice` and passes a 64-byte creation record with SDK value `0x20002`. Its call sites select device slot 8 for a non-compute queue, slot 48 for a compute queue and slot 73 for a graphics command list. The fixture sets the two title-dependent creation fields to zero and supplies a DXGI adapter explicitly so each run can verify the selected GPU. The recorded retail factory call supplies a null adapter. Other SDK versions and option combinations need their own evidence. [Static call sites and executable hash](../../evidence/fortnite-device.json)

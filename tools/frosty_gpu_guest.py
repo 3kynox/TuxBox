@@ -6,7 +6,7 @@ import subprocess
 from build import ROOT, Toolchain
 
 
-def run_gpu_guest(source, name, trial, work, proton, prefix_source, provider, compiler_dir):
+def run_gpu_guest(source, name, trial, work, proton, prefix_source, provider, compiler_dir, *, vkd3d_dir=None):
     files = proton / "files"
     tools = Toolchain()
     obj = tools.compile(source, trial, "/W4", "/WX", f"/I{ROOT / 'runtime/d3d12'}")
@@ -17,8 +17,11 @@ def run_gpu_guest(source, name, trial, work, proton, prefix_source, provider, co
     shutil.copyfile(provider, trial / "d3d12_xs.dll")
     for lib in ("dxcompiler.dll", "dxil.dll"):
         shutil.copyfile(compiler_dir / lib, trial / lib)
-    for lib, group in (("d3d12.dll", "vkd3d-proton"), ("d3d12core.dll", "vkd3d-proton"), ("dxgi.dll", "dxvk")):
-        shutil.copyfile(files / "lib/wine" / group / "x86_64-windows" / lib, trial / lib)
+    wine_libs = files / "lib/wine"
+    vkd3d_dir = vkd3d_dir or wine_libs / "vkd3d-proton/x86_64-windows"
+    for lib in ("d3d12.dll", "d3d12core.dll"):
+        shutil.copyfile(vkd3d_dir / lib, trial / lib)
+    shutil.copyfile(wine_libs / "dxvk/x86_64-windows/dxgi.dll", trial / "dxgi.dll")
     for name in ("tmp", "runtime", "cache"):
         (trial / name).mkdir(mode=0o700)
     # Terminate the disposable Wine server before the caller removes its prefix.

@@ -6,8 +6,11 @@ import re
 import shutil
 import subprocess
 import sys
+from contextlib import nullcontext
 
 from .backend_log import game_diagnostics
+from .console_cbv import configure_console_cbv
+from .mangohud import performance_capture
 from .runtime_shaders import runtime_shader_compiler
 
 
@@ -74,10 +77,13 @@ class Host:
         return subprocess.run([*self.command, str(executable), *arguments], cwd=executable.parent,
                               env=self.env, timeout=timeout, **options)
 
-    def run_game(self, executable, arguments, log):
+    def run_game(self, executable, arguments, log, *, mangohud=False):
         env = self.env.copy()
         env.setdefault("TUXBOX_LOG", "stderr" if self.backend == "native" else "1")
-        with runtime_shader_compiler(self.backend, env, executable, log.status), \
+        if "-nullrhi" not in (arg.lower() for arg in arguments):
+            configure_console_cbv(self.backend, env, executable, log.status)
+        capture = performance_capture(self.backend, env, executable, log) if mangohud else nullcontext()
+        with capture, runtime_shader_compiler(self.backend, env, executable, log.status), \
              game_diagnostics(self.backend, env, executable.parent, log.stderr_bytes, log_path=log.path) as stderr:
             return log.run([*self.command, str(executable), *arguments], cwd=executable.parent, env=env,
                            stderr_bytes=stderr)

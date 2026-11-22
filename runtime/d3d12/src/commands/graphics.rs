@@ -2,7 +2,9 @@ use super::{List, parent, recording};
 use crate::device::compute::root_signature;
 use core::ffi::c_void;
 use windows::Win32::Foundation::{E_INVALIDARG, RECT};
-use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY;
+use windows::Win32::Graphics::Direct3D::{
+    D3D_PRIMITIVE_TOPOLOGY, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::{BOOL, Interface};
 
@@ -20,7 +22,12 @@ pub(super) unsafe extern "system" fn root(list: &List, signature: *mut c_void) {
 pub(super) unsafe extern "system" fn topology(list: &List, primitive: D3D_PRIMITIVE_TOPOLOGY) {
     let mut state = recording(list);
     if state.can_record(&list.native) {
-        unsafe { list.native.IASetPrimitiveTopology(primitive) };
+        let native = if primitive.0 == crate::device::rectangle::LIST {
+            D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST
+        } else {
+            primitive
+        };
+        unsafe { list.native.IASetPrimitiveTopology(native) };
     }
 }
 

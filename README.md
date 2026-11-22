@@ -1,11 +1,11 @@
 # TuxBox
 
-TuxBox is an experimental project for running Xbox Series X|S games on PC. Most testing happens on Linux with Proton. Windows support is also in development.
+TuxBox is an experimental project for running Xbox Series X|S games on PC. On Linux it runs with Valve’s stock Proton Experimental. Windows support is also in development.
 
 ## What runs today?
 
 - **Lanes** is a small game that uses TuxBox’s Xbox graphics, memory and input libraries. Collect coins and dodge barriers using a keyboard, mouse or Xbox controller.
-- **The Matrix Awakens (Frosty)** runs from the main menu through the highway chase and into the open city on Linux. You can shoot at pursuing cars and walk the streets after the chase. Some buildings and vehicles have missing surfaces. You supply the game, its matching Xbox system files and Proton. [Setup and test results](docs/MATRIX_AWAKENS.md)
+- **The Matrix Awakens (Frosty)** runs from the main menu through the highway chase and into the open city on Linux. You can shoot at pursuing cars and walk the streets after the chase. The optional Nanite mode draws more of the buildings and roads. Some surfaces are still missing. You supply the game, its matching Xbox system files and Proton. [Setup and test results](docs/MATRIX_AWAKENS.md)
 
 ## Try Lanes
 
@@ -28,6 +28,8 @@ To choose a file, pass `--log-file` before the game path. Each run appends to th
 ```sh
 python tuxbox.py run --log-file build/lanes.log --app-id Lanes build/lanes
 ```
+
+On Linux, add `--mangohud` before the game path to see FPS, frame times and hardware load while playing. TuxBox saves a CSV of presented frames and a `summary.json` with average FPS and median, p95 and p99 frame times in a capture folder beside the game log. The Frosty launcher enables this automatically when MangoHud is installed.
 
 Run `python tuxbox.py inspect /path/to/game` to see the executable TuxBox will launch and what it found in the package’s `.bin` files. For Frosty, its shipping symbols can also turn addresses from the log into function names. [Symbol lookup example](docs/MATRIX_AWAKENS.md#what-carries-over-to-projectscarlett)
 

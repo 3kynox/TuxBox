@@ -6,6 +6,7 @@ import ctypes
 from ctypes.util import find_library
 from dataclasses import dataclass
 import hashlib
+import os
 from pathlib import Path
 import re
 import struct
@@ -160,17 +161,19 @@ def requests(path):
                      "unique_sources": len(sources)}
 
 
-def write_index(path, entries, profiled, phases, surveyed, validated):
+def write_index(path, entries, profiled, phases, surveyed, validated, independent):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as stream:
         out = csv.writer(stream)
         out.writerow(["archive", "entry", "stage", "shader_sha1", "source_dxbc_sha256", "shader_maps",
-                      "in_preparation_profile", "observed_in", "hlsl_emitted", "standalone_dxil_validated"])
+                      "in_preparation_profile", "observed_in", "hlsl_emitted", "standalone_dxil_validated",
+                      "independent_hlsl"])
         for entry in entries:
             source = entry.source
             out.writerow([entry.archive, entry.index, entry.stage, entry.shader_sha1, source or "",
                           " ".join(map(str, entry.maps)), source in profiled,
-                          " ".join(sorted(phases.get(source, ()))), surveyed.get(source, ""), validated.get(source, "")])
+                          " ".join(sorted(phases.get(source, ()))), surveyed.get(source, ""), validated.get(source, ""),
+                          source in independent if independent is not None and source else ""])
 
 
 def source_rows(report):
@@ -198,6 +201,8 @@ def use_frontend_survey(report, previous):
     for item in source_rows(report):
         item["hlsl_emitted"] = known.get(item["source_sha256"])
     report["compiler_sha256"] = previous["compiler_sha256"]
+    if "independent_emitter" in previous:
+        report["independent_emitter"] = previous["independent_emitter"]
     if previous.get("desktop_tools"):
         report["desktop_tools"] = previous["desktop_tools"]
         validated = {row["source_sha256"]: row.get("standalone_dxil_validated") for row in previous["requested"]}
@@ -216,7 +221,7 @@ def desktop_tool_hashes(dxc):
     return {"dxc_sha256": digest(dxc), "dxv_sha256": digest(dxc.with_name("dxv"))}
 
 
-def inventory(mount, plan, links, traces, compiler=None, index=None, materials=(), dxc=None):
+def inventory(mount, plan, links, traces, compiler=None, index=None, materials=(), dxc=None, independent_compiler=None):
     executable = mount / "Frosty/Binaries/XSX/Frosty-XSX-Shipping.exe"
     if digest(executable) != TITLE or plan["executable_sha256"] != TITLE:
         raise ValueError("Frosty executable and preparation profile must match the reviewed build")
@@ -235,8 +240,15 @@ def inventory(mount, plan, links, traces, compiler=None, index=None, materials=(
     compiler = compiler.resolve() if compiler else None
     dxc = dxc.resolve() if dxc else None
     compiler_hash = digest(compiler) if compiler else None
-    if dxc and not compiler:
-        raise ValueError("The observed DXIL survey requires both the Xbox compiler and DXC")
+    if (dxc or independent_compiler) and not compiler:
+        raise ValueError("The independent and desktop surveys require the regular Xbox compiler")
+    independent = set() if independent_compiler else None
+    if independent_compiler:
+        independent_compiler = independent_compiler.resolve()
+        independent_hash = digest(independent_compiler)
+        modes = subprocess.run([independent_compiler, "--list-emitters"], capture_output=True)
+        if modes.returncode or modes.stdout.splitlines() != [b"independent"]:
+            raise ValueError("--independent-compiler requires an xshader built with --no-default-features")
     desktop_tools = desktop_tool_hashes(dxc) if dxc else None
     with TemporaryDirectory(prefix="tuxbox-shader-survey-") as tmp, ThreadPoolExecutor(max_workers=4) as workers:
         batch = {}
@@ -247,18 +259,33 @@ def inventory(mount, plan, links, traces, compiler=None, index=None, materials=(
             work.mkdir(exist_ok=True)
             sample, hlsl, profile, desktop = (work / file for file in ("shader.dxbc", "shader.hlsl", "profile", "output.cso"))
             sample.write_bytes(native)
-            if dxc and source in observed:
-                for output in (hlsl, profile, desktop):
-                    output.unlink(missing_ok=True)
-                emitted = survey_command([compiler, sample, "--hlsl-out", hlsl, "--profile-out", profile])
+            own = False
+            if independent_compiler:
+                own_hlsl, own_profile = work / "independent.hlsl", work / "independent.profile"
+                own_hlsl.unlink(missing_ok=True)
+                own_profile.unlink(missing_ok=True)
+                own = survey_command([independent_compiler, sample, "--hlsl-out", own_hlsl, "--profile-out", own_profile])
+            needs_dxil = dxc and (source in observed or own)
+            if not (own or needs_dxil):
+                return source, survey_command([compiler, sample, "--hlsl-out", os.devnull]), None, False
+            for output in (hlsl, profile, desktop):
+                output.unlink(missing_ok=True)
+            emitted = survey_command([compiler, sample, "--hlsl-out", hlsl, "--profile-out", profile])
+            if own and (not emitted or own_hlsl.read_bytes() != hlsl.read_bytes()
+                        or own_profile.read_bytes() != profile.read_bytes()):
+                raise ValueError(f"Independent and regular compilers disagree for {source}")
+            valid = None
+            if needs_dxil:
                 compiled = emitted and survey_command(
                     [dxc, "-T", profile.read_text().strip(), "-E", "main", "-Fo", desktop, hlsl])
-                return source, emitted, compiled and survey_command([dxc.with_name("dxv"), desktop])
-            return source, survey_command([compiler, sample, "--hlsl-out", "/dev/null"]), None
+                valid = compiled and survey_command([dxc.with_name("dxv"), desktop])
+            return source, emitted, valid, own
 
         def finish_batch():
-            for source, emitted, valid in workers.map(translate, batch.items()):
+            for source, emitted, valid, own in workers.map(translate, batch.items()):
                 surveyed[source] = emitted
+                if own:
+                    independent.add(source)
                 if valid is not None:
                     validated[source] = valid
             batch.clear()
@@ -275,7 +302,8 @@ def inventory(mount, plan, links, traces, compiler=None, index=None, materials=(
             for name in ARCHIVES:
                 entries.extend(archive_entries(name, stream, decode, enqueue if compiler else None, map_keys))
         finish_batch()
-    if (compiler and digest(compiler) != compiler_hash) or (dxc and desktop_tool_hashes(dxc) != desktop_tools):
+    if ((compiler and digest(compiler) != compiler_hash) or (dxc and desktop_tool_hashes(dxc) != desktop_tools)
+            or (independent_compiler and digest(independent_compiler) != independent_hash)):
         raise ValueError("The shader tools changed during the survey")
 
     locations = defaultdict(list)
@@ -297,7 +325,7 @@ def inventory(mount, plan, links, traces, compiler=None, index=None, materials=(
         if pair["producer"] not in profiled or pair["pixel"] not in profiled:
             raise ValueError("Linked shader refers to an absent source profile")
     if index:
-        write_index(index, entries, profiled, phases, surveyed, validated)
+        write_index(index, entries, profiled, phases, surveyed, validated, independent)
     stages = []
     for stage in STAGES:
         rows = [row for row in entries if row.stage == stage]
@@ -331,8 +359,15 @@ def inventory(mount, plan, links, traces, compiler=None, index=None, materials=(
                                     "in_preparation_profile": row.source in profiled,
                                     "hlsl_emitted": surveyed.get(row.source),
                                     "observed_in": sorted(phases.get(row.source, ()))} for row in members]})
-    return {"title": "Frosty", "executable_sha256": TITLE,
+    report = {"title": "Frosty", "executable_sha256": TITLE,
             "archives": {name: {"member_sha256": meta[2], "entries": sum(row.archive == name for row in entries)}
                          for name, meta in ARCHIVES.items()},
             "compiler_sha256": compiler_hash, "desktop_tools": desktop_tools, "traces": trace_info, "stages": stages,
             "linked_variants": len(links), "menu_materials": groups, "requested": required}
+    if independent_compiler:
+        report["independent_emitter"] = {
+            "compiler_sha256": independent_hash,
+            "programs": [{"source_sha256": key, "stage": locations[key][0].stage,
+                          "standalone_dxil_validated": validated.get(key)} for key in sorted(independent)]
+        }
+    return report

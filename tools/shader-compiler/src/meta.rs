@@ -1,26 +1,25 @@
-//! Parsers for the standard (PC-format) metadata chunks that survive in XSX shader
-//! containers: ISG1/OSG1 signatures, PSV0 resource bindings and the RTS0 root signature.
-//! These give the HLSL emitter the D3D-side view (semantics, registers, root parameters).
-
-fn u32_at(b: &[u8], off: usize) -> Result<u32, String> {
-    b.get(off..off + 4)
-        .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
-        .ok_or_else(|| format!("meta: u32 out of bounds at {off:#x} (len {})", b.len()))
-}
+//! Input registers and binding metadata consumed by the gameplay HLSL emitter.
 
 /// The PS configuration in FSSM 1.1 carries SPI_PS_INPUT_ENA at 0x248.
-/// RDNA2 packs enabled raster inputs into consecutive VGPRs. The ancillary
-/// word follows the barycentrics, line stipple, position and front face.
-pub(crate) fn ancillary_vgpr(fssm: &[u8]) -> Option<usize> {
+/// RDNA2 packs the front-face and ancillary words after the barycentrics,
+/// line stipple and position components, skipping disabled inputs.
+#[derive(Clone, Copy)]
+pub(crate) enum PixelSystemInput {
+    FrontFace = 12,
+    Ancillary = 13,
+}
+
+pub(crate) fn pixel_system_vgpr(fssm: &[u8], input: PixelSystemInput) -> Option<usize> {
     let enabled = ps_input_enable(fssm)?;
-    (enabled & (1 << 13) != 0).then(|| packed_pixel_vgpr(enabled, 13))
+    let bit = input as usize;
+    (enabled & (1 << bit) != 0).then(|| packed_pixel_vgpr(enabled, bit))
 }
 
 fn ps_input_enable(fssm: &[u8]) -> Option<u32> {
     if fssm.get(..8)? != b"FSSM\x01\x01\0\0" {
         return None;
     }
-    let enabled = u32_at(fssm, 0x248).ok()?;
+    let enabled = u32::from_le_bytes(*fssm.get(0x248..)?.first_chunk()?);
     (enabled >> 16 == 0).then_some(enabled)
 }
 
@@ -32,12 +31,11 @@ fn packed_pixel_vgpr(enabled: u32, bit: usize) -> usize {
         .sum()
 }
 
-/// XYZ-only inputs have matching signature/PA read masks. Their first enabled
-/// component immediately follows the enabled barycentric/stipple registers.
-/// The separate reciprocal-W and unused-position ABIs use the existing setup.
+/// Position components follow the enabled barycentric/stipple registers.
+/// A disabled component occupies no VGPR, including when W follows X/Y or Z.
 pub(crate) fn position_vgprs(fssm: &[u8], read: u8) -> Option<[Option<usize>; 4]> {
     let enabled = ps_input_enable(fssm)?;
-    if !(1..=7).contains(&read) || (enabled >> 8) & 15 != u32::from(read) {
+    if read == 0 || (enabled >> 8) & 15 != u32::from(read) {
         return None;
     }
     Some(std::array::from_fn(|i| {
@@ -47,7 +45,7 @@ pub(crate) fn position_vgprs(fssm: &[u8], read: u8) -> Option<[Option<usize>; 4]
 
 #[cfg(test)]
 mod pixel_inputs {
-    use super::{ancillary_vgpr, position_vgprs};
+    use super::{pixel_system_vgpr, position_vgprs, PixelSystemInput};
 
     #[test]
     fn sparse_fragment_position_follows_enabled_barycentrics() {
@@ -58,7 +56,9 @@ mod pixel_inputs {
             (0x702, 7, Some([Some(2), Some(3), Some(4), None])),
             (0x528, 5, Some([Some(5), None, Some(6), None])),
             (0x402, 3, None),
-            (0xb02, 11, None),
+            (0xb02, 11, Some([Some(2), Some(3), None, Some(4)])),
+            (0xc02, 12, Some([None, None, Some(2), Some(3)])),
+            (0x1f02, 15, Some([Some(2), Some(3), Some(4), Some(5)])),
             (0x20, 0, None),
         ] {
             fssm[0x248..].copy_from_slice(&mask.to_le_bytes());
@@ -73,217 +73,25 @@ mod pixel_inputs {
         for (mask, slot) in [(0x2020u32, Some(2)), (0x2302, Some(4)),
                              (0x3fff, Some(21)), (0x0302, None)] {
             fssm[0x248..].copy_from_slice(&mask.to_le_bytes());
-            assert_eq!(ancillary_vgpr(&fssm), slot);
+            assert_eq!(pixel_system_vgpr(&fssm, PixelSystemInput::Ancillary), slot);
         }
-        assert_eq!(ancillary_vgpr(&fssm[..24]), None);
+        assert_eq!(pixel_system_vgpr(&fssm[..24], PixelSystemInput::Ancillary), None);
+    }
+
+    #[test]
+    fn front_face_follows_only_enabled_position_components() {
+        let mut fssm = [0; 0x24c];
+        fssm[..8].copy_from_slice(b"FSSM\x01\x01\0\0");
+        for (mask, slot) in [(0x1302u32, Some(4)), (0x1702, Some(5)),
+                             (0x1f02, Some(6)), (0x3000, Some(0)), (0x0f02, None)] {
+            fssm[0x248..].copy_from_slice(&mask.to_le_bytes());
+            assert_eq!(pixel_system_vgpr(&fssm, PixelSystemInput::FrontFace), slot);
+        }
     }
 }
 
 pub use tuxbox_dxbc::{has_packing_mismatch, parse_signature, pixel_input_order, SigElement};
 
-/// A PSV0 resource binding.
-#[derive(Debug, Clone)]
-pub struct PsvResource {
-    /// 1 Sampler, 2 CBV, 3 SRVTyped, 4 SRVRaw, 5 SRVStructured, 6 UAVTyped, 7 UAVRaw, 8 UAVStructured...
-    pub res_type: u32,
-    pub space: u32,
-    pub lower: u32,
-    pub upper: u32,
-}
+pub use crate::psv::{parse_compute_threads, parse_mesh_info, parse_psv0, parse_psv0_gs, GsInfo, MeshInfo, PsvResource};
 
-/// Parse the PSV0 chunk far enough to recover the resource-binding list.
-/// Geometry-shader facts from the PSV0 runtime info.
-#[derive(Debug, Clone, Copy)]
-pub struct GsInfo {
-    /// D3D input primitive: 1 point, 2 line, 3 triangle, 6 line-adj, 7 triangle-adj.
-    pub input_primitive: u32,
-    /// D3D output topology: 1 point list, 3 line strip, 5 triangle strip.
-    pub output_topology: u32,
-    pub max_vertex_count: u16,
-}
-
-/// Parse the GS part of PSV0's PSVRuntimeInfo: the stage union starts at +4
-/// ({InputPrimitive u32, OutputTopology u32, OutputStreamMask u32, ...}); PSVRuntimeInfo1
-/// adds ShaderStage u8 @+24, UsesViewID u8 @+25 and MaxVertexCount u16 @+26.
-pub fn parse_psv0_gs(body: &[u8]) -> Option<GsInfo> {
-    let info_size = u32_at(body, 0).ok()? as usize;
-    if info_size < 28 {
-        return None;
-    }
-    let info = body.get(4..4 + info_size)?;
-    Some(GsInfo {
-        input_primitive: u32_at(info, 0).ok()?,
-        output_topology: u32_at(info, 4).ok()?,
-        max_vertex_count: u16::from_le_bytes([*info.get(26)?, *info.get(27)?]),
-    })
-}
-
-/// PSVRuntimeInfoMS0 gives the output capacities, PSVRuntimeInfo1 the topology,
-/// and PSVRuntimeInfo2 the logical Xbox thread-group dimensions.
-#[derive(Clone, Copy, Debug)]
-pub struct MeshInfo {
-    pub vertices: u16,
-    pub primitives: u16,
-    pub topology: u8,
-    pub threads: [u32; 3],
-    pub payload: u32,
-    pub shared_bytes: u32,
-}
-
-pub fn parse_mesh_info(body: &[u8]) -> Option<MeshInfo> {
-    let size = u32_at(body, 0).ok()? as usize;
-    let info = body.get(4..4usize.checked_add(size)?)?;
-    if info.get(24) != Some(&13) { return None; }
-    Some(MeshInfo {
-        vertices: u16::from_le_bytes(info.get(12..14)?.try_into().ok()?),
-        primitives: u16::from_le_bytes(info.get(14..16)?.try_into().ok()?),
-        shared_bytes: u32_at(info, 0).ok()?,
-        payload: u32_at(info, 8).ok()?,
-        topology: *info.get(27)?,
-        threads: [u32_at(info, 36).ok()?, u32_at(info, 40).ok()?, u32_at(info, 44).ok()?],
-    })
-}
-
-/// Compute group dimensions follow the 36-byte PSVRuntimeInfo1 prefix.
-pub fn parse_compute_threads(body: &[u8]) -> Option<[u32; 3]> {
-    let size = u32_at(body, 0).ok()? as usize;
-    let info = body.get(4..4usize.checked_add(size)?)?;
-    if info.get(24) != Some(&5) {
-        return None;
-    }
-    let [x, y, z] = [u32_at(info, 36).ok()?, u32_at(info, 40).ok()?, u32_at(info, 44).ok()?];
-    (x > 0 && y > 0 && (1..=64).contains(&z) && x.checked_mul(y)?.checked_mul(z)? <= 1024).then_some([x, y, z])
-}
-
-pub fn parse_psv0(body: &[u8]) -> Result<Vec<PsvResource>, String> {
-    let info_size = u32_at(body, 0)? as usize;
-    let mut p = 4 + info_size;
-    let count = u32_at(body, p)? as usize;
-    p += 4;
-    if count == 0 {
-        return Ok(vec![]);
-    }
-    if count > 256 {
-        return Err(format!("implausible PSV0 resource count {count}"));
-    }
-    let bind_size = u32_at(body, p)? as usize;
-    p += 4;
-    if bind_size < 16 {
-        return Err(format!("PSV0 bind size {bind_size} too small"));
-    }
-    let mut out = Vec::with_capacity(count);
-    for i in 0..count {
-        let e = p + i * bind_size;
-        out.push(PsvResource {
-            res_type: u32_at(body, e)?,
-            space: u32_at(body, e + 4)?,
-            lower: u32_at(body, e + 8)?,
-            upper: u32_at(body, e + 12)?,
-        });
-    }
-    Ok(out)
-}
-
-#[derive(Debug, Clone)]
-pub struct RootRange {
-    /// 0 SRV, 1 UAV, 2 CBV, 3 Sampler.
-    pub range_type: u32,
-    pub num: u32,
-    pub base_register: u32,
-    pub space: u32,
-    pub offset_in_table: u32,
-}
-
-#[derive(Debug, Clone)]
-pub enum RootParamKind {
-    Table(Vec<RootRange>),
-    Constants { register: u32, space: u32, num32: u32 },
-    /// 2 = CBV, 3 = SRV, 4 = UAV root descriptor.
-    Descriptor { kind: u32, register: u32, space: u32 },
-}
-
-#[derive(Debug, Clone)]
-pub struct RootParam {
-    pub visibility: u32,
-    pub kind: RootParamKind,
-}
-
-#[derive(Debug, Clone)]
-pub struct RootSig {
-    pub version: u32,
-    pub flags: u32,
-    pub params: Vec<RootParam>,
-    pub num_static_samplers: u32,
-    /// D3D12_STATIC_SAMPLER_DESC words in serialized v1.0/v1.1 signatures.
-    pub static_samplers: Vec<[u32; 13]>,
-}
-
-/// Parse an RTS0 (serialized root signature) chunk body.
-pub fn parse_rts0(body: &[u8]) -> Result<RootSig, String> {
-    let version = u32_at(body, 0)?;
-    let nparams = u32_at(body, 4)? as usize;
-    let params_off = u32_at(body, 8)? as usize;
-    let num_static_samplers = u32_at(body, 12)?;
-    let flags = u32_at(body, 20)?;
-    if nparams > 64 {
-        return Err(format!("implausible root parameter count {nparams}"));
-    }
-    let v11 = version >= 2;
-    let mut params = Vec::with_capacity(nparams);
-    for i in 0..nparams {
-        let e = params_off + i * 12;
-        let ptype = u32_at(body, e)?;
-        let visibility = u32_at(body, e + 4)?;
-        let off = u32_at(body, e + 8)? as usize;
-        let kind = match ptype {
-            0 => {
-                let nranges = u32_at(body, off)? as usize;
-                let roff = u32_at(body, off + 4)? as usize;
-                if nranges > 64 {
-                    return Err(format!("implausible range count {nranges}"));
-                }
-                let stride = if v11 { 24 } else { 20 };
-                let mut ranges = Vec::with_capacity(nranges);
-                for r in 0..nranges {
-                    let q = roff + r * stride;
-                    ranges.push(RootRange {
-                        range_type: u32_at(body, q)?,
-                        num: u32_at(body, q + 4)?,
-                        base_register: u32_at(body, q + 8)?,
-                        space: u32_at(body, q + 12)?,
-                        offset_in_table: u32_at(body, q + if v11 { 20 } else { 16 })?,
-                    });
-                }
-                RootParamKind::Table(ranges)
-            }
-            1 => RootParamKind::Constants {
-                register: u32_at(body, off)?,
-                space: u32_at(body, off + 4)?,
-                num32: u32_at(body, off + 8)?,
-            },
-            2..=4 => RootParamKind::Descriptor {
-                kind: ptype,
-                register: u32_at(body, off)?,
-                space: u32_at(body, off + 4)?,
-            },
-            other => return Err(format!("unknown root parameter type {other}")),
-        };
-        params.push(RootParam { visibility, kind });
-    }
-    let mut static_samplers = Vec::new();
-    if matches!(version, 1 | 2) && num_static_samplers != 0 {
-        let offset = u32_at(body, 16)? as usize;
-        let bytes = body.get(offset..).ok_or("invalid static sampler offset")?;
-        if num_static_samplers as usize > bytes.len() / 52 {
-            return Err("truncated static sampler array".into());
-        }
-        for desc in bytes.chunks_exact(52).take(num_static_samplers as usize) {
-            let mut words = [0; 13];
-            for (word, bytes) in words.iter_mut().zip(desc.chunks_exact(4)) {
-                *word = u32::from_le_bytes(bytes.try_into().unwrap());
-            }
-            static_samplers.push(words);
-        }
-    }
-    Ok(RootSig { version, flags, params, num_static_samplers, static_samplers })
-}
+pub use crate::rootsig::{parse_rts0, RootParamKind, RootParam, RootRange, RootSig};

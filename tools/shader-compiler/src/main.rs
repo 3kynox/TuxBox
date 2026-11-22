@@ -1,10 +1,86 @@
 //! Translate a cooked shader, optionally linking its outputs to a pixel shader.
-use std::{env, fs, path::PathBuf};
-use tuxbox_xshader::{Stage, extract, hlsl, meta};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
+use tuxbox_xshader::{extract, ShaderExtract, Stage};
+
+fn read(path: &Path) -> Result<Vec<u8>, String> {
+    fs::read(path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+#[cfg(feature = "legacy-hlsl")]
+fn translate(
+    shader: &ShaderExtract,
+    consumer: Option<&Path>,
+    pixel_order: Option<&Path>,
+    stencil_target: Option<u32>,
+) -> Result<(String, &'static str), String> {
+    use tuxbox_xshader::{hlsl, meta};
+
+    let translated = if let Some(path) = consumer {
+        let pixel = extract(&read(path)?)?;
+        if !matches!(shader.stage, Stage::Vertex | Stage::Geometry) || pixel.stage != Stage::Pixel {
+            return Err("expected a vertex or geometry producer and a pixel consumer".into());
+        }
+        let pixel = hlsl::translate(&pixel)?;
+        let order = pixel_order
+            .map(read)
+            .transpose()?
+            .map(|dxil| meta::pixel_input_order(&dxil))
+            .unwrap_or_default();
+        hlsl::translate_ordered(shader, Some(&pixel.ps_input_interp), &order)?
+    } else if let Some(target) = stencil_target {
+        hlsl::translate_stencil_target(shader, target)?
+    } else {
+        hlsl::translate(shader)?
+    };
+    let model = if translated.required_wave_size.is_some() || translated.typed_int64_atomics {
+        "6_6"
+    } else if shader.stage == Stage::Mesh {
+        "6_5"
+    } else if translated.needs_barycentrics {
+        "6_1"
+    } else {
+        "6_0"
+    };
+    Ok((translated.hlsl, model))
+}
+
+#[cfg(not(feature = "legacy-hlsl"))]
+fn translate(
+    shader: &ShaderExtract,
+    consumer: Option<&Path>,
+    _pixel_order: Option<&Path>,
+    stencil_target: Option<u32>,
+) -> Result<(String, &'static str), String> {
+    if consumer.is_some() {
+        return Err("independent HLSL emitter does not support linked shaders".into());
+    }
+    if stencil_target.is_some() {
+        return Err("independent HLSL emitter does not support stencil exports".into());
+    }
+    let hlsl = tuxbox_xshader::independent_hlsl(shader).ok_or_else(|| {
+        format!(
+            "unsupported {:?} program for the independent HLSL emitter",
+            shader.stage
+        )
+    })?;
+    Ok((hlsl, "6_0"))
+}
 
 fn run() -> Result<(), String> {
     let mut args = env::args_os().skip(1);
     let source = args.next().ok_or("expected a cooked shader path")?;
+    if source == "--list-emitters" {
+        if args.next().is_some() {
+            return Err("--list-emitters takes no arguments".into());
+        }
+        println!("independent");
+        #[cfg(feature = "legacy-hlsl")]
+        println!("legacy");
+        return Ok(());
+    }
     let mut output = None;
     let mut profile_output = None;
     let mut consumer = None;
@@ -36,35 +112,19 @@ fn run() -> Result<(), String> {
         }
     }
     let output = output.ok_or("--hlsl-out is required")?;
-    let read =
-        |path: &std::path::Path| fs::read(path).map_err(|e| format!("{}: {e}", path.display()));
-    let shader = extract(&read(source.as_ref())?)?;
     if consumer.is_some() && stencil_target.is_some() {
         return Err("a stencil export requires an unlinked pixel shader".into());
     }
-    let translated = match consumer {
-        Some(path) => {
-            let pixel = extract(&read(&path)?)?;
-            if !matches!(shader.stage, Stage::Vertex | Stage::Geometry)
-                || pixel.stage != Stage::Pixel
-            {
-                return Err("expected a vertex or geometry producer and a pixel consumer".into());
-            }
-            let pixel = hlsl::translate(&pixel)?;
-            let order = pixel_order
-                .as_deref()
-                .map(read)
-                .transpose()?
-                .map(|dxil| meta::pixel_input_order(&dxil))
-                .unwrap_or_default();
-            hlsl::translate_ordered(&shader, Some(&pixel.ps_input_interp), &order)?
-        }
-        None if pixel_order.is_some() => return Err("--pixel-order requires --link-pixel".into()),
-        None if stencil_target.is_some() => {
-            hlsl::translate_stencil_target(&shader, stencil_target.unwrap())?
-        }
-        None => hlsl::translate(&shader)?,
-    };
+    if pixel_order.is_some() && consumer.is_none() {
+        return Err("--pixel-order requires --link-pixel".into());
+    }
+    let shader = extract(&read(source.as_ref())?)?;
+    let (hlsl, model) = translate(
+        &shader,
+        consumer.as_deref(),
+        pixel_order.as_deref(),
+        stencil_target,
+    )?;
     if let Some(path) = profile_output {
         let stage = match shader.stage {
             Stage::Pixel => "ps",
@@ -73,15 +133,6 @@ fn run() -> Result<(), String> {
             Stage::Compute => "cs",
             Stage::Mesh => "ms",
             _ => return Err("unsupported DXC stage".into()),
-        };
-        let model = if translated.required_wave_size.is_some() || translated.typed_int64_atomics {
-            "6_6"
-        } else if shader.stage == Stage::Mesh {
-            "6_5"
-        } else if translated.needs_barycentrics {
-            "6_1"
-        } else {
-            "6_0"
         };
         fs::write(&path, format!("{stage}_{model}"))
             .map_err(|e| format!("{}: {e}", path.display()))?;
@@ -99,7 +150,7 @@ fn run() -> Result<(), String> {
         "decode: {instructions} instrs, consumed {consumed}/{} bytes, terminated_on_s_endpgm={ended}",
         shader.isa.len()
     );
-    fs::write(&output, translated.hlsl).map_err(|e| format!("{}: {e}", output.display()))
+    fs::write(&output, hlsl).map_err(|e| format!("{}: {e}", output.display()))
 }
 
 fn main() -> std::process::ExitCode {

@@ -5,6 +5,8 @@
 #include "triangle_vs.h"
 #include "triangle_input_vs.h"
 #include "triangle_ps.h"
+#include "rectangle_vs.h"
+#include "rectangle_ps.h"
 #include <cstring>
 
 namespace {
@@ -21,7 +23,7 @@ constexpr D3D12_RECT scissor{3, 4, 9, 10};
 constexpr std::array<UINT, 18> profile_20004{
     0x20004, 0, UINT_MAX, 0, 0, 0, UINT_MAX, UINT_MAX, 0, 1};
 
-ComPtr<ID3D12PipelineState> create_pipeline(ID3D12Device* device, ID3D12RootSignature* root) {
+ComPtr<ID3D12PipelineState> create_pipeline(ID3D12Device* device, ID3D12RootSignature* root, bool rectangle) {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC desc{};
     static_assert(sizeof(desc) == 0x290);
     desc.pRootSignature = root;
@@ -33,6 +35,11 @@ ComPtr<ID3D12PipelineState> create_pipeline(ID3D12Device* device, ID3D12RootSign
     desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     desc.RasterizerState.DepthClipEnable = TRUE;
     desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    if (rectangle) {
+        desc.VS = {rectangle_vs, sizeof(rectangle_vs)};
+        desc.PS = {rectangle_ps, sizeof(rectangle_ps)};
+        desc.PrimitiveTopologyType = static_cast<D3D12_PRIMITIVE_TOPOLOGY_TYPE>(0x13);
+    }
     desc.NumRenderTargets = 1;
     desc.RTVFormats[0] = format;
     desc.SampleDesc.Count = 1;
@@ -47,7 +54,7 @@ ComPtr<ID3D12PipelineState> create_pipeline(ID3D12Device* device, ID3D12RootSign
 }
 
 ComPtr<ID3D12PipelineState> create_stream_pipeline(ID3D12Device* device, ID3D12RootSignature* root,
-                                                   ID3DBlob* serialized, const wchar_t* requested) {
+                                                   ID3DBlob* serialized, const wchar_t* requested, bool rectangle) {
     ComPtr<ID3D12Device2> device2;
     check(device->QueryInterface(IID_PPV_ARGS(&device2)), "query Xbox ID3D12Device2");
     ComPtr<IUnknown> base_identity, stream_identity;
@@ -76,6 +83,14 @@ ComPtr<ID3D12PipelineState> create_stream_pipeline(ID3D12Device* device, ID3D12R
     parts.raster.payload.DepthClipEnable = TRUE;
     parts.formats.payload.NumRenderTargets = 1;
     parts.formats.payload.RTFormats[0] = format;
+    if (rectangle) {
+        parts.layout.payload = {};
+        parts.vs.payload = {rectangle_vs, sizeof(rectangle_vs)};
+        parts.ps.payload = {rectangle_ps, sizeof(rectangle_ps)};
+        parts.topology.payload = 0x13;
+        blend.BlendEnable = FALSE;
+        blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    }
     parts.dsv.payload = DXGI_FORMAT_UNKNOWN;
     const std::array<BYTE, 16> console_hint{0x58, 0x53};
     parts.cached.payload = {console_hint.data(), console_hint.size()};
@@ -154,7 +169,7 @@ ComPtr<ID3D12Resource> draw_indexed(ID3D12Device* device, ID3D12GraphicsCommandL
     return input;
 }
 
-std::string run(const wchar_t* requested, bool stream) {
+std::string run(const wchar_t* requested, bool stream, bool rectangle = false) {
     DXGI_ADAPTER_DESC1 selected{};
     auto device = create_device(requested, selected, stream ? profile_20004.data() : profile.data());
     D3D12_ROOT_SIGNATURE_DESC signature{};
@@ -164,8 +179,8 @@ std::string run(const wchar_t* requested, bool stream) {
     ComPtr<ID3D12RootSignature> root;
     check(device->CreateRootSignature(0, serialized->GetBufferPointer(), serialized->GetBufferSize(),
                                       IID_PPV_ARGS(&root)), "graphics root");
-    auto pipeline = stream ? create_stream_pipeline(device.Get(), root.Get(), serialized.Get(), requested)
-                           : create_pipeline(device.Get(), root.Get());
+    auto pipeline = stream ? create_stream_pipeline(device.Get(), root.Get(), serialized.Get(), requested, rectangle)
+                           : create_pipeline(device.Get(), root.Get(), rectangle);
 
     D3D12_HEAP_PROPERTIES heap{};
     heap.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -196,7 +211,7 @@ std::string run(const wchar_t* requested, bool stream) {
     ComPtr<ID3D12GraphicsCommandList> list;
     check(method<CreateList>(device.Get(), 73)(device.Get(), parameters, allocator.Get(), nullptr,
                                               IID_PPV_ARGS(&list)), "direct list");
-    const float blue[]{0, 0, 1, 1};
+    const float blue[]{0, 0, 1, rectangle ? 0.0f : 1.0f};
     method<Clear>(list.Get(), 52)(list.Get(), rtv, blue, 0, nullptr);
     if (stream) {
         // Frosty's inline pipeline bind copies these eight DWORDs before slot 25.
@@ -216,10 +231,38 @@ std::string run(const wchar_t* requested, bool stream) {
     std::memcpy(&cursor, object + 0x18, sizeof(cursor));
     std::memcpy(&end, object + 0x30, sizeof(end));
     if (cursor < end) throw std::runtime_error("list advertises writable Xbox packet memory");
-    list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    ComPtr<ID3D12Resource> geometry;
-    if (stream) geometry = draw_indexed(device.Get(), list.Get());
-    else list->DrawInstanced(3, 1, 0, 0);
+    ComPtr<ID3D12Resource> geometry, arguments;
+    ComPtr<ID3D12CommandSignature> draw_signature;
+    if (rectangle) {
+        D3D12_RECT full{0, 0, extent, extent};
+        list->RSSetScissorRects(1, &full);
+        list->IASetPrimitiveTopology(static_cast<D3D_PRIMITIVE_TOPOLOGY>(0x11));
+        if (stream) {
+            const UINT16 indices[] = {77, 0, 1, 2};
+            geometry = compute_fixture::buffer(device.Get(), D3D12_HEAP_TYPE_UPLOAD,
+                                                sizeof(indices), D3D12_RESOURCE_STATE_GENERIC_READ);
+            compute_fixture::upload(geometry.Get(), indices, sizeof(indices));
+            D3D12_INDEX_BUFFER_VIEW ib{geometry->GetGPUVirtualAddress(), sizeof(indices), DXGI_FORMAT_R16_UINT};
+            using SetIndex = void (WINAPI*)(ID3D12GraphicsCommandList*, const D3D12_INDEX_BUFFER_VIEW*);
+            method<SetIndex>(list.Get(), 47)(list.Get(), &ib);
+            const D3D12_DRAW_INDEXED_ARGUMENTS draws{3, 2, 1, 0, 0};
+            D3D12_INDIRECT_ARGUMENT_DESC operation{};
+            operation.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED;
+            D3D12_COMMAND_SIGNATURE_DESC signature{sizeof(draws), 1, &operation, 1};
+            check(device->CreateCommandSignature(&signature, nullptr, IID_PPV_ARGS(&draw_signature)),
+                  "Xbox rectangle indirect signature");
+            arguments = compute_fixture::buffer(device.Get(), D3D12_HEAP_TYPE_UPLOAD,
+                                                 sizeof(draws), D3D12_RESOURCE_STATE_GENERIC_READ);
+            compute_fixture::upload(arguments.Get(), &draws, sizeof(draws));
+            list->ExecuteIndirect(draw_signature.Get(), 1, arguments.Get(), 0, nullptr, 0);
+        } else {
+            list->DrawInstanced(6, 1, 0, 0);
+        }
+    } else {
+        list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        if (stream) geometry = draw_indexed(device.Get(), list.Get());
+        else list->DrawInstanced(3, 1, 0, 0);
+    }
     compute_fixture::transition(list.Get(), target.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
     D3D12_TEXTURE_COPY_LOCATION from{}, to{};
     from.pResource = target.Get();
@@ -245,7 +288,14 @@ std::string run(const wchar_t* requested, bool stream) {
             const bool covered = x >= scissor.left && x < scissor.right && y >= scissor.top && y < scissor.bottom;
             const UINT drawn = stream ? (x < (scissor.left + scissor.right) / 2 ? 0xffff0080u : 0xffff00ffu)
                                       : 0xff0000ffu;
-            const UINT expected = covered ? drawn : 0xffff0000u;
+            UINT expected = covered ? drawn : 0xffff0000u;
+            if (rectangle) {
+                const bool right = x >= 9 && x < 15 && y >= 9 && y < 15;
+                const bool left = x >= 1 && x < 7 && y >= 2 && y < 8;
+                expected = left || right ? 0xff000000u | (right ? 0x00ff0000u : 0)
+                    | (x >= (right ? 12 : 4) ? 0x000000ffu : 0)
+                    | (y >= (right ? 12 : 5) ? 0x0000ff00u : 0) : 0x00ff0000u;
+            }
             if (!mismatch[0] && row[x] != expected)
                 std::snprintf(mismatch, sizeof(mismatch), "triangle pixel (%ld,%ld) = %08x, expected %08x",
                               x, y, row[x], expected);
@@ -254,7 +304,10 @@ std::string run(const wchar_t* requested, bool stream) {
     readback->Unmap(0, &empty);
     if (mismatch[0]) throw std::runtime_error(mismatch);
     char receipt[128];
-    if (stream)
+    if (rectangle)
+        std::snprintf(receipt, sizeof(receipt), "d3d12-rectangle PASS pci=%04x:%04x slot=%d rectangles=2 texels=256",
+                      selected.VendorId, selected.DeviceId, stream ? 86 : 60);
+    else if (stream)
         std::snprintf(receipt, sizeof(receipt), "d3d12-stream PASS pci=%04x:%04x slot=86 bytes=712 indices=16,32 half-red-blue=18 magenta=18 blue=220 rejected=4",
                       selected.VendorId, selected.DeviceId);
     else
@@ -265,8 +318,13 @@ std::string run(const wchar_t* requested, bool stream) {
 }
 
 int wmain(int argc, wchar_t** argv) {
+    if (argc > 1 && (!std::wcscmp(argv[1], L"--rect") || !std::wcscmp(argv[1], L"--rect-stream"))) {
+        const bool stream = !std::wcscmp(argv[1], L"--rect-stream");
+        return tuxbox_test::frame_main(argc - 1, argv + 1, "d3d12-rectangle", false,
+            [stream](const wchar_t* adapter, bool) { return run(adapter, stream, true); });
+    }
     if (argc > 1 && std::wcscmp(argv[1], L"--stream") == 0)
         return tuxbox_test::frame_main(argc - 1, argv + 1, "d3d12-stream", false,
             [](const wchar_t* adapter, bool) { return run(adapter, true); });
-    return tuxbox_test::frame_main(argc, argv, "d3d12-draw", false, run);
+    return tuxbox_test::frame_main(argc, argv, "d3d12-draw", false, [](const wchar_t* adapter, bool) { return run(adapter, false); });
 }

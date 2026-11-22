@@ -1,6 +1,6 @@
 //! Xbox device slot 86. Standard x64 state subobjects use desktop D3D12 layout;
 //! the console also appends a stencil subobject and embeds guest object handles.
-use super::{Device, Out, compute, identity, shader_cache, stencil, wrap_pageable};
+use super::{Device, Out, compute, identity, rectangle, shader_cache, stencil, wrap_pageable};
 use crate::proxy::check_output;
 use core::{ffi::c_void, mem::MaybeUninit, ptr, slice};
 use windows::Win32::Foundation::{E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER};
@@ -79,13 +79,17 @@ unsafe fn create(
     }
     // Guest structures can have uninitialized alignment padding. Copy their
     // representation verbatim and only interpret the fields selected by tags.
-    let mut storage = vec![MaybeUninit::<usize>::uninit(); size / size_of::<usize>()];
+    let (gs_offset, gs_size) = subobject::<D3D12_SHADER_BYTECODE>();
+    let mut storage = vec![MaybeUninit::<usize>::uninit(); (size + gs_size) / size_of::<usize>()];
     let output = storage.as_mut_ptr().cast::<u8>();
     unsafe { ptr::copy_nonoverlapping(input, output, size) };
     let mut depth: *mut D3D12_DEPTH_STENCIL_DESC1 = ptr::null_mut();
     let mut formats: *mut D3D12_RT_FORMAT_ARRAY = ptr::null_mut();
     let mut blend: *mut D3D12_BLEND_DESC = ptr::null_mut();
     let mut samples = 1;
+    let mut rectangles = false;
+    let mut stream_output = false;
+    let mut geometry_record = ptr::null_mut::<D3D12_SHADER_BYTECODE>();
     let mut stages = Vec::new();
     let mut original = [None; 8];
     let mut fields = [None; 8];
@@ -124,6 +128,9 @@ unsafe fn create(
                     _ => (tag - 1) as usize,
                 };
                 let shader = unsafe { &mut *payload.cast::<D3D12_SHADER_BYTECODE>() };
+                if tag == 5 {
+                    geometry_record = shader;
+                }
                 if shader.BytecodeLength != 0 {
                     if shader.pShaderBytecode.is_null()
                         || shader.BytecodeLength > isize::MAX as usize
@@ -149,7 +156,19 @@ unsafe fn create(
                     }
                 }
             }
+            7 => {
+                stream_output =
+                    unsafe { (*payload.cast::<D3D12_STREAM_OUTPUT_DESC>()).NumEntries != 0 }
+            }
             8 => blend = payload.cast(),
+            14 if unsafe { payload.cast::<i32>().read() } == rectangle::PIPELINE_TYPE => {
+                rectangles = true;
+                unsafe {
+                    payload
+                        .cast::<i32>()
+                        .write(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE.0)
+                };
+            }
             15 => formats = payload.cast(),
             17 => samples = unsafe { (*payload.cast::<DXGI_SAMPLE_DESC>()).Count },
             // Cached native Xbox PSOs are hints, specific to the console driver.
@@ -190,6 +209,28 @@ unsafe fn create(
         }
         pipeline.stencil_slot = Some(slot);
     }
+    let pixel_bytecode = || {
+        fields[1]
+            .and_then(|p| unsafe { p.as_ref() })
+            .copied()
+            .unwrap_or_default()
+    };
+    let rectangle_geometry;
+    if rectangles {
+        if fields[2..].iter().any(Option::is_some) || stream_output {
+            return Err(E_NOTIMPL.into());
+        }
+        let vertex = unsafe { fields[0].ok_or(E_INVALIDARG)?.as_ref() }.ok_or(E_INVALIDARG)?;
+        rectangle_geometry = unsafe { rectangle::geometry(vertex, &pixel_bytecode()) }?;
+        if geometry_record.is_null() {
+            // The storage reserves one extra subobject before taking field pointers.
+            let record = unsafe { output.add(size) };
+            unsafe { record.cast::<i32>().write(5) };
+            geometry_record = unsafe { record.add(gs_offset).cast() };
+            size += gs_size;
+        }
+        unsafe { geometry_record.write(rectangle::bytecode(&rectangle_geometry)) };
+    }
     let native_desc = D3D12_PIPELINE_STATE_STREAM_DESC {
         SizeInBytes: size,
         pPipelineStateSubobjectStream: output.cast(),
@@ -198,6 +239,12 @@ unsafe fn create(
     // all stay alive throughout this synchronous call on the desktop Device2.
     let initial = unsafe { host.CreatePipelineState(&native_desc) };
     let Err(error) = &initial else {
+        if rectangles {
+            static FIRST_RECTANGLE: std::sync::Once = std::sync::Once::new();
+            crate::diagnostics::log_once(&FIRST_RECTANGLE, || {
+                "created Xbox screen-rectangle pipeline with three-vertex input".into()
+            });
+        }
         if fields[7].is_some() {
             static FIRST_MESH: std::sync::Once = std::sync::Once::new();
             crate::diagnostics::log_once(&FIRST_MESH, || {
@@ -257,6 +304,11 @@ unsafe fn create(
                 BytecodeLength: linked.len(),
             })
         };
+        let linked_rectangle;
+        if rectangles {
+            linked_rectangle = unsafe { rectangle::geometry(&*field, &pixel_bytecode())? };
+            unsafe { geometry_record.write(rectangle::bytecode(&linked_rectangle)) };
+        }
         let retry = unsafe { host.CreatePipelineState(&native_desc) };
         match &retry {
             Ok(_) => {

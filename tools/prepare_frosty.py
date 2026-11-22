@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -52,7 +53,7 @@ def verify_staged_files(work):
         raise ValueError(f"Unexpected retail binary set: {sorted(binaries ^ expected)}")
 
 
-def prepare(source, packaged_os, work, proton, windows_dxc):
+def prepare(source, packaged_os, work, proton, windows_dxc, *, select=True):
     import fcntl
 
     plan = json.loads(FROSTY_PLAN.read_text())
@@ -133,7 +134,6 @@ def prepare(source, packaged_os, work, proton, windows_dxc):
         config = stage / "Frosty/Config/UserEngine.ini"
         config.parent.mkdir(exist_ok=True)
         shutil.copyfile(ROOT / "tools/reference/frosty-reduced-effects.ini", config)
-        subprocess.run([ROOT / "tools/build_frosty_cbv_layer.sh"], check=True)
         publish(work / "providers.json", json.dumps(files, indent=2) + "\n")
         if os.environ.get("TUXBOX_SHADER_PREP") != "chase":
             os.environ["TUXBOX_SHADER_PREP"] = "menu"
@@ -141,8 +141,9 @@ def prepare(source, packaged_os, work, proton, windows_dxc):
             raise ValueError("The TuxBox graphics provider did not match the Frosty shader profile")
         publish(work / "stage", str(stage) + "\n")
         publish(work / "proton", str(proton) + "\n")
-        publish(POINTER, str(work) + "\n")
-    print(f"Frosty ready in {stage}. Start the game with tools/run_frosty.sh")
+        if select:
+            publish(POINTER, str(work) + "\n")
+    print(f"Frosty ready in {stage}. Launch with tools/run_frosty.sh --desktop --work {shlex.quote(str(work))}")
 
 
 def main():
@@ -153,6 +154,7 @@ def main():
     parser.add_argument("--work", type=Path, required=True, help="dedicated directory, preferably on the game's filesystem")
     parser.add_argument("--windows-dxc", type=Path, help="Microsoft DXC Windows release zip or bin/x64 directory")
     parser.add_argument("--proton", type=Path, help="installed Proton distribution")
+    parser.add_argument("--no-select", action="store_true", help="keep the current default working directory")
     args = parser.parse_args()
     try:
         if args.check:
@@ -162,7 +164,8 @@ def main():
             parser.error("preparation requires the original Mount directory and --windows-dxc")
         source = args.source.resolve()
         prepare(source, (args.packaged_os or source.parent / "EmbeddedXvd").resolve(), args.work.resolve(),
-                proton_installation(args.proton or os.getenv("PROTONPATH")), args.windows_dxc.resolve())
+                proton_installation(args.proton or os.getenv("PROTONPATH")), args.windows_dxc.resolve(),
+                select=not args.no_select)
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         parser.exit(1, f"Frosty preparation failed: {exc}\n")
 
