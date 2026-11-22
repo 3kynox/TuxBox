@@ -49,7 +49,9 @@ uint4 tb_bvh_boxes(uint node[32], bool box16, float3 origin,
 }
 
 // Returns unremapped t numerator, determinant, and two barycentric
-// numerators. A miss returns +infinity and one in the first two words.
+// numerators. For non-degenerate ordinary misses, gfx1036 preserves the
+// determinant and uses an infinity with the same sign for the numerator.
+// Exact shared-edge inclusion and degenerate inputs remain unverified here.
 float4 tb_bvh_triangle(float3 origin, float3 direction,
                        float3 a, float3 b, float3 c) {
     float3 edge1 = b - a;
@@ -67,7 +69,8 @@ float4 tb_bvh_triangle(float3 origin, float3 direction,
     float i = iNumerator / determinant;
     float j = jNumerator / determinant;
     if (t < 0.0 || i < 0.0 || j < 0.0 || i + j > 1.0)
-        return float4(asfloat(0x7f800000u), 1.0, iNumerator, jNumerator);
+        return float4(asfloat(0x7f800000u | (asuint(determinant) & 0x80000000u)),
+                      determinant, iNumerator, jNumerator);
     return float4(tNumerator, determinant, iNumerator, jNumerator);
 }
 

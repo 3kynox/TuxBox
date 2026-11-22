@@ -73,8 +73,10 @@ def triangle_reference(origin, direction, a, b, c):
     p, q = cross(direction, e2), cross(v, e1)
     determinant = dot(e1, p)
     t, i, j = dot(e2, q), dot(v, p), dot(direction, q)
-    if not determinant or t / determinant < 0 or i / determinant < 0 or j / determinant < 0 or (i + j) / determinant > 1:
+    if not determinant:
         return [math.inf, 1.0, i, j]
+    if t / determinant < 0 or i / determinant < 0 or j / determinant < 0 or (i + j) / determinant > 1:
+        return [math.copysign(math.inf, determinant), determinant, i, j]
     return [t, determinant, i, j]
 
 
@@ -155,8 +157,9 @@ def main():
     for box16 in (True, False):
         node = box_node(ties, box16)
         node[3] = 36
-        boxes.append((node, box16, "equal-distance lanes", (0, 0, -4),
-                      (1, 1, 1), 100, True))
+        origin, inverse = (0, 0, -4), (10, 10, 1)
+        assert box_reference(node, box16, origin, inverse, 100, True) == [27, 18, 36, INVALID]
+        boxes.append((node, box16, "equal-distance lanes", origin, inverse, 100, True))
     triangles = [
         ((0.25, 0.25, -1), (0, 0, 1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
         ((0.25, 0.25, 1), (0, 0, -1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
@@ -166,6 +169,8 @@ def main():
         ((0.5, 0.5, 0), (0, 0, 1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
         ((0.25, 0.25, -1), (1, 0, 0), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
         ((0.25, 0.25, -1), (0, 0, 1), (0, 0, 0), (1, 0, 0), (2, 0, 0)),
+        ((2, 2, -1), (0, 0, 1), (0, 0, 0), (2, 0, 0), (0, 2, 0)),
+        ((2, 2, 1), (0, 0, -1), (0, 0, 0), (2, 0, 0), (0, 2, 0)),
     ]
     if retail_triangle:
         center = tuple(sum(vertex[axis] for vertex in retail_triangle) / 3 for axis in range(3))

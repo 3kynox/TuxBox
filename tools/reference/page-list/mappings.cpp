@@ -39,8 +39,8 @@ static void dispatch(Context &ctx, const std::string &name, UINT entry, UINT gro
     // A cached shadow page also reads the previous frame's tables and
     // metadata. The other page selectors read one table and one CBV.
     const bool cached = entry == 1228, instance = entry == 3403, cluster = entry == 1793;
-    const bool post_instance = entry == 3397 || entry == 3398 || entry == 3412;
-    const bool single_instance = entry == 3396 || entry == 3399 || post_instance;
+    const bool post_instance = entry == 3397 || entry == 3398 || entry == 3412 || entry == 3422 || entry == 3432 || entry == 3454 || entry == 3457 || entry == 3470;
+    const bool single_instance = entry == 3396 || entry == 3399 || entry == 3438 || entry == 3430 || entry == 3449 || entry == 3451 || entry == 3456 || entry == 3458 || post_instance;
     const bool depth_cull = instance || cluster || single_instance;
     const bool cards = entry == 1243 || entry == 1257;
     InstanceDepth hzb;

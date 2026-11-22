@@ -223,7 +223,7 @@ def main():
     p.add_argument("--prefix", type=Path)
     p.add_argument("--proton", type=Path)
     p.add_argument("--xshader", type=Path)
-    p.add_argument("--entry", type=int, choices=(1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3397, 3398, 3399, 3403, 3412, 3477),
+    p.add_argument("--entry", type=int, choices=(1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3397, 3398, 3399, 3403, 3412, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470, 3477),
                    help="run the controls for one archive entry")
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
@@ -283,9 +283,9 @@ def main():
     ):
         cases["visibility_" + name] = (3396, visibility_instance(visible, occluders, protected))
         cases["visibility_post_" + name] = (3397, visibility_instance(visible, occluders, protected, post=True))
-        for entry in (3398, 3399, 3412):
+        for entry in (3398, 3399, 3412, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470):
             cases[f"visibility_{entry}_" + name] = (entry, visibility_instance(
-                visible, occluders, protected, post=entry != 3399, stats_variant=True))
+                visible, occluders, protected, post=entry not in (3399, 3438, 3430, 3449, 3451, 3456, 3458), stats_variant=entry in (3398, 3399, 3412, 3422, 3430, 3456, 3458, 3470)))
     if args.entry is not None:
         cases = {name: case for name, case in cases.items() if case[0] == args.entry}
         if not cases:
@@ -309,7 +309,7 @@ def main():
                     words(work / f"{name}.b{i}", constants)
             else:
                 words(work / (name+".cbv"), cb)
-            if entry in (1016, 1243, 1257, 1793, 3477, 3396, 3397, 3398, 3399, 3403, 3412):
+            if entry in (1016, 1243, 1257, 1793, 3477, 3396, 3397, 3398, 3399, 3403, 3412, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470):
                 for i, records in enumerate(srv):
                     words(work / f"{name}.t{i}", records)
             else:
@@ -334,7 +334,7 @@ def main():
                 if len(array) != len(actual):
                     diffs.append([i, "missing readback"])
                 else:
-                    if entry in (3396, 3397, 3398, 3399, 3412) and i < 2:
+                    if entry in (3396, 3397, 3398, 3399, 3412, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470) and i < 2:
                         width = 36 if i == 0 else 9
                         for y in range(9):
                             actual[y * 64 + width:(y + 1) * 64] = [0] * (64 - width)
