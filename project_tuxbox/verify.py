@@ -211,6 +211,9 @@ def verify(host, output, adapter, selected=None, samples=1):
                   r"raw=16 zlib=16 guards=2 errors=2 cancellation=1 autosubmit=64 PASS",
                   providers={"xcrdapi/xcrdapi.dll": ("DStorageGetFactory",)})
         if "xmem" in selected:
+            check("xmem-heap-profiles", "xmem-smoke/xmem-smoke.exe", ["--heap-profiles", "--report"],
+                  r"xmem-heap-profiles PASS attributes=40 alloc=80 free=80",
+                  providers={"xmem-smoke/xmem.dll": ("XMemAlloc", "XMemFree", "XMemAllocDefault", "XMemFreeDefault")})
             check("xmem-virtual-cpu", "xmem-smoke/xmem-smoke.exe", ["--virtual-cpu", "--report"],
                   r"xmem-virtual-cpu PASS protections=5 allocations=10 invalid=1",
                   providers={"xmem-smoke/xmem.dll": ("XMemVirtualAlloc",)})
@@ -356,6 +359,7 @@ GATE_LABELS = {
     "xmem-watch": "Guest write-watch dirty-page query",
     "xmem-scatter": "CPU scattered physical-page mapping",
     "xmem-virtual-cpu": "CPU virtual-memory allocation profiles",
+    "xmem-heap-profiles": "CPU heap attribute profiles",
     "invalid-route": "Invalid input exit status", "xmem-default": "Xbox memory allocation and working set",
     "d3d12-signatures": "Root signature 1.0 and 1.1 serialization, deserialization and errors",
     "d3d12-exports": "Blob, debug interface, four DXGIX entry points and Series CPU memory clear",

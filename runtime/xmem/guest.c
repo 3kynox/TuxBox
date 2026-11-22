@@ -339,6 +339,26 @@ static int allocation_hooks(void)
 typedef void *(WINAPI *Allocation)(SIZE_T, UINT64);
 typedef void (WINAPI *Release)(void *, UINT64);
 
+static int heap_profiles(void)
+{
+    const UINT64 metadata[] = {0, 1, 0x9e, 0x3fff, 0x20000, 0x800000, 0x823fff, 0x200000000ULL};
+    for (unsigned type = 0; type < 5; ++type) {
+        for (unsigned i = 0; i < sizeof metadata / sizeof metadata[0]; ++i) {
+            UINT64 attributes = ((UINT64)type << 24) | metadata[i];
+            BYTE *memory = XMemAllocDefault(17, attributes);
+            REQUIRE(memory && !((UINT_PTR)memory & 15) && HeapValidate(GetProcessHeap(), 0, memory));
+            memset(memory, (int)(i + type), 17);
+            REQUIRE(memory[0] == (BYTE)(i + type) && memory[16] == memory[0]);
+            XMemFreeDefault(memory, attributes);
+            REQUIRE(!HeapValidate(GetProcessHeap(), 0, memory));
+            memory = XMemAlloc(17, attributes);
+            REQUIRE(memory && HeapValidate(GetProcessHeap(), 0, memory));
+            XMemFree(memory, attributes);
+        }
+    }
+    return 0;
+}
+
 static int allocation_pair(Allocation allocate, Release release)
 {
     const UINT64 heap_attributes[] = {0x04800092, 0x04800040, 0x04800078, 0x04820000};
@@ -371,7 +391,7 @@ static int allocation_pair(Allocation allocate, Release release)
     release((void *)placed, XMEM_PLACEMENT_ATTRIBUTES);
     REQUIRE(VirtualQuery((void *)placed, &area, sizeof area) == sizeof area && area.State == MEM_FREE);
     REQUIRE(!allocate(0, XMEM_ORDINARY_ATTRIBUTES));
-    REQUIRE(!allocate(1, 0) && GetLastError() == ERROR_NOT_SUPPORTED);
+    REQUIRE(!allocate(1, 0x00804000) && GetLastError() == ERROR_NOT_SUPPORTED);
     release(NULL, XMEM_ORDINARY_ATTRIBUTES);
 
     return 0;
@@ -493,13 +513,21 @@ int wmain(int argc, wchar_t **argv)
     BOOL watch_only = argc >= 2 && !wcscmp(argv[1], L"--watch");
     BOOL scatter_only = argc >= 2 && !wcscmp(argv[1], L"--scatter");
     BOOL cpu_profiles_only = argc >= 2 && !wcscmp(argv[1], L"--virtual-cpu");
-    if (pages_only || query_only || tag_only || hooks_only || watch_only || scatter_only || cpu_profiles_only) { --argc; ++argv; }
+    BOOL heap_only = argc >= 2 && !wcscmp(argv[1], L"--heap-profiles");
+    if (pages_only || query_only || tag_only || hooks_only || watch_only || scatter_only || cpu_profiles_only || heap_only) { --argc; ++argv; }
     if (!(argc == 1 || (argc == 3 && wcscmp(argv[1], L"--report") == 0))) {
-        fputs("usage: xmem-smoke.exe [--pages|--query|--tags|--hooks|--watch|--scatter|--virtual-cpu] [--report FILE]\n", stderr);
+        fputs("usage: xmem-smoke.exe [--pages|--query|--tags|--hooks|--watch|--scatter|--virtual-cpu|--heap-profiles] [--report FILE]\n", stderr);
         return 2;
     }
     if (argc == 3 && _wfopen_s(&report, argv[2], L"wb") != 0) return 2;
     REQUIRE(app_local_provider());
+    if (heap_only) {
+        REQUIRE(!heap_profiles());
+        const char result[] = "xmem-heap-profiles PASS attributes=40 alloc=80 free=80\n";
+        if (report && (fputs(result, report) == EOF || fclose(report))) return 2;
+        fputs(result, stdout);
+        return 0;
+    }
     if (cpu_profiles_only) {
         REQUIRE(!virtual_cpu_profiles());
         const char result[] = "xmem-virtual-cpu PASS protections=5 allocations=10 invalid=1\n";

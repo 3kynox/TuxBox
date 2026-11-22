@@ -91,13 +91,12 @@ pub extern "system" fn make_tag(fourcc: u32) -> u64 {
 }
 
 fn process_heap_attributes(attributes: u64) -> bool {
-    // The two packaged D3D drivers use 0x92 for startup allocations, 0x40
-    // for the blob object and 0x78 for its bytes. The packaged media decoders
-    // allocate and free CPU storage with 0x04820000. All return 16-byte aligned memory.
-    matches!(
-        attributes,
-        0x0480_009e | 0x0480_0092 | 0x0480_0040 | 0x0480_0078 | 0x0482_0000
-    )
+    // The supplied Xbox DLL routes selector 0 with ordinary CPU allocation
+    // types 0..4 and no special alignment bits through its partition heap.
+    // The remaining low attribute bits are metadata and do not change this path.
+    (attributes >> 29) & 0xf == 0
+        && attributes & 0x1f00_0000 <= 0x0400_0000
+        && attributes & 0xc000 == 0
 }
 
 /// Allocate guest memory with the selected backing. A null return denotes failure.

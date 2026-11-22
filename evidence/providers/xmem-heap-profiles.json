@@ -1,0 +1,94 @@
+{
+  "scope": "XMemAllocDefault/XMemFreeDefault ordinary CPU partition-heap attribute routing; non-heap Xbox page and partition paths remain unsupported. TuxBox uses the process heap as CPU backing.",
+  "reference_dll_sha256": "adc182acae5340b0618a3d57a239ed2e8deb305dbefc49439cb8a2d06c7ce812",
+  "native_control": "python tools/check_xmem_heap_native.py /path/to/xmem.dll",
+  "native_method": "Runs the hash-pinned supplied routines in a temporary mapped PE, using controlled XbGetPartitionHeap, HeapAlloc and HeapFree stubs. Forty input attributes cover allocation-type values 0..4, lower metadata fields, and high attribute bits. Verifies actual routing, flags, size and pointer on allocation and free.",
+  "native_result": "xmem-native-heap PASS attributes=40 alloc=40 free=40",
+  "predicate": "(attributes >> 29) & 15 == 0; (attributes & 0x1f000000) <= 0x04000000; (attributes & 0xc000) == 0",
+  "guest_checks": [
+    "Allocate and free 17-byte blocks with all 40 attribute cases through both the default and hooked entry points. Verify host heap membership, 16-byte alignment and writable contents.",
+    "Test zero-valued attributes, including the case previously rejected, and reject an unsupported page-alignment profile."
+  ],
+  "limits": [
+    "The supplied console DLL partition heap calls are stubbed in the native control; real console heap, tracking callbacks and allocation-failure behavior are not compared.",
+    "Higher alignment modes, other selector values, allocation types and GPU/partition behaviors remain unsupported.",
+    "Default XMemFree on null is currently a no-op, unlike the original heap dispatch; null free error details remain unverified."
+  ],
+  "source_sha256": {
+    "tools/check_xmem_heap_native.py": "9de602e87192bd0b7099e53bf80174d13df290801f4b4fd7cc65192475a20195",
+    "tools/reference/xmem-tag/heap_native.c": "367faf2f2f7733850572e819e511a1efc1bb47b5682511fbaef1776842d69cff",
+    "runtime/xmem/guest.c": "c4e8898fc6141114058ee5df243367b652ffdf652204e5763a25841aa338cb4e",
+    "runtime/xmem/src/lib.rs": "2f48ee2a1bec9d2873a2174d63fd43eecdc84f86baf5b032dcade5b024741f48"
+  },
+  "run": {
+    "schema": 1,
+    "type": "homebrew",
+    "date_utc": "2026-11-22",
+    "host": "Linux",
+    "os_release": "7.3.5-2-cachyos-bore",
+    "cpu": "AMD Ryzen 7 9800X3D 8-Core Processor",
+    "machine": "x86_64",
+    "backend": "proton",
+    "provider": "1793301796 experimental-11.0-20261027b-x86_64",
+    "binaries_sha256": {
+      "xmem-smoke/xmem-smoke.exe": "17308b2a357e47014415c0454f84889d7478da8580b102dc06268825fc879f24",
+      "xmem-smoke/xmem.dll": "14fa66bf384a8c55793f59da1c3a7c5e4bbcd9f47b63c14c0e94fdf23c03d146"
+    },
+    "checks": [
+      {
+        "gate": "xmem-heap-profiles",
+        "passed": true,
+        "exit_code": 0,
+        "receipt": "xmem-heap-profiles PASS attributes=40 alloc=80 free=80"
+      },
+      {
+        "gate": "xmem-virtual-cpu",
+        "passed": true,
+        "exit_code": 0,
+        "receipt": "xmem-virtual-cpu PASS protections=5 allocations=10 invalid=1"
+      },
+      {
+        "gate": "xmem-scatter",
+        "passed": true,
+        "exit_code": 0,
+        "receipt": "xmem-scatter PASS pages=3 remapped-bytes=196608 duplicates=2 guards=2 rollback=1"
+      },
+      {
+        "gate": "xmem-watch",
+        "passed": true,
+        "exit_code": 0,
+        "receipt": "xmem-watch PASS initial=2 reset=2 next=1 guards=2 invalid=1 pause=2 resume=3 allocations=2"
+      },
+      {
+        "gate": "xmem-hooks",
+        "passed": true,
+        "exit_code": 0,
+        "receipt": "xmem-hooks PASS calls=2/2 zero-size=1 null-free=1 restore=1 reentrant=1"
+      },
+      {
+        "gate": "xmem-tags",
+        "passed": true,
+        "exit_code": 0,
+        "receipt": "xmem-tags PASS count=5120 hash=d4bf30c57509b176"
+      },
+      {
+        "gate": "xmem-query",
+        "passed": true,
+        "exit_code": 0,
+        "receipt": "xmem-query PASS unsupported=3 guards=2 null=1"
+      },
+      {
+        "gate": "xmem-default",
+        "passed": true,
+        "exit_code": 0,
+        "receipt": "xmem-default: PASS (allocator pairs 1/6 and 2/7, ordinary and 64 KiB allocations, host working set v2, virtual reserve/commit)"
+      },
+      {
+        "gate": "xmem-pages",
+        "passed": true,
+        "exit_code": 0,
+        "receipt": "xmem-pages PASS cpu-pages=2 remapped-bytes=131072 stale-and-foreign-rejected=1"
+      }
+    ]
+  }
+}
