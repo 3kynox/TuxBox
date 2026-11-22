@@ -9,6 +9,7 @@ mod mesh_sdf_offsets;
 mod compact_visualize_rays;
 mod compact_hwrt_rays;
 mod distance_field_requests;
+mod voxel_indirect_setup;
 
 use std::fmt::Write;
 
@@ -245,6 +246,9 @@ pub(super) fn hlsl(shader: &ShaderExtract) -> Option<String> {
             return None;
         }
         return Some(format!("[numthreads({x}, {y}, {z})]\nvoid main() {{}}\n"));
+    }
+    if let Some(source) = voxel_indirect_setup::translate(shader) {
+        return Some(source);
     }
     if let Some(source) = distance_field_requests::translate(shader) {
         return Some(source);

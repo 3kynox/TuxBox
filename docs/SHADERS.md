@@ -115,6 +115,8 @@ The packaged `CompactFeedbackHashTableCS` shader compacts nonzero feedback into 
 
 The packaged `CullToVoxelClipmapCS` shader builds a list of objects intersecting a voxel clipmap. Radeon and GeForce matched a CPU model for intersecting, distant and undersized objects across sparse, full and partial waves. [GPU readbacks](../evidence/matrix-awakens/voxel-clipmap-cull.json)
 
+Lumen’s visibility-shading indirect setup also translates and passes provider-level checks on both GPUs. The control checks the dispatch dimensions and buffer guards for five allocator values; it does not validate the complete lighting pass. [GPU readbacks and title view-format evidence](../evidence/matrix-awakens/voxel-indirect-setup-gpus.json)
+
 Frosty uses compute shaders to allocate physical shadow pages, choose pages for initialization and merging, and compact the views that need rendering. GeForce and Radeon ran ten packaged shaders and matched every one of the 137,694 output words checked on each GPU. The cases include an exhausted free-page pool, requests in both halves of a 64-lane wave, and selected mip levels from multiple views. Raising the depth texture from zero to one culled all six shadow instances that previously reached the work queue. [Shadow page and view readbacks](../evidence/matrix-awakens/virtual-shadow-pages.json)
 
 The first-boot hair cluster-culling shader also passes five CPU-modeled readbacks on Radeon and GeForce through TuxBox’s D3D12 provider. The controls cover visible and hidden clusters, LOD and frustum selection. [GPU readbacks](../evidence/matrix-awakens/hair-cluster-provider-gpus.json)
