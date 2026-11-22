@@ -674,10 +674,33 @@ static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, 
             probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,entry,active);
         probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,1064,true,true);
         probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,218,true,false,true,true);
-        const float bounds[][3]{{.5f,2.f,-1.f}, {1.f,2.f,-1.f}, {1.25f,2.f,-1.f}, {2.f,3.f,-1.f},
-                                {0.f,.5f,-1.f}, {0.f,1.f,-1.f}, {0.f,2.f,-1.f}, {0.f,2.f,20.f}, {1.25f,2.f,20.f}};
+        const float bounds[][4]{{.5f,2.f,-1.f,-1.f}, {1.f,2.f,-1.f,-1.f}, {1.25f,2.f,-1.f,-1.f},
+                                {2.f,3.f,-1.f,-1.f}, {0.f,.5f,-1.f,-1.f}, {0.f,1.f,-1.f,-1.f},
+                                {0.f,2.f,-1.f,-1.f}, {0.f,2.f,20.f,-1.f}, {1.25f,2.f,20.f,-1.f},
+                                {0.f,2.f,-1.f,0.f}};
         for (UINT i = 0; i < std::size(bounds); ++i)
-            probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,218,true,false,true,true,bounds[i][0],bounds[i][1],i+1,bounds[i][2]);
+            probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,218,true,false,true,true,bounds[i][0],bounds[i][1],i+1,bounds[i][2],bounds[i][3]);
+        // Align a second instance's z=1 triangle with the first instance's
+        // z=0 triangle, giving the test ray candidates at distances 1 and 2.
+        auto stacked_instances = instances;
+        stacked_instances[1].Transform[0][3] = -2.f;
+        auto stacked_upload = upload(owner.Get(), stacked_instances.data(), sizeof(stacked_instances));
+        auto stacked_scene = buffer(owner.Get(), top_sizes.ResultDataMaxSizeInBytes, D3D12_HEAP_TYPE_DEFAULT,
+                                    D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, true);
+        auto stacked_scratch = buffer(owner.Get(), top_sizes.ScratchDataSizeInBytes, D3D12_HEAP_TYPE_DEFAULT,
+                                      D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
+        ComPtr<ID3D12CommandAllocator> stacked_allocator;
+        ComPtr<ID3D12GraphicsCommandList4> stacked_list;
+        check(owner->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&stacked_allocator)), "stacked allocator");
+        check(owner->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, stacked_allocator.Get(), nullptr, IID_PPV_ARGS(&stacked_list)), "stacked list");
+        Build stacked = tlas;
+        stacked.Inputs.InstanceDescs = stacked_upload->GetGPUVirtualAddress();
+        stacked.DestAccelerationStructureData = stacked_scene->GetGPUVirtualAddress();
+        stacked.ScratchAccelerationStructureData = stacked_scratch->GetGPUVirtualAddress();
+        stacked_list->BuildRaytracingAccelerationStructure(&stacked, 0, nullptr);
+        stacked_list->ResourceBarrier(1, &ready);
+        submit(owner.Get(), queue.Get(), stacked_list.Get());
+        probe_card_tile(owner.Get(),queue.Get(),stacked_scene.Get(),receipt,218,true,false,true,true,1.25f,3.f,11,-1.f,-1.f);
     }
 #endif
 #ifdef TUXBOX_SCREEN_GATHER_PROBE

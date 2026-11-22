@@ -2,7 +2,8 @@
 // for radiosity. Sample the packed mask and the atlas pixels on the host.
 static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D12Resource *scene, FILE *receipt,
                             UINT entry, bool active, bool lit = false, bool trace = false, bool occluded = false,
-                            float near_bound = 8.f, float far_bound = 8.f, UINT scenario = 0, float origin_x = -1.f) {
+                            float near_bound = 8.f, float far_bound = 8.f, UINT scenario = 0,
+                            float origin_x = -1.f, float origin_z = -1.f) {
     const bool radiosity = entry == 1064;
     const UINT count = radiosity ? 16 : 7, width = trace ? 8 : 4, side = 8;
     D3D12_DESCRIPTOR_RANGE ranges[]{{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, count, 0, 1, 0},
@@ -95,7 +96,7 @@ static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D1
             if ((lit || trace) && i == 0) {
                 // The three float4 card basis rows also carry their world-space origin in W.
                 const float basis[12]{1, 0, 0, trace ? origin_x : 20.f, 0, 1, 0, trace ? 0.f : 20.f,
-                                      0, 0, 1, trace ? -1.f : 20.f};
+                                      0, 0, 1, trace ? origin_z : 20.f};
                 std::memcpy(words.data(), basis, sizeof(basis));
             }
             if (radiosity && i == 1) {
@@ -287,7 +288,7 @@ static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D1
         ComPtr<ID3D12GraphicsCommandList> candidate_list;
         check(dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&candidate_allocator)), "card candidate allocator");
         check(dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, candidate_allocator.Get(), pipeline.Get(), IID_PPV_ARGS(&candidate_list)), "card candidate list");
-        const float bounds[]{near_bound, far_bound, origin_x};
+        const float bounds[]{near_bound, far_bound, origin_x, origin_z};
         auto bound_buffer = upload(dev, bounds, sizeof(bounds));
         auto candidate = buffer(dev, 16, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
         auto candidate_readback = buffer(dev, 16, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
@@ -309,29 +310,34 @@ static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D1
         std::memcpy(candidate_words.data(), candidate_data, 16);
         candidate_readback->Unmap(0, &none);
         const UINT expected_mask = 2u | (candidate_words[2] * 0x5554u);
-        const UINT expected_first[]{1, 0, 0, 0, 0, 0, 1, 0, 0};
-        const UINT expected_second[]{0, 0, 1, 1, 0, 0, 0, 0, 0};
+        const UINT expected_first[]{1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1};
+        const UINT expected_second[]{0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0};
+        // The widened query additionally includes a triangle at the first
+        // segment's lower endpoint in scenario 2.
+        const UINT expected_filtered[]{1, 1, 6, 6, 0, 0, 1, 0, 0, 0, 5};
         const UINT expected_hits = candidate_words[1] * 7u;
         const UINT expected_misses = candidate_words[0] ? 0u : (candidate_words[1] ? 7u : 14u);
         const std::array<UINT, 2> expected_events = candidate_words[0] ? std::array<UINT, 2>{0, 0}
             : std::array<UINT, 2>{2, candidate_words[1] ? 1u : 2u};
         const bool event_matches = std::all_of(events_seen.begin(), events_seen.end(),
             [&](const auto &event) { return event == expected_events; });
-        UINT x_bits{}, near_bits{}, far_bits{};
+        UINT x_bits{}, z_bits{}, near_bits{}, far_bits{};
         std::memcpy(&x_bits, &origin_x, 4);
+        std::memcpy(&z_bits, &origin_z, 4);
         std::memcpy(&near_bits, &near_bound, 4);
         std::memcpy(&far_bits, &far_bound, 4);
         const UINT second_end = candidate_words[1] ? 0x3f800000u : near_bits;
-        const std::array<UINT, 16> expected_rays{x_bits, 0, 0xbf800000u, near_bits, 0, 0, 0x3f800000u, far_bits,
-                                                 x_bits, 0, 0xbf800000u, 0, 0, 0, 0x3f800000u, second_end};
+        const std::array<UINT, 16> expected_rays{x_bits, 0, z_bits, near_bits, 0, 0, 0x3f800000u, far_bits,
+                                                 x_bits, 0, z_bits, 0, 0, 0, 0x3f800000u, second_end};
         const bool argument_matches = candidate_words[0] || std::all_of(rays_seen.begin(), rays_seen.end(),
             [&](const auto &ray) { return ray == expected_rays; });
         const bool matches = scenario <= std::size(expected_first) && event_matches && argument_matches &&
             candidate_words[0] == expected_first[scenario - 1] && candidate_words[1] == expected_second[scenario - 1] &&
+            candidate_words[3] == expected_filtered[scenario - 1] &&
             candidate_words[2] >= 2 && candidate_words[2] <= 3 && mask == expected_mask &&
             hits == expected_hits && misses == expected_misses;
-        std::fprintf(receipt, "card_candidate_%u=first %u; second %u; candidate %u; original mask %08x; match %u\n", scenario,
-                     candidate_words[0], candidate_words[1], candidate_words[2], mask, matches);
+        std::fprintf(receipt, "card_candidate_%u=first %u; second %u; candidate %u; original mask %08x; filtered %u; match %u\n", scenario,
+                     candidate_words[0], candidate_words[1], candidate_words[2], mask, candidate_words[3], matches);
         if (!matches) throw std::runtime_error("direct-light candidate differs from translated 218");
     }
     const char *name = trace ? (occluded ? "occluded" : "unoccluded") : lit ? "lit" : active ? "active" : "empty";
