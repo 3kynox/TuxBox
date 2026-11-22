@@ -259,22 +259,25 @@ pub unsafe extern "C" fn tb_shadow_info(
     0
 }
 
-// Borrow the destination resource and expose the GPU address of the immutable
-// validation upload to the standalone verification shader. The caller must hold
-// a recording reference and fence leases while any command uses either object;
-// the returned pointer does not add a COM reference and must not be released.
+// Borrow the destination and validation-upload resources for bounded GPU
+// views, and expose the upload's GPU address. The caller must hold recording
+// references and fence leases while commands use either object. Neither
+// returned pointer adds a COM reference; callers must not release them.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tb_shadow_gpu_resources(
     handle: *const c_void,
     target: *mut *mut c_void,
+    validation: *mut *mut c_void,
     validation_address: *mut u64,
 ) -> i32 {
-    if handle.is_null() || target.is_null() || validation_address.is_null() {
+    if handle.is_null() || target.is_null() || validation.is_null() || validation_address.is_null()
+    {
         return -1;
     }
     let shadow = unsafe { &*handle.cast::<Shadow>() };
     unsafe {
         target.write(shadow.buffer.as_raw());
+        validation.write(shadow.upload.as_raw());
         validation_address.write(shadow.upload.GetGPUVirtualAddress());
     }
     0

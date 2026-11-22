@@ -117,6 +117,8 @@ Frosty uses compute shaders to allocate physical shadow pages, choose pages for 
 
 Ten reflection trace compaction variants translate their wave32 reductions and prefix scans. Real texture inputs and CPU-modeled outputs pass on Radeon and GeForce for empty, full, mixed and wave-boundary cases across groups of 64 to 1,024 threads. [GPU readbacks](../evidence/matrix-awakens/reflection-compact-wave-sizes.json)
 
+The visualization tile shader compacts viewport-intersecting 8×8 groups. GPU controls cover viewport edges, fractional offsets and floating-point conversion limits. [GPU readbacks](../evidence/matrix-awakens/visualize-create-tiles.json) · [AMD RDNA 2 instruction reference](https://docs.amd.com/api/khub/documents/Et~wpu9g~Ffl7d9q0QZ~Og/content)
+
 Three visualization ray-compaction variants preserve matching data and ray records while selecting different flags. GPU controls cover empty, full, mixed and two-group dispatches. [GPU readbacks](../evidence/matrix-awakens/visualize-compact-rays.json)
 
 Four hardware ray-compaction variants select five-word ray records, including variants with different flag masks. Tests on Radeon and GeForce check sparse and full waves, per-lane limits and two groups. [GPU readbacks](../evidence/matrix-awakens/hwrt-compact-rays.json)

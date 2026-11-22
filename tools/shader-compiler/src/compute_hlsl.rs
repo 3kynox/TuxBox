@@ -4,6 +4,7 @@
 
 pub(crate) mod page_list;
 mod compact_views;
+mod visualize_tiles;
 mod mesh_sdf_offsets;
 mod compact_visualize_rays;
 mod compact_hwrt_rays;
@@ -255,6 +256,9 @@ pub(super) fn hlsl(shader: &ShaderExtract) -> Option<String> {
         return Some(source);
     }
     if let Some(source) = mesh_sdf_offsets::translate(shader) {
+        return Some(source);
+    }
+    if let Some(source) = visualize_tiles::translate(shader) {
         return Some(source);
     }
     if let Some(source) = compact_views::translate(shader) {

@@ -168,6 +168,31 @@ def selection(entry, count, extra):
         "pages": count, "selected": len(base), "additional_pages": len(second), "initial_indirect_x": 32}
 
 
+def visualize_tiles(gx, gy, offset, extent):
+    import math
+    def cvt(v):
+        if math.isnan(v) or v <= 0: return 0
+        if v >= 4294967296: return 0xffffffff
+        return int(v)
+    def f32(v): return struct.unpack("<f", struct.pack("<f", v))[0]
+    def bits(v): return struct.unpack("<I", struct.pack("<f", v))[0]
+    cb = [0] * 576
+    cb[532:534] = [bits(v) for v in offset]
+    cb[536:538] = [bits(v) for v in extent]
+    selected = []
+    for y in range(gy):
+        for x in range(gx):
+            if any(cvt(f32(offset[0] + (x * 8 + dx))) < cvt(extent[0]) and
+                   cvt(f32(offset[1] + (y * 8 + dy))) < cvt(extent[1])
+                   for dy in range(8) for dx in range(8)):
+                selected.append((x & 0xffff) | (y << 16))
+    seed = [[3] + [GUARD] * 15, [GUARD] * 160]
+    expected = [row.copy() for row in seed]
+    expected[0][0] += len(selected)
+    expected[1][3:3 + len(selected)] = sorted(selected)
+    return cb, [0] * 4, seed, [4, 4], 4, gx, gy, expected, {"selected": selected}
+
+
 def mesh_sdf_offsets(count, groups, dispatch_count, zero=False, wrap=False):
     cb = [0] * 64
     cb[10] = count
@@ -317,7 +342,7 @@ def main():
     p.add_argument("--prefix", type=Path)
     p.add_argument("--proton", type=Path)
     p.add_argument("--xshader", type=Path)
-    p.add_argument("--entry", type=int, choices=(728, 248, 249, 259, 507, 509, 512, 513, 517, 1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470, 3477),
+    p.add_argument("--entry", type=int, choices=(257, 728, 248, 249, 259, 507, 509, 512, 513, 517, 1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470, 3477),
                    help="run the controls for one archive entry")
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
@@ -326,6 +351,19 @@ def main():
     compiler = args.xshader.resolve() if args.xshader else compiler
     data, entries = global_archive(args.mount)
     cases, libraries = {}, {}
+    for name, gx, gy, offset, extent in (
+        ("empty", 3, 2, (0., 0.), (0., 0.)),
+        ("one", 3, 2, (0., 0.), (1., 1.)),
+        ("edge", 3, 2, (0., 0.), (9., 9.)),
+        ("full", 3, 2, (0., 0.), (24., 16.)),
+        ("offset", 3, 2, (7.75, 3.5), (17., 11.)),
+        ("negative", 3, 2, (-3.5, -2.25), (5., 6.)),
+        ("nan_offset", 3, 2, (float("nan"), 0.), (5., 6.)),
+        ("nan_extent", 3, 2, (0., 0.), (float("nan"), 6.)),
+        ("positive_infinity", 3, 2, (float("inf"), 0.), (float("inf"), 6.)),
+        ("negative_infinity", 3, 2, (float("-inf"), 0.), (5., 6.)),
+    ):
+        cases["tiles_" + name] = (257, visualize_tiles(gx, gy, offset, extent))
     for name, count, groups, dispatch, zero, wrap in (
         ("empty", 0, 1, 0, False, False), ("single", 1, 1, 1, False, False),
         ("lower", 32, 1, 64, False, False), ("boundary", 33, 1, 65, False, False),
@@ -492,6 +530,9 @@ def main():
                             [actual[j:j + 5] for j in range(first, end, 5)]) for word in row]
                     if entry == 728 and i == 0 and metadata["alternate_offsets"] == actual:
                         array = metadata["alternate_offsets"]
+                    if entry == 257 and i == 1:
+                        end = 3 + len(metadata["selected"])
+                        actual[3:end] = sorted(actual[3:end])
                     if entry == 1223:
                         actual = unordered_wave_ranges(actual, array, metadata["initial"], metadata["selected_pages"])
                     diffs.extend([i, j, x, y] for j,(x,y) in enumerate(zip(array,actual)) if x != y)
