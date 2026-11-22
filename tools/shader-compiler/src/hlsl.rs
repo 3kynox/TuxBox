@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 
 mod compare;
+mod uniform_texel;
 mod fssm_bindings;
 mod micropoly;
 mod mesh;
@@ -1658,6 +1659,8 @@ impl<'a> Emitter<'a> {
         let mut links: Vec<((bool, bool, u32), (bool, bool, u32))> = Vec::new();
         // Textures that are sampled or gathered hold filterable (float) data.
         let mut sampled: BTreeSet<u32> = BTreeSet::new();
+        let mut uniform_uint = BTreeMap::new();
+        let targets = uniform_texel::branch_targets(&self.insns);
         let n = self.insns.len();
         // The typed resource an instruction reads or writes, with the data registers.
         let typed = |em: &Self, i: usize| -> Option<((bool, bool, u32), BTreeSet<u8>, bool, bool)> {
@@ -1697,6 +1700,10 @@ impl<'a> Emitter<'a> {
                 }
             }
             let Some((key, regs, is_load, is_store)) = typed(self, i) else { continue };
+            if is_load && key.0 && !key.1 {
+                let packed = uniform_texel::packed_uint(&self.insns[i], &self.insns[i + 1..], &targets);
+                uniform_uint.entry(key.2).and_modify(|all| *all &= packed).or_insert(packed);
+            }
             let v = votes.entry(key).or_insert([0; 3]);
             if is_load {
                 // Forward: how are the loaded registers (and plain copies / masks of them) used?
@@ -1766,6 +1773,12 @@ impl<'a> Emitter<'a> {
             let ints = v[1] + v[2];
             if ints > v[0] {
                 ty.insert(*k, if v[2] > 0 { 2 } else { 1 });
+            }
+        }
+        for (slot, packed) in uniform_uint {
+            let key = (true, false, slot);
+            if packed && votes.get(&key) == Some(&[0; 3]) && !sampled.contains(&slot) {
+                ty.insert(key, 1);
             }
         }
         for (to, from) in links {

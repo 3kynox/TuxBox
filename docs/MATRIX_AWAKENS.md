@@ -6,6 +6,8 @@ With temporal anti-aliasing on stock Proton, the shooting tutorial appeared 4m37
 
 The first temporal anti-aliasing run reached the city chase intro in 6m53s. With the driver cache populated and 41 more shaders prepared, an earlier repeat reached it in 2m33s. A CPU sample from that repeat found 710 of 803 samples in Proton’s conversion of shader control flow to SPIR-V. [Earlier desktop runs](../evidence/matrix-awakens/foreground-chase-repeat.json) · [Compiler profile](../evidence/matrix-awakens/chase-warmup.json)
 
+With the corrected street shaders, Frosty’s own Sandbox test reached the on-foot view and exited successfully. Gaps remain in the street and buildings. In a ten-second CPU profile on that street, 168 of 800 samples came from TuxBox comparing the saved bytes of a texture mip level against guest memory copied for the current submission. [Street screenshot](../evidence/matrix-awakens/street-page-table.jpg) · [Texture readbacks and title run](../evidence/matrix-awakens/street-page-table.json) · [CPU samples](../evidence/matrix-awakens/foreground-chase-grouped.json)
+
 The title reports an invalid local user when saving the city unlock. Closing the desktop game window after the controls test produced a viewport error and exit code 1. The game’s built-in Sandbox test also reached the street, accepted walking input and exited successfully through its own shutdown path. [Sandbox test](../evidence/matrix-awakens/sandbox-gauntlet.json)
 
 ## Run with TuxBox on Linux
@@ -36,7 +38,7 @@ The preparer builds TuxBox’s Game Runtime, storage, input, memory, ACP, graphi
 
 Before Frosty starts, TuxBox prepares shaders observed in the menu, the highway chase and the open city. It reads them from the game’s package. The gameplay profile covers all 2,099 distinct shaders requested in the recorded full chase to the city. Later scenes can still request new shaders. TuxBox translates those during play and saves the results. [Shader coverage](SHADERS.md) · [Runtime compilation check](../evidence/providers/shader-runtime-clear.json)
 
-To prepare ahead of time, run `./tools/run_frosty.sh --prepare-only`. On the test PC, preparing all 2,509 entries and six compute pipelines from empty caches took 3 minutes 50 seconds. With the caches warm, the launcher checked the same profile in 2.11 seconds. For a shorter menu-only test, use `TUXBOX_SHADER_PREP=menu ./tools/run_frosty.sh --desktop`. [Preparation results](../evidence/matrix-awakens/chase-warmup.json)
+To prepare ahead of time, run `./tools/run_frosty.sh --prepare-only`. On the test PC, preparing all 2,509 entries and six compute pipelines from empty caches took 4 minutes 28 seconds. With the caches warm, the launcher checked the same profile in 1.89 seconds. For a shorter menu-only test, use `TUXBOX_SHADER_PREP=menu ./tools/run_frosty.sh --desktop`. [Preparation results](../evidence/matrix-awakens/chase-warmup.json)
 
 TuxBox also creates six compute pipelines before play, including culling, upscaling and temporal anti-aliasing. All six cache keys matched Frosty’s retail runs. Creating them took 12.18 seconds total on GeForce and 6.86 seconds on Radeon with empty caches. In a second process the same calls took 5.52 milliseconds and 1.82 milliseconds respectively. [GPU timings and pipeline keys](../evidence/matrix-awakens/chase-warmup.json)
 

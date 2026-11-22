@@ -1965,10 +1965,10 @@
         "dxbc_bytes": 18266,
         "dxbc_sha256": "ccdd625c97ef08eb7adfa5e2c029827fe389a64c69f4095ef2e229f47c40ff34",
         "profile": "ps_6_1",
-        "hlsl_sha256": "dac942321b07dc772e691fe7620596f579b5059bcb6a69b8ae486fffd0af1551",
-        "cache_key": "cca8d8e56663bd25",
-        "observed_dxil_sha256": "63535c5788ff56bcb414bbff3ea0c94904e0237f546e279bb97900607f7add01",
-        "compiled_dxil_sha256": "63535c5788ff56bcb414bbff3ea0c94904e0237f546e279bb97900607f7add01"
+        "hlsl_sha256": "44d1216c2d9762a7f835f3897910b3e336d890b0a983b864b344d5edf6a11567",
+        "cache_key": "4d40cc662bc51238",
+        "observed_dxil_sha256": "d911d519acc92d80358b7ebce48d0bc595cba458f3795939a4ba46b4c394852c",
+        "compiled_dxil_sha256": "d911d519acc92d80358b7ebce48d0bc595cba458f3795939a4ba46b4c394852c"
       }
     ],
     "linked_shaders": [

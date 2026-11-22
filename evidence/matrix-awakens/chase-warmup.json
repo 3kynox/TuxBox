@@ -44,7 +44,7 @@
   },
   "host": "Linux x86-64",
   "proton": "1793301796 experimental-11.0-20261027b-x86_64",
-  "compiler_sha256": "14bf0bb7659602d596c87a26a6716878a5af181638361fda457e2f115f6a88b3",
+  "compiler_sha256": "f42f9d916e6fe267d4e723efd3938eab5d8db8da2dde799eef4fb3d560f8ff19",
   "dxc_sha256": "3dfc856b76291ffc7e45e21fd37ab80e85b34101de76a03253df6608785c92a0",
   "dxv_sha256": "33778294d67143d9f81526f4759c66d5a67a95ea9873448ef3595650a643cbd3",
   "gpu_pipelines": {
@@ -175,7 +175,7 @@
       }
     },
     "compiler_sha256": "e4d2f24b6acb9c12dc6d4da2c8f3b4bf0f6ee3991dac671e3cfd12783b76e0e1",
-    "compute_dxil_verified_unchanged_with": "14bf0bb7659602d596c87a26a6716878a5af181638361fda457e2f115f6a88b3"
+    "compute_dxil_verified_unchanged_with": "f42f9d916e6fe267d4e723efd3938eab5d8db8da2dde799eef4fb3d560f8ff19"
   },
   "temporal_aa_retail": {
     "prior_menu_snapshots": {
@@ -362,14 +362,11 @@
     },
     "compiler_sha256": "e4d2f24b6acb9c12dc6d4da2c8f3b4bf0f6ee3991dac671e3cfd12783b76e0e1"
   },
-  "runtime_cache_fingerprint": "144803717fa330d38cae827f4ca21c06cbd36b79f660d0c389f3322fcb00088c",
-  "runtime_cache_entries": 2277,
-  "runtime_output_manifest_sha256": "ae30ad94c6b73d7615e600a6efb6a6d1f2f51aa22bf3dc163a32bf52420211eb",
   "portable_cache": {
     "by_source": {
       "files": 216,
-      "manifest_sha256": "545c1d73be1e5266811892b1e9a5c59eaf7f2c7187e372c20226e93723b6ff36",
-      "receipt_sha256": "ec4e46ffb8a5b5f09eb9991b53bab50b0d74d60bd9e58e9d1cc2c347cb1cd0d6"
+      "manifest_sha256": "5bb2ed4f6fa72ef12f92f39d1fa739681ce30cbcbc01837bc2075306e2cfc0fb",
+      "receipt_sha256": "0d0cc3fd6dfeda174a7cad75b1ef1072520304381cc11722d57af090c87c3077"
     },
     "by_gs_ps": {
       "files": 4,
@@ -379,25 +376,28 @@
     "by_vs_ps": {
       "files": 4,
       "manifest_sha256": "345e0ac330392168c7d46365eb208ca81efcac9168f87defecfcf36732df37bf",
-      "receipt_sha256": "9092472d1e62979c159465484f0ddf03c3f3d317181c9a99c671018a78f99d79"
+      "receipt_sha256": "624325de62528b2601a904cf5fc4108f91ceea68e2e64dd1cd22fbd3e7bef1bf"
     },
-    "runtime/144803717fa330d38cae827f4ca21c06cbd36b79f660d0c389f3322fcb00088c": {
+    "runtime/b5b9c6d58fb0160cb3fe1a798c7a65a9039b0933b8718a5c23d395bc66ffa7cc": {
       "files": 2277,
-      "manifest_sha256": "ae30ad94c6b73d7615e600a6efb6a6d1f2f51aa22bf3dc163a32bf52420211eb"
+      "manifest_sha256": "44ba7be750a9b551961befc8df808ea376bf3b9592fe28170816871b4bcb5df9"
     }
   },
   "output_changes_from_previous_compiler": {
-    "by_source": 68,
+    "by_source": 1,
     "by_gs_ps": 0,
     "by_vs_ps": 0,
-    "runtime_sources": 1069,
+    "runtime_sources": 10,
     "runtime_link_outputs": 0,
-    "runtime_link_input_hashes": 207
+    "runtime_link_input_hashes": 7
   },
-  "startup_profile_sha256": "18ccfa909c6488c350552507cbf832eb855c14993572608f6f6a72eb40ee361e",
+  "startup_profile_sha256": "e23891b9f6a5a71a819ec10a55caa7523e8a5e946666ec4365f2d9edf126c7a9",
   "menu_profile_sha256": "f46c1133a8ec3d25ed96c5838a6cb43e82eaac7424ce1b81e94208816a678420",
+  "runtime_cache_fingerprint": "b5b9c6d58fb0160cb3fe1a798c7a65a9039b0933b8718a5c23d395bc66ffa7cc",
+  "runtime_cache_entries": 2277,
+  "runtime_output_manifest_sha256": "44ba7be750a9b551961befc8df808ea376bf3b9592fe28170816871b4bcb5df9",
   "cold": {
-    "wall_seconds": 230.109,
+    "wall_seconds": 268.077,
     "total_compiled": 2490,
     "total_reused": 19,
     "chase": {
@@ -410,11 +410,11 @@
         "compiled": 229
       }
     },
-    "log_sha256": "69468f2b96c796e0bf9e4e7289b217812bc4344c8e8b18b31b70195e25a12427",
+    "log_sha256": "75d448954fb860458325c0ae6880831f2b493a09789cafefb5677fb975961a82",
     "gpu_helper_started": true
   },
   "warm": {
-    "wall_seconds": 2.11,
+    "wall_seconds": 1.885,
     "total_compiled": 0,
     "total_reused": 2509,
     "chase": {
@@ -427,69 +427,34 @@
         "compiled": 0
       }
     },
-    "log_sha256": "c11d9542d5a2ec30be97988d34b2d9f45a61eb6a8bb03a2a2bbbc1274c3d4865",
+    "log_sha256": "65105b0f07c655aaee114b47b686b2a2fd9751e276069d36f7623d78147c73aa",
     "gpu_helper_started": false
   },
-  "scope": "The stock Proton prepare-only CLI prepared the complete 2,509-entry gameplay profile in a fresh prefix with empty portable, vkd3d and NVIDIA caches. The repeat used the same prefix and caches. Both passes include overlaps between the menu and gameplay sets. No game process ran in these preparation trials.",
+  "scope": "Using the display kernel module\u2019s matching 620.70.06 user libraries in a private mount namespace, the stock Proton prepare-only CLI prepared the complete 2,509-entry gameplay profile in a fresh prefix with empty portable, vkd3d and NVIDIA caches. The repeat used the same prefix and caches. Both passes include overlaps between the menu and gameplay sets. No game process ran in these preparation trials.",
   "previous_preparation": {
-    "compiler_sha256": "e4d2f24b6acb9c12dc6d4da2c8f3b4bf0f6ee3991dac671e3cfd12783b76e0e1",
+    "compiler_sha256": "14bf0bb7659602d596c87a26a6716878a5af181638361fda457e2f115f6a88b3",
     "dxc_sha256": "3dfc856b76291ffc7e45e21fd37ab80e85b34101de76a03253df6608785c92a0",
     "dxv_sha256": "33778294d67143d9f81526f4759c66d5a67a95ea9873448ef3595650a643cbd3",
     "profile_sha256": "a9ef891b6e350d155307443118776609ecc9e700972b355bd2dc1019be3a2c1c",
     "cold": {
-      "wall_seconds": 335.848,
-      "total_compiled": 2433,
+      "wall_seconds": 230.109,
+      "total_compiled": 2490,
       "total_reused": 19,
       "chase": {
         "programs": {
-          "checked": 2000,
-          "compiled": 1992
-        },
-        "links": {
-          "checked": 228,
-          "compiled": 228
-        }
-      },
-      "log_sha256": "92f78df6dac156d46e11e408d5dd9c0cce2135577d18615e88e6f562e127a93a",
-      "gpu_helper_started": true,
-      "profile_sha256": "e5c0409be7c51e1d8551ce660a60c9ce5ac96c1b20a44aada922217cd7fea173"
-    },
-    "warm_2452": {
-      "wall_seconds": 2.44,
-      "total_compiled": 0,
-      "total_reused": 2452,
-      "chase": {
-        "programs": {
-          "checked": 2000,
-          "compiled": 0
-        },
-        "links": {
-          "checked": 228,
-          "compiled": 0
-        }
-      },
-      "log_sha256": "f6f58b3fa600e86f4d2f847bca192a646c1406a6e8c35baca017d38b9e47efc2",
-      "gpu_helper_started": false
-    },
-    "incremental": {
-      "wall_seconds": 5.194,
-      "total_compiled": 57,
-      "total_reused": 2452,
-      "chase": {
-        "programs": {
           "checked": 2056,
-          "compiled": 56
+          "compiled": 2048
         },
         "links": {
           "checked": 229,
-          "compiled": 1
+          "compiled": 229
         }
       },
-      "log_sha256": "a6136cd589b02191d38b1b0e9ceef688e6ba9210cf99622fce09fd93346c9d75",
-      "gpu_helper_started": false
+      "log_sha256": "69468f2b96c796e0bf9e4e7289b217812bc4344c8e8b18b31b70195e25a12427",
+      "gpu_helper_started": true
     },
     "warm": {
-      "wall_seconds": 2.105,
+      "wall_seconds": 2.11,
       "total_compiled": 0,
       "total_reused": 2509,
       "chase": {
@@ -502,12 +467,91 @@
           "compiled": 0
         }
       },
-      "log_sha256": "bf9d3d8e580d07cbd8b166c0627c4b823b943de599bf2ae4d1b3a6cc95926ef5",
+      "log_sha256": "c11d9542d5a2ec30be97988d34b2d9f45a61eb6a8bb03a2a2bbbc1274c3d4865",
       "gpu_helper_started": false
     },
-    "runtime_cache_fingerprint": "c86fb5f9aa99d7709a46879ce0c8b6cad5a40e6c2a7896c47e6807964f8b96ab",
+    "previous_preparation": {
+      "compiler_sha256": "e4d2f24b6acb9c12dc6d4da2c8f3b4bf0f6ee3991dac671e3cfd12783b76e0e1",
+      "dxc_sha256": "3dfc856b76291ffc7e45e21fd37ab80e85b34101de76a03253df6608785c92a0",
+      "dxv_sha256": "33778294d67143d9f81526f4759c66d5a67a95ea9873448ef3595650a643cbd3",
+      "profile_sha256": "a9ef891b6e350d155307443118776609ecc9e700972b355bd2dc1019be3a2c1c",
+      "cold": {
+        "wall_seconds": 335.848,
+        "total_compiled": 2433,
+        "total_reused": 19,
+        "chase": {
+          "programs": {
+            "checked": 2000,
+            "compiled": 1992
+          },
+          "links": {
+            "checked": 228,
+            "compiled": 228
+          }
+        },
+        "log_sha256": "92f78df6dac156d46e11e408d5dd9c0cce2135577d18615e88e6f562e127a93a",
+        "gpu_helper_started": true,
+        "profile_sha256": "e5c0409be7c51e1d8551ce660a60c9ce5ac96c1b20a44aada922217cd7fea173"
+      },
+      "warm_2452": {
+        "wall_seconds": 2.44,
+        "total_compiled": 0,
+        "total_reused": 2452,
+        "chase": {
+          "programs": {
+            "checked": 2000,
+            "compiled": 0
+          },
+          "links": {
+            "checked": 228,
+            "compiled": 0
+          }
+        },
+        "log_sha256": "f6f58b3fa600e86f4d2f847bca192a646c1406a6e8c35baca017d38b9e47efc2",
+        "gpu_helper_started": false
+      },
+      "incremental": {
+        "wall_seconds": 5.194,
+        "total_compiled": 57,
+        "total_reused": 2452,
+        "chase": {
+          "programs": {
+            "checked": 2056,
+            "compiled": 56
+          },
+          "links": {
+            "checked": 229,
+            "compiled": 1
+          }
+        },
+        "log_sha256": "a6136cd589b02191d38b1b0e9ceef688e6ba9210cf99622fce09fd93346c9d75",
+        "gpu_helper_started": false
+      },
+      "warm": {
+        "wall_seconds": 2.105,
+        "total_compiled": 0,
+        "total_reused": 2509,
+        "chase": {
+          "programs": {
+            "checked": 2056,
+            "compiled": 0
+          },
+          "links": {
+            "checked": 229,
+            "compiled": 0
+          }
+        },
+        "log_sha256": "bf9d3d8e580d07cbd8b166c0627c4b823b943de599bf2ae4d1b3a6cc95926ef5",
+        "gpu_helper_started": false
+      },
+      "runtime_cache_fingerprint": "c86fb5f9aa99d7709a46879ce0c8b6cad5a40e6c2a7896c47e6807964f8b96ab",
+      "runtime_cache_entries": 2277,
+      "runtime_output_manifest_sha256": "5ad72a63a759e34ffb31dff90103b8bfe6076c56bceb9026323aaac162d735b7",
+      "scope": "The normal stock Proton prepare-only CLI started with empty shader, vkd3d and NVIDIA driver caches. The cold trial checked 2,452 entries, including menu/gameplay overlaps, and built six compute pipelines. The first cached repeat checked that same profile. The shooting tutorial supplied another 56 material programs and one linked pair. The incremental pass and final cached repeat used the same prefix and all 2,509 entries. No game process ran in these preparation trials."
+    },
+    "runtime_cache_fingerprint": "144803717fa330d38cae827f4ca21c06cbd36b79f660d0c389f3322fcb00088c",
     "runtime_cache_entries": 2277,
-    "runtime_output_manifest_sha256": "5ad72a63a759e34ffb31dff90103b8bfe6076c56bceb9026323aaac162d735b7",
-    "scope": "The normal stock Proton prepare-only CLI started with empty shader, vkd3d and NVIDIA driver caches. The cold trial checked 2,452 entries, including menu/gameplay overlaps, and built six compute pipelines. The first cached repeat checked that same profile. The shooting tutorial supplied another 56 material programs and one linked pair. The incremental pass and final cached repeat used the same prefix and all 2,509 entries. No game process ran in these preparation trials."
+    "runtime_output_manifest_sha256": "ae30ad94c6b73d7615e600a6efb6a6d1f2f51aa22bf3dc163a32bf52420211eb",
+    "scope": "The stock Proton prepare-only CLI prepared the complete 2,509-entry gameplay profile in a fresh prefix with empty portable, vkd3d and NVIDIA caches. The repeat used the same prefix and caches. Both passes include overlaps between the menu and gameplay sets. No game process ran in these preparation trials."
   }
 }

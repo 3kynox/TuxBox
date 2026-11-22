@@ -501,6 +501,108 @@
       "vk_render_pass_barrier_from_view": 1
     },
     "perf_data_sha256": "c05a4a7e7e5c56e285df20d34626231834e611cc348c6d916a92982cc100c31c",
-    "phase_difference": "The earlier sample at 52.43 seconds after Frogger was taken before the gameplay profile activated. The grouped sample at 53.16 seconds after Frogger was taken after the gameplay profile activated, while the tutorial controls were visible."
+    "phase_difference": "The earlier sample at 52.43 seconds after Frogger was taken before the gameplay profile activated. The grouped sample at 53.16 seconds after Frogger was taken after the gameplay profile activated, while the tutorial controls were visible.",
+    "tuxbox_provider_attribution": {
+      "method": "Assign perf anonymous executable mappings to modules from the same run\u2019s Wine module table. Re-link the exact release static library and CRT with a linker map and check that the complete result matches the staged TuxBox DLL byte for byte. Map each address within the DLL to its code section and nearest linker symbol. The example SHA-256 covers 64 bytes on either side of that sampled instruction. Several interior labels belong to the same CRT memcmp function. The sample contains instruction pointers without call chains.",
+      "provider_sha256": "69a64840b95534400cf96e4a0acb494c2496fc8628a4fbba2c13030fd341259b",
+      "production_and_mapped_relink_identical": true,
+      "provider_runtime_base": "0x6ffffad40000",
+      "provider_runtime_end": "0x6ffffaddc000",
+      "resolved_anonymous_executable_samples": {
+        "d3d12_xs": 395,
+        "frosty-xsx-shipping": 246,
+        "xcrdapi": 37,
+        "vcruntime140": 6
+      },
+      "tuxbox_d3d12_samples": 395,
+      "sampled_provider_functions": {
+        "memcmp": {
+          "samples": 276,
+          "highest_sample_site": {
+            "rva": "0x6e147",
+            "samples": 131,
+            "code_window_sha256": "5e26a0fff51a260a32774dfd6e36ef0700d8f8168076933925db5948ad424048"
+          }
+        },
+        "tuxbox_d3d12::device::placement::submit": {
+          "samples": 31,
+          "highest_sample_site": {
+            "rva": "0x1a05e",
+            "samples": 31,
+            "code_window_sha256": "0e25447351db0bdfed8a00c70bd7a3a122ab51147689f9475c481e9971f30df3"
+          }
+        },
+        "Iterator used by placed-texture Views::gather": {
+          "samples": 23,
+          "highest_sample_site": {
+            "rva": "0x37c95",
+            "samples": 13,
+            "code_window_sha256": "61f57e8dd6e3bd718cc4151e6d06d85745635e67bccd3944b3ffcbe4dbf39f14"
+          }
+        },
+        "core::slice::sort::unstable::quicksort::quicksort::<alloc::sync::Arc<tuxbox_d3d12::device::placement::Texture>, <[alloc::sync::Arc<tuxbox_d3d12::device::placement::Texture>]>::sort_unstable_by_key<*const tuxbox_d3d12::device::placement::Texture, <alloc::sync::Arc<tuxbox_d3d12::device::placement::Texture>>::as_ptr>::{closure#0}>": {
+          "samples": 21,
+          "highest_sample_site": {
+            "rva": "0x59f78",
+            "samples": 6,
+            "code_window_sha256": "80845584ee5746a87af29ee6a4ba0ed89ad5dc76af78d1f874f5c22f40c645f6"
+          }
+        },
+        "tuxbox_d3d12::device::descriptor_copy::simple": {
+          "samples": 10,
+          "highest_sample_site": {
+            "rva": "0x3c56a",
+            "samples": 7,
+            "code_window_sha256": "df57988f63679d1f72b98222421c5e610847bdd1d608643e822b9536ac0d7987"
+          }
+        },
+        "tuxbox_d3d12::commands::descriptors::table::<false>": {
+          "samples": 8,
+          "highest_sample_site": {
+            "rva": "0x48e64",
+            "samples": 8,
+            "code_window_sha256": "ed85bd701cc30469de3b9db1c6b134ce2000d45d9eb7a09b2abaa5daa31410ac"
+          }
+        },
+        "<std::sys::sync::mutex::futex::Mutex>::lock_contended": {
+          "samples": 6,
+          "highest_sample_site": {
+            "rva": "0x6f3e2",
+            "samples": 4,
+            "code_window_sha256": "0c6b3da4548bd06af72543f42e308b2e81d95d619e2999407c1e9c68f8155f4a"
+          }
+        },
+        "<tuxbox_d3d12::device::placement::Texture>::changed": {
+          "samples": 2,
+          "highest_sample_site": {
+            "rva": "0x1c8fe",
+            "samples": 2,
+            "code_window_sha256": "6a9aec3e91bdcdf59c216a9bebcf7f540d11edf08020dc85a38b40ede1d797e8"
+          }
+        }
+      },
+      "interpretation": "The texture placement path reads mapped guest mips and compares them against their saved copies on submission. Samples in that path and memcmp justify measuring snapshot traffic directly. These instruction pointers alone cannot attribute every comparison or libc copy to a specific caller."
+    }
+  },
+  "street_cpu_control": {
+    "scope": "A separate stock Proton Sandbox run using the uniform integer-fetch compiler, after the street walking controls appeared. The sample shows the character on the city street, with vehicles and pedestrians. The shooting tutorial was a different workload.",
+    "perf_data_sha256": "d2035be3a85c74fee4504ee6e271d762a9e1643d5b612f0860a2ffa5c569940a",
+    "retail_log_sha256": "b3c77ba5c77ff33e5b738cac1724522d6029bbd01be069ecb3c8fa7c89296d6c",
+    "shader_compiler_sha256": "f42f9d916e6fe267d4e723efd3938eab5d8db8da2dde799eef4fb3d560f8ff19",
+    "title_screenshot_during_sample_sha256": "3a11c58cd39e1861aa767808f0a0dc60566c809bca3a557b861b659fde64dd82",
+    "sample_started_utc": "2026-11-22T10:26:23.650404933+00:00",
+    "sample_finished_utc": "2026-11-22T10:26:33.920381430+00:00",
+    "frequency_hz": 49,
+    "total_user_samples": 800,
+    "tuxbox_d3d12_samples": 313,
+    "tuxbox_static_crt_memcmp_samples": 168,
+    "memcmp_samples_with_return_to_texture_changed": 168,
+    "provider_sha256": "69a64840b95534400cf96e4a0acb494c2496fc8628a4fbba2c13030fd341259b",
+    "caller": "tuxbox_d3d12::device::placement::Texture::changed",
+    "call_rva": "0x1c909",
+    "return_rva": "0x1c90e",
+    "target_memcmp_rva": "0x6e0f0",
+    "callsite_128byte_sha256": "547aa60d577b028f830a6b5ebaa37e43b403375a900114ebe2714a5d445e8392",
+    "method": "Record each sampled user instruction pointer and 256 bytes of user stack. Perf records the staged DLL header mapping and its executable range. The byte-identical link map identifies the memcmp body, which leaves RSP unchanged. For each sample in that body, read the top stack word as the return address and verify the preceding x64 call directly targets memcmp in the staged provider. All 168 return addresses identify the same full-mip comparison. These counts describe sampled CPU time."
   }
 }
