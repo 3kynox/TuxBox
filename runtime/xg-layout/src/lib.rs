@@ -98,7 +98,7 @@ impl Plane {
         Ok(plane)
     }
 
-    /// Compute an uncompressed 4 KiB-swizzled 3D plane without packed mips.
+    /// Compute a bounded uncompressed 4 KiB-swizzled 3D plane.
     pub fn compute_4k_volume(desc: &Desc) -> Result<Self, i32> {
         if desc.layout != TILE_4K
             || (70..=84).contains(&desc.format)
@@ -111,40 +111,88 @@ impl Plane {
         let mut plane = Self::compute(&linear)?;
         let (tw, th, td, _, _, _) = volume_tile(plane.element_bytes).ok_or(E_NOTIMPL)?;
         let levels = usize::from(desc.mips);
+        // Packed tails have only been verified for these bounded shapes.
+        let tail = if levels > 1
+            && (8..=128).contains(&desc.width)
+            && (desc.width as u32).is_power_of_two()
+            && desc.height <= 4
+        {
+            (0..levels).find(|level| ((desc.width as u32) >> level).max(1) <= tw)
+        } else {
+            None
+        };
+        if tail.is_some_and(|first| levels - first > 2) {
+            return Err(E_NOTIMPL);
+        }
+        if let Some(first) = tail {
+            plane.unpacked_mips = first as u32;
+            plane.tail_mips = (levels - first) as u32;
+        }
         let mut chain_bytes = 0u64;
         for (level, mip) in plane.mips[..levels].iter_mut().enumerate() {
             let scale = 1u32 << level;
             let w = (desc.width as u32).div_ceil(scale);
             let h = desc.height.div_ceil(scale);
             let d = u32::from(desc.slices).div_ceil(scale);
-            // Packed-tail placement is not yet implemented.
-            if levels > 1 && w <= tw {
+            // Reject unverified packed-tail shapes.
+            let in_tail = tail.is_some_and(|first| level >= first);
+            if levels > 1 && w <= tw && !in_tail {
                 return Err(E_NOTIMPL);
             }
-            let pitch = w.next_multiple_of(tw);
-            let rows = h.next_multiple_of(th);
-            let depth = d.next_multiple_of(td);
-            let slice_bytes = u64::from(pitch) * u64::from(rows) * u64::from(plane.element_bytes);
+            let tail_index = level.saturating_sub(tail.unwrap_or(level));
+            let pitch = if in_tail {
+                tw >> tail_index
+            } else {
+                w.next_multiple_of(tw)
+            };
+            let rows = if in_tail {
+                (th / 2) >> tail_index
+            } else {
+                h.next_multiple_of(th)
+            };
+            let depth = d.next_multiple_of(if in_tail { td / 2 } else { td });
+            let slice_bytes = if in_tail {
+                4096 / u64::from(td)
+            } else {
+                u64::from(pitch) * u64::from(rows) * u64::from(plane.element_bytes)
+            };
             mip.size = slice_bytes * u64::from(depth);
             mip.slice_bytes = slice_bytes;
             mip.pitch_texels = pitch;
             mip.pitch_bytes = pitch * plane.element_bytes;
-            mip.alignment = 4096;
+            mip.alignment = if in_tail { 256 } else { 4096 };
             mip.pitch_elements = pitch;
             mip.padded_rows = rows;
             mip.padded_depth = depth;
             mip.depth = (u32::from(desc.slices) >> level).max(1);
-            mip.swizzle = 5;
+            mip.swizzle = if in_tail { 1 } else { 5 };
             mip.samples = td;
-            chain_bytes += slice_bytes * u64::from(td);
+            mip.packed_tail = u32::from(in_tail);
+            if in_tail {
+                mip.padding[0] = if tail_index == 0 {
+                    (th / 2) << 11
+                } else {
+                    ((th / 4) << 11) | (tw / 2)
+                };
+            }
+            if !in_tail {
+                chain_bytes += slice_bytes * u64::from(td);
+            }
+        }
+        if tail.is_some() {
+            chain_bytes += 4096;
         }
         let mut end = chain_bytes;
         for mip in &mut plane.mips[..levels] {
-            end -= mip.slice_bytes * u64::from(td);
-            mip.offset = end;
+            if mip.packed_tail == 0 {
+                end -= mip.slice_bytes * u64::from(td);
+                mip.offset = end;
+            } else {
+                mip.offset = 0;
+            }
         }
         plane.slice_bytes = chain_bytes;
-        plane.size = chain_bytes * u64::from(plane.mips[0].padded_depth / td);
+        plane.size = chain_bytes * u64::from(u32::from(desc.slices).div_ceil(td));
         plane.alignment = 4096;
         Ok(plane)
     }
@@ -304,6 +352,15 @@ impl Plane {
             mip.offset
                 + u64::from(z / td) * self.slice_bytes
                 + u64::from(tile) * 4096
+                + if mip.packed_tail != 0 {
+                    if level == self.unpacked_mips {
+                        2048
+                    } else {
+                        768
+                    }
+                } else {
+                    0
+                }
                 + u64::from(scatter(x, xb) + scatter(y, yb) + scatter(z, zb)),
         )
     }

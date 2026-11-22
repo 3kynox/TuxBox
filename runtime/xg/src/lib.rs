@@ -459,7 +459,7 @@ pub struct Texture3DDesc {
 }
 
 fn texture_3d_plane(desc: &Texture3DDesc) -> Result<Plane, i32> {
-    // Linear color volumes and 4 KiB volumes without a packed mip tail.
+    // Linear color volumes and bounded 4 KiB volume layouts.
     if !matches!((desc.usage, desc.swizzle), (0 | 1 | 3, 0) | (0 | 1, 5))
         || desc.bind_flags != 8
         || desc.cpu_access != 0
