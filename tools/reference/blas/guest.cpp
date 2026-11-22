@@ -190,6 +190,7 @@ static ComPtr<ID3D12GraphicsCommandList> guest_list(ID3D12Device* guest, ID3D12C
 #ifdef TUXBOX_CARD_TILE_PROBE
 #include "card_candidate_dxil.h"
 #include "zero_aabb_dxil.h"
+#include "sidecar_bounds_dxil.h"
 #include "inline219_dxil.h"
 #include "card_tile_probe.h"
 #include "zero_aabb_probe.h"

@@ -22,13 +22,15 @@ def float32(value):
     return struct.unpack("<f", struct.pack("<f", value))[0]
 
 
-def make_blas(random_source):
+def make_blas(random_source, bounded_miss=False):
     body = bytearray(64)
     struct.pack_into("<I", body, 12, 6)
     struct.pack_into("<I", body, 52, 64)
     for index in range(6):
         while True:
-            vertices = [[float32(random_source.uniform(-200, 200)) for _ in range(3)]
+            vertices = [[float32(random_source.randint(-80, -60) if axis == 0 else
+                                 random_source.randint(-20, 20)) if bounded_miss else
+                         float32(random_source.uniform(-200, 200)) for axis in range(3)]
                         for _ in range(3)]
             a, b, c = vertices
             area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
@@ -55,6 +57,7 @@ def main():
     direction.add_argument("--oblique", action="store_true", help="use varied ray directions and magnitudes")
     direction.add_argument("--tied", action="store_true", help="use tied dominant ray axes")
     direction.add_argument("--miss", action="store_true", help="offset rays to exercise misses")
+    direction.add_argument("--bounded-miss", action="store_true", help="seed lattice-bounded miss geometry")
     direction.add_argument("--edge", action="store_true", help="target triangle edge midpoints")
     direction.add_argument("--nearedge", action="store_true", help="offset edge rays by one float ULP")
     args = parser.parse_args()
@@ -63,6 +66,7 @@ def main():
     random_source = random.Random(219091)
     rays = ("varied ray directions and magnitudes" if args.oblique else
             "tied dominant ray axes" if args.tied else
+            "bounded lattice misses" if args.bounded_miss else
             "offset varied directions" if args.miss else "edge midpoint rays" if args.edge else
             "one-ULP offset edge rays" if args.nearedge else "positive-Z unit rays")
     result = {"scope": f"48 seeded synthetic paired triangle cases, {rays}, native gfx1036 instruction versus dynamic-input experimental HLSL; not general traversal or opcode equivalence",
@@ -74,9 +78,9 @@ def main():
             source = root / f"{batch}.blas"
             dump = root / f"{batch}.bin"
             report = root / f"{batch}.json"
-            source.write_bytes(make_blas(random_source))
+            source.write_bytes(make_blas(random_source, args.bounded_miss))
             mode = ("--retail-oblique" if args.oblique else "--retail-tied" if args.tied else
-                    "--retail-miss" if args.miss else "--retail-edge" if args.edge else
+                    "--retail-miss" if args.miss or args.bounded_miss else "--retail-edge" if args.edge else
                     "--retail-nearedge" if args.nearedge else "--retail-triangles")
             native = subprocess.run([str(args.probe), str(args.code), mode,
                                      str(source), str(dump)], capture_output=True, text=True)
@@ -86,6 +90,17 @@ def main():
             if data[:8] != b"TXBVT002" or len(data) != 8 + 6 * 27 * 4:
                 raise ValueError(f"invalid native output in batch {batch}")
             for case in range(6):
+                if args.bounded_miss:
+                    base = 8 + case * 27 * 4
+                    words = struct.unpack_from('<27I', data, base)
+                    side = words[22]
+                    indices = (0, 1, 2) if side == 0 else (1, 3, 2)
+                    selected = [words[3 * i + j] for i in indices for j in range(3)]
+                    selected += list(words[16:22])
+                    for word in selected:
+                        value = struct.unpack('<f', struct.pack('<I', word))[0]
+                        if not (-256 <= value <= 256 and value * 256 == int(value * 256)):
+                            raise RuntimeError('generated case left bounded miss lattice')
                 numerator = struct.unpack_from("<I", data, 8 + case * 27 * 4 + 23 * 4)[0]
                 if numerator & 0x7fffffff == 0x7f800000:
                     result["native_misses"] += 1

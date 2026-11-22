@@ -21,6 +21,14 @@ void tb_candidate_unsupported(uint reason) {
     tb_status.InterlockedOr(0, reason, ignored);
 }
 
+// Conservative bounded lattice for the miss sentinel: for these inputs every
+// projected intermediate is finite, and nonzero exact products stay far above
+// the float32 underflow range. This does not prove general node equivalence.
+bool tb_candidate_miss_lattice(float3 v) {
+    return all(isfinite(v)) && all(abs(v) <= 256.0) &&
+           all(v * 256.0 == trunc(v * 256.0));
+}
+
 bool tb_candidate_219(RayQuery<RAY_FLAG_FORCE_NON_OPAQUE> q,
                       float near_t, float far_t, uint cull_mode, out float distance) {
     distance = 0;
@@ -66,11 +74,19 @@ bool tb_candidate_219(RayQuery<RAY_FLAG_FORCE_NON_OPAQUE> q,
         tb_candidate_unsupported(2u); return false;
     }
     float4 candidate = tb_bvh_triangle_rtz(node, entry.y, origin, direction);
-    // The native node uses infinity for the tested misses. Do not interpret
-    // unexpected numerics as misses: they need a different implementation.
-    // An infinite numerator is also the observed hardware miss encoding, but
-    // can result from unverified overflow; require fallback instead of guessing.
-    if (isinf(candidate.x)) { tb_candidate_unsupported(4u); return false; }
+    // The helper emits infinity as a miss sentinel. Restrict interpretation of
+    // that sentinel to an explicitly bounded range; other inputs fall back.
+    if (isinf(candidate.x)) {
+        uint ia = entry.y == 0 ? 0u : 1u, ib = entry.y == 0 ? 1u : 3u;
+        float3 a = asfloat(uint3(node[3*ia], node[3*ia+1], node[3*ia+2]));
+        float3 b = asfloat(uint3(node[3*ib], node[3*ib+1], node[3*ib+2]));
+        float3 c = asfloat(uint3(node[6], node[7], node[8]));
+        if (!tb_candidate_miss_lattice(origin) || !tb_candidate_miss_lattice(direction) ||
+            !tb_candidate_miss_lattice(a) || !tb_candidate_miss_lattice(b) ||
+            !tb_candidate_miss_lattice(c) || !all(isfinite(candidate.yzw)))
+            tb_candidate_unsupported(4u);
+        return false;
+    }
     if (!all(isfinite(candidate)) || candidate.y == 0) {
         tb_candidate_unsupported(4u); return false;
     }

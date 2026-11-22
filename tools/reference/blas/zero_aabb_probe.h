@@ -1,9 +1,8 @@
 // Procedural candidates are only a proposed broad phase for a future shadow
 // scene. This checks API behavior at zero, not triangle correctness.
 static void probe_zero_aabb(ID3D12Device5 *dev, ID3D12CommandQueue *queue, FILE *receipt) {
-    const D3D12_RAYTRACING_AABB boxes[]{{-.25f, -.25f, -1, 1.25f, 1.25f, 1},
-                                        {1.75f, -.25f, -1, 3.25f, 1.25f, 1}};
-    auto aabb = upload(dev, boxes, sizeof(boxes));
+    constexpr UINT box_count = 2, box_bytes = box_count * sizeof(D3D12_RAYTRACING_AABB);
+    auto aabb = buffer(dev, box_bytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
     const auto node_words = read_file("sidecar-leaves.bin");
     const auto directory_words = read_file("sidecar-directory.bin");
     if (node_words.size() != 128 || directory_words.size() != 96)
@@ -14,8 +13,8 @@ static void probe_zero_aabb(ID3D12Device5 *dev, ID3D12CommandQueue *queue, FILE 
     auto directory = buffer(dev, directory_words.size(), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
     D3D12_RAYTRACING_GEOMETRY_DESC geometry{};
     geometry.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_PROCEDURAL_PRIMITIVE_AABBS;
-    geometry.AABBs.AABBCount = 2;
-    geometry.AABBs.AABBs = {aabb->GetGPUVirtualAddress(), sizeof(boxes[0])};
+    geometry.AABBs.AABBCount = box_count;
+    geometry.AABBs.AABBs = {aabb->GetGPUVirtualAddress(), sizeof(D3D12_RAYTRACING_AABB)};
     Inputs bottom{};
     bottom.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
     bottom.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
@@ -79,6 +78,89 @@ static void probe_zero_aabb(ID3D12Device5 *dev, ID3D12CommandQueue *queue, FILE 
     list->ResourceBarrier(1, &nodes_ready);
     nodes_ready.Transition.pResource = directory.Get();
     list->ResourceBarrier(1, &nodes_ready);
+    D3D12_ROOT_PARAMETER bounds_params[4]{};
+    bounds_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    bounds_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+    bounds_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+    bounds_params[2].Descriptor.ShaderRegister = 1;
+    bounds_params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    bounds_params[3].Constants = {0, 0, 3};
+    D3D12_ROOT_SIGNATURE_DESC bounds_root_desc{4, bounds_params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+    ComPtr<ID3DBlob> bounds_blob;
+    check(D3D12SerializeRootSignature(&bounds_root_desc, D3D_ROOT_SIGNATURE_VERSION_1, &bounds_blob, nullptr), "bounds root serialize");
+    ComPtr<ID3D12RootSignature> bounds_root;
+    check(dev->CreateRootSignature(0, bounds_blob->GetBufferPointer(), bounds_blob->GetBufferSize(), IID_PPV_ARGS(&bounds_root)), "bounds root");
+    D3D12_COMPUTE_PIPELINE_STATE_DESC bounds_pso_desc{};
+    bounds_pso_desc.pRootSignature = bounds_root.Get();
+    bounds_pso_desc.CS = {sidecar_bounds_dxil, sizeof(sidecar_bounds_dxil)};
+    ComPtr<ID3D12PipelineState> bounds_pso;
+    check(dev->CreateComputePipelineState(&bounds_pso_desc, IID_PPV_ARGS(&bounds_pso)), "bounds pipeline");
+    const UINT bounds_zero = 0;
+    auto bounds_zero_upload = upload(dev, &bounds_zero, sizeof(bounds_zero));
+    auto bounds_status = buffer(dev, 4, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST, true);
+    auto bounds_readback = buffer(dev, 4, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+    list->CopyBufferRegion(bounds_status.Get(), 0, bounds_zero_upload.Get(), 0, 4);
+    D3D12_RESOURCE_BARRIER bounds_status_ready{};
+    bounds_status_ready.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    bounds_status_ready.Transition = {bounds_status.Get(), 0, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS};
+    list->ResourceBarrier(1, &bounds_status_ready);
+    list->SetPipelineState(bounds_pso.Get());
+    list->SetComputeRootSignature(bounds_root.Get());
+    list->SetComputeRootShaderResourceView(0, nodes->GetGPUVirtualAddress());
+    list->SetComputeRootUnorderedAccessView(1, aabb->GetGPUVirtualAddress());
+    list->SetComputeRootUnorderedAccessView(2, bounds_status->GetGPUVirtualAddress());
+    const UINT bounds_sizes[]{static_cast<UINT>(node_words.size()), box_bytes, box_count};
+    list->SetComputeRoot32BitConstants(3, 3, bounds_sizes, 0);
+    list->Dispatch(1, 1, 1);
+    // Exercise the converter separately with a malformed selector. Its
+    // output is deliberately never used as an AS build input.
+    auto invalid_node_words = node_words;
+    std::fill(invalid_node_words.begin() + 60, invalid_node_words.begin() + 64, 0);
+    auto invalid_nodes = upload(dev, invalid_node_words.data(), invalid_node_words.size());
+    std::array<UINT, box_bytes / sizeof(UINT)> sentinel{};
+    sentinel.fill(0xdeadbeef);
+    auto sentinel_upload = upload(dev, sentinel.data(), sizeof(sentinel));
+    auto invalid_bounds = buffer(dev, box_bytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST, true);
+    auto invalid_status = buffer(dev, 4, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST, true);
+    auto invalid_readback = buffer(dev, box_bytes + 4, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+    list->CopyBufferRegion(invalid_bounds.Get(), 0, sentinel_upload.Get(), 0, box_bytes);
+    list->CopyBufferRegion(invalid_status.Get(), 0, bounds_zero_upload.Get(), 0, 4);
+    D3D12_RESOURCE_BARRIER invalid_ready[2]{};
+    for (auto &item : invalid_ready) item.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    invalid_ready[0].Transition = {invalid_bounds.Get(), 0, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS};
+    invalid_ready[1].Transition = {invalid_status.Get(), 0, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS};
+    list->ResourceBarrier(2, invalid_ready);
+    list->SetComputeRootShaderResourceView(0, invalid_nodes->GetGPUVirtualAddress());
+    list->SetComputeRootUnorderedAccessView(1, invalid_bounds->GetGPUVirtualAddress());
+    list->SetComputeRootUnorderedAccessView(2, invalid_status->GetGPUVirtualAddress());
+    list->Dispatch(1, 1, 1);
+    D3D12_RESOURCE_BARRIER invalid_copy[2]{};
+    for (auto &item : invalid_copy) item.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    invalid_copy[0].Transition = {invalid_bounds.Get(), 0, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE};
+    invalid_copy[1].Transition = {invalid_status.Get(), 0, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE};
+    list->ResourceBarrier(2, invalid_copy);
+    list->CopyBufferRegion(invalid_readback.Get(), 0, invalid_bounds.Get(), 0, box_bytes);
+    list->CopyBufferRegion(invalid_readback.Get(), box_bytes, invalid_status.Get(), 0, 4);
+    auto short_readback = buffer(dev, box_bytes + 4, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+    D3D12_RESOURCE_BARRIER short_reset[2]{};
+    for (auto &item : short_reset) item.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    short_reset[0].Transition = {invalid_bounds.Get(), 0, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST};
+    short_reset[1].Transition = {invalid_status.Get(), 0, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST};
+    list->ResourceBarrier(2, short_reset);
+    list->CopyBufferRegion(invalid_bounds.Get(), 0, sentinel_upload.Get(), 0, box_bytes);
+    list->CopyBufferRegion(invalid_status.Get(), 0, bounds_zero_upload.Get(), 0, 4);
+    list->ResourceBarrier(2, invalid_ready);
+    list->SetComputeRootShaderResourceView(0, nodes->GetGPUVirtualAddress());
+    const UINT short_sizes[]{63, box_bytes, box_count};
+    list->SetComputeRoot32BitConstants(3, 3, short_sizes, 0);
+    list->Dispatch(1, 1, 1);
+    list->ResourceBarrier(2, invalid_copy);
+    list->CopyBufferRegion(short_readback.Get(), 0, invalid_bounds.Get(), 0, box_bytes);
+    list->CopyBufferRegion(short_readback.Get(), box_bytes, invalid_status.Get(), 0, 4);
+    D3D12_RESOURCE_BARRIER bounds_ready{};
+    bounds_ready.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    bounds_ready.Transition = {aabb.Get(), 0, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
+    list->ResourceBarrier(1, &bounds_ready);
     Build build{};
     build.Inputs = bottom;
     build.DestAccelerationStructureData = blas->GetGPUVirtualAddress();
@@ -94,13 +176,23 @@ static void probe_zero_aabb(ID3D12Device5 *dev, ID3D12CommandQueue *queue, FILE 
     list->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
     barrier.UAV.pResource = tlas.Get();
     list->ResourceBarrier(1, &barrier);
+    auto bounds_geometry_readback = buffer(dev, box_bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+    D3D12_RESOURCE_BARRIER bounds_read{};
+    bounds_read.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    bounds_read.Transition = {aabb.Get(), 0, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE};
+    list->ResourceBarrier(1, &bounds_read);
+    list->CopyBufferRegion(bounds_geometry_readback.Get(), 0, aabb.Get(), 0, box_bytes);
+    bounds_read.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    bounds_read.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    list->ResourceBarrier(1, &bounds_read);
     const float origins[][4]{{.25f,.25f,0,0}, {2.25f,.25f,0,0}, {4.5f,.25f,0,0},
-                              {0,.5f,0,0}, {.5f,0,0,0}, {.8f,.8f,0,0}, {8.5f,.25f,0,0},
+                              {0,.5f,0,0}, {.5f,0,0,0}, {.75f,.75f,0,0}, {8.5f,.25f,0,0},
                               {20,0,0,0}, {.25f,.25f,-1,0}, {12.25f,.25f,0,0}};
     constexpr UINT result_bytes = sizeof(origins);
     auto source = upload(dev, origins, sizeof(origins));
     auto output = buffer(dev, result_bytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
     auto readback = buffer(dev, result_bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+    list->SetPipelineState(pipeline.Get());
     list->SetComputeRootSignature(root.Get());
     list->SetComputeRootShaderResourceView(0, tlas->GetGPUVirtualAddress());
     list->SetComputeRootUnorderedAccessView(1, output->GetGPUVirtualAddress());
@@ -178,13 +270,73 @@ static void probe_zero_aabb(ID3D12Device5 *dev, ID3D12CommandQueue *queue, FILE 
     list->ResourceBarrier(2, inline_barriers);
     list->CopyBufferRegion(inline_readback.Get(), 0, inline_output.Get(), 0, result_bytes);
     list->CopyBufferRegion(inline_readback.Get(), result_bytes, status.Get(), 0, 4);
+    D3D12_RESOURCE_BARRIER bounds_status_copy{};
+    bounds_status_copy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    bounds_status_copy.Transition = {bounds_status.Get(), 0, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE};
+    list->ResourceBarrier(1, &bounds_status_copy);
+    list->CopyBufferRegion(bounds_readback.Get(), 0, bounds_status.Get(), 0, 4);
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barrier.Transition = {output.Get(), 0, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE};
     list->ResourceBarrier(1, &barrier);
     list->CopyBufferRegion(readback.Get(), 0, output.Get(), 0, result_bytes);
+    // Restore every repeatedly written resource to its initial state so the
+    // same closed list can be replayed after its prior execution completes.
+    D3D12_RESOURCE_BARRIER replay[11]{};
+    for (auto &item : replay) item.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    replay[0].Transition = {nodes.Get(), 0, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST};
+    replay[1].Transition = {directory.Get(), 0, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST};
+    replay[2].Transition = {aabb.Get(), 0, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS};
+    replay[3].Transition = {output.Get(), 0, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS};
+    replay[4].Transition = {inline_output.Get(), 0, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS};
+    replay[5].Transition = {bad_output.Get(), 0, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS};
+    replay[6].Transition = {status.Get(), 0, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST};
+    replay[7].Transition = {bad_status.Get(), 0, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST};
+    replay[8].Transition = {bounds_status.Get(), 0, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST};
+    replay[9].Transition = {invalid_bounds.Get(), 0, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST};
+    replay[10].Transition = {invalid_status.Get(), 0, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST};
+    list->ResourceBarrier(static_cast<UINT>(std::size(replay)), replay);
     submit(dev, queue, list.Get());
     D3D12_RANGE read{0,result_bytes}, empty{};
     void *data{};
+    D3D12_RANGE bounds_range{0,4};
+    check(bounds_readback->Map(0, &bounds_range, &data), "bounds status readback");
+    UINT bounds_result{};
+    std::memcpy(&bounds_result, data, 4);
+    bounds_readback->Unmap(0, &empty);
+    std::fprintf(receipt, "sidecar_gpu_bounds_status=%u\n", bounds_result);
+    if (bounds_result != 0) throw std::runtime_error("GPU bounds conversion failed");
+    D3D12_RANGE geometry_range{0, box_bytes};
+    check(bounds_geometry_readback->Map(0, &geometry_range, &data), "GPU bounds readback");
+    std::array<D3D12_RAYTRACING_AABB, box_count> generated{};
+    std::memcpy(generated.data(), data, box_bytes);
+    bounds_geometry_readback->Unmap(0, &empty);
+    const auto encloses = [](const D3D12_RAYTRACING_AABB &b, float minimum_x, float maximum_x) {
+        return std::isfinite(b.MinX) && std::isfinite(b.MinY) && std::isfinite(b.MinZ) &&
+               std::isfinite(b.MaxX) && std::isfinite(b.MaxY) && std::isfinite(b.MaxZ) &&
+               b.MinX < minimum_x && b.MaxX > maximum_x && b.MinY < 0 && b.MaxY > 1 &&
+               b.MinZ < 0 && b.MaxZ > 0;
+    };
+    if (!encloses(generated[0], 0, 1) || !encloses(generated[1], 2, 3))
+        throw std::runtime_error("GPU bounds do not conservatively enclose the triangles");
+    std::fprintf(receipt, "sidecar_gpu_bounds_enclose=2\n");
+    D3D12_RANGE invalid_range{0, box_bytes + 4};
+    check(invalid_readback->Map(0, &invalid_range, &data), "invalid bounds readback");
+    std::array<UINT, box_bytes / sizeof(UINT) + 1> invalid_values{};
+    std::memcpy(invalid_values.data(), data, box_bytes + 4);
+    invalid_readback->Unmap(0, &empty);
+    bool invalid_untouched = std::all_of(invalid_values.begin(), invalid_values.begin() + 6,
+                                         [](UINT word) { return word == 0xdeadbeef; });
+    std::fprintf(receipt, "sidecar_gpu_invalid=status %u; untouched %u\n", invalid_values.back(), invalid_untouched);
+    if (invalid_values.back() != 2 || !invalid_untouched)
+        throw std::runtime_error("invalid GPU bounds input was accepted");
+    check(short_readback->Map(0, &invalid_range, &data), "short bounds readback");
+    std::memcpy(invalid_values.data(), data, box_bytes + 4);
+    short_readback->Unmap(0, &empty);
+    const bool short_untouched = std::all_of(invalid_values.begin(), invalid_values.end() - 1,
+                                             [](UINT word) { return word == 0xdeadbeef; });
+    std::fprintf(receipt, "sidecar_gpu_short=status %u; untouched %u\n", invalid_values.back(), short_untouched);
+    if (invalid_values.back() != 1 || !short_untouched)
+        throw std::runtime_error("short GPU bounds input was accepted");
     check(readback->Map(0, &read, &data), "zero AABB readback");
     std::array<std::array<UINT,4>,std::size(origins)> values{};
     std::memcpy(values.data(), data, result_bytes);
@@ -207,7 +359,7 @@ static void probe_zero_aabb(ID3D12Device5 *dev, ID3D12CommandQueue *queue, FILE 
         inline_matches &= a == b || ((a & 0x7fffffffu) == 0 && (b & 0x7fffffffu) == 0);
         std::fprintf(receipt, "inline219_reference_%u=%u,%u,%08x,%08x\n", i, values[i][0], values[i][1], values[i][2], values[i][3]);
     }
-    if (inline_status != 4 || !inline_matches)
+    if (inline_status != 0 || !inline_matches)
         throw std::runtime_error("inline 219 guarded candidate mismatch");
     check(bad_readback->Map(0, &inline_range, &data), "invalid inline directory readback");
     std::array<std::array<UINT,4>,std::size(origins)> bad_values{};
@@ -229,4 +381,32 @@ static void probe_zero_aabb(ID3D12Device5 *dev, ID3D12CommandQueue *queue, FILE 
         values[8] != std::array<UINT,4>{1,2,0x3f800000,0x70000} ||
         values[9] != std::array<UINT,4>{0,0,0,0})
         throw std::runtime_error("zero AABB candidate mismatch");
+    // Change the recorded upload only after completion. The replay must copy
+    // it, regenerate bounds, rebuild the AS and observe the new geometry.
+    auto moved = node_words;
+    for (UINT corner=0; corner<4; ++corner) {
+        float x{};
+        std::memcpy(&x, moved.data() + corner * 12, sizeof(x));
+        x += 10.f;
+        std::memcpy(moved.data() + corner * 12, &x, sizeof(x));
+    }
+    write_upload(nodes_upload.Get(), moved.data(), moved.size());
+    submit_closed(dev, queue, list.Get());
+    check(inline_readback->Map(0, &inline_range, &data), "replayed inline candidate readback");
+    std::memcpy(inline_values.data(), data, result_bytes);
+    std::memcpy(&inline_status, static_cast<const BYTE *>(data) + result_bytes, 4);
+    inline_readback->Unmap(0, &empty);
+    check(bounds_readback->Map(0, &bounds_range, &data), "replayed bounds status readback");
+    std::memcpy(&bounds_result, data, 4);
+    bounds_readback->Unmap(0, &empty);
+    check(bounds_geometry_readback->Map(0, &geometry_range, &data), "replayed GPU bounds readback");
+    std::memcpy(generated.data(), data, box_bytes);
+    bounds_geometry_readback->Unmap(0, &empty);
+    std::fprintf(receipt, "sidecar_gpu_replay=status %u; bounds %u; old %u; other %u,%08x; moved %u\n",
+                 inline_status, bounds_result, inline_values[0][1], inline_values[1][1],
+                 inline_values[1][3], inline_values[2][1]);
+    if (inline_status != 0 || bounds_result != 0 || !encloses(generated[0], 10, 11) ||
+        !encloses(generated[1], 2, 3) || inline_values[0][1] != 0 ||
+        inline_values[1][1] != 2 || inline_values[1][3] != 0x70001 || inline_values[2][1] != 0)
+        throw std::runtime_error("sidecar GPU replay observed stale geometry");
 }

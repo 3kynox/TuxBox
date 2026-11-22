@@ -220,6 +220,8 @@ def main():
                             "-Vn", "card_candidate_dxil", src / "card_candidate.hlsl"], check=True)
             subprocess.run([find_dxc(None), "-T", "cs_6_5", "-E", "main", "-O3", "-Fh", work / "zero_aabb_dxil.h",
                             "-Vn", "zero_aabb_dxil", src / "zero_aabb.hlsl"], check=True)
+            subprocess.run([find_dxc(None), "-T", "cs_6_0", "-E", "main", "-O3", "-Fh", work / "sidecar_bounds_dxil.h",
+                            "-Vn", "sidecar_bounds_dxil", src / "sidecar_bounds.hlsl"], check=True)
             candidate_source = work / "inline219_probe.hlsl"
             candidate_source.write_text((ROOT / "tools/reference/bvh-node/rtz_triangle.hlsl").read_text() + "\n" +
                                         (src / "inline219_candidate.hlsl").read_text() + "\n" +
