@@ -1,6 +1,7 @@
 LIBRARY xg_xs
 EXPORTS
     XGComputeBufferLayout @1
+    XGComputeOptimalSwizzleMode @3
     XGComputeTexture1DLayout @4
     XGComputeTexture2DLayout @5
     XGComputeTexture3DLayout @6

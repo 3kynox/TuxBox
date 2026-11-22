@@ -33,6 +33,40 @@ pub struct TileShape {
     depth: u32,
 }
 
+/// Select the Xbox swizzle mode for a resource description.
+///
+/// The supplied XG build reads an eighth flags argument and does not inspect
+/// the dimensions or sample count for this selection.
+#[unsafe(export_name = "XGComputeOptimalSwizzleMode")]
+extern "system" fn optimal_swizzle_mode(
+    dimension: u32,
+    format: u32,
+    _width: u32,
+    _height: u32,
+    _depth_or_array: u32,
+    _samples: u32,
+    bind_flags: u32,
+    resource_flags: u32,
+) -> u32 {
+    if dimension == 1 {
+        return 0;
+    }
+    if bind_flags & 0x40 != 0 {
+        let incompatible = matches!(format, 19 | 20 | 22 | 44 | 45 | 47 | 62 | 118 | 119 | 120);
+        return if resource_flags & 0x0800_8000 != 0 && incompatible {
+            u32::MAX
+        } else {
+            24
+        };
+    }
+    match dimension {
+        3 | 4 if resource_flags & 0x0800_0000 != 0 => 10,
+        3 | 4 if bind_flags & 0x20 != 0 => 27,
+        3 | 4 => 5,
+        _ => 0,
+    }
+}
+
 /// Validate a depth/stencil swizzle mode. This Xbox DLL's supported modes are
 /// independent of the supplied format and sample-count parameters.
 #[unsafe(export_name = "XGValidateDepthStencilSwizzleMode")]

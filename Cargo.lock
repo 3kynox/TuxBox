@@ -125,6 +125,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "tuxbox-pixlivemerge"
+version = "0.1.0"
+
+[[package]]
 name = "tuxbox-xaudio"
 version = "0.1.0"
 dependencies = [

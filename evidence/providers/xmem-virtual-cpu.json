@@ -16,7 +16,7 @@
   "source_sha256": {
     "tools/check_xmem_virtual_cpu_native.py": "3376c8f0148b5128e95b3c80abcaae239c3f842aa35cfb9462940817956bdb7f",
     "tools/reference/xmem-tag/virtual_cpu_native.c": "be4376b0dc7380a0137b22f335e74a905fde56bff9c32690fc43734df5775fc8",
-    "runtime/xmem/guest.c": "a980e63cf1b874540768753f4577100edacc58e8c4f77c4b05ba52b8911938f4",
+    "runtime/xmem/guest.c": "b990c6882d3d865e7f31cd20d2ff194c29f2b87bc763d282f2a75e47ca13f68e",
     "runtime/xmem/src/virtual_memory.rs": "9f2f2f94101a840e188f2d72ba657f4fa757f7df1ff0379cd31c1758f8fc673d"
   },
   "run": {
@@ -30,7 +30,7 @@
     "backend": "proton",
     "provider": "1793301796 experimental-11.0-20261027b-x86_64",
     "binaries_sha256": {
-      "xmem-smoke/xmem-smoke.exe": "7959a8a9b19aa420c3a9b3c932006b64f3f9f10166a3467bbaadcb0c4af3cb9c",
+      "xmem-smoke/xmem-smoke.exe": "3ecd70efd22d53eedeb0039a19e7cec5477b75864d02e89d7d6b1598cd5e0c90",
       "xmem-smoke/xmem.dll": "bbc11f08dc5d884adef5048d84ea12acccfb7853915c8151387df4e4d15c35ed"
     },
     "checks": [
