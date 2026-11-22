@@ -4,7 +4,9 @@ use core::ptr;
 use core::sync::atomic::{AtomicU32, Ordering};
 use std::alloc::{Layout as Allocation, alloc};
 use tuxbox_xg_layout::{Desc, Layout, Plane};
-use windows_sys::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL, E_OUTOFMEMORY, E_POINTER, S_OK};
+use windows_sys::Win32::Foundation::{
+    E_FAIL, E_INVALIDARG, E_NOTIMPL, E_OUTOFMEMORY, E_POINTER, S_OK,
+};
 
 #[repr(C)]
 pub struct Computer {
@@ -29,6 +31,21 @@ pub struct TileShape {
     width: u32,
     height: u32,
     depth: u32,
+}
+
+/// Validate a depth/stencil swizzle mode. This Xbox DLL's supported modes are
+/// independent of the supplied format and sample-count parameters.
+#[unsafe(export_name = "XGValidateDepthStencilSwizzleMode")]
+extern "system" fn validate_depth_stencil_swizzle(
+    _format: u32,
+    _samples: u32,
+    swizzle: u32,
+) -> i32 {
+    if matches!(swizzle, 4 | 8 | 12 | 16 | 20 | 24 | 28) {
+        S_OK
+    } else {
+        E_FAIL
+    }
 }
 
 /// Format storage in bytes per element and pixels per element, for the

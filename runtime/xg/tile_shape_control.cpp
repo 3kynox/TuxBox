@@ -40,6 +40,9 @@ int main() {
         if(!test(1,fmt,bpe,samples,mode))return 6;
     for(uint32_t dim:{2u,4u})for(uint32_t samples:{1u,2u})for(unsigned mode=0;mode<5;++mode)
         if(!test(dim,0,1,samples,mode))return 7;
+    for(uint32_t dim:{2u,4u})for(uint32_t fmt:formats)for(uint32_t bpe:{0u,3u,16u})
+        for(uint32_t samples:{1u,2u})for(unsigned mode=0;mode<5;++mode)
+            if(!test(dim,fmt,bpe,samples,mode))return 9;
     if(std::fclose(out))return 8;
     std::printf("xg-tile PASS %u cases, nullable and aliased outputs\n",cases);return 0;
 }

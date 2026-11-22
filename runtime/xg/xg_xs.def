@@ -9,3 +9,4 @@ EXPORTS
     XGCreateTexture2DComputer @9
     XGCreateTexture3DComputer @10
     XGCreateTextureComputer @11
+    XGValidateDepthStencilSwizzleMode @21

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare XGComputeTileShape with the supplied Xbox library.
 
-The same guest calls the Xbox DLL and TuxBox provider with 7,310 cases,
+The same guest calls the Xbox DLL and TuxBox provider with 11,990 cases,
 including supported color formats, buffer and texture dimensions, sample
 counts, invalid input, null outputs and aliased outputs. Results contain only
 HRESULTs and generated shape/guard bytes, not game data.
@@ -58,10 +58,10 @@ def main():
             run = subprocess.run([str(wine), str(guest)], cwd=trial, env=env, timeout=60,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
             out = run.stdout.decode('utf-8', errors='replace').strip()
-            if run.returncode or 'xg-tile PASS 7310 cases' not in out:
+            if run.returncode or 'xg-tile PASS 11990 cases' not in out:
                 raise RuntimeError(f'{name} control failed ({run.returncode}): {out}')
             data = (trial / 'tile-results.bin').read_bytes()
-            if len(data) != 7310 * 92:
+            if len(data) != 11990 * 92:
                 raise ValueError(f'{name} emitted an unexpected result size')
             outputs.append(data)
             results[name] = {'dll_sha256': digest(dll), 'guest_receipt': out.splitlines()[-1],
@@ -74,16 +74,16 @@ def main():
             'host': (proton / 'version').read_text().strip(),
             'guest_sha256': digest(exe), 'guest_source_sha256': digest(source),
             'xmem_sha256': digest(args.xmem),
-            'cases': 7310,
+            'cases': 11990,
             'checks': ['78 color and block-compressed formats', 'unknown-format explicit element sizes',
                        '1, 2, 4 and 8 samples plus invalid sample counts',
-                       'buffer, 1D, 2D and 3D dimensions', 'null and aliased output pointers',
+                       'buffer, 1D, 2D and 3D dimensions, including all 78 formats for 1D/3D', 'null and aliased output pointers',
                        'output guards and no writes on invalid arguments'],
             'runs': results,
         }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(receipt, indent=2) + '\n')
-    print('xg-tile differential PASS: 7310 cases match')
+    print('xg-tile differential PASS: 11990 cases match')
 
 
 if __name__ == '__main__':

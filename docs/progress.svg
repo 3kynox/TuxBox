@@ -162,16 +162,16 @@
       <text x="38.0" y="290" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">13/31 functions, 0/1 data</text>
     </g>
     <g>
-      <title>xg_xs.dll · Partial · Verified TuxBox exports 9/21 (42.9%). TuxBox texture address computer. Computes linear and 4 KiB tiled 2D textures, array slices and packed mip chains. TuxBox and the supplied DLL matched on 9,231,018 texel or block addresses across 78 formats and 156 layouts. A separate check includes eight descriptors from Frosty. XGComputeBufferLayout matches the supplied DLL on 967 buffer descriptors, including invalid arguments and full output guards. The 2D-specific layout and computer exports match the supplied DLL on 7,020 sampled layouts and 81,432 sampled addresses for the checked usage and swizzle profiles. The 1D-specific layout and computer exports match 4,104 sampled linear layouts and 45,144 addresses for 57 uncompressed formats. The 3D-specific layout and computer exports match 12,825 sampled linear layouts and 99,180 sampled addresses for 57 uncompressed formats. Tile shapes for buffers and checked 2D formats matched the supplied DLL across 7,310 cases. Frosty direct imports verified 1/1. Verified (XGCreateTextureComputer).</title>
+      <title>xg_xs.dll · Partial · Verified TuxBox exports 10/21 (47.6%). TuxBox texture address computer. Computes linear and 4 KiB tiled 2D textures, array slices and packed mip chains. TuxBox and the supplied DLL matched on 9,231,018 texel or block addresses across 78 formats and 156 layouts. A separate check includes eight descriptors from Frosty. XGComputeBufferLayout matches the supplied DLL on 967 buffer descriptors, including invalid arguments and full output guards. The 2D-specific layout and computer exports match the supplied DLL on 7,020 sampled layouts and 81,432 sampled addresses for the checked usage and swizzle profiles. The 1D-specific layout and computer exports match 4,104 sampled linear layouts and 45,144 addresses for 57 uncompressed formats. The 3D-specific layout and computer exports match 12,825 sampled linear layouts and 99,180 sampled addresses for 57 uncompressed formats. Tile shapes for buffers and checked 2D formats matched the supplied DLL across 11,990 cases. Depth/stencil swizzle validation matched the supplied DLL across 6,125 cases. Frosty direct imports verified 1/1. Verified (XGCreateTextureComputer).</title>
       <g transform="translate(24.0 314)">
         <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
         <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
       <text x="38.0" y="319" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xg_xs.dll *</text>
       <rect x="315.09999999999997" y="310" width="54.900000000000034" height="7" fill="#272733" />
-      <rect x="315.09999999999997" y="310" width="23.5286" height="7" fill="#6fc7d4" />
-      <text x="422.0" y="319" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">9/21</text>
-      <text x="480.0" y="319" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">42.9%</text>
+      <rect x="315.09999999999997" y="310" width="26.1429" height="7" fill="#6fc7d4" />
+      <text x="422.0" y="319" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">10/21</text>
+      <text x="480.0" y="319" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">47.6%</text>
     </g>
     <g>
       <title>d3d12_x.dll · Incomplete · Verified TuxBox exports 0/53 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox D3D12.X Runtime Library for UWP Extensions. 53 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
