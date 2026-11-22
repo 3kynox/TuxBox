@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" role="img" font-family="'Terminess Nerd Font Mono', 'DejaVu Sans Mono', Consolas, monospace" aria-labelledby="map-title map-description" viewBox="0 0 1000 3619" width="1000" height="3619">
+<svg xmlns="http://www.w3.org/2000/svg" role="img" font-family="'Terminess Nerd Font Mono', 'DejaVu Sans Mono', Consolas, monospace" aria-labelledby="map-title map-description" viewBox="0 0 1000 3764" width="1000" height="3764">
   <title id="map-title">TuxBox runtime compatibility</title>
   <desc id="map-description">Current runtime capabilities, retail output, Xbox DLL coverage and shader preparation. A checked circle marks complete coverage, a half-filled circle partial coverage and an open ring incomplete coverage. Shader bars show frontend and preparation coverage. DLL bars show verified exports.</desc>
-  <rect x="0" y="0" width="1000" height="3619" fill="#0b0b0f" />
+  <rect x="0" y="0" width="1000" height="3764" fill="#0b0b0f" />
   <rect x="0" y="0" width="1000" height="48" fill="#090910" />
   <rect x="0" y="47" width="1000" height="1" fill="#272733" />
   <rect x="14" y="10" width="210" height="27" fill="#e2bc8c" />
@@ -10,7 +10,7 @@
   <text x="986" y="30" fill="#6fc7d4" font-size="16" text-anchor="end" font-weight="normal">Xbox Series X|S</text>
   <g transform="translate(14 60)">
     <title>Runtime capabilities</title>
-    <rect x="0" y="0" width="509" height="481" fill="#14141d" stroke="#e2bc8c" stroke-width="2" />
+    <rect x="0" y="0" width="509" height="500" fill="#14141d" stroke="#e2bc8c" stroke-width="2" />
     <rect x="1" y="1" width="507" height="32" fill="#0d0d15" />
     <rect x="1" y="33" width="507" height="1" fill="#272733" />
     <circle cx="16" cy="17" r="4.5" fill="#e74c3c" />
@@ -49,7 +49,7 @@
   </g>
   <g transform="translate(535 60)">
     <title>The Matrix Awakens</title>
-    <rect x="0" y="0" width="451" height="481" fill="#14141d" stroke="#272733" stroke-width="1" />
+    <rect x="0" y="0" width="451" height="500" fill="#14141d" stroke="#272733" stroke-width="1" />
     <rect x="1" y="1" width="449" height="32" fill="#0d0d15" />
     <rect x="1" y="33" width="449" height="1" fill="#272733" />
     <circle cx="16" cy="17" r="4.5" fill="#e74c3c" />
@@ -73,10 +73,22 @@
     <text x="18" y="278" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Start Chase</text>
     <text x="433" y="278" fill="#2ecc71" font-size="15" text-anchor="end" font-weight="normal">Opening cinematic</text>
     <rect x="18" y="292" width="415" height="1" fill="#272733" />
-    <text x="18" y="317" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Driving and shooting</text>
-    <text x="433" y="317" fill="#a0a0b1" font-size="15" text-anchor="end" font-weight="normal">Unverified</text>
+    <text x="18" y="317" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Chase tutorial</text>
+    <text x="433" y="317" fill="#2ecc71" font-size="15" text-anchor="end" font-weight="normal">Reached in game</text>
+    <rect x="18" y="331" width="415" height="1" fill="#272733" />
+    <text x="18" y="356" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Controller target lock</text>
+    <text x="433" y="356" fill="#2ecc71" font-size="15" text-anchor="end" font-weight="normal">Registered in game</text>
+    <rect x="18" y="370" width="415" height="1" fill="#272733" />
+    <text x="18" y="395" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Manual shooting</text>
+    <text x="433" y="395" fill="#2ecc71" font-size="15" text-anchor="end" font-weight="normal">Verified</text>
+    <rect x="18" y="409" width="415" height="1" fill="#272733" />
+    <text x="18" y="434" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">City sandbox</text>
+    <text x="433" y="434" fill="#2ecc71" font-size="15" text-anchor="end" font-weight="normal">Reached after the chase</text>
+    <rect x="18" y="448" width="415" height="1" fill="#272733" />
+    <text x="18" y="473" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Free roam</text>
+    <text x="433" y="473" fill="#2ecc71" font-size="15" text-anchor="end" font-weight="normal">Verified</text>
   </g>
-  <g transform="translate(14 553)">
+  <g transform="translate(14 572)">
     <title>d3d12_xs Xbox interface methods</title>
     <rect x="0" y="0" width="972" height="207" fill="#14141d" stroke="#272733" stroke-width="1" />
     <rect x="1" y="1" width="970" height="32" fill="#0d0d15" />
@@ -94,7 +106,7 @@
     <text x="654" y="113" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Device8</text>
     <text x="933" y="113" fill="#a0a0b1" font-size="14" text-anchor="end" font-weight="normal">0/1</text>
     <text x="18" y="136" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Graphics command list</text>
-    <text x="297" y="136" fill="#6fc7d4" font-size="14" text-anchor="end" font-weight="normal">7/7</text>
+    <text x="297" y="136" fill="#6fc7d4" font-size="14" text-anchor="end" font-weight="normal">8/8</text>
     <text x="336" y="136" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">DMA command list</text>
     <text x="615" y="136" fill="#6fc7d4" font-size="14" text-anchor="end" font-weight="normal">4/4</text>
     <text x="654" y="136" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Command queue</text>
@@ -105,11 +117,11 @@
     <text x="615" y="159" fill="#a0a0b1" font-size="14" text-anchor="end" font-weight="normal">0/1</text>
     <text x="654" y="159" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">State object properties</text>
     <text x="933" y="159" fill="#a0a0b1" font-size="14" text-anchor="end" font-weight="normal">0/1</text>
-    <text x="18" y="192" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">Compiled TuxBox handlers: 40 device · 46 graphics list · 13 DMA list · 15 queue</text>
+    <text x="18" y="192" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">Compiled TuxBox handlers: 40 device · 47 graphics list · 13 DMA list · 15 queue</text>
   </g>
-  <g transform="translate(14 772)">
+  <g transform="translate(14 791)">
     <title>Frosty shader coverage</title>
-    <rect x="0" y="0" width="972" height="495" fill="#14141d" stroke="#272733" stroke-width="1" />
+    <rect x="0" y="0" width="972" height="621" fill="#14141d" stroke="#272733" stroke-width="1" />
     <rect x="1" y="1" width="970" height="32" fill="#0d0d15" />
     <rect x="1" y="33" width="970" height="1" fill="#272733" />
     <circle cx="16" cy="17" r="4.5" fill="#e74c3c" />
@@ -117,7 +129,7 @@
     <circle cx="48" cy="17" r="4.5" fill="#2ecc71" />
     <text x="68" y="22" fill="#6fc7d4" font-size="14" text-anchor="start" font-weight="normal">~/evidence/matrix-awakens/shader-inventory.json</text>
     <text x="18" y="70" fill="#e2bc8c" font-size="25" text-anchor="start" font-weight="bold">Frosty shader coverage</text>
-    <text x="954" y="68" fill="#a0a0b1" font-size="14" text-anchor="end" font-weight="normal">43,407 shipped entries · 210 in profile · 7 linked variants</text>
+    <text x="954" y="68" fill="#a0a0b1" font-size="14" text-anchor="end" font-weight="normal">43,407 shipped entries · 215 in profile · 8 linked variants</text>
     <text x="18" y="97" fill="#a0a0b1" font-size="14" text-anchor="start" font-weight="normal">HLSL counts unique source programs the translator can read and emit as desktop shader code.</text>
     <text x="18" y="118" fill="#a0a0b1" font-size="14" text-anchor="start" font-weight="normal">Requests are distinct programs seen in captured title runs. A pipeline can request a shader before drawing.</text>
     <text x="18" y="151" fill="#6fc7d4" font-size="14" text-anchor="start" font-weight="normal">Stage</text>
@@ -132,9 +144,9 @@
     <rect x="299" y="172" width="98.0" height="7" fill="#2ecc71" />
     <text x="561" y="181" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">19,634 / 19,634</text>
     <rect x="722" y="172" width="94" height="7" fill="#272733" />
-    <rect x="722" y="172" width="10.825842696629213" height="7" fill="#e2bc8c" />
-    <text x="954" y="181" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">41 / 356</text>
-    <text x="694" y="181" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">41</text>
+    <rect x="722" y="172" width="4.486363636363636" height="7" fill="#e2bc8c" />
+    <text x="954" y="181" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">42 / 880</text>
+    <text x="694" y="181" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">42</text>
     <rect x="18" y="188" width="936" height="1" fill="#272733" />
     <text x="18" y="208" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Mesh</text>
     <text x="263" y="208" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">192</text>
@@ -142,8 +154,8 @@
     <rect x="299" y="199" width="98.0" height="7" fill="#2ecc71" />
     <text x="561" y="208" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">192 / 192</text>
     <rect x="722" y="199" width="94" height="7" fill="#272733" />
-    <rect x="722" y="199" width="94.0" height="7" fill="#2ecc71" />
-    <text x="954" y="208" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">1 / 1</text>
+    <rect x="722" y="199" width="47.0" height="7" fill="#e2bc8c" />
+    <text x="954" y="208" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">1 / 2</text>
     <text x="694" y="208" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">1</text>
     <rect x="18" y="215" width="936" height="1" fill="#272733" />
     <text x="18" y="235" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Pixel</text>
@@ -152,9 +164,9 @@
     <rect x="299" y="226" width="97.5847119224187" height="7" fill="#e2bc8c" />
     <text x="561" y="235" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">12,219 / 12,271</text>
     <rect x="722" y="226" width="94" height="7" fill="#272733" />
-    <rect x="722" y="226" width="13.708333333333334" height="7" fill="#e2bc8c" />
-    <text x="954" y="235" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">91 / 624</text>
-    <text x="694" y="235" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">92</text>
+    <rect x="722" y="226" width="7.1118421052631575" height="7" fill="#e2bc8c" />
+    <text x="954" y="235" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">92 / 1,216</text>
+    <text x="694" y="235" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">93</text>
     <rect x="18" y="242" width="936" height="1" fill="#272733" />
     <text x="18" y="262" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Geometry</text>
     <text x="263" y="262" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">112</text>
@@ -169,12 +181,12 @@
     <text x="18" y="289" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Compute</text>
     <text x="263" y="289" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">3,242</text>
     <rect x="299" y="280" width="98" height="7" fill="#272733" />
-    <rect x="299" y="280" width="83.84410763996289" height="7" fill="#e2bc8c" />
-    <text x="561" y="289" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">2,766 / 3,233</text>
+    <rect x="299" y="280" width="86.93597278069905" height="7" fill="#e2bc8c" />
+    <text x="561" y="289" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">2,868 / 3,233</text>
     <rect x="722" y="280" width="94" height="7" fill="#272733" />
-    <rect x="722" y="280" width="39.45679012345679" height="7" fill="#e2bc8c" />
-    <text x="954" y="289" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">34 / 81</text>
-    <text x="694" y="289" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">74</text>
+    <rect x="722" y="280" width="32.136752136752136" height="7" fill="#e2bc8c" />
+    <text x="954" y="289" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">40 / 117</text>
+    <text x="694" y="289" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">77</text>
     <rect x="18" y="296" width="936" height="1" fill="#272733" />
     <text x="18" y="316" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Ray generation</text>
     <text x="263" y="316" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">289</text>
@@ -193,13 +205,19 @@
     <text x="561" y="370" fill="#a0a0b1" font-size="15" text-anchor="end" font-weight="normal">—</text>
     <text x="954" y="370" fill="#a0a0b1" font-size="15" text-anchor="end" font-weight="normal">—</text>
     <text x="694" y="370" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">0</text>
-    <text x="18" y="397" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Standalone DXIL passed for 1063/1064 tested programs among 1064 distinct title requests.</text>
-    <text x="18" y="418" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Packaged mesh shaders with a GPU pipeline · NVIDIA 192/192 · Radeon 192/192</text>
-    <text x="18" y="439" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Nanite InstanceCull · 4/76 packaged variants passed GPU readback on both adapters</text>
-    <text x="18" y="460" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Nanite PersistentClusterCull · 4/32 pass DXIL validation · 4 pass GPU readback on both adapters</text>
-    <text x="18" y="481" fill="#a0a0b1" font-size="14" text-anchor="start" font-weight="normal">Ray-tracing entries contain serialized state objects. Their translation has a separate path.</text>
+    <text x="18" y="397" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Standalone DXIL passed for 2217/2217 tested programs among 2217 distinct title requests.</text>
+    <text x="18" y="418" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Optional chase warmup · 1,271 programs and 207 linked pairs ready before playing</text>
+    <text x="18" y="439" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Packaged mesh shaders with a GPU pipeline · NVIDIA 192/192 · Radeon 192/192</text>
+    <text x="18" y="460" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Nanite InstanceCull · 12/76 packaged variants passed GPU readback on both adapters</text>
+    <text x="18" y="481" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Nanite PersistentClusterCull · 5/32 packaged variants passed GPU readback on both adapters</text>
+    <text x="18" y="502" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Nanite MicropolyRasterize · 96/96 pipelines on both adapters · retail shader 3246 passed pixel readback</text>
+    <text x="18" y="523" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Nanite ClassifyMaterials · 8 material tile tests passed on both adapters</text>
+    <text x="18" y="544" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">Pixel shader stencil export · 2 retail programs matched depth and stencil on both adapters</text>
+    <text x="18" y="565" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">City flyover temporal filter · 15,360 output texels matched on both adapters</text>
+    <text x="18" y="586" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">City flyover temporal history · 40,960 output texels matched on both adapters</text>
+    <text x="18" y="607" fill="#a0a0b1" font-size="14" text-anchor="start" font-weight="normal">Ray-tracing entries contain serialized state objects. Their translation has a separate path.</text>
   </g>
-  <g transform="translate(14 1279)">
+  <g transform="translate(14 1424)">
     <title>Xbox library coverage</title>
     <rect x="0" y="0" width="972" height="2294" fill="#14141d" stroke="#272733" stroke-width="1" />
     <rect x="1" y="1" width="970" height="32" fill="#0d0d15" />
@@ -887,7 +905,7 @@
       <text x="954.0" y="2265" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
     </g>
   </g>
-  <g transform="translate(14 3585)">
+  <g transform="translate(14 3730)">
     <title>Guest regression checks</title>
     <text x="0" y="21" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Guest regression checks</text>
     <text x="972" y="21" fill="#a0a0b1" font-size="15" text-anchor="end" font-weight="normal">47 of 52 passed across 4 host configurations</text>

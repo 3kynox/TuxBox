@@ -15,6 +15,7 @@ using Pipeline = HRESULT (WINAPI*)(ID3D12Device*, const D3D12_COMPUTE_PIPELINE_S
 using SetRoot = void (WINAPI*)(ID3D12GraphicsCommandList*, ID3D12RootSignature*);
 using SetConstants = void (WINAPI*)(ID3D12GraphicsCommandList*, UINT, UINT, const void*, UINT);
 using SetUav = void (WINAPI*)(ID3D12GraphicsCommandList*, UINT, D3D12_GPU_VIRTUAL_ADDRESS);
+using ComputeBudget = void (WINAPI*)(ID3D12GraphicsCommandList*, const UINT*);
 using Flush = void (WINAPI*)(ID3D12GraphicsCommandList*, UINT, UINT64, UINT64);
 
 HRESULT signature(ID3D12Device* device, UINT kind, UINT stride, ID3D12RootSignature* root,
@@ -121,6 +122,16 @@ std::string run(const wchar_t* requested, bool) {
     reject_flush(UINT_MAX, 0, 512, E_NOTIMPL);
     reject_flush(0x3000, out->GetGPUVirtualAddress(), 0, E_INVALIDARG);
     reject_flush(0x3000, UINT64_MAX - 255, 512, E_INVALIDARG);
+    const auto budget = method<ComputeBudget>(list.Get(), 96);
+    std::array<UINT, 6> budget_record{};
+    budget_record.back() = 1;
+    check(list->Reset(allocator.Get(), pipeline.Get()), "reset nondefault budget list");
+    budget(list.Get(), budget_record.data());
+    if (list->Close() != E_NOTIMPL) throw std::runtime_error("nondefault compute budget accepted");
+    check(list->Reset(allocator.Get(), pipeline.Get()), "reset null budget list");
+    budget(list.Get(), nullptr);
+    if (list->Close() != E_INVALIDARG) throw std::runtime_error("null compute budget accepted");
+    budget_record.back() = 0;
     check(list->Reset(allocator.Get(), pipeline.Get()), "reset compute list");
     list->CopyBufferRegion(out.Get(), 0, seed.Get(), 0, sizeof(expected));
     transition(list.Get(), out.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -133,6 +144,7 @@ std::string run(const wchar_t* requested, bool) {
         list->ExecuteIndirect(compute.Get(), max_count, args.Get(), offset, count, count_offset);
         for (UINT i = 0; i < expected_words; ++i) expected[first + i] = constants[0] + i * constants[1];
     };
+    budget(list.Get(), budget_record.data());
     dispatch(0, 24, 1, nullptr, 0, 24);
     dispatch(28, 12, 2, args.Get(), 36, 8);
     dispatch(40, 24, 1, args.Get(), 40, 0);
@@ -175,7 +187,7 @@ std::string run(const wchar_t* requested, bool) {
     char receipt[210];
     std::snprintf(receipt, sizeof(receipt),
                   "d3d12-indirect PASS pci=%04x:%04x sdk=0x20004 device=41 list=59 words=64/64 "
-                  "counts=direct,one,zero flush=global,range mesh=0x%08lx rays=0x%08lx",
+                  "counts=direct,one,zero flush=global,range budget=default,rejected2 mesh=0x%08lx rays=0x%08lx",
                   selected.VendorId, selected.DeviceId, static_cast<unsigned long>(mesh), static_cast<unsigned long>(ray));
     return receipt;
 }

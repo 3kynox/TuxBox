@@ -4,11 +4,11 @@ from tempfile import TemporaryDirectory
 import unittest
 from xml.etree import ElementTree as ET
 
-from project_tuxbox.progress_map import export_progress, instance_cull_readbacks, library_table, render_map, write_map
+from project_tuxbox.progress_map import export_progress, culling_readbacks, library_table, render_map, write_map
 
 
 class ProgressMapTests(unittest.TestCase):
-    def test_instance_readbacks_link_the_current_compiler_to_retail_shader_bytes(self):
+    def test_culling_readbacks_require_matching_source_and_current_gpu_bytecode(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             dest = root / "matrix-awakens"
@@ -22,13 +22,22 @@ class ProgressMapTests(unittest.TestCase):
                        provider_sha256="provider", programs=[program])
             for suffix, adapter in (("amd", "1002:13c0"), ("nvidia", "10de:2705")):
                 (dest / f"instance-cull-{suffix}.json").write_text(json.dumps(dict(run, adapter=adapter)))
-            self.assertIn("1/2", instance_cull_readbacks(root, "archive", "current"))
-            self.assertFalse(instance_cull_readbacks(root, "archive", "old"))
-            self.assertFalse(instance_cull_readbacks(root, "other", "current"))
+            self.assertIn("1/2", culling_readbacks(root, "archive", "current", "InstanceCull"))
+            self.assertFalse(culling_readbacks(root, "archive", "old", "InstanceCull"))
+            self.assertFalse(culling_readbacks(root, "other", "current", "InstanceCull"))
             for changed in (dict(dxil_sha256="different"), dict(cases={})):
                 (dest / "instance-cull-amd.json").write_text(json.dumps(
                     dict(run, adapter="1002:13c0", programs=[dict(program, **changed)])))
-                self.assertFalse(instance_cull_readbacks(root, "archive", "current"))
+                self.assertFalse(culling_readbacks(root, "archive", "current", "InstanceCull"))
+            # A corrected build may emit new DXIL for the same Xbox program.
+            updated = dict(program, dxil_sha256="corrected")
+            for suffix, adapter in (("amd", "1002:13c0"), ("nvidia", "10de:2705")):
+                (dest / f"instance-cull-{suffix}.json").write_text(json.dumps(
+                    dict(run, adapter=adapter, provider_sha256="new provider", programs=[updated])))
+            self.assertIn("1/2", culling_readbacks(root, "archive", "current", "InstanceCull"))
+            (dest / "instance-cull-nvidia.json").write_text(json.dumps(
+                dict(run, adapter="10de:2705", programs=[updated])))
+            self.assertFalse(culling_readbacks(root, "archive", "current", "InstanceCull"))
 
     def test_workspace_map_matches_saved_receipts_and_milestones(self):
         root = Path(__file__).resolve().parents[1]

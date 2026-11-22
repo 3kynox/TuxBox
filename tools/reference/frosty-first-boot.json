@@ -1939,6 +1939,36 @@
         "cache_key": "43ba45d6b7d30fbd",
         "observed_dxil_sha256": "095e3aad4f03fa0b445ac06b1d5566a1cec65800b149fe8336615ca20f315736",
         "compiled_dxil_sha256": "d911aa7e3b7467c47460e8813d3fe47af2376a7dc8f058e40e2f89cc6e22afbd"
+      },
+      {
+        "archive": "material",
+        "entry": 31059,
+        "offset": 307413334,
+        "packed_bytes": 2541,
+        "unpacked_bytes": 4673,
+        "dxbc_offset": 124,
+        "dxbc_bytes": 4535,
+        "dxbc_sha256": "b331bc67f92ea2c1daaf26418e8ed09c55179a36b529340fe8bd60ec9d4fd75c",
+        "profile": "vs_6_0",
+        "hlsl_sha256": "dabd9d5c3f082f1acd528d2d903645432a0f59975eb399a13be20f4f746fab1b",
+        "cache_key": "95dff046720af889",
+        "observed_dxil_sha256": "fb4cf0d3637c3ac1e7b5fe6129c30ccee32554ca40ae93d15fbe07189ed536f4",
+        "compiled_dxil_sha256": "fb4cf0d3637c3ac1e7b5fe6129c30ccee32554ca40ae93d15fbe07189ed536f4"
+      },
+      {
+        "archive": "material",
+        "entry": 31420,
+        "offset": 312174499,
+        "packed_bytes": 15576,
+        "unpacked_bytes": 18612,
+        "dxbc_offset": 332,
+        "dxbc_bytes": 18266,
+        "dxbc_sha256": "ccdd625c97ef08eb7adfa5e2c029827fe389a64c69f4095ef2e229f47c40ff34",
+        "profile": "ps_6_1",
+        "hlsl_sha256": "3c8cae149c57a57d306714a85561b5e04a1b52a384742d7ccfc1e3407d3235c7",
+        "cache_key": "c69089fff48af7ad",
+        "observed_dxil_sha256": "e08272f47646a29d3bfd672e87843fb00c41745748445472939e132ce0e08b24",
+        "compiled_dxil_sha256": "e08272f47646a29d3bfd672e87843fb00c41745748445472939e132ce0e08b24"
       }
     ],
     "linked_shaders": [
@@ -1999,6 +2029,15 @@
         "hlsl_sha256": "973f06d9f3d45710d92a02a65e045ac94476b95131d15d4dfd40b38cd2368454",
         "compiled_dxil_sha256": "0ef90f5a9fc0913414c663819b79f308f79b8daca8f8d5b87ca6b5329ab73f03",
         "observed_dxil_sha256": "3e8d36744a6b38bd1e18a041eac7d4dee0215ffc9d51922402e980ccc387bffe"
+      },
+      {
+        "producer": "b331bc67f92ea2c1daaf26418e8ed09c55179a36b529340fe8bd60ec9d4fd75c",
+        "pixel": "ccdd625c97ef08eb7adfa5e2c029827fe389a64c69f4095ef2e229f47c40ff34",
+        "ordered": true,
+        "hlsl_sha256": "2e63195e80681599706084ff16c35985508cf1cf08995e56782305ac9f6e54d8",
+        "cache_key": "184581cd3f81704a",
+        "observed_dxil_sha256": "05af648e4a8c6645ad9b833058626f68eb0ed6aa6ffdcc289b5b8881da0977f8",
+        "compiled_dxil_sha256": "05af648e4a8c6645ad9b833058626f68eb0ed6aa6ffdcc289b5b8881da0977f8"
       }
     ],
     "menu_profile": "frosty-menu-shaders.json"

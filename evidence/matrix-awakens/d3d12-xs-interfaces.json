@@ -17,7 +17,10 @@
     "sizing": "matrix-awakens/tuxbox-present-sizing.json",
     "linked": "matrix-awakens/tuxbox-linked-materials.json",
     "mesh_abi": "matrix-awakens/mesh-stream-retail.json",
-    "mesh_gpu": "matrix-awakens/mesh-command-list-nvidia.json"
+    "mesh_gpu": "matrix-awakens/mesh-command-list-nvidia.json",
+    "micropoly": "matrix-awakens/micropoly-retail.json",
+    "async_budget_amd": "providers/async-compute-budget-amd.json",
+    "async_budget_nvidia": "providers/async-compute-budget-nvidia.json"
   },
   "interfaces": [
     {
@@ -251,6 +254,15 @@
           }
         },
         {
+          "slot": 96,
+          "method": "Async compute budget (title call)",
+          "identified": "micropoly",
+          "checks": {
+            "async_budget_amd": "Dispatch after the default 24-byte budget, with null and nonzero controls",
+            "async_budget_nvidia": "The same dispatch and rejected-budget controls on NVIDIA"
+          }
+        },
+        {
           "slot": 127,
           "method": "DispatchMesh",
           "identified": "mesh_abi",
@@ -441,6 +453,7 @@
       68,
       83,
       84,
+      96,
       127
     ],
     "DMA command list": [

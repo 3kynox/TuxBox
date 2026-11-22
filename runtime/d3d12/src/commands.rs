@@ -20,6 +20,7 @@ mod descriptors;
 mod graphics;
 mod media;
 mod queries;
+mod stencil;
 
 enum ListState {
     Fresh(ID3D12CommandAllocator, Option<ID3D12PipelineState>),
@@ -28,6 +29,9 @@ enum ListState {
 }
 
 struct Recording {
+    stencil_slot: Option<u32>,
+    stencil_targets: Option<stencil::Targets>,
+    dsv_bound: bool,
     media: Option<media::Recording>,
     placed_reads: Vec<Arc<Texture>>,
     placed_writes: Vec<Arc<Texture>>,
@@ -57,6 +61,23 @@ impl Recording {
         Ok(())
     }
 
+    fn draw(&mut self, list: &ID3D12GraphicsCommandList, draw: impl FnOnce()) {
+        self.sample_heap();
+        if let Some(slot) = self.stencil_slot
+            && self.dsv_bound
+        {
+            let status = self
+                .stencil_targets
+                .as_ref()
+                .ok_or_else(|| windows::core::Error::from(E_NOTIMPL))
+                .and_then(|t| t.draw(list, slot, draw));
+            if let Err(e) = status {
+                self.error = e.code();
+            }
+        } else {
+            draw();
+        }
+    }
     fn sample_heap(&mut self) {
         if let Some(heap) = &self.resource_heap
             && !self.sampled_heaps.contains(heap)
@@ -191,7 +212,7 @@ unsafe extern "system" fn reset(
         (native.vtable().Reset)(
             native.as_raw(),
             allocator.native.as_raw(),
-            initial.map_or(ptr::null_mut(), Interface::as_raw),
+            initial.map_or(ptr::null_mut(), |p| p.native.as_raw()),
         )
     };
     if hr.is_ok() {
@@ -199,6 +220,11 @@ unsafe extern "system" fn reset(
         if state.media.is_some() {
             state.media = Some(media::Recording::new(allocator));
         }
+        state.stencil_slot = initial.and_then(|p| p.state.stencil_slot);
+        if let Some(targets) = &mut state.stencil_targets {
+            targets.unbind();
+        }
+        state.dsv_bound = false;
         state.placed_reads.clear();
         state.placed_writes.clear();
         state.resource_heap = None;
@@ -760,8 +786,7 @@ unsafe extern "system" fn execute_indirect(
         };
         Some(buffer)
     };
-    state.sample_heap();
-    unsafe {
+    state.draw(&list.native, || unsafe {
         list.native.ExecuteIndirect(
             &signature.native,
             max_count,
@@ -770,7 +795,7 @@ unsafe extern "system" fn execute_indirect(
             count,
             count_offset,
         );
-    }
+    });
 }
 
 static LIST_SLOTS: Slots<149> = {
@@ -813,6 +838,7 @@ static LIST_SLOTS: Slots<149> = {
     slots[68] = crate::slot!(graphics::depth_bounds);
     slots[83] = crate::slot!(copy_texture);
     slots[84] = crate::slot!(copy_resource);
+    slots[96] = crate::slot!(compute::async_compute_budget);
     slots[127] = crate::slot!(graphics::dispatch_mesh);
     slots
 };
@@ -1045,6 +1071,7 @@ pub(crate) unsafe fn wrap_command_list(
     native: ID3D12GraphicsCommandList,
     allocator: &device::Allocator,
     initial: Option<&ID3D12PipelineState>,
+    stencil_slot: Option<u32>,
     device: &IUnknown,
     compact: bool,
     out: *mut *mut c_void,
@@ -1060,6 +1087,9 @@ pub(crate) unsafe fn wrap_command_list(
         enhanced_barriers: OnceLock::new(),
         mesh: OnceLock::new(),
         recording: Mutex::new(Recording {
+            stencil_slot,
+            stencil_targets: None,
+            dsv_bound: false,
             placed_reads: Vec::new(),
             placed_writes: Vec::new(),
             resource_heap: None,

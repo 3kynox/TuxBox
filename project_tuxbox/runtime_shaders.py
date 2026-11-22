@@ -17,6 +17,7 @@ from .shader_prep import SOURCE_CACHE, compiler_tools, has_dxil_container, run_t
 
 MAX_SHADER_BYTES = 64 << 20
 SOURCE_KEY = r"[a-f0-9]{64}"
+STENCIL_KEY = SOURCE_KEY + r"_rt[0-7]"
 LINK_KEY = "_".join([SOURCE_KEY] * 3)
 
 
@@ -33,14 +34,18 @@ def verified_input(path, expected):
     return data
 
 
-def portable_pixel(data):
+def portable_stage(data):
     if not has_dxil_container(data):
-        return False
+        return None
     count, = struct.unpack_from("<I", data, 28)
     stages = [struct.unpack_from("<H", data, offset + 10)[0]
               for offset, in struct.iter_unpack("<I", memoryview(data)[32:32 + count * 4])
               if data[offset:offset + 4] == b"DXIL"]
-    return stages == [0]  # D3D12_SHVER_PIXEL_SHADER
+    return stages[0] if len(stages) == 1 else None
+
+
+def portable_pixel(data):
+    return portable_stage(data) == 0  # D3D12_SHVER_PIXEL_SHADER
 
 
 def compile_request(source, key, tools, cache, session):
@@ -65,7 +70,12 @@ def compile_request(source, key, tools, cache, session):
             flags = ["--link-pixel", pixel, "--pixel-order", order]
         else:
             cooked = work / "input.dxbc"
-            cooked.write_bytes(verified_input(source, key))
+            if source.suffix == ".stencil":
+                source_hash, slot = key.split("_rt")
+                flags = ["--stencil-target", slot]
+            else:
+                source_hash = key
+            cooked.write_bytes(verified_input(source, source_hash))
 
         dest = cache / (key + ".cso")
         checksum = dest.with_suffix(".sha256")
@@ -110,10 +120,32 @@ def remove_request(path):
 
 
 def serve(session, stop, report):
+    # Cargo can replace the release executable while another title is running.
+    # Keep the executable we fingerprint private to this host worker.
+    with TemporaryDirectory(prefix="tuxbox-xshader-") as tmp:
+        _serve_requests(session, stop, report, Path(tmp) / "xshader")
+
+
+def snapshot_compiler_cache(xshader, cache_root):
+    """Pin the executable used for all requests under this toolchain fingerprint."""
+    compiler, dxc, dxv = compiler_tools()
+    shutil.copyfile(compiler, xshader)
+    xshader.chmod(0o700)
+    tools = (xshader, dxc, dxv)
+    version = subprocess.check_output([dxc, "--version"], timeout=10)
+    fingerprint = hashlib.sha256(version)
+    for tool in tools:
+        fingerprint.update(bytes.fromhex(digest(Path(tool))))
+    cache = cache_root / "runtime" / fingerprint.hexdigest()
+    cache.mkdir(parents=True, exist_ok=True)
+    return tools, cache
+
+
+def _serve_requests(session, stop, report, xshader):
     tools = cache = None
     while not stop.is_set():
         directory = session / "requests"
-        requests = [*directory.glob("*.dxbc"), *directory.glob("*.link")]
+        requests = [*directory.glob("*.dxbc"), *directory.glob("*.link"), *directory.glob("*.stencil")]
         if not requests:
             stop.wait(0.05)
             continue
@@ -121,19 +153,13 @@ def serve(session, stop, report):
             if stop.is_set():
                 return
             key = source.stem
-            if not re.fullmatch(LINK_KEY if source.suffix == ".link" else SOURCE_KEY, key):
+            pattern = {".link": LINK_KEY, ".stencil": STENCIL_KEY, ".dxbc": SOURCE_KEY}[source.suffix]
+            if not re.fullmatch(pattern, key):
                 remove_request(source)
                 continue
             try:
                 if tools is None:
-                    selected = compiler_tools()
-                    version = subprocess.check_output([selected[1], "--version"], timeout=10)
-                    fingerprint = hashlib.sha256(version)
-                    for tool in selected:
-                        fingerprint.update(bytes.fromhex(digest(Path(tool))))
-                    cache = session.parent / "runtime" / fingerprint.hexdigest()
-                    cache.mkdir(parents=True, exist_ok=True)
-                    tools = selected
+                    tools, cache = snapshot_compiler_cache(xshader, session.parent)
                 compiled = compile_request(source, key, tools, cache, session)
                 if compiled:
                     report(f"Compiled Xbox shader {key}")

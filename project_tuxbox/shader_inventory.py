@@ -26,6 +26,7 @@ ENTRY = struct.Struct("<QIIB")
 MAP = struct.Struct("<4I")
 TRACE_SOURCE = re.compile(rb"TuxBox d3d12_xs: shader request (\w+) ([0-9a-f]{64})")
 FIRST_SOURCE = re.compile(rb"TuxBox d3d12_xs: prepared (\w+) shader (?:loaded|missing or invalid), source SHA-256 ([0-9a-f]{64})")
+COMPILED_SOURCE = re.compile(rb"\[TuxBox [^\]]+\] Compiled Xbox shader ([0-9a-f]{64})\s*$")
 TITLE = "ae39eb1e92fa806df189c768c1478a53dfb54a2cc9769a9f2301ca7921e3eb04"
 
 
@@ -124,6 +125,8 @@ def archive_entries(name, stream, decode, survey, map_keys):
 def requests(path):
     sources = {}
     traced = False
+    compiled = False
+    first = False
     fingerprint = hashlib.sha256()
     with path.open("rb") as stream:
         for line in stream:
@@ -133,13 +136,27 @@ def requests(path):
                 traced = True
             else:
                 match = FIRST_SOURCE.search(line)
+                first |= bool(match)
             if match:
                 stage, source = (word.decode() for word in match.groups())
-                if sources.setdefault(source, stage.title()) != stage.title():
+                if sources.get(source) not in (None, stage.title()):
                     raise ValueError(f"Conflicting stages for {source} in {path.name}")
+                sources[source] = stage.title()
+            elif match := COMPILED_SOURCE.search(line):
+                # The worker logs standalone compilation even when per-request
+                # tracing is off. The package provides its stage after indexing.
+                compiled = True
+                sources.setdefault(match[1].decode(), None)
     if not sources:
         raise ValueError(f"No TuxBox shader requests found in {path.name}")
-    return sources, {"log_sha256": fingerprint.hexdigest(), "trace": "per-source" if traced else "first hits and misses",
+    modes = []
+    if traced:
+        modes.append("per-source")
+    elif first:
+        modes.append("first hits and misses")
+    if compiled:
+        modes.append("standalone compilations")
+    return sources, {"log_sha256": fingerprint.hexdigest(), "trace": ", ".join(modes),
                      "unique_sources": len(sources)}
 
 
@@ -209,8 +226,10 @@ def inventory(mount, plan, links, traces, compiler=None, index=None, materials=(
     for label, path in traces.items():
         sources, trace_info[label] = requests(path)
         for source, stage in sources.items():
-            if observed.setdefault(source, stage) != stage:
+            previous = observed.get(source)
+            if stage and previous and previous != stage:
                 raise ValueError(f"Conflicting stage for {source}")
+            observed[source] = stage or previous
             phases[source].add(label)
     entries, surveyed, validated, map_keys = [], {}, {}, {}
     compiler = compiler.resolve() if compiler else None
@@ -269,6 +288,9 @@ def inventory(mount, plan, links, traces, compiler=None, index=None, materials=(
         if by_id[(row["archive"], row["entry"])].source != source:
             raise ValueError(f"Profile digest differs at {row['archive']} entry {row['entry']}")
     for source, stage in observed.items():
+        if stage is None:
+            stage = next((entry.stage for entry in locations[source]), "Unknown")
+            observed[source] = stage
         if any(entry.stage != stage for entry in locations.get(source, ())):
             raise ValueError(f"The trace and archive disagree on stage for {source}")
     for pair in links:

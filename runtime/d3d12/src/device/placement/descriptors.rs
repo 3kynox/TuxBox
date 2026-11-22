@@ -1,6 +1,5 @@
-//! Sparse shadow of placed SRVs in CPU and shader-visible descriptor heaps.
-//! All other descriptors continue to pass directly to the native device.
-use super::{Texture, lock};
+//! Track only descriptors with additional guest state, such as placed SRVs and stencil DSVs.
+use super::lock;
 use std::{
     collections::BTreeMap,
     ops::Range,
@@ -8,15 +7,20 @@ use std::{
 };
 use windows::Win32::Graphics::Direct3D12::*;
 
-#[derive(Default)]
-pub(crate) struct Views(Mutex<BTreeMap<usize, Weak<Texture>>>);
+pub(crate) struct Views<T>(Mutex<BTreeMap<usize, Weak<T>>>);
 
-pub(crate) struct HeapViews {
-    views: Arc<Views>,
+impl<T> Default for Views<T> {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+
+pub(crate) struct HeapViews<T> {
+    views: Arc<Views<T>>,
     pub(crate) range: Range<usize>,
 }
 
-impl Drop for HeapViews {
+impl<T> Drop for HeapViews<T> {
     fn drop(&mut self) {
         lock(&self.views.0)
             .extract_if(self.range.clone(), |_, _| true)
@@ -24,14 +28,19 @@ impl Drop for HeapViews {
     }
 }
 
-impl Views {
+impl<T> Views<T> {
+    pub(crate) fn get(&self, handle: usize) -> Option<Arc<T>> {
+        lock(&self.0).get(&handle)?.upgrade()
+    }
+
     pub(crate) fn heap(
         self: &Arc<Self>,
         device: &ID3D12Device,
         native: &ID3D12DescriptorHeap,
         desc: &D3D12_DESCRIPTOR_HEAP_DESC,
-    ) -> Option<HeapViews> {
-        if desc.Type != D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV {
+        kind: D3D12_DESCRIPTOR_HEAP_TYPE,
+    ) -> Option<HeapViews<T>> {
+        if desc.Type != kind {
             return None;
         }
         let start = unsafe { native.GetCPUDescriptorHandleForHeapStart() }.ptr;
@@ -42,7 +51,7 @@ impl Views {
         })
     }
 
-    pub(crate) fn set(&self, handle: usize, texture: Option<&Arc<Texture>>) {
+    pub(crate) fn set(&self, handle: usize, texture: Option<&Arc<T>>) {
         let mut views = lock(&self.0);
         if let Some(texture) = texture {
             views.insert(handle, Arc::downgrade(texture));
@@ -51,7 +60,7 @@ impl Views {
         }
     }
 
-    pub(crate) fn gather(&self, heaps: &[Range<usize>], textures: &mut Vec<Arc<Texture>>) {
+    pub(crate) fn gather(&self, heaps: &[Range<usize>], textures: &mut Vec<Arc<T>>) {
         if !heaps.is_empty() {
             let views = lock(&self.0);
             for heap in heaps {

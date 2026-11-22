@@ -135,7 +135,8 @@ def prepare(source, packaged_os, work, proton, windows_dxc):
         shutil.copyfile(ROOT / "tools/reference/frosty-reduced-effects.ini", config)
         subprocess.run([ROOT / "tools/build_frosty_cbv_layer.sh"], check=True)
         publish(work / "providers.json", json.dumps(files, indent=2) + "\n")
-        os.environ["TUXBOX_SHADER_PREP"] = "menu"
+        if os.environ.get("TUXBOX_SHADER_PREP") != "chase":
+            os.environ["TUXBOX_SHADER_PREP"] = "menu"
         if not prepare_for_launch(guest_bin / TITLE, host):
             raise ValueError("The TuxBox graphics provider did not match the Frosty shader profile")
         publish(work / "stage", str(stage) + "\n")

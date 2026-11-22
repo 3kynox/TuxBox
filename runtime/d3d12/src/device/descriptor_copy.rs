@@ -90,6 +90,12 @@ pub(super) unsafe extern "system" fn ranges(
                     .views
                     .copy(stride, to.spans(), from.spans());
             }
+            if kind == D3D12_DESCRIPTOR_HEAP_TYPE_DSV {
+                device
+                    .state
+                    .depth_views
+                    .copy(stride, to.spans(), from.spans());
+            }
             for (destination, source) in to.handles(stride).zip(from.handles(stride)) {
                 unsafe {
                     device
@@ -124,6 +130,14 @@ pub(super) unsafe extern "system" fn simple(
     if kind == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV {
         let stride = unsafe { device.native.GetDescriptorHandleIncrementSize(kind) } as usize;
         device.state.placements.views.copy(
+            stride,
+            std::iter::once((dst.ptr, count)),
+            std::iter::once((src.ptr, count)),
+        );
+    }
+    if kind == D3D12_DESCRIPTOR_HEAP_TYPE_DSV {
+        let stride = unsafe { device.native.GetDescriptorHandleIncrementSize(kind) } as usize;
+        device.state.depth_views.copy(
             stride,
             std::iter::once((dst.ptr, count)),
             std::iter::once((src.ptr, count)),

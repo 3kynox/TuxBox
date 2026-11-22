@@ -12,9 +12,10 @@ static ROOT: Slots<8> = child_slots::<ID3D12RootSignature, (), 8>();
 // with an empty packet buffer, so no Xbox command packets are advertised.
 #[repr(C)]
 #[derive(Default)]
-pub(super) struct PipelineData {
+pub(crate) struct PipelineData {
     reserved: usize,
     packets: [u8; 32],
+    pub(crate) stencil_slot: Option<u32>,
 }
 
 const _: () = assert!(
@@ -42,13 +43,13 @@ pub(crate) unsafe fn root_signature<'a>(
 pub(crate) unsafe fn pipeline<'a>(
     guest: *mut c_void,
     device: *mut c_void,
-) -> Result<Option<&'a ID3D12PipelineState>, HRESULT> {
+) -> Result<Option<&'a Proxy<ID3D12PipelineState, PipelineData>>, HRESULT> {
     if guest.is_null() {
         return Ok(None);
     }
     // SAFETY: as with root_signature, the caller owns the live guest reference.
     unsafe { unwrap::<ID3D12PipelineState, PipelineData>(guest, device, &PIPELINE) }
-        .map(|object| Some(&object.native))
+        .map(Some)
         .ok_or(E_INVALIDARG)
 }
 

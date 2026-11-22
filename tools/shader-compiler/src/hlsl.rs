@@ -20,13 +20,20 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 
 mod compare;
+mod fssm_bindings;
+mod micropoly;
 mod mesh;
 mod mesh_exports;
 mod exec_group;
 mod hair_cluster;
 mod instance_cull;
 mod instance_cull_tail;
+mod instance_cull_hzb;
+mod instance_cull_post;
+mod instance_cull_views;
+mod classify_materials;
 mod int16;
+mod indexed_lane;
 mod particle_sort;
 mod persistent;
 mod persistent_lanes;
@@ -146,8 +153,22 @@ float tb_cubeid(float x, float y, float z) { float ax = abs(x), ay = abs(y), az 
 float3 tb_cube_dir(float s, float t, float face) { float u = (s - 1.5) * 2.0, v = (t - 1.5) * 2.0; int f = (int)round(face); if (f == 0) return float3(1.0, -v, -u); if (f == 1) return float3(-1.0, -v, u); if (f == 2) return float3(u, 1.0, v); if (f == 3) return float3(u, -1.0, -v); if (f == 4) return float3(u, -v, 1.0); return float3(-u, -v, -1.0); }
 float tb_mull(float a, float b) { return (a == 0.0 || b == 0.0) ? 0.0 : a * b; }
 uint tb_f16_cvt(float x, bool rtz) { uint u = asuint(x); uint s = (u >> 16) & 0x8000u; uint a = u & 0x7fffffffu; if (a > 0x7f800000u) return s | 0x7e00u | ((a >> 13) & 0x3ffu); if (a == 0x7f800000u) return s | 0x7c00u; if (rtz) { if (a >= 0x477fe000u) return s | 0x7bffu; } else { if (a >= 0x477ff000u) return s | 0x7c00u; } if (a >= 0x38800000u) { uint r = (a >> 13) - 0x1c000u; uint rem = a & 0x1fffu; if (!rtz && (rem > 0x1000u || (rem == 0x1000u && (r & 1u) != 0u))) r += 1u; return s | r; } if (a < 0x33000000u) return s; uint e = a >> 23; uint mant = (a & 0x7fffffu) | 0x800000u; uint sh = 126u - e; uint q = mant >> sh; uint rem = mant & ((1u << sh) - 1u); uint half = 1u << (sh - 1u); if (!rtz && (rem > half || (rem == half && (q & 1u) != 0u))) q += 1u; return s | q; }
-uint tb_f16_rne(float x) { return tb_f16_cvt(x, false); }
-uint tb_trig_f16(uint bits, bool cosine) {
+"#;
+const HALF_RNE: &str = "uint tb_f16_rne(float x) { return tb_f16_cvt(x, false); }\n";
+// The branch-free implementation keeps the driver control-flow graph small
+// when a filter applies the conversion hundreds of times per invocation.
+const HALF_RNE_STRAIGHT_LINE: &str = r#"uint tb_f16_rne(float x) {
+    uint bits = asuint(x), a = bits & 0x7fffffffu;
+    uint sign = (bits >> 16) & 0x8000u;
+    uint normal = min(((a + 0xfffu + ((a >> 13) & 1u)) >> 13) - 0x1c000u, 0x7c00u);
+    uint shift = clamp(126u - min(a >> 23, 126u), 14u, 24u);
+    uint mantissa = (a & 0x7fffffu) | 0x800000u;
+    uint sub = (mantissa + ((1u << (shift - 1u)) - 1u) + ((mantissa >> shift) & 1u)) >> shift;
+    uint finite = a >= 0x38800000u ? normal : (a >= 0x33000000u ? sub : 0u);
+    return sign | (a > 0x7f800000u ? 0x7e00u | ((a >> 13) & 0x3ffu) : finite);
+}
+"#;
+const HALF_HELPERS: &str = r#"uint tb_trig_f16(uint bits, bool cosine) {
     uint magnitude = bits & 0x7fffu;
     if (magnitude > 0x7c00u) return (bits & 0xffffu) | 0x200u;
     if (magnitude == 0x7c00u) return 0xfe00u;
@@ -314,6 +335,7 @@ struct Emitter<'a> {
     samp_cmp: BTreeSet<u32>,
     uav: BTreeMap<u32, u32>,       // slot -> dim
     sbuf: BTreeMap<(bool, u32), u32>, // (is_uav, slot) -> element dwords used
+    reflected_strides: bool,
     /// PersistentClusterCull's validated buffer layout and cross-group UAV queue.
     persistent_queue: bool,
     raw: BTreeSet<(bool, u32)>,
@@ -349,8 +371,11 @@ struct Emitter<'a> {
     /// Image ops whose texture and/or sampler is one of several descriptors.
     /// UAV texture slots used with image atomics (declared `<uint>`).
     uav_uint: BTreeSet<u32>,
-    /// The two verified HWRasterizePS permutations bind PF_R32G32_UINT at u0.
-    wide_visibility_uav: bool,
+    /// Typed image slots carrying a two-word visibility value in a 64-bit atomic.
+    wide_visibility_uavs: BTreeSet<u32>,
+    /// Instruction where all 128 rasterizer threads vote in their logical wave.
+    micropoly_vote: Option<usize>,
+    view_cull: Option<instance_cull_views::ViewProgram>,
     /// The shader uses wave intrinsics (needs shader model 6: DXC only).
     required_wave_size: Option<u32>,
     msel: HashMap<usize, MSel>,
@@ -366,6 +391,9 @@ struct Emitter<'a> {
     /// Pixel shader needs its position within the 2x2 quad (ds_swizzle).
     uses_quad: bool,
     compute_swizzle: bool,
+    indexed_lane: bool,
+    /// Complete 32-thread wave using independent one-word vector comparison masks.
+    single_wave32: bool,
     regs: BTreeSet<String>,
     body: String,
     tmp: usize,
@@ -517,6 +545,34 @@ fn lower_wave_reductions(insns: &mut [Insn]) -> Result<Option<u32>, String> {
         at = end + 1;
     }
     Ok(width)
+}
+
+fn writes_scalar(op: &Insn, register: u8) -> bool {
+    let m = op.mnemonic.as_str();
+    let width = if m.ends_with("dwordx16") {
+        16
+    } else if m.ends_with("dwordx8") {
+        8
+    } else if m.ends_with("dwordx4") {
+        4
+    } else if m.ends_with("dwordx2")
+        || m.ends_with("_b64")
+        || m.ends_with("_i64")
+        || m.ends_with("_u64")
+        || m.starts_with("v_cmp")
+    {
+        2
+    } else {
+        1
+    };
+    op.dst.iter().any(|dst| {
+        let base = match *dst {
+            Opnd::Sgpr(n) => n,
+            Opnd::Vgpr(n) if m == "v_readlane_b32" => n, // scalar destination in the VOP3 encoding
+            _ => return false,
+        };
+        (base..base.saturating_add(width)).contains(&register)
+    })
 }
 
 /// Translator temporaries from this index up are lane-spill slots (declared up front).
@@ -725,6 +781,23 @@ pub fn translate_linked(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>) -> R
 pub fn translate_ordered(
     ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_order: &[String],
 ) -> Result<Translated, String> {
+    translate_outputs(ex, feeds_ps, output_order, None)
+}
+
+/// Redirect the pixel stencil reference to an unused integer render target.
+/// The host binds a mirror of the original stencil plane at this index.
+pub fn translate_stencil_target(ex: &ShaderExtract, slot: u32) -> Result<Translated, String> {
+    if ex.stage != Stage::Pixel || slot >= 8
+        || ex.output_sig.iter().filter(|e| e.sysval == 69 && e.comp_type == 1 && e.mask == 1).count() != 1
+        || ex.output_sig.iter().any(|e| e.sysval == 64 && e.index >= slot)
+    {
+        return Err("invalid stencil render target".into());
+    }
+    translate_outputs(ex, None, &[], Some(slot))
+}
+
+fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_order: &[String],
+    stencil_target: Option<u32>) -> Result<Translated, String> {
     if ex.stage == Stage::Mesh {
         return mesh::translate(ex, feeds_ps);
     }
@@ -751,11 +824,24 @@ pub fn translate_ordered(
                 | Opnd::ConstInt(_) | Opnd::ConstF32(_) | Opnd::Literal(_)))
     })).then(|| compute_group(ex));
     lower_local_pc_transfers(&mut insns)?;
+    let entry_fallback = ex.stage == Stage::Compute && indexed_lane::skip_empty_wave_fallback(&mut insns);
+    let single_wave32 = entry_fallback && compute_group(ex).into_iter().fold(1u32, u32::saturating_mul) == 32
+        && insns.iter().any(|op| op.mnemonic == "s_and_saveexec_b32")
+        && insns.iter().any(|op| op.mnemonic.starts_with("v_cmp_") && matches!(op.dst[..], [Opnd::Sgpr(n)] if n & 1 != 0));
     let particle_sort = particle_sort::prepare(ex, &mut insns);
     let hair_cluster = hair_cluster::prepare(ex, &mut insns);
     let instance_cull = instance_cull::prepare(ex, &mut insns);
+    let hzb_cull = instance_cull_hzb::prepare(ex, &mut insns);
+    let view_cull = instance_cull_views::prepare(ex, &mut insns);
+    let post_cull = instance_cull_post::prepare(ex, &mut insns);
+    if !post_cull && !instance_cull && !hzb_cull && view_cull.is_none() && ex.stage == Stage::Compute
+        && ex.entry.as_deref() == Some("InstanceCull") && compute_group(ex) == [64, 1, 1]
+    {
+        return persistent::translate(ex);
+    }
     let subsurface_setup = subsurface_setup::prepare(ex, &mut insns);
     let material_classify = ps09_classify::prepare(ex, &mut insns);
+    let classify_tiles = classify_materials::prepare(ex, &mut insns);
     let allocation_wave64 = mark_wave_allocations(&mut insns)?;
     let required_wave_size = lower_wave_reductions(&mut insns)?;
     let uses_bpermute = insns.iter().any(|ins| ins.mnemonic == "ds_bpermute_b32");
@@ -768,8 +854,11 @@ pub fn translate_ordered(
     }
     let scan = wave_scan::prepare(ex, &mut insns)?;
     let scan_width = scan.as_ref().map(|s| s.width);
+    let indexed_lane = ex.stage == Stage::Compute && indexed_lane::prepare(compute_group(ex), &mut insns);
     lower_lane_spills(&mut insns)?;
     let mut em = Emitter::new(ex, insns);
+    em.indexed_lane = indexed_lane;
+    em.single_wave32 = single_wave32;
     if matches!(ex.stage, Stage::Vertex | Stage::Geometry) {
         em.out_interp = feeds_ps.cloned().unwrap_or_default();
     }
@@ -873,9 +962,17 @@ pub fn translate_ordered(
         em.tbuf_uint.extend([0, 1]);
     }
     if material_classify { ps09_classify::resources(&mut em)?; }
+    if classify_tiles { classify_materials::resources(&mut em)?; }
     if instance_cull { instance_cull::resources(&mut em)?; }
+    if post_cull { instance_cull_post::resources(&mut em)?; }
+    if hzb_cull { instance_cull_hzb::resources(&mut em)?; }
+    if let Some(program) = view_cull { program.resources(&mut em)?; }
+    if ex.entry.as_deref() == Some("MicropolyRasterize") && ex.stage == Stage::Compute {
+        micropoly::prepare(&mut em)?;
+    }
     let live_in = em.live_in();
     em.live = live_in.clone();
+    em.view_cull = view_cull;
     em.emit_body(is_ps)?;
     if ex.stage == Stage::Compute
         && (packed_root::matches_program(&ex.isa, 60424, 0xc449ec66f2170fb3)
@@ -892,11 +989,26 @@ pub fn translate_ordered(
         em.body.insert_str(0, "    bool cull_candidate = false; uint4 cull_record = 0;\n");
         em.body.push_str(instance_cull::EPILOGUE);
     }
+    if post_cull {
+        em.body.insert_str(0, "    bool cull_candidate = false; uint4 cull_record = 0;\n");
+        em.body.push_str(instance_cull_post::APPEND);
+    }
+    if hzb_cull {
+        em.body.insert_str(0, "    bool cull_candidate = false, hidden = false; uint4 cull_record = 0; uint hidden_id = 0; const uint hidden_view = 0u;\n");
+        em.body.push_str(instance_cull_hzb::HIDDEN_APPEND);
+        em.body.push_str(instance_cull::EPILOGUE);
+    }
     if particle_sort { em.body.push_str(particle_sort::EPILOGUE); }
-    let mut hlsl = em.finish(is_ps, output_order)?;
+    let mut hlsl = em.finish(is_ps, output_order, stencil_target)?;
+    if hzb_cull {
+        hlsl.insert_str(0, &instance_cull::queue_declarations(3));
+        hlsl.insert_str(0, instance_cull_hzb::HIDDEN_DECLARATIONS);
+    }
     if particle_sort { hlsl.insert_str(0, particle_sort::DECLARATIONS); }
     if hair_cluster { hlsl.insert_str(0, hair_cluster::DECLARATIONS); }
-    if instance_cull { hlsl.insert_str(0, instance_cull::DECLARATIONS); }
+    if instance_cull { hlsl.insert_str(0, &instance_cull::queue_declarations(1)); }
+    if post_cull { hlsl.insert_str(0, "groupshared uint cull_mask[2], cull_base;\n"); }
+    if let Some(program) = view_cull { hlsl.insert_str(0, &program.declarations()); }
     if material_classify { hlsl.insert_str(0, ps09_classify::DECLARATIONS); }
     hlsl.insert_str(0, &format!("// entry-live registers (read before written): {}
 ", live_in.join(" ")));
@@ -908,7 +1020,7 @@ pub fn translate_ordered(
         entry: "main",
         profile,
         needs_barycentrics: !em.pulled_attrs.is_empty(),
-        typed_int64_atomics: em.wide_visibility_uav || em.packed.as_ref().is_some_and(|p| !p.wide_images.is_empty()),
+        typed_int64_atomics: !em.wide_visibility_uavs.is_empty() || em.packed.as_ref().is_some_and(|p| !p.wide_images.is_empty()),
         required_wave_size,
         portable_compute_group,
         ps_input_interp: std::mem::take(&mut em.ps_in_interp),
@@ -1144,6 +1256,7 @@ impl<'a> Emitter<'a> {
             samp_cmp: BTreeSet::new(),
             uav: BTreeMap::new(),
             sbuf: BTreeMap::new(),
+            reflected_strides: false,
             persistent_queue: false,
             raw: BTreeSet::new(),
             tbuf: BTreeSet::new(),
@@ -1161,7 +1274,9 @@ impl<'a> Emitter<'a> {
             vreg_array: false,
             multi_sets: Vec::new(),
             uav_uint: BTreeSet::new(),
-            wide_visibility_uav: false,
+            wide_visibility_uavs: BTreeSet::new(),
+            micropoly_vote: None,
+            view_cull: None,
             required_wave_size: None,
             msel: HashMap::new(),
             bsel: HashMap::new(),
@@ -1170,6 +1285,8 @@ impl<'a> Emitter<'a> {
             live: Vec::new(),
             uses_quad: false,
             compute_swizzle: false,
+            indexed_lane: false,
+            single_wave32: false,
             regs: if has_mode { BTreeSet::from(["tb_fp_mode".into()]) } else { BTreeSet::new() },
             body: String::new(),
             tmp: 0,
@@ -1754,7 +1871,7 @@ impl<'a> Emitter<'a> {
     /// A heuristic (TECHNICAL_DEBT).
     fn sbuf_words(&self, key: (bool, u32)) -> u32 {
         let raw = self.sbuf.get(&key).copied().unwrap_or(1).max(1);
-        if self.persistent_queue {
+        if self.persistent_queue || self.micropoly_vote.is_some() || self.reflected_strides {
             return raw;
         }
         // Unreal's instance-culling work item packs two uints per record. Both
@@ -2229,6 +2346,8 @@ impl<'a> Emitter<'a> {
 
     fn push_helpers(&self, h: &mut String) {
         h.push_str(CUBE_HELPERS);
+        h.push_str(if self.single_wave32 { HALF_RNE_STRAIGHT_LINE } else { HALF_RNE });
+        h.push_str(HALF_HELPERS);
         if self.insns.iter().any(|i| i.mnemonic.starts_with("v_cmp") && (i.mnemonic.ends_with("_f64") || i.mnemonic.ends_with("_f32") || i.mnemonic.ends_with("_f16"))) {
             h.push_str(compare::FLOAT_HELPERS);
         }
@@ -2397,7 +2516,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 if !(disjoint || nested) {
                     // Interleaved loops cannot be expressed as nested do/while: fall back
                     // to the general block dispatcher.
-                    return self.emit_body_dispatch(is_ps);
+                    return self.emit_body_dispatch(is_ps, 0);
                 }
             }
             // A forward branch from before the header into the body (the usual rotated
@@ -2417,6 +2536,11 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         }
 
         let insns = self.insns.clone();
+        let view_cull = self.view_cull;
+        if view_cull.is_some() { self.line("uint cull_view = 0u; bool cull_candidate = false; uint3 cull_record = 0;"); }
+        if insns.iter().any(|op| op.mnemonic == "tb_view_occluded") {
+            self.line("bool hidden = false; uint hidden_id = 0u, hidden_view = 0u;");
+        }
         let group_size = compute_group(self.ex).into_iter().fold(1u32, u32::saturating_mul);
         let lds_waits = if self.is_cs && back.is_empty() && (2..=64).contains(&group_size) {
             lds_order::exchange_waits(&insns)
@@ -2425,7 +2549,29 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         };
         let mut open = false;
         let mut cur: Vec<usize> = vec![];
+        let mut prior_lds_write = None;
         for (i, ins) in insns.iter().enumerate() {
+            // One guest wave exchanges halfwords through LDS in instruction order.
+            // Host invocations must finish reading before another lane overwrites
+            // the tile, and finish publishing writes before other lanes read.
+            // Keep the rendezvous outside the translated guest branch guard.
+            if self.single_wave32 && ins.enc == Enc::Ds {
+                let write = ins.mnemonic.starts_with("ds_write");
+                if prior_lds_write.replace(write).is_some_and(|was_write| was_write != write) {
+                    if !back.is_empty() {
+                        return Err("single-wave LDS exchange inside a loop".into());
+                    }
+                    if open { self.line("}"); open = false; cur.clear(); }
+                    self.line("GroupMemoryBarrierWithGroupSync();");
+                }
+            }
+            // Reconverge both host subgroups after each guest view, including
+            // invocations whose guest EXEC mask branched over the queue append.
+            if let Some(program) = view_cull.filter(|p| p.join == ins.offset) {
+                if open { self.line("}"); open = false; }
+                cur.clear();
+                program.append(self);
+            }
             if let Some(&b) = heads.get(&i) {
                 if open {
                     self.line("}");
@@ -2449,6 +2595,13 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             if self.compute_swizzle && ins.mnemonic == "ds_swizzle_b32" && !active.is_empty() {
                 return Err(format!("compute swizzle in divergent control flow at {:#x}", ins.offset));
+            }
+            if self.micropoly_vote == Some(i) {
+                // Retired triangles contribute zero and still participate in both
+                // barriers. The count precedes either rasterization loop.
+                if open { self.line("}"); }
+                micropoly::emit_vote(self, ins, &active)?;
+                return Ok(());
             }
             if is_quad_add(ins) {
                 // FI=1 fetches the saved VGPR even from an EXEC-disabled lane. All
@@ -2520,7 +2673,13 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 } else {
                     " && ++tb_guard < 65536u"
                 };
-                self.line(&format!("}} while (tb_c{i}{exit}{guard});"));
+                if view_cull.is_some_and(|p| p.back == ins.offset) {
+                    // The guest iterates cb0[12] views. Retired lanes must
+                    // participate in the barriers for each remaining view.
+                    self.line("} while (++cull_view < cb0[3].x);");
+                } else {
+                    self.line(&format!("}} while (tb_c{i}{exit}{guard});"));
+                }
                 self.loop_depth = self.loop_depth.saturating_sub(1);
             }
         }
@@ -2530,22 +2689,20 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         Ok(())
     }
 
-    /// General control flow: a `while` + `switch` dispatcher over basic blocks, used when
-    /// the CFG is not reducible to nested loops. Each block ends by setting the next block
-    /// id (`tb_pc`); the program ends when it reaches the id one past the last instruction.
+    /// Follow guest basic blocks from `entry`. Each block sets the next block id
+    /// (`tb_pc`). The id one past the last instruction terminates the program.
     /// (Implicit-derivative sampling cannot live inside this loop — FXC rejects it, and the
     /// shader then fails to compile rather than silently changing meaning.)
-    fn emit_body_dispatch(&mut self, is_ps: bool) -> Result<(), String> {
+    fn emit_body_dispatch(&mut self, is_ps: bool, entry: usize) -> Result<(), String> {
         let n = self.insns.len();
         let mut off2idx: HashMap<usize, usize> = self.insns.iter().enumerate().map(|(i, x)| (x.offset, i)).collect();
         if let Some(l) = self.insns.last() {
             off2idx.insert(l.offset + l.dwords * 4, n);
         }
         let prog_end = self.insns.last().map_or(0, |l| l.offset + l.dwords * 4);
-        let mut leaders: BTreeSet<usize> = BTreeSet::new();
-        leaders.insert(0);
+        let mut leaders = BTreeSet::from([entry]);
         let mut tgt: HashMap<usize, usize> = HashMap::new();
-        for (i, ins) in self.insns.iter().enumerate() {
+        for (i, ins) in self.insns.iter().enumerate().skip(entry) {
             if ins.enc != Enc::Sopp {
                 continue;
             }
@@ -2567,8 +2724,12 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         }
         let starts: Vec<usize> = leaders.into_iter().filter(|&s| s < n).collect();
         self.loop_depth = 0;
-        self.line("uint tb_pc = 0u; uint tb_guard = 0u;");
-        self.line(&format!("[loop] while (tb_pc != {n}u && tb_guard++ < 1000000u) {{"));
+        if entry == 0 {
+            self.line("uint tb_pc = 0u; uint tb_guard = 0u;");
+            self.line(&format!("[loop] while (tb_pc != {n}u && tb_guard++ < 1000000u) {{"));
+        } else {
+            self.line(&format!("uint tb_pc = {entry}u; [loop] while (tb_pc != {n}u) {{"));
+        }
         self.loop_depth += 1;
         // Flat `if (tb_sel == K)` tests on a snapshot of the block id (FXC mishandles a
         // `switch` whose selector is assigned inside its cases).
@@ -2612,6 +2773,14 @@ uint tb_fmac_half(uint a, uint b, uint c) {
     fn fm(&self, ins: &Insn, i: usize) -> Result<String, String> {
         let mask = if ins.enc == Enc::Vop3 { ins.aux.mask } else { 0 };
         Ok(Self::float_source(f(&ins.src[i])?, mask, i))
+    }
+
+    fn select_source(ins: &Insn, mut bits: String, source: u8) -> String {
+        if ins.enc == Enc::Vop3 {
+            if ins.aux.mask & (1 << source) != 0 { bits = format!("({bits} & 0x7fffffffu)"); }
+            if ins.aux.mask & (8 << source) != 0 { bits = format!("({bits} ^ 0x80000000u)"); }
+        }
+        bits
     }
 
     fn float_source(mut expr: String, mask: u8, i: usize) -> String {
@@ -2694,6 +2863,22 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         self.line(&format!("// {:#06x} {m}", ins.offset));
         self.cur_idx = idx;
         match m {
+            "tb_indexed_readlane" => {
+                self.line(&format!("tb_swizzle[tb_lane] = {};", r(&s[0])?));
+                self.line("GroupMemoryBarrierWithGroupSync();");
+                self.ws(&d.ok_or("missing lane-read destination")?, &format!("tb_swizzle[(tb_lane & ~63u) | ({} & 63u)]", r(&s[1])?))?;
+                self.line("GroupMemoryBarrierWithGroupSync();");
+                return Ok(());
+            }
+            "tb_view_occluded" => {
+                self.line("hidden = (exec_lo & 1u) != 0u; hidden_id = v0; hidden_view = cull_view;");
+                return Ok(());
+            }
+            "tb_view_candidate" => {
+                self.line("cull_candidate = (exec_lo & 1u) != 0u;");
+                self.line(&format!("cull_record = uint3({}, {}, {});", r(&ins.src[0])?, r(&ins.src[1])?, r(&ins.src[2])?));
+                return Ok(());
+            }
             "s_ff1_i32_b64" if ins.src == [Opnd::ExecLo] => {
                 // WaveActiveMin returns the same lane ID to all participating invocations.
                 let dst = d.ok_or("missing elected lane register")?;
@@ -2721,6 +2906,10 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             _ => {}
         }
         if hair_cluster::emit(self, ins) { return Ok(()); }
+        if m == "tb_hidden_instance" {
+            self.line("hidden = (exec_lo & 1u) != 0u; hidden_id = v0; if (hidden) v42 = v28;");
+            return Ok(());
+        }
         if instance_cull::emit(self, ins)? { return Ok(()); }
         if ps09_classify::emit(self, ins) { return Ok(()); }
         if let Some(tile) = self.lds_tile {
@@ -3475,7 +3664,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                     }
                 }
             }
-            Enc::Ds if self.is_cs && matches!(m, "ds_write_b16" | "ds_write_b8" | "ds_read_u16" | "ds_read_i16" | "ds_read_u8" | "ds_read_i8" | "ds_read_u16_d16" | "ds_read_u16_d16_hi") => {
+            Enc::Ds if self.is_cs && matches!(m, "ds_write_b16" | "ds_write_b16_d16_hi" | "ds_write_b8" | "ds_read_u16" | "ds_read_i16" | "ds_read_u8" | "ds_read_i8" | "ds_read_u16_d16" | "ds_read_u16_d16_hi") => {
                 // Sub-word accesses to group-shared memory: tb_lds is addressed in dwords, so
                 // read-modify-write the containing dword.
                 self.uses_lds = true;
@@ -3487,11 +3676,18 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 self.line(&format!("uint t{t}a = ({}) + {off:#x}u; uint t{t}s = (t{t}a & 3u) * 8u;", r(&s[0])?));
                 let word = format!("tb_lds[(t{t}a >> 2) & 8191u]");
                 if m.starts_with("ds_write") {
+                    let mut data = r(&s[1])?;
+                    if m == "ds_write_b16_d16_hi" {
+                        if ins.raw[0] & (1 << 17) != 0 {
+                            return Err("unsupported global data store halfword write".into());
+                        }
+                        data = format!("({data} >> 16)");
+                    }
                     // Adjacent lanes can target different halves of the same word.
                     // A plain read-modify-write would lose one lane's update.
                     self.line(&format!("if (exec_lo & 1u) {{ uint t{t}old; InterlockedOr({word}, 0u, t{t}old);"));
                     self.line(&format!("uint t{t}seen; [allow_uav_condition] do {{ t{t}seen = t{t}old;"));
-                    self.line(&format!("uint t{t}new = (t{t}seen & ~({mask:#x}u << t{t}s)) | ((({}) & {mask:#x}u) << t{t}s);", r(&s[1])?));
+                    self.line(&format!("uint t{t}new = (t{t}seen & ~({mask:#x}u << t{t}s)) | ((({data}) & {mask:#x}u) << t{t}s);"));
                     self.line(&format!("InterlockedCompareExchange({word}, t{t}seen, t{t}new, t{t}old); }} while (t{t}old != t{t}seen); }}"));
                     return Ok(());
                 }
@@ -3744,7 +3940,8 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             format!("tb_f16_rne({e})")
         };
-        if matches!(m.as_str(), "v_add_f16" | "v_sub_f16" | "v_subrev_f16" | "v_mul_f16" | "v_max_f16" | "v_min_f16") {
+        let half_binary = matches!(m.as_str(), "v_add_f16" | "v_sub_f16" | "v_subrev_f16" | "v_mul_f16" | "v_max_f16" | "v_min_f16");
+        if ins.aux.sdwa.is_none() && half_binary {
             let (a, b) = (h16(&s[0])?, h16(&s[1])?);
             let e = match m.as_str() {
                 "v_add_f16" => format!("{a} + {b}"),
@@ -4075,7 +4272,15 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             } else {
                 Opnd::VccLo
             };
-            let cin = if m.contains("_ci_") { if vop3f { r(&s[2])? } else { "vcc_lo".to_string() } } else { "0u".to_string() };
+            let cin = if !m.contains("_ci_") {
+                "0u".to_string()
+            } else {
+                let mask = if vop3f { s[2] } else { Opnd::VccLo };
+                if self.persistent_queue {
+                    self.touch(&hi(&mask));
+                    format!("uint(tb_bit(uint2({}, {}), tb_lane))", r(&mask)?, r(&hi(&mask))?)
+                } else { r(&mask)? }
+            };
             let (mut a, mut b) = (r(&s[0])?, r(&s[1])?);
             if m.starts_with("v_subrev") {
                 core::mem::swap(&mut a, &mut b);
@@ -4093,8 +4298,13 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             self.wv(&d, &format!("t{t}"))?;
             self.touch(&cout);
+            if self.persistent_queue {
+                self.line(&format!("uint2 carry{t} = tb_ballot((exec_lo & t{t}o) != 0u);"));
+                self.ws(&cout, &format!("carry{t}.x"))?;
+                return self.ws(&hi(&cout), &format!("carry{t}.y"));
+            }
             self.ws(&cout, &format!("((exec_lo & 1u) != 0u) ? t{t}o : 0u"))?;
-            if self.packed.as_ref().is_some_and(|p| p.abi == RootAbi::RegisterWave32) { return Ok(()); } // Wave32 has a single carry mask word.
+            if self.single_wave32 || self.packed.as_ref().is_some_and(|p| p.abi == RootAbi::RegisterWave32) { return Ok(()); } // Wave32 has a single carry mask word.
             let ch = hi(&cout);
             self.touch(&ch);
             self.ws(&ch, "0u")?;
@@ -4110,8 +4320,16 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             let mut c = ins.clone();
             c.aux.sdwa = None;
+            // The selected half operands now occupy the low word. Apply the
+            // floating modifiers through the ordinary VOP3 half-float path.
+            let half_alu = half_binary || m == "v_rcp_f16";
+            if half_alu {
+                c.enc = Enc::Vop3;
+                c.aux.imm = i64::from((sd >> 13) & 1);
+                c.aux.imm2 = i64::from((sd >> 14) & 3);
+            }
             if sd & 0x3030_0000 != 0 {
-                if !is_cmp || !(m.ends_with("_f16") || m.ends_with("_f32"))
+                if !(half_alu || (is_cmp && (m.ends_with("_f16") || m.ends_with("_f32"))))
                     || (m.contains("_class_") && sd & 0x3000_0000 != 0)
                 {
                     return Err("unsupported SDWA neg/abs for this operand type".into());
@@ -4133,7 +4351,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                     continue;
                 }
                 let mut x = r(&c.src[i])?;
-                if is_cmp && m.ends_with("_f16") && (i == 0 || !m.contains("_class_"))
+                if (is_cmp || half_alu) && m.ends_with("_f16") && (i == 0 || !m.contains("_class_"))
                     && matches!(c.src[i], Opnd::ConstF32(_))
                 {
                     // The inline constant ROM supplies binary16 before byte/word selection.
@@ -4203,7 +4421,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 return self.ws(&hi(&d), &format!("t{t}ballot.y"));
             }
             self.ws(&d, &format!("(((exec_lo & 1u) != 0u) && {c}) ? 1u : 0u"))?;
-            if self.packed.as_ref().is_some_and(|p| p.abi == RootAbi::RegisterWave32) { return Ok(()); } // The next SGPR can hold an independent mask.
+            if self.single_wave32 || self.packed.as_ref().is_some_and(|p| p.abi == RootAbi::RegisterWave32) { return Ok(()); } // The next SGPR can hold an independent mask.
             let dh = hi(&d);
             if !matches!(dh, Opnd::Null | Opnd::ConstInt(_)) {
                 self.touch(&dh);
@@ -4362,16 +4580,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             "v_cndmask_b32" => {
                 // E64 permits float sign modifiers on both data sources. Apply them
                 // to the bits so signed zero and NaN payloads survive the selection.
-                let modified = |mut bits: String, source: u8| {
-                    if vop3 && ins.aux.mask & (1 << source) != 0 {
-                        bits = format!("({bits} & 0x7fffffffu)");
-                    }
-                    if vop3 && ins.aux.mask & (8 << source) != 0 {
-                        bits = format!("({bits} ^ 0x80000000u)");
-                    }
-                    bits
-                };
-                format!("(({mask} & 1u) != 0u) ? {} : {}", modified(b, 1), modified(a, 0))
+                format!("(({mask} & 1u) != 0u) ? {} : {}", Self::select_source(ins, b, 1), Self::select_source(ins, a, 0))
             }
             "v_and_b32" => format!("({a} & {b})"),
             "v_or_b32" => format!("({a} | {b})"),
@@ -4397,6 +4606,13 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             "v_mul_lo_u32" => format!("({a} * {b})"),
             // Count the mask bits below this lane in the selected 32-bit word.
             "v_mbcnt_lo_u32_b32" | "v_mbcnt_hi_u32_b32" => {
+                if self.single_wave32 && m == "v_mbcnt_lo_u32_b32" && s[0] == Opnd::ConstInt(-1) {
+                    return self.wv(&d, &format!("({b} + tb_lane)"));
+                }
+                if self.indexed_lane {
+                    let lane = if m == "v_mbcnt_lo_u32_b32" { "tb_lane & 63u" } else { "max(tb_lane & 63u, 32u) - 32u" };
+                    return self.wv(&d, &format!("({b} + countbits({a} & {}))", low_mask(lane)));
+                }
                 if self.ex.stage == Stage::Mesh {
                     // These forms count the low/high 32 lanes preceding this logical wave64 lane.
                     if s[0] != Opnd::ConstInt(-1) { return Err("mesh mbcnt with a dynamic mask".into()); }
@@ -5085,23 +5301,23 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             if ins.mnemonic.starts_with("image_atomic_") {
                 // Image atomics → Interlocked* on a RWTexture<uint> texel; vdata carries the
                 // operand in and the previous value out.
-                if ins.aux.mask == 3 && as_uint && dim == 1 && slot == 0 {
+                if ins.aux.mask == 3 && as_uint && dim == 1 {
                     let visibility = match (self.ex.stage, ins.raw.as_slice()) {
                         (Stage::Pixel, [0xf05c1308, 0x00000301]) => {
-                            self.ex.entry.as_deref() == Some("HWRasterizePS")
+                            slot == 0 && self.ex.entry.as_deref() == Some("HWRasterizePS")
                                 && matches!(self.ex.resources.as_slice(), [r] if
                                     (r.res_type, r.space, r.lower, r.upper) == (6, 0, 0, 0))
                                 && (packed_root::matches_program(&self.ex.isa, 104, 0x62a4894f274d7459)
                                     || packed_root::matches_program(&self.ex.isa, 120, 0xc974f220d28f72d8))
                         }
-                        (Stage::Compute, [0xf05c1308, _]) => self.wide_visibility_uav,
+                        (Stage::Compute, [0xf05c1308, _]) => self.wide_visibility_uavs.contains(&slot),
                         _ => false,
                     };
                     if !visibility {
                         return Err("unknown two-word visibility atomic".into());
                     }
-                    self.wide_visibility_uav = true;
-                    return packed_root::ps09_raster::emit_wide_image(self, ins, "uav0");
+                    self.wide_visibility_uavs.insert(slot);
+                    return packed_root::ps09_raster::emit_wide_image(self, ins, &format!("uav{slot}"));
                 }
                 if ins.aux.mask != 1 {
                     return Err("image atomic requires a verified two-word binding for DMASK=3 or DMASK=1 for one word".into());
@@ -5414,6 +5630,27 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         }
         if gather {
             // gather4: dmask picks the channel; the four texels fill vdata..vdata+3.
+            if modi == 4 && dim == 1 && !cmp && !has_off && !d16 && !a16 && !unorm
+                && ins.aux.mask == 1 && self.is_cs && sslot == 0
+                && matches!((self.ex.entry.as_deref(), tslot), (Some("InstanceCull"), 3) | (Some("PersistentClusterCull"), 5))
+                && ins.raw.first() == Some(&0xf110010a)
+            {
+                // This HZB program supplies an integer mip and a point sampler.
+                // Gather around floor(uv * size - 0.5) in D3D component order.
+                // Sampling texel centres preserves the bound sampler's edge mode.
+                let lod = lod.as_ref().ok_or("missing HZB gather mip")?;
+                self.line(&format!("uint w{t}, h{t}, m{t}; {tex}.GetDimensions(0u, w{t}, h{t}, m{t});"));
+                self.line(&format!("uint l{t} = (uint)clamp({lod}, 0.0, float(max(1u, m{t}) - 1u));"));
+                self.line(&format!("{tex}.GetDimensions(l{t}, w{t}, h{t}, m{t}); float2 sz{t} = max(float2(w{t},h{t}), 1.0);"));
+                self.line(&format!("float2 base{t} = floor({cvec} * sz{t} - 0.5) + 0.5;"));
+                let taps = ["0,1", "1,1", "1,0", "0,0"].map(|xy|
+                    format!("{tex}.SampleLevel({smp}, (base{t} + float2({xy}))/sz{t}, l{t}).r"));
+                self.line(&format!("float4 t{t} = float4({});", taps.join(", ")));
+                for (k, channel) in XYZW.iter().enumerate() {
+                    self.wv(&Opnd::Vgpr(vd + k as u8), &format!("asuint(t{t}.{channel})"))?;
+                }
+                return Ok(());
+            }
             if !matches!(modi, 0 | 7) {
                 return Err("gather4 with explicit LOD/bias unsupported".into());
             }
@@ -5605,14 +5842,22 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             return Ok(()); // null export (no colour written)
         }
         if is_ps && target == 8 {
-            // MRTZ: x = depth.
-            if en & 1 == 0 {
-                return Err("MRTZ export without depth (stencil/sample-mask only) unsupported".into());
+            // MRTZ exports depth in X and the per-fragment stencil reference in Y.
+            // Keep their independent channel enables and their respective float/integer types.
+            if compr || en == 0 || en & !3 != 0 {
+                return Err(format!("unsupported MRTZ export format (mask={en}, compressed={compr})"));
             }
-            if !self.ex.output_sig.iter().any(|e| matches!(e.sysval, 65 | 67 | 68)) {
-                return Err("depth export without an SV_Depth output".into());
+            if en & 1 != 0 {
+                if !self.ex.output_sig.iter().any(|e| matches!(e.sysval, 65 | 67 | 68)) {
+                    return Err("depth export without an SV_Depth output".into());
+                }
+                self.line(&format!("if (exec_lo & 1u) o.od = {};", f(&ins.src[0])?));
             }
-            self.line(&format!("if (exec_lo & 1u) o.od = {};", f(&ins.src[0])?));
+            if en & 2 != 0 {
+                let slot = self.ex.output_sig.iter().position(|e| e.sysval == 69 && e.comp_type == 1 && e.mask == 1)
+                    .ok_or("stencil export without a scalar uint SV_StencilRef output")?;
+                self.line(&format!("if (exec_lo & 1u) o.o{slot} = {};", r(&ins.src[1])?));
+            }
             return Ok(());
         }
         if !is_ps && (32..64).contains(&target) && (target - 32) as usize >= self.out_params.len() {
@@ -5818,7 +6063,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 (1, false) => format!("RWTexture2D<{e}>"),
                 (2, false) => format!("RWTexture3D<{e}>"),
                 (5, false) => format!("RWTexture2DArray<{e}>"),
-                (1, true) if *slot == 0 && self.wide_visibility_uav => "RWTexture2D<uint64_t>".to_string(),
+                (1, true) if self.wide_visibility_uavs.contains(slot) => "RWTexture2D<uint64_t>".to_string(),
                 (1, true) => "RWTexture2D<uint>".to_string(),
                 (2, true) => "RWTexture3D<uint>".to_string(),
                 (5, true) => "RWTexture2DArray<uint>".to_string(),
@@ -5840,13 +6085,15 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 .collect();
             let _ = writeln!(h, "static const uint tb_code[{}] = {{ {} }};", words.len().max(1), if words.is_empty() { "0".to_string() } else { words.join(", ") });
         }
-        if self.is_cs && self.uses_lds {
+        if self.micropoly_vote.is_some() {
+            writeln!(h, "groupshared uint tb_lds[784];\ngroupshared uint tb_raster_votes[2];").unwrap();
+        } else if self.is_cs && self.uses_lds {
             let _ = writeln!(h, "groupshared uint tb_lds[8192];");
         }
         Ok(h)
     }
 
-    fn finish(&mut self, is_ps: bool, output_order: &[String]) -> Result<String, String> {
+    fn finish(&mut self, is_ps: bool, output_order: &[String], stencil_target: Option<u32>) -> Result<String, String> {
         let ex = self.ex;
         let mut h = String::new();
         let _ = writeln!(h, "// Generated by tuxbox-xshader from RDNA2 microcode ({:?}, {} instrs).", ex.stage, self.insns.len());
@@ -5863,7 +6110,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 Some(RootAbi::Ps09Raster) => 11,
                 None => 4 + nparams,
             };
-            if self.compute_swizzle {
+            if self.compute_swizzle || self.indexed_lane {
                 writeln!(h, "groupshared uint tb_swizzle[{}];", tx * ty_ * tz).unwrap();
             }
             if let Some(width) = self.required_wave_size { writeln!(h, "[WaveSize({width})]").unwrap(); }
@@ -5877,7 +6124,7 @@ void main(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {{");
                 self.regs.insert(format!("s{}", g + k));
             }
             let _ = writeln!(h, "{}", self.reg_decls());
-            if self.compute_swizzle {
+            if self.compute_swizzle || self.indexed_lane || self.single_wave32 {
                 writeln!(h, "    uint tb_lane = gtid.x + {tx}u * (gtid.y + {ty_}u * gtid.z);").unwrap();
             }
             let _ = writeln!(h, "    v0 = gtid.x; v1 = gtid.y; v2 = gtid.z;");
@@ -5957,7 +6204,9 @@ void main(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {{");
         }
         for (ei, e) in outputs {
             let (ty, _) = sig_type(e);
-            if matches!(e.sysval, 65 | 67 | 68) {
+            if let Some(slot) = stencil_target.filter(|_| e.sysval == 69) {
+                let _ = writeln!(h, "    uint o{ei} : SV_Target{slot};");
+            } else if matches!(e.sysval, 65 | 67 | 68) {
                 let _ = writeln!(h, "    float od : {};", semantic(e).trim_end_matches('0'));
             } else if e.sysval == 1 && !is_ps {
                 // `precise`: no fast-math on the position computation. The title relies on a
@@ -6147,6 +6396,11 @@ void main(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {{");
         }
         h.push_str(&init);
         h.push_str(&self.body);
+        // Native stencil reference export stores the low byte. An R8_UINT
+        // render target instead saturates a 32-bit shader result at 255.
+        if let Some(ei) = stencil_target.and_then(|_| ex.output_sig.iter().position(|e| e.sysval == 69)) {
+            let _ = writeln!(h, "    o.o{ei} &= 255u;");
+        }
         h.push_str(if no_out || self.is_gs { "}\n" } else { "    return o;\n}\n" });
         Ok(h)
     }

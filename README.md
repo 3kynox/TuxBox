@@ -5,7 +5,7 @@ TuxBox is an experimental project for running Xbox Series X|S games on PC. Most 
 ## What runs today?
 
 - **Lanes** is a small game that uses TuxBox’s Xbox graphics, memory and input libraries. Collect coins and dodge barriers using a keyboard, mouse or Xbox controller.
-- **The Matrix Awakens (Frosty)** shows the falling green code behind the menu, opens Settings and plays the beginning of the chase cinematic on Linux. You supply the game, its matching Xbox system files and Proton. Driving and shooting remain unverified. [Menu animation](evidence/matrix-awakens/menu-rain-animation.webp) · [Setup and test results](docs/MATRIX_AWAKENS.md)
+- **The Matrix Awakens (Frosty)** runs from the main menu through the highway chase and into the open city on Linux. You can shoot at pursuing cars and walk the streets after the chase. Some buildings and vehicles have missing surfaces. You supply the game, its matching Xbox system files and Proton. [Setup and test results](docs/MATRIX_AWAKENS.md)
 
 ## Try Lanes
 

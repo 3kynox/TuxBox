@@ -1,0 +1,53 @@
+{
+  "title_sha256": "ae39eb1e92fa806df189c768c1478a53dfb54a2cc9769a9f2301ca7921e3eb04",
+  "global_archive_sha256": "afab84fa891e491d64f1c2a9bdf26a66afc2054aef2cd9110e358402473b4fb2",
+  "material_archive_sha256": "9de0439f815138c89fd414e69f4f5f3497fd523ac4dd2321c5207f7fd67eb2e1",
+  "profile_sha256": "735711c06cb8fe368e7448905256cb532af22712eb2d3c9e8fbdf2109bf969c5",
+  "source_trace_sha256": "dee9acbad4c4ec5847b295a767785216f24361c8ebfb96b11863856a471cfd19",
+  "compiler_sha256": "732513553bab1f580e7530f3d1640e6117420495e585e757177947975523f48f",
+  "dxc_sha256": "3dfc856b76291ffc7e45e21fd37ab80e85b34101de76a03253df6608785c92a0",
+  "dxv_sha256": "33778294d67143d9f81526f4759c66d5a67a95ea9873448ef3595650a643cbd3",
+  "source_programs": {
+    "global": 42,
+    "material": 1229
+  },
+  "linked_pairs": 207,
+  "host": "Linux x86-64",
+  "proton": "1793301796 experimental-11.0-20261027b-x86_64",
+  "cold": {
+    "wall_seconds": 292.21,
+    "total_compiled": 1686,
+    "total_reused": 15,
+    "chase": {
+      "programs": {
+        "checked": 1271,
+        "compiled": 1267
+      },
+      "links": {
+        "checked": 207,
+        "compiled": 207
+      }
+    },
+    "log_sha256": "98600d6d91f7e7a8267b7af81fef5e440903329821287c949b0667e41ac94a27"
+  },
+  "warm": {
+    "wall_seconds": 1.45,
+    "total_compiled": 0,
+    "total_reused": 1701,
+    "chase": {
+      "programs": {
+        "checked": 1271,
+        "compiled": 0
+      },
+      "links": {
+        "checked": 207,
+        "compiled": 0
+      }
+    },
+    "log_sha256": "cbed1c7ca0e12916df383c604475ad54d4b23e4a4deea5821a6da86eb3ab45b2"
+  },
+  "runtime_cache_fingerprint": "7fe838fbadd02f320c170d0a11207b7be3240a590a1400e1fb70b79bdb673464",
+  "runtime_cache_entries": 1474,
+  "runtime_output_manifest_sha256": "e2a98eacb881268689a16bcf58fa14578b7e8ae84ac3ef18d1b78b89222e4e50",
+  "scope": "Normal prepare-only entry point against the staged game. Cold used an empty prefix. Warm reused the same prefix. Total preparation entries include the ordinary first-boot plan and any overlapping chase inputs."
+}

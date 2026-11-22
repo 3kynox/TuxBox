@@ -68,7 +68,9 @@ def main():
     for name in ("pak", "cache", "provider", "prefix", "proton", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--adapter", required=True)
-    parser.add_argument("--frame-seven", action="store_true", help="also check the five-target material vertex/pixel pipeline")
+    material = parser.add_mutually_exclusive_group()
+    material.add_argument("--frame-seven", action="store_true", help="also check the five-target material vertex/pixel pipeline")
+    material.add_argument("--bridge", action="store_true", help="also check the four-target bridge finale material")
     parser.add_argument("--runtime-links", action="store_true", help="test on-demand geometry and vertex links cold and warm")
     args = parser.parse_args()
     plan, _ = tuxbox_plan(FROSTY_PLAN, json.loads(FROSTY_PLAN.read_text()), True)
@@ -77,12 +79,16 @@ def main():
     if args.runtime_links:
         programs.pop("pixel1")
         programs["pixel0"] = rows["material", 700]
-    if args.frame_seven or args.runtime_links:
-        programs.update(vertex7=rows["material", 2517], pixel7=rows["material", 2522])
+    check_material = args.frame_seven or args.bridge or args.runtime_links
+    if check_material:
+        vs, ps = (31059, 31420) if args.bridge else (2517, 2522)
+        programs.update(vertex7=rows["material", vs], pixel7=rows["material", ps])
     parent = ROOT / "build/frosty-geometry-link"
     parent.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=parent) as temporary:
         trial = Path(temporary)
+        if args.bridge:
+            (trial / "bridge.txt").touch()
         staging = trial / "by_source"
         staging.mkdir()
         for name, row in programs.items():
@@ -97,7 +103,7 @@ def main():
                 source = args.cache / "by_gs_ps" / (pair + ".cso")
                 links.append(dict(pair=pair, compiled_sha256=digest(source)))
                 shutil.copyfile(source, trial / f"linked{n}.cso")
-            if args.frame_seven:
+            if check_material:
                 vs, ps = (programs[name]["dxbc_sha256"] for name in ("vertex7", "pixel7"))
                 pair = f"{vs}_{ps}"
                 source = args.cache / "by_vs_ps" / (pair + ".cso")
@@ -115,12 +121,19 @@ def main():
         host = Host(None, args.proton, args.prefix)
         output = dict(proton=host.version, provider_sha256=digest(args.provider), guest_sha256=digest(exe),
                       source_shaders={name: row["dxbc_sha256"] for name, row in programs.items()})
+        if args.bridge:
+            for stage in ("vertex", "pixel"):
+                source_key = output["source_shaders"].pop(stage + "7")
+                output["source_shaders"]["bridge_" + stage] = source_key
+            output["bridge_portable_pixel_sha256"] = digest(staging / (programs["pixel7"]["dxbc_sha256"] + ".cso"))
         if args.runtime_links:
             output.update(runtime_checks(trial, host, exe, args.adapter, programs))
         else:
             expected = dict(pci=args.adapter.lower(), linked="2", absent="1", wrong_consumer="1", wrong_stage="1")
-            if args.frame_seven:
+            if check_material:
                 expected.update(vertex_linked="1", vertex_absent="1", vertex_wrong_consumer="1", vertex_wrong_stage="1")
+            if args.bridge:
+                expected["bridge_pixel_absent"] = "1"
             output.update(links=links, checks=guest_check(host, exe, [args.adapter], expected))
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(output, indent=2) + "\n")

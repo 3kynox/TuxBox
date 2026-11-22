@@ -2,7 +2,7 @@
 use super::{List, parent, recording};
 use crate::device;
 use core::ffi::c_void;
-use windows::Win32::Foundation::E_INVALIDARG;
+use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL};
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_CS_DISPATCH_MAX_THREAD_GROUPS_PER_DIMENSION, D3D12_RESOURCE_DIMENSION_BUFFER,
     ID3D12Resource,
@@ -52,6 +52,31 @@ pub(super) unsafe extern "system" fn unordered_access(list: &List, index: u32, g
                 .SetComputeRootUnorderedAccessView(index, gpu_address)
         };
     }
+}
+
+pub(super) unsafe extern "system" fn async_compute_budget(list: &List, budget: *const [u8; 24]) {
+    let mut state = recording(list);
+    if !state.can_record(&list.native) {
+        return;
+    }
+    // SAFETY: the Xbox caller supplies a readable 24-byte record for this call.
+    let Some(budget) = (unsafe { budget.as_ref() }) else {
+        state.error = E_INVALIDARG;
+        return;
+    };
+    // SetAsyncComputeBudgetInternal passes six zero DWORDs at RVA 0x5765a97.
+    // Host queues already use their existing scheduling policy for this default.
+    if *budget != [0; 24] {
+        crate::diagnostics::recording_error(format_args!(
+            "nonzero asynchronous compute budget {budget:02x?}"
+        ));
+        state.error = E_NOTIMPL;
+        return;
+    }
+    static FIRST: std::sync::Once = std::sync::Once::new();
+    crate::diagnostics::log_once(&FIRST, || {
+        "accepted default asynchronous compute budget (list slot 96)".into()
+    });
 }
 
 pub(super) unsafe extern "system" fn dispatch(list: &List, x: u32, y: u32, z: u32) {

@@ -39,6 +39,9 @@ class ShaderInventoryTests(unittest.TestCase):
             absent = "7" * 64
             log.write_text(f"TuxBox d3d12_xs: shader request vertex {source}\n" * 2 +
                            f"TuxBox d3d12_xs: prepared compute shader missing or invalid, source SHA-256 {absent}\n")
+            chase = root / "chase.log"
+            chase.write_text(f"[TuxBox test] Compiled Xbox shader {source}\n" +
+                             f"[TuxBox test] Compiled Xbox shader {absent}_{source}_{source}\n")
             plan = {"executable_sha256": digest(title), "shaders": [{"archive": "global", "entry": 0,
                     "dxbc_sha256": source, "profile": "vs_6_0"}]}
             index = root / "index.csv"
@@ -56,7 +59,7 @@ class ShaderInventoryTests(unittest.TestCase):
                             {"global": (0, pak.stat().st_size, digest(pak)), "material": (0, pak.stat().st_size, digest(pak))},
                             clear=True), patch("project_tuxbox.shader_inventory.decoder"), \
                  patch("project_tuxbox.shader_inventory.survey_command", side_effect=run) as calls:
-                result = inventory(root, plan, [], {"menu": log}, compiler, index=index, dxc=dxc)
+                result = inventory(root, plan, [], {"chase": chase, "menu": log}, compiler, index=index, dxc=dxc)
             self.assertEqual([call.args[0][0] for call in calls.call_args_list], [compiler, dxc, dxv])
             self.assertEqual(result["desktop_tools"]["dxv_sha256"], digest(dxv))
             stages = {row["stage"]: row for row in result["stages"]}
@@ -68,6 +71,9 @@ class ShaderInventoryTests(unittest.TestCase):
             self.assertEqual(stages["Ray hit group"]["unique_dxbc"], 0)
             self.assertEqual(result["traces"]["menu"]["unique_sources"], 2)
             self.assertEqual(result["traces"]["menu"]["trace"], "per-source")
+            self.assertEqual(result["traces"]["chase"]["unique_sources"], 1)
+            self.assertEqual(result["traces"]["chase"]["trace"], "standalone compilations")
+            self.assertEqual(result["requested"][1]["observed_in"], ["chase", "menu"])
             self.assertEqual(result["requested"][0]["archive_entries"], [])
             self.assertIsNone(result["requested"][0]["standalone_dxil_validated"])
             self.assertTrue(result["requested"][1]["standalone_dxil_validated"])

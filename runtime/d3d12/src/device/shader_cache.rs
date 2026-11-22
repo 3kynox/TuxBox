@@ -198,6 +198,11 @@ pub(super) fn link_on_demand(
     compile::linked(producer, pixel, pixel_dxil, stage)
 }
 
+pub(super) fn stencil_target(shader: &[u8], slot: u32) -> Option<Vec<u8>> {
+    let source = source_digest(shader)?;
+    compile::stencil(shader, &source, slot)
+}
+
 pub(super) fn prepared(shader: &[u8]) -> Option<Vec<u8>> {
     let (stage, ShaderCode::Xbox) = shader_code(shader)? else {
         return None;

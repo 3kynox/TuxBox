@@ -1,10 +1,10 @@
 //! Xbox device slot 86. Standard x64 state subobjects use desktop D3D12 layout;
 //! the console also appends a stencil subobject and embeds guest object handles.
-use super::{Device, Out, compute, identity, shader_cache, wrap_pageable};
+use super::{Device, Out, compute, identity, shader_cache, stencil, wrap_pageable};
 use crate::proxy::check_output;
 use core::{ffi::c_void, mem::MaybeUninit, ptr, slice};
 use windows::Win32::Foundation::{E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER};
-use windows::Win32::Graphics::{Direct3D12::*, Dxgi::Common::DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::{Direct3D12::*, Dxgi::Common::*};
 use windows::core::{GUID, HRESULT, Interface};
 
 // In the packaged mesh builder at RVA 0x57577d0, Xbox AS and MS are one
@@ -61,6 +61,7 @@ unsafe fn equivalent_stencil(payload: *const u8, depth: &D3D12_DEPTH_STENCIL_DES
 unsafe fn create(
     device: &Device,
     desc: &D3D12_PIPELINE_STATE_STREAM_DESC,
+    pipeline: &mut compute::PipelineData,
 ) -> windows::core::Result<ID3D12PipelineState> {
     let host = device.state.pipeline_device.as_ref().ok_or(E_NOINTERFACE)?;
     let mut size = desc.SizeInBytes;
@@ -81,7 +82,10 @@ unsafe fn create(
     let mut storage = vec![MaybeUninit::<usize>::uninit(); size / size_of::<usize>()];
     let output = storage.as_mut_ptr().cast::<u8>();
     unsafe { ptr::copy_nonoverlapping(input, output, size) };
-    let mut depth = None;
+    let mut depth: *mut D3D12_DEPTH_STENCIL_DESC1 = ptr::null_mut();
+    let mut formats: *mut D3D12_RT_FORMAT_ARRAY = ptr::null_mut();
+    let mut blend: *mut D3D12_BLEND_DESC = ptr::null_mut();
+    let mut samples = 1;
     let mut stages = Vec::new();
     let mut original = [None; 8];
     let mut fields = [None; 8];
@@ -145,15 +149,18 @@ unsafe fn create(
                     }
                 }
             }
+            8 => blend = payload.cast(),
+            15 => formats = payload.cast(),
+            17 => samples = unsafe { (*payload.cast::<DXGI_SAMPLE_DESC>()).Count },
             // Cached native Xbox PSOs are hints, specific to the console driver.
             19 => unsafe {
                 payload
                     .cast::<D3D12_CACHED_PIPELINE_STATE>()
                     .write(Default::default())
             },
-            21 => depth = Some(unsafe { &*payload.cast::<D3D12_DEPTH_STENCIL_DESC1>() }),
+            21 => depth = payload.cast(),
             STENCIL_X => {
-                let depth = depth.ok_or(E_NOTIMPL)?;
+                let depth = unsafe { depth.as_ref() }.ok_or(E_NOTIMPL)?;
                 if at + bytes != size || !unsafe { equivalent_stencil(payload, depth) } {
                     return Err(E_NOTIMPL.into());
                 }
@@ -165,6 +172,24 @@ unsafe fn create(
         at += bytes;
     }
 
+    let stencil_code;
+    if let (Some(depth), Some(formats), Some(blend), Some((ps, Some(_))), Some(field)) = (
+        unsafe { depth.as_mut() },
+        unsafe { formats.as_mut() },
+        unsafe { blend.as_mut() },
+        original[1],
+        fields[1],
+    ) && let Some((slot, code)) = stencil::redirect(device, ps, samples, depth, formats, blend)?
+    {
+        stencil_code = code;
+        unsafe {
+            field.write(D3D12_SHADER_BYTECODE {
+                pShaderBytecode: stencil_code.as_ptr().cast(),
+                BytecodeLength: stencil_code.len(),
+            });
+        }
+        pipeline.stencil_slot = Some(slot);
+    }
     let native_desc = D3D12_PIPELINE_STATE_STREAM_DESC {
         SizeInBytes: size,
         pPipelineStateSubobjectStream: output.cast(),
@@ -267,18 +292,11 @@ pub(super) unsafe extern "system" fn create_pipeline(
     let Some(desc) = (unsafe { desc.as_ref() }) else {
         return E_POINTER;
     };
-    let native = unsafe { create(device, desc) };
+    let mut state = compute::PipelineData::default();
+    let native = unsafe { create(device, desc, &mut state) };
     crate::diagnostics::pipeline_stream(
         desc.SizeInBytes,
         native.as_ref().err().map(|e| e.code().0),
     );
-    unsafe {
-        wrap_pageable(
-            native,
-            &compute::PIPELINE,
-            device,
-            compute::PipelineData::default(),
-            out,
-        )
-    }
+    unsafe { wrap_pageable(native, &compute::PIPELINE, device, state, out) }
 }

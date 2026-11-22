@@ -18,4 +18,5 @@ elif [[ ${1:-} == --prepare-only ]]; then
 elif [[ ${1:-} != --desktop && ${1:-} != --no-shader-prep && ${TUXBOX_SHADER_PREP:-1} != 0 && " $* " != *" -nullrhi "* ]]; then
     python "$repo/tools/reference/prepare_comparison.py" "$pointer" || echo "Comparison shader preparation incomplete." >&2
 fi
+desktop_limits=(--property=MemoryHigh=8G --property=MemoryMax=11G --property=MemorySwapMax=2G)
 source "$repo/tools/frosty_session.sh"

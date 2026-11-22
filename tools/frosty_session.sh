@@ -32,12 +32,12 @@ if [[ ${1:-} == --desktop ]]; then
     environment=()
     for var in DISPLAY XAUTHORITY PULSE_SERVER PROTONPATH PROTON_LOG_DIR WINEDEBUG \
                TUXBOX_LOG TUXBOX_SHADER_PREP TUXBOX_SHADER_PREP_UI TUXBOX_XSHADER DXC \
-               TUXBOX_RUNTIME_SHADERS TUXBOX_TRACE_SHADERS "${extra_variables[@]}" TUXBOX_KEYBOARD_GAMEPAD VK_LAYER_PATH VK_ADD_LAYER_PATH \
+               TUXBOX_RUNTIME_SHADERS TUXBOX_TRACE_SHADERS TUXBOX_TRACE_STENCIL "${extra_variables[@]}" TUXBOX_KEYBOARD_GAMEPAD VK_LAYER_PATH VK_ADD_LAYER_PATH \
                VK_INSTANCE_LAYERS VKD3D_DISABLE_EXTENSIONS PRESSURE_VESSEL_FILESYSTEMS_RO; do
         if [[ -v $var ]]; then environment+=("--setenv=$var=${!var}"); fi
     done
     systemd-run --user --collect --unit=tuxbox-frosty --description="Frosty in $work" --working-directory="$repo" \
-        --property=MemoryHigh=8G --property=MemoryMax=11G --property=MemorySwapMax=2G \
+        "${desktop_limits[@]}" \
         --property=StandardOutput=journal --property=StandardError=journal \
         "${environment[@]}" "$launcher" "${replay_options[@]}" "$@"
     echo "Follow the live console with journalctl --user -fu tuxbox-frosty.service -o cat"

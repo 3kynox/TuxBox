@@ -28,13 +28,13 @@ pub(super) fn expression(ins: &Insn) -> Result<Option<String>, String> {
     }
     let op = match ins.mnemonic.as_str() {
         "v_add_nc_u16" | "v_pk_add_u16" => Operation::Add,
-        "v_pk_sub_i16" | "v_pk_sub_u16" => Operation::Subtract,
+        "v_sub_nc_u16" | "v_pk_sub_i16" | "v_pk_sub_u16" => Operation::Subtract,
         "v_pk_mul_lo_u16" => Operation::Multiply,
         "v_lshlrev_b16" | "v_pk_lshlrev_b16" => Operation::ShiftLeft,
         "v_lshrrev_b16" | "v_pk_lshrrev_b16" => Operation::ShiftRight,
         "v_ashrrev_i16" | "v_pk_ashrrev_i16" => Operation::ArithmeticShiftRight,
-        "v_max_i16" => Operation::SignedMax,
-        "v_min_i16" => Operation::SignedMin,
+        "v_max_i16" | "v_pk_max_i16" => Operation::SignedMax,
+        "v_min_i16" | "v_pk_min_i16" => Operation::SignedMin,
         _ => return Ok(None),
     };
     let packed = ins.op >= 0x400;

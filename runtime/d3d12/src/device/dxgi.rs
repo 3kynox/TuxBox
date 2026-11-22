@@ -21,6 +21,8 @@ pub(super) struct DxgiDevice {
     pub(super) pipeline_device: Option<ID3D12Device2>,
     pub(super) media: super::media::Sources,
     pub(super) placements: super::placement::Placements,
+    pub(super) emulate_stencil: OnceLock<bool>,
+    pub(super) depth_views: std::sync::Arc<super::placement::Views<super::stencil::Surface>>,
     pub(super) frames: super::frame_events::FrameEvents,
 }
 
@@ -42,6 +44,8 @@ impl DxgiDevice {
             use_descriptor_api: 1,
             adapter,
             pipeline_device,
+            emulate_stencil: Default::default(),
+            depth_views: Default::default(),
             frames: Default::default(),
             media: Default::default(),
             placements: Default::default(),

@@ -2,6 +2,7 @@ import hashlib
 import os
 from pathlib import Path
 import struct
+import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -102,3 +103,38 @@ class RuntimeShaderLinks(unittest.TestCase):
         self.assertTrue((self.session / (key + ".failed")).is_file())
         self.assertFalse(completed.exists())
         self.assertTrue(pending.is_dir())
+
+    def test_running_worker_keeps_compiler_after_release_replacement(self):
+        from threading import Event
+        release = self.cache / "xshader"
+        replacement = self.cache / "new"
+        dxc = self.cache / "dxc"
+        for binary, text in [(release, "original"), (replacement, "rebuilt"), (dxc, "toolchain")]:
+            binary.write_text(f"#!/bin/sh\necho {text}\n")
+            binary.chmod(0o700)
+        stop = Event()
+        calls = []
+
+        def request(data):
+            key = hashlib.sha256(data).hexdigest()
+            (self.requests / (key + ".dxbc")).write_bytes(data)
+
+        def compile_one(source, key, tools, cache, session):
+            calls.append((subprocess.check_output([tools[0]]).strip(), cache.name))
+            if len(calls) == 1:
+                replacement.replace(release)
+                request(b"second")
+            else:
+                stop.set()
+            return True
+
+        with patch("project_tuxbox.runtime_shaders.compiler_tools", return_value=(release, dxc, dxc)), \
+                patch("project_tuxbox.runtime_shaders.compile_request", side_effect=compile_one):
+            request(b"first")
+            serve(self.session, stop, lambda line: None)
+            stop.clear()
+            request(b"third")
+            serve(self.session, stop, lambda line: None)
+        self.assertEqual([entry[0] for entry in calls], [b"original", b"original", b"rebuilt"])
+        self.assertEqual(calls[0][1], calls[1][1])
+        self.assertNotEqual(calls[1][1], calls[2][1])

@@ -3,7 +3,7 @@ mod descriptors;
 mod publication;
 mod upload;
 mod writeback;
-pub(crate) use descriptors::HeapViews;
+pub(crate) use descriptors::{HeapViews, Views};
 pub(crate) use publication::QueueAccess;
 
 use super::Device;
@@ -251,7 +251,7 @@ impl Texture {
 
 #[derive(Default)]
 pub(super) struct Placements {
-    pub(super) views: Arc<descriptors::Views>,
+    pub(super) views: Arc<Views<Texture>>,
     // Equal descriptors at the same VA name the same image, including writes
     // made before the title creates a second resource proxy for it.
     images: Arc<Images>,

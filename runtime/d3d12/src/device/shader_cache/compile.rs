@@ -30,6 +30,14 @@ pub(super) fn on_demand(shader: &[u8], source: &str, stage: Stage) -> Option<Vec
     })
 }
 
+pub(crate) fn stencil(shader: &[u8], source: &str, slot: u32) -> Option<Vec<u8>> {
+    let key = format!("{source}_rt{slot}");
+    request(&key, Stage::Pixel, |pending, requests| {
+        fs::write(pending, shader)?;
+        fs::rename(pending, requests.join(format!("{key}.stencil")))
+    })
+}
+
 pub(super) fn linked(
     producer: (&str, &[u8]),
     pixel: (&str, &[u8]),

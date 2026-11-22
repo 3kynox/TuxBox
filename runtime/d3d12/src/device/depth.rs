@@ -135,5 +135,13 @@ pub(super) unsafe fn wrap(
             Err(error) => return error.code(),
         },
     };
-    unsafe { wrap_pageable(Ok(native), &RESOURCE, device, backing, out) }
+    unsafe {
+        wrap_pageable(
+            Ok(native),
+            &RESOURCE,
+            device,
+            super::ResourceState::from(backing),
+            out,
+        )
+    }
 }

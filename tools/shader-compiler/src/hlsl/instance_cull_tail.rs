@@ -1,6 +1,7 @@
 //! Recognize the Scarlett wave64 append sequence independently of the culling
 //! code that selects its active lanes. Its queue and statistics descriptors
 //! and the encodings of the wave operations are part of the matched ABI.
+use super::writes_scalar;
 use crate::rdna2::{
     Enc, Insn,
     Opnd::{self, Sgpr, Vgpr},
@@ -37,34 +38,6 @@ fn scalar_input(op: &Insn, encoding: u32) -> Option<Opnd> {
         return None;
     };
     (word & !0xff == encoding).then_some(reg)
-}
-
-fn writes_scalar(op: &Insn, register: u8) -> bool {
-    let m = op.mnemonic.as_str();
-    let width = if m.ends_with("dwordx16") {
-        16
-    } else if m.ends_with("dwordx8") {
-        8
-    } else if m.ends_with("dwordx4") {
-        4
-    } else if m.ends_with("dwordx2")
-        || m.ends_with("_b64")
-        || m.ends_with("_i64")
-        || m.ends_with("_u64")
-        || m.starts_with("v_cmp")
-    {
-        2
-    } else {
-        1
-    };
-    op.dst.iter().any(|dst| {
-        let base = match *dst {
-            Sgpr(n) => n,
-            Vgpr(n) if m == "v_readlane_b32" => n, // scalar destination in the VOP3 encoding
-            _ => return false,
-        };
-        (base..base.saturating_add(width)).contains(&register)
-    })
 }
 
 fn table_reaches_tail(prefix: &[Insn], start: usize, end: usize) -> bool {

@@ -152,6 +152,17 @@ pub(super) unsafe extern "system" fn dsv(
     handle: D3D12_CPU_DESCRIPTOR_HANDLE,
 ) {
     let resource = unsafe { view_resource(device, object, desc, handle) };
+    if super::stencil::needs_emulation(device) {
+        let source = unsafe { super::resource_proxy(object, identity(device).as_raw()) };
+        let surface = source
+            .filter(|p| super::stencil::supported_view(&p.native, unsafe { desc.as_ref() }))
+            .map(|p| {
+                p.state
+                    .stencil
+                    .get_or_init(|| std::sync::Arc::new(super::stencil::Surface::new(&p.native)))
+            });
+        device.state.depth_views.set(handle.ptr, surface);
+    }
     unsafe {
         device
             .native

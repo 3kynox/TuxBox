@@ -1,5 +1,5 @@
 //! Resource layout of the Xbox persistent hierarchy and cluster queue kernel.
-use super::{Emitter, Enc, Opnd, Res};
+use super::{fssm_bindings, Emitter, Enc, Opnd, Res};
 use crate::meta::RootParamKind;
 
 pub(super) fn prepare(em: &mut Emitter<'_>) -> Result<(), String> {
@@ -21,6 +21,19 @@ pub(super) fn prepare(em: &mut Emitter<'_>) -> Result<(), String> {
     {
         return Err("unsupported PersistentClusterCull descriptor tables".into());
     }
+    let hzb = em
+        .ex
+        .resources
+        .iter()
+        .any(|r| (r.res_type, r.space, r.lower, r.upper) == (3, 0, 5, 5));
+    let post = hzb
+        && em
+            .ex
+            .resources
+            .iter()
+            .any(|r| (r.res_type, r.space, r.lower, r.upper) == (3, 0, 7, 7));
+    let shift = u32::from(hzb);
+    let prior_counts = 6 + shift + u32::from(post);
     let bindings = [
         (2, 0),
         (5, 0),
@@ -28,8 +41,8 @@ pub(super) fn prepare(em: &mut Emitter<'_>) -> Result<(), String> {
         (5, 2),
         (4, 3),
         (5, 4),
-        (4, 5),
-        (5, 6),
+        (4, 5 + shift),
+        (5, prior_counts),
         (8, 0),
         (8, 1),
         (7, 2),
@@ -37,8 +50,16 @@ pub(super) fn prepare(em: &mut Emitter<'_>) -> Result<(), String> {
         (7, 4),
         (6, 5),
     ];
-    if em.ex.resources.len() != bindings.len()
-        || !bindings.iter().all(|&(kind, slot)| {
+    let extra = [(3, 5), (1, 0), (3, 7)];
+    let bindings = bindings.iter().chain(if post {
+        &extra[..]
+    } else if hzb {
+        &extra[..2]
+    } else {
+        &[]
+    });
+    if em.ex.resources.len() != bindings.clone().count()
+        || !bindings.into_iter().all(|&(kind, slot)| {
             em.ex
                 .resources
                 .iter()
@@ -46,6 +67,18 @@ pub(super) fn prepare(em: &mut Emitter<'_>) -> Result<(), String> {
         })
     {
         return Err("unsupported PersistentClusterCull resource bindings".into());
+    }
+    if hzb {
+        // First and second passes touch different fields of the same buffers.
+        // The record size remains the one published in the binding table.
+        for (&(uav, slot), extent) in &mut em.sbuf {
+            *extent = fssm_bindings::structured_words(em.ex, slot, uav)?;
+        }
+        if post {
+            em.tbuf_ty.insert((false, 7), 1);
+        }
+        em.persistent_queue = true;
+        return Ok(());
     }
     // Vector accesses address float4 scene rows, uint instance lookups and
     // three-word streaming requests. All five queue counters are fields of
@@ -59,15 +92,23 @@ pub(super) fn prepare(em: &mut Emitter<'_>) -> Result<(), String> {
     ] {
         if em.sbuf.get(&key) != Some(&words) {
             return Err(format!(
-                "unsupported PersistentClusterCull structured access {key:?}"
+                "unsupported PersistentClusterCull structured access {key:?}: {:?}",
+                em.sbuf.get(&key)
             ));
         }
     }
-    // Views have 192 dwords and prior visible counts have two. The single-view
+    // The hierarchy lookup is an indexed structured load of the first field.
+    // Element one starts beyond the three padding words in element zero.
+    em.sbuf.insert(
+        (false, 2),
+        fssm_bindings::structured_words(em.ex, 2, false)?,
+    );
+    // The view prefix read here spans 192 dwords; prior counts use two. The single-view
     // kernel reads view zero with scalar loads. Multiview uses the view index
     // from the queue entry with the same constant field offsets.
-    for (slot, expected) in [(4, 192), (6, 2)] {
+    for (slot, expected) in [(4, 192), (prior_counts, 2)] {
         let mut words = 0;
+        let mut indexed = false;
         for (&index, resources) in &em.res {
             if resources.as_slice() != [Res::Buf(slot, false)] {
                 continue;
@@ -95,6 +136,7 @@ pub(super) fn prepare(em: &mut Emitter<'_>) -> Result<(), String> {
                                 | "buffer_load_dwordx4"
                         ) =>
                 {
+                    indexed = true;
                     Emitter::mubuf_dwords(&load.mnemonic)
                 }
                 _ => None,
@@ -108,7 +150,18 @@ pub(super) fn prepare(em: &mut Emitter<'_>) -> Result<(), String> {
             words = words.max(load.aux.imm as u32 / 4 + width);
         }
         if words != expected {
-            return Err(format!("invalid PersistentClusterCull t{slot} extent"));
+            return Err(format!(
+                "invalid PersistentClusterCull t{slot} extent {words} (expected {expected})"
+            ));
+        }
+        if indexed {
+            let stride = fssm_bindings::structured_words(em.ex, slot, false)?;
+            if stride < words {
+                return Err(format!(
+                    "PersistentClusterCull t{slot} fields exceed its element stride"
+                ));
+            }
+            words = stride;
         }
         em.sbuf.insert((false, slot), words);
     }

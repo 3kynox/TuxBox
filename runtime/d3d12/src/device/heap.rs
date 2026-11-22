@@ -168,7 +168,7 @@ pub(super) unsafe extern "system" fn place_virtual(
                     Ok(native),
                     &RESOURCE,
                     device,
-                    super::Backing::Placed(texture),
+                    super::ResourceState::from(super::Backing::Placed(texture)),
                     out,
                 )
             };

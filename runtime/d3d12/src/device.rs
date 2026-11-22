@@ -27,6 +27,7 @@ pub(crate) mod media;
 pub(crate) mod placement;
 pub(crate) mod queries;
 mod shader_cache;
+pub(crate) mod stencil;
 mod stream;
 mod views;
 
@@ -50,7 +51,25 @@ impl Backing {
         }
     }
 }
-type Resource = Proxy<ID3D12Resource, Backing>;
+pub(crate) struct ResourceState {
+    backing: Backing,
+    stencil: std::sync::OnceLock<std::sync::Arc<stencil::Surface>>,
+}
+impl From<Backing> for ResourceState {
+    fn from(backing: Backing) -> Self {
+        Self {
+            backing,
+            stencil: Default::default(),
+        }
+    }
+}
+impl core::ops::Deref for ResourceState {
+    type Target = Backing;
+    fn deref(&self) -> &Backing {
+        &self.backing
+    }
+}
+type Resource = Proxy<ID3D12Resource, ResourceState>;
 type Out = *mut *mut c_void;
 
 fn identity(device: &Device) -> InterfaceRef<'_, IUnknown> {
@@ -120,7 +139,7 @@ unsafe extern "system" fn unmap_resource(
 }
 
 static RESOURCE: Slots<32> = {
-    let mut slots = child_slots::<ID3D12Resource, Backing, 32>();
+    let mut slots = child_slots::<ID3D12Resource, ResourceState, 32>();
     slots[8] = crate::slot!(map_resource);
     slots[9] = crate::slot!(unmap_resource);
     slots[10] = crate::slot!(resource_desc);
@@ -134,7 +153,7 @@ unsafe extern "system" fn resource_desc(
     out: *mut D3D12_RESOURCE_DESC,
 ) -> *mut D3D12_RESOURCE_DESC {
     unsafe {
-        out.write(match &this.state {
+        out.write(match &this.state.backing {
             Backing::Depth(pair) => pair.guest,
             Backing::Placed(texture) => texture.desc,
             Backing::Native => this.native.GetDesc(),
@@ -190,7 +209,8 @@ static FENCE: Slots<16> = {
 // D3D12_CPU_DESCRIPTOR_HANDLE to a hidden return buffer.
 pub(crate) struct DescriptorHeapState {
     pub(crate) desc: D3D12_DESCRIPTOR_HEAP_DESC,
-    pub(crate) placed_views: Option<placement::HeapViews>,
+    pub(crate) placed_views: Option<placement::HeapViews<placement::Texture>>,
+    _depth_views: Option<placement::HeapViews<stencil::Surface>>,
 }
 type DescriptorHeap = Proxy<ID3D12DescriptorHeap, DescriptorHeapState>;
 
@@ -330,14 +350,21 @@ unsafe extern "system" fn create_heap(
         Ok(native) => native,
         Err(error) => return error.code(),
     };
-    let placed_views = this
-        .state
-        .placements
-        .views
-        .heap(&this.native, &native, desc);
+    let placed_views = this.state.placements.views.heap(
+        &this.native,
+        &native,
+        desc,
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+    );
     let state = DescriptorHeapState {
         desc: *desc,
         placed_views,
+        _depth_views: this.state.depth_views.heap(
+            &this.native,
+            &native,
+            desc,
+            D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
+        ),
     };
     unsafe { wrap_pageable(Ok(native), &HEAP, this, state, out) }
 }
@@ -615,8 +642,12 @@ unsafe extern "system" fn create_list_x(
         Err(error) => return error,
     };
     let list: ID3D12GraphicsCommandList = match unsafe {
-        this.native
-            .CreateCommandList(desc.node_mask, desc.kind, &allocator.native, initial)
+        this.native.CreateCommandList(
+            desc.node_mask,
+            desc.kind,
+            &allocator.native,
+            initial.map(|p| &p.native),
+        )
     } {
         Ok(list) => list,
         Err(error) => return error.code(),
@@ -626,7 +657,17 @@ unsafe extern "system" fn create_list_x(
     if let Err(error) = unsafe { list.Close() } {
         return error.code();
     }
-    unsafe { wrap_command_list(list, allocator, initial, &parent, compact, out) }
+    unsafe {
+        wrap_command_list(
+            list,
+            allocator,
+            initial.map(|p| &p.native),
+            initial.and_then(|p| p.state.stencil_slot),
+            &parent,
+            compact,
+            out,
+        )
+    }
 }
 
 static DEVICE: Slots<160> = {

@@ -1,6 +1,6 @@
 //! Translate a cooked shader, optionally linking its outputs to a pixel shader.
 use std::{env, fs, path::PathBuf};
-use tuxbox_xshader::{extract, hlsl, meta, Stage};
+use tuxbox_xshader::{Stage, extract, hlsl, meta};
 
 fn run() -> Result<(), String> {
     let mut args = env::args_os().skip(1);
@@ -9,7 +9,18 @@ fn run() -> Result<(), String> {
     let mut profile_output = None;
     let mut consumer = None;
     let mut pixel_order = None;
+    let mut stencil_target = None;
     while let Some(argument) = args.next() {
+        if argument == "--stencil-target" {
+            let index: u32 = args
+                .next()
+                .and_then(|v| v.to_str()?.parse().ok())
+                .ok_or("--stencil-target requires a render target index")?;
+            if stencil_target.replace(index).is_some() {
+                return Err("duplicate --stencil-target".into());
+            }
+            continue;
+        }
         let slot = match argument.to_str() {
             Some("--hlsl-out") => &mut output,
             Some("--profile-out") => &mut profile_output,
@@ -28,6 +39,9 @@ fn run() -> Result<(), String> {
     let read =
         |path: &std::path::Path| fs::read(path).map_err(|e| format!("{}: {e}", path.display()));
     let shader = extract(&read(source.as_ref())?)?;
+    if consumer.is_some() && stencil_target.is_some() {
+        return Err("a stencil export requires an unlinked pixel shader".into());
+    }
     let translated = match consumer {
         Some(path) => {
             let pixel = extract(&read(&path)?)?;
@@ -46,6 +60,9 @@ fn run() -> Result<(), String> {
             hlsl::translate_ordered(&shader, Some(&pixel.ps_input_interp), &order)?
         }
         None if pixel_order.is_some() => return Err("--pixel-order requires --link-pixel".into()),
+        None if stencil_target.is_some() => {
+            hlsl::translate_stencil_target(&shader, stencil_target.unwrap())?
+        }
         None => hlsl::translate(&shader)?,
     };
     if let Some(path) = profile_output {
@@ -78,7 +95,10 @@ fn run() -> Result<(), String> {
         ended |= ins.mnemonic == "s_endpgm";
     }
     println!("entry={:?}", shader.entry);
-    println!("decode: {instructions} instrs, consumed {consumed}/{} bytes, terminated_on_s_endpgm={ended}", shader.isa.len());
+    println!(
+        "decode: {instructions} instrs, consumed {consumed}/{} bytes, terminated_on_s_endpgm={ended}",
+        shader.isa.len()
+    );
     fs::write(&output, translated.hlsl).map_err(|e| format!("{}: {e}", output.display()))
 }
 

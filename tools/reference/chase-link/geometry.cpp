@@ -1,5 +1,6 @@
 // Exercise the actual three-stage TuxBox PSO with two distinct consumers.
 #include "frame_stream.h"
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -100,11 +101,12 @@ int wmain(int argc, wchar_t **argv) {
       probe("pixel1.dxbc", true);
     }
     const bool frame_seven = fs::exists("vertex7.dxbc");
+    const bool bridge = fs::exists("bridge.txt");
     if (frame_seven) {
       auto vertex = read("vertex7.dxbc");
       ComPtr<ID3D12RootSignature> material_root;
       check(device->CreateRootSignature(0, vertex.data(), vertex.size(), IID_PPV_ARGS(&material_root)),
-            "frame seven material root");
+            "material root");
       stream.root.payload = material_root.Get();
       stream.vs.payload = {vertex.data(), vertex.size()};
       stream.gs.payload = {};
@@ -112,11 +114,11 @@ int wmain(int argc, wchar_t **argv) {
       layout[1].SemanticIndex = 13;
       layout[1].Format = DXGI_FORMAT_R32_UINT;
       layout[1].AlignedByteOffset = 16;
-      stream.formats.payload.NumRenderTargets = 5;
+      stream.formats.payload.NumRenderTargets = bridge ? 4 : 5;
       const DXGI_FORMAT targets[]{DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R10G10B10A2_UNORM,
                                   DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
                                   DXGI_FORMAT_B8G8R8A8_UNORM};
-      std::copy(std::begin(targets), std::end(targets), stream.formats.payload.RTFormats);
+      std::copy_n(targets, stream.formats.payload.NumRenderTargets, stream.formats.payload.RTFormats);
       if (offline || dynamic) {
         probe("pixel7.dxbc", dynamic);
       } else {
@@ -131,6 +133,14 @@ int wmain(int argc, wchar_t **argv) {
         probe("pixel7.dxbc", false);
         fs::copy_file("linked7.cso", correct, fs::copy_options::overwrite_existing);
         probe("pixel7.dxbc", true);
+        if (bridge) {
+          // The failed title call had a translated producer and a missing consumer.
+          const std::string key(vs_key.begin(), vs_key.end());
+          const auto pixel = cache / "by_source" / key.substr(key.find('_') + 1);
+          fs::rename(pixel, "held-pixel.cso");
+          probe("pixel7.dxbc", false);
+          fs::rename("held-pixel.cso", pixel);
+        }
       }
     }
     FILE *f = nullptr;
@@ -146,6 +156,8 @@ int wmain(int argc, wchar_t **argv) {
           adapter.VendorId, adapter.DeviceId);
       if (frame_seven)
         std::fputs("vertex_linked=1\nvertex_absent=1\nvertex_wrong_consumer=1\nvertex_wrong_stage=1\n", f);
+      if (bridge)
+        std::fputs("bridge_pixel_absent=1\n", f);
     }
     if (fclose(f))
       throw std::runtime_error("close result");

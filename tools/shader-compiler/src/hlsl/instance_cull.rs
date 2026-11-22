@@ -63,9 +63,9 @@ pub(super) fn resources(em: &mut Emitter<'_>) -> Result<(), String> {
     {
         return Err("unsupported InstanceCull visibility image".into());
     }
-    em.wide_visibility_uav = match atomic.raw.as_slice() {
-        [0xf05c1108, _] => false,
-        [0xf05c1308, _] => true,
+    match atomic.raw.as_slice() {
+        [0xf05c1108, _] => {}
+        [0xf05c1308, _] => { em.wide_visibility_uavs.insert(0); }
         _ => return Err("unsupported InstanceCull image atomic flags".into()),
     };
     // Every packed-view read uses a byte offset in the first structure. Give
@@ -137,14 +137,18 @@ pub(super) fn emit(em: &mut Emitter<'_>, op: &Insn) -> Result<bool, String> {
 
 // Both counter descriptors address fields of the first structured element.
 // Byte offsets 16 and 20 remain independent of the view's structure stride.
-pub(super) const DECLARATIONS: &str = r#"
-struct CullQueueCounters { uint4 reserved; uint nodes; uint candidates; };
-struct CullStatistics { uint4 reserved; uint instances; };
-RWByteAddressBuffer cull_nodes : register(u1);
-RWStructuredBuffer<CullQueueCounters> cull_queue : register(u2);
-RWStructuredBuffer<CullStatistics> cull_stats : register(u3);
+pub(super) fn queue_declarations(nodes: u32) -> String {
+    let queue = nodes + 1;
+    let stats = nodes + 2;
+    format!(r#"
+struct CullQueueCounters {{ uint4 reserved; uint nodes; uint candidates; }};
+struct CullStatistics {{ uint4 reserved; uint instances; }};
+RWByteAddressBuffer cull_nodes : register(u{nodes});
+RWStructuredBuffer<CullQueueCounters> cull_queue : register(u{queue});
+RWStructuredBuffer<CullStatistics> cull_stats : register(u{stats});
 groupshared uint cull_mask[2], cull_base;
-"#;
+"#)
+}
 
 pub(super) const EPILOGUE: &str = r#"
     uint lane = gtid.x;

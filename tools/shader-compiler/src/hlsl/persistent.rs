@@ -47,7 +47,12 @@ pub(super) fn translate(ex: &ShaderExtract) -> Result<Translated, String> {
     let mut em = Emitter::new(ex, disassemble(&ex.isa));
     em.resolve_resources()?;
     em.infer_tbuf_types();
-    persistent_resources::prepare(&mut em)?;
+    let instances = ex.entry.as_deref() == Some("InstanceCull");
+    if instances {
+        super::instance_cull_hzb::wave_resources(&mut em)?;
+    } else {
+        persistent_resources::prepare(&mut em)?;
+    }
     let code = em.insns.clone();
     emit_blocks(&mut em, &code)?;
     let [x, y, z] = compute_group(ex);
@@ -59,7 +64,9 @@ pub(super) fn translate(ex: &ShaderExtract) -> Result<Translated, String> {
         .len();
     let mut h = em.resource_decls()?;
     em.push_helpers(&mut h);
-    h.push_str(&persistent_lanes::declarations(ex)?);
+    if !instances {
+        h.push_str(&persistent_lanes::declarations(ex)?);
+    }
     h.push_str(HELPERS);
     for register in ["v0", "v1", "v2"] {
         em.regs.insert(register.into());
@@ -85,7 +92,7 @@ pub(super) fn translate(ex: &ShaderExtract) -> Result<Translated, String> {
         entry: "main",
         profile: "cs_6_0",
         needs_barycentrics: false,
-        typed_int64_atomics: false,
+        typed_int64_atomics: !em.wide_visibility_uavs.is_empty(),
         required_wave_size: None,
         portable_compute_group: None,
         ps_input_interp: Default::default(),
@@ -136,10 +143,21 @@ fn emit_blocks(em: &mut Emitter<'_>, code: &[Insn]) -> Result<(), String> {
         "[allow_uav_condition] while (tb_pc < {}u) {{",
         code.len()
     ));
+    // A switch gives the driver a single structured merge for the wave PC.
+    // A long chain of nested SSA joins exhausts the retail render thread's
+    // 1 MiB stack during host pipeline compilation for larger instance kernels.
+    let dispatch_switch = em.ex.entry.as_deref() == Some("InstanceCull");
+    if dispatch_switch {
+        em.line("switch (tb_pc) {");
+    }
     for block in leaders.windows(2) {
         let (start, end) = (block[0], block[1]);
         let last = &code[end - 1];
-        em.line(&format!("if (tb_pc == {start}u) {{"));
+        if dispatch_switch {
+            em.line(&format!("case {start}u: {{"));
+        } else {
+            em.line(&format!("if (tb_pc == {start}u) {{"));
+        }
         for (i, op) in code.iter().enumerate().take(end).skip(start) {
             if condition(op).is_some() || op.mnemonic == "s_endpgm" {
                 continue;
@@ -157,7 +175,11 @@ fn emit_blocks(em: &mut Emitter<'_>, code: &[Insn]) -> Result<(), String> {
         } else {
             format!("{end}u")
         };
-        em.line(&format!("tb_pc = {next}; }}"));
+        let leave = if dispatch_switch { " break;" } else { "" };
+        em.line(&format!("tb_pc = {next};{leave} }}"));
+    }
+    if dispatch_switch {
+        em.line("}");
     }
     em.line("}");
     Ok(())
@@ -198,7 +220,7 @@ fn emit_op(em: &mut Emitter<'_>, idx: usize, op: &Insn) -> Result<(), String> {
         return em.ws(&high, &format!("tb_result{idx}.y"));
     }
     if m == "v_cndmask_b32" {
-        if op.aux.mask != 0 || op.aux.sdwa.is_some() {
+        if op.aux.mask & !0x1b != 0 || op.aux.sdwa.is_some() {
             return Err("unsupported modified wave selection".into());
         }
         let mask = op.src.get(2).copied().unwrap_or(Opnd::VccLo);
@@ -209,8 +231,8 @@ fn emit_op(em: &mut Emitter<'_>, idx: usize, op: &Insn) -> Result<(), String> {
             r(&op.dst[0])?,
             r(&mask)?,
             r(&high)?,
-            r(&op.src[1])?,
-            r(&op.src[0])?
+            Emitter::select_source(op, r(&op.src[1])?, 1),
+            Emitter::select_source(op, r(&op.src[0])?, 0)
         ));
         return Ok(());
     }
@@ -227,7 +249,7 @@ fn emit_op(em: &mut Emitter<'_>, idx: usize, op: &Insn) -> Result<(), String> {
         Enc::Sop1 | Enc::Sop2 | Enc::Sopk | Enc::Sopc | Enc::Sopp | Enc::Smem => {
             em.emit_insn(idx, op, false, None)
         }
-        Enc::Vop1 | Enc::Vop2 | Enc::Vop3 | Enc::Vopc | Enc::Mubuf | Enc::Mtbuf => {
+        Enc::Vop1 | Enc::Vop2 | Enc::Vop3 | Enc::Vopc | Enc::Mubuf | Enc::Mtbuf | Enc::Mimg => {
             // The general emitter guards lane-local instructions with bit zero.
             // Narrow its predicate to the current lane only for this instruction;
             // the scalar EXEC pair remains live for the next wave operation.

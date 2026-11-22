@@ -3,8 +3,6 @@
 import argparse
 import ctypes
 from ctypes.util import find_library
-from concurrent.futures import ThreadPoolExecutor
-import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -19,7 +17,7 @@ from check_frosty_shaders import GLOBAL_SHA, containers, decompress, global_arch
 from project_tuxbox.host import Host
 from project_tuxbox.inspect import digest
 from project_tuxbox.runtime_shaders import shader_session
-from project_tuxbox.shader_prep import compiler_tools, run_tool
+from frosty_pipeline_checks import check_packaged_pipelines, guest
 
 PROGRAMS = {
     3194: "0d4059821b7f492a8b6672e87fc9bdff6e4d826966b6bb5c78de9a37dc42dcb6",
@@ -27,17 +25,6 @@ PROGRAMS = {
     3130: "0cd12c7f55a779bfd6ec8c234c515c129b9e219c39e75faac3bd7cf11d283442",
     2853: "33c3a3b5c3045ac280b15ccaf78e951227c87833ec919c0fbb787c6316d970a6",
 }
-
-
-def guest(host, exe, adapter, flag, expected):
-    receipt = exe.with_name("result.txt")
-    receipt.unlink(missing_ok=True)
-    run = host.run(exe, [*flag, "--adapter", adapter, "--report", receipt.name], capture=True, timeout=120)
-    line = receipt.read_text().strip() if receipt.exists() else ""
-    if run.returncode or line != expected:
-        sys.stderr.buffer.write(run.stdout[-4000:])
-        raise ValueError(f"Expected {expected!r}, got exit {run.returncode} and {line!r}")
-    return line
 
 
 def run_draw(host, exe, adapter, cache, entry, cold):
@@ -60,43 +47,6 @@ def run_draw(host, exe, adapter, cache, entry, cold):
                 if key in replies:
                     shutil.copyfile(replies[key], exe.with_name(name))
         return {"receipt": line, "compiled": sorted(cold), "dxil_sha256": {key: digest(path) for key, path in replies.items()}}
-
-
-def check_all_pipelines(payload, entries, decode, host, adapter, trial, exe):
-    xshader, dxc, dxv = compiler_tools()
-    cache = trial / "temp/tuxbox_shader_cache/by_source"
-    mesh = [index for index, entry in enumerate(entries) if entry[3] == 1]
-
-    def prepare(index):
-        ((_, blob, _),) = containers(decompress(payload, entries[index], decode))
-        source = trial / f"{index}.dxbc"
-        source.write_bytes(blob)
-        source_hash = digest(source)
-        with TemporaryDirectory(dir=trial) as tmp:
-            hlsl, profile, dxil = (Path(tmp) / name for name in ("mesh.hlsl", "profile", "mesh.cso"))
-            run_tool([xshader, source, "--hlsl-out", hlsl, "--profile-out", profile])
-            target = profile.read_text().strip()
-            if target not in {"ms_6_5", "ms_6_6"}:
-                raise ValueError(f"Entry {index} produced {target}, expected a mesh shader")
-            run_tool([dxc, "-T", target, "-E", "main", "-Fo", dxil, hlsl])
-            run_tool([dxv, dxil])
-            dxil_hash = digest(dxil)
-            dxil.replace(cache / (source_hash + ".cso"))
-        return f"{index} {source_hash} {dxil_hash}"
-
-    with ThreadPoolExecutor(max_workers=4) as workers:
-        rows = list(workers.map(prepare, mesh))
-    (trial / "pipelines.txt").write_text("".join(f"{index}\n" for index in mesh))
-    line = guest(host, exe, adapter, ["--pipelines"],
-                 f"nanite-mesh-pipelines PASS pci={adapter} created={len(mesh)}")
-    results = (trial / "pipeline-results.txt").read_text().splitlines()
-    if not mesh or results != [f"{index} 00000000" for index in mesh]:
-        raise ValueError("Missing or failed Xbox mesh pipeline in the per-entry results")
-    fingerprint = hashlib.sha256(("\n".join(rows) + "\n").encode("ascii")).hexdigest()
-    return {"receipt": line, "archive_entries": mesh, "compiler_sha256": digest(xshader),
-            "dxc_sha256": digest(dxc), "dxv_sha256": digest(dxv), "program_manifest_sha256": fingerprint,
-            "manifest_format": "Archive index, source DXBC SHA-256 and validated DXIL SHA-256 in archive order, separated by spaces, one LF per row.",
-            "scope": "Each stripped mesh stage created an Xbox graphics pipeline on this adapter with the translated shader and no pixel stage."}
 
 
 def check(mount, host, adapter, provider, trial, all_mesh=False):
@@ -141,7 +91,12 @@ def check(mount, host, adapter, provider, trial, all_mesh=False):
                        "Primitive 96 references vertices 192 to 194. Additional draws cover a projected triangle, "
                        "an empty cluster, out-of-range triangle indices and two mesh groups selecting different clusters."}
     if all_mesh:
-        result["mesh_pipelines"] = check_all_pipelines(payload, entries, lz4, host, adapter, trial, exe)
+        mesh = [index for index, entry in enumerate(entries) if entry[3] == 1]
+        pipelines = check_packaged_pipelines(payload, entries, lz4, host, adapter, trial, exe,
+                                             mesh, {"ms_6_5", "ms_6_6"}, "nanite-mesh")
+        pipelines["scope"] = ("Each stripped mesh stage created an Xbox graphics pipeline on this adapter "
+                              "with the translated shader and no pixel stage.")
+        result["mesh_pipelines"] = pipelines
     return result
 
 

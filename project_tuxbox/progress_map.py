@@ -133,7 +133,24 @@ def retail_summary(evidence, report):
                 rows.append(("Green code background", "Missing", RED))
         if "independent-wakeup.webp" in independent["captures"]:
             rows.append(("Start Chase", "Opening cinematic", GREEN))
-        rows.append(("Driving and shooting", "Unverified", MUTED))
+        chase = read_json(evidence / "matrix-awakens/chase-gameplay.json")
+        if (chase.get("title_sha256") == report["sha256"]
+                and chase.get("run", {}).get("first_gameplay_profile", {}).get("name") == "XSX_ChaseGameplay"):
+            rows.append(("Chase tutorial", "Reached in game", GREEN))
+            controls = chase.get("current_build", {}).get("controls") or chase["controls"]
+            if controls.get("target_lock_action", {}).get("verified"):
+                rows.append(("Controller target lock", "Registered in game", GREEN))
+            fired = controls.get("manual_fire_verified")
+            rows.append(("Manual shooting", "Verified" if fired else "Unverified", GREEN if fired else MUTED))
+            runs = [chase.get(key, {}) for key in ("warm_replay", "sandbox_replay", "normal_final")]
+            sandboxes = [run["sandbox"] for run in runs if run.get("title_sha256") == report["sha256"]
+                         and run.get("sandbox", {}).get("state") == "EFrostyGameStateType::Sandbox"]
+            if sandboxes:
+                rows.append(("City sandbox", "Reached after the chase", GREEN))
+            movement = any(sandbox.get("free_roam_movement_verified") for sandbox in sandboxes)
+            rows.append(("Free roam", "Verified" if movement else "Unverified", GREEN if movement else MUTED))
+        else:
+            rows.append(("Driving and shooting", "Unverified", MUTED))
         host = independent.get("proton", "")
         if "experimental" in host.casefold():
             host = "Proton Experimental"
@@ -458,33 +475,49 @@ def shader_validation(data):
             f"among {len(checks)} distinct title requests.")
 
 
-def instance_cull_readbacks(evidence, archive, compiler):
-    retail = read_json(evidence / "matrix-awakens/instance-cull-retail.json")
+def culling_readbacks(evidence, archive, compiler, name):
+    census, probe, fields = {
+        "InstanceCull": ("instance-cull-retail", "instance-cull", ("checked_words", "checked_texels")),
+        "PersistentClusterCull": ("persistent-cluster-retail", "persistent-cull", ("verified_uav_words",)),
+    }[name]
+    retail = read_json(evidence / f"matrix-awakens/{census}.json")
     if not retail or not archive or not compiler or retail["global_archive_sha256"] != archive:
         return ""
     family = set(retail["family"]["archive_entries"])
     paired = []
+    provider = None
     for suffix, adapter in (("amd", "1002:13c0"), ("nvidia", "10de:2705")):
-        run = read_json(evidence / f"matrix-awakens/instance-cull-{suffix}.json")
-        if (run.get("adapter") != adapter or run.get("name") != "InstanceCull"
+        run = read_json(evidence / f"matrix-awakens/{probe}-{suffix}.json")
+        if (run.get("adapter") != adapter or run.get("name") != name
                 or run.get("compiler_sha256") != compiler or run.get("global_archive_sha256") != archive
-                or run.get("provider_sha256") != retail["d3d12_xs_sha256"]):
+                or not run.get("provider_sha256") or (provider and provider != run["provider_sha256"])):
             return ""
+        provider = run["provider_sha256"]
         paired.append({(p["entry"], p["source_sha256"], p["dxil_sha256"]) for p in run["programs"]
                        if p["entry"] in family and p["cases"]
-                       and all(c["checked_words"] > 0 and c["checked_texels"] > 0 for c in p["cases"].values())})
+                       and all(c[field] > 0 for c in p["cases"].values() for field in fields)})
     verified = paired[0] & paired[1]
-    # The historical trace identifies the retail pipeline by both bytecodes.
-    # A later compiler must still produce the same DXIL for this title request.
-    if (retail["entry"], retail["source_sha256"], retail["dxil_sha256"]) not in verified:
+    # The trace identifies the original Xbox program. Both current GPUs must
+    # agree on the tested DXIL, which can change after a compiler correction.
+    if not any(entry == retail["entry"] and source == retail["source_sha256"]
+               and (compiler != retail["compiler_sha256"] or dxil == retail["dxil_sha256"])
+               for entry, source, dxil in verified):
         return ""
     count = len({entry for entry, _, _ in verified})
-    return f"Nanite InstanceCull · {count}/{len(family)} packaged variants passed GPU readback on both adapters"
+    return f"Nanite {name} · {count}/{len(family)} packaged variants passed GPU readback on both adapters"
 
 
 def shader_checks(evidence, data):
     notes = [validation] if (validation := shader_validation(data)) else []
     archive = data.get("archives", {}).get("global", {}).get("member_sha256")
+    warmup = read_json(evidence / "matrix-awakens/chase-warmup.json")
+    if (warmup and warmup["title_sha256"] == data.get("executable_sha256")
+            and warmup["global_archive_sha256"] == archive
+            and warmup["compiler_sha256"] == data.get("compiler_sha256")
+            and warmup["warm"]["total_compiled"] == 0):
+        chase = warmup["warm"]["chase"]
+        notes.append(f"Optional chase warmup · {chase['programs']['checked']:,} programs and "
+                     f"{chase['links']['checked']} linked pairs ready before playing")
     total = next((row["global"] for row in data["stages"] if row["stage"] == "Mesh"), 0)
     results = []
     for suffix, gpu in (("nvidia", "NVIDIA"), ("amd", "Radeon")):
@@ -495,14 +528,50 @@ def shader_checks(evidence, data):
             results.append(f"{gpu} {len(set(pipelines['archive_entries']))}/{total}")
     if results:
         notes.append("Packaged mesh shaders with a GPU pipeline · " + " · ".join(results))
-    if cull := instance_cull_readbacks(evidence, archive, data.get("compiler_sha256")):
-        notes.append(cull)
-    persistent = read_json(evidence / "matrix-awakens/persistent-cluster-retail.json")
-    if (persistent and persistent["global_archive_sha256"] == archive
-            and persistent["compiler_sha256"] == data["compiler_sha256"]):
-        family = persistent["family"]
-        notes.append(f"Nanite PersistentClusterCull · {len(family['dxil_validated'])}/{len(family['archive_entries'])} "
-                     f"pass DXIL validation · {len(family['gpu_verified_on_both'])} pass GPU readback on both adapters")
+    for name in ("InstanceCull", "PersistentClusterCull"):
+        if cull := culling_readbacks(evidence, archive, data.get("compiler_sha256"), name):
+            notes.append(cull)
+    micro = read_json(evidence / "matrix-awakens/micropoly-retail.json")
+    if micro and micro["global_archive_sha256"] == archive:
+        pipelines = []
+        for suffix, adapter in (("amd", "1002:13c0"), ("nvidia", "10de:2705")):
+            run = read_json(evidence / f"matrix-awakens/micropoly-{suffix}.json")
+            suite = run.get("pipelines", {})
+            if (run.get("adapter") == adapter and run.get("global_archive_sha256") == archive
+                    and run.get("source_sha256") == micro["source_sha256"]
+                    and run.get("compiler_sha256") == suite.get("compiler_sha256") == data["compiler_sha256"]
+                    and run.get("cases") and all(c["checked_texels"] > 0 for c in run["cases"].values())):
+                pipelines.append((suite["program_manifest_sha256"], run["provider_sha256"], run["dxil_sha256"],
+                                  frozenset(suite["archive_entries"])))
+        if len(pipelines) == 2 and pipelines[0] == pipelines[1]:
+            family = set(micro["family"]["archive_entries"])
+            count = len(family & pipelines[0][3])
+            notes.append(f"Nanite MicropolyRasterize · {count}/{len(family)} pipelines on both adapters "
+                         f"· retail shader {micro['entry']} passed pixel readback")
+    for suite in ("classify-materials", "stencil-export", "tsr-filter", "tsr-history"):
+        amd, nvidia = (read_json(evidence / f"matrix-awakens/{suite}-{vendor}.json")
+                       for vendor in ("amd", "nvidia"))
+        if not (amd.get("adapter") == "1002:13c0" and nvidia.get("adapter") == "10de:2705"
+                and amd.get("provider_sha256") == nvidia.get("provider_sha256")
+                and amd.get("compiler_sha256") == nvidia.get("compiler_sha256") == data["compiler_sha256"]
+                and amd.get("global_archive_sha256") == nvidia.get("global_archive_sha256") == archive):
+            continue
+        if suite == "classify-materials":
+            if (amd["source_sha256"] == nvidia["source_sha256"] and amd["dxil_sha256"] == nvidia["dxil_sha256"]
+                    and amd["cases"] == nvidia["cases"] and amd["cases"]):
+                notes.append(f"Nanite ClassifyMaterials · {len(amd['cases'])} material tile tests passed on both adapters")
+        elif suite in ("tsr-filter", "tsr-history"):
+            if (amd["source_sha256"] == nvidia["source_sha256"] and amd["dxil_sha256"] == nvidia["dxil_sha256"]
+                    and amd["cases"] == nvidia["cases"] and amd["cases"]):
+                texels = sum(output["verified_texels"] for case in amd["cases"].values() for output in case["outputs"])
+                label = "temporal filter" if suite == "tsr-filter" else "temporal history"
+                notes.append(f"City flyover {label} · {texels:,} output texels matched on both adapters")
+        else:
+            readbacks = [{(s["source_sha256"], s["readback_sha256"], s["matching_texels"])
+                          for s in run["shaders"] if s["matching_texels"] > 0} for run in (amd, nvidia)]
+            count = len(readbacks[0] & readbacks[1])
+            if count:
+                notes.append(f"Pixel shader stencil export · {count} retail programs matched depth and stencil on both adapters")
     return notes
 
 

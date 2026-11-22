@@ -11,7 +11,7 @@ The progress map shows which shader stages TuxBox can translate and which progra
 
 The green code on the camera plane uses material shader map **136**. The verified main-menu trace includes its vertex shader at material entry 2 and pixel shader at entry 3530. The post-process filter uses map **66**, including pixel shader 1461. The inventory lists each map member, its archive index, stage and the runs that requested it. A request identifies a program used to create a pipeline. Checking a draw or a captured frame establishes whether that pipeline produced visible output. The packaged ray-tracing entries use Xbox serialized state objects and have their own translation path. [Rendered menu](../evidence/matrix-awakens/green-code-menu.webp) · [Cooked material references](../evidence/matrix-awakens/menu-materials.json) · [Ray-state samples](../evidence/matrix-awakens/retail-shaders.json)
 
-All 19,634 distinct vertex shaders now translate to HLSL. GPU readbacks check the cubemap shadow shader’s vertex outputs and the compute instructions used by 94 newly translated programs. Across twelve traces covering startup, the menu, the city chase and Nanite, 1,063 of 1,064 requested shaders pass standalone DXIL validation. The remaining shader is Nanite’s `MicropolyRasterize` at global entry 3246. The first-boot profile includes 169 of the requested programs. [Cubemap shadow readback](../evidence/matrix-awakens/cubemap-shadow-vertex.json) · [Clip-distance outputs](../evidence/matrix-awakens/clip-distance-vertex.json) · [Compute instruction checks](../evidence/matrix-awakens/compute-instructions.json)
+All 19,634 distinct vertex shaders now translate to HLSL. GPU readbacks check the cubemap shadow shader’s vertex outputs and the compute instructions used by 94 newly translated programs. Across 19 traces covering startup, Nanite, the playable chase and city free roam, all 2,217 observed programs passed standalone DXIL validation. The default first-boot profile includes 177 of those programs. The larger chase profile also prepares shaders that compiled on demand during play. [Cubemap shadow readback](../evidence/matrix-awakens/cubemap-shadow-vertex.json) · [Clip-distance outputs](../evidence/matrix-awakens/clip-distance-vertex.json) · [Compute instruction checks](../evidence/matrix-awakens/compute-instructions.json)
 
 ## Mesh shaders
 
@@ -31,7 +31,7 @@ python tools/check_frosty_nanite_mesh.py /path/to/Mount --adapter 10de:2705 \
 
 Frosty calls `InstanceCull` to decide which scene instances enter Nanite’s work queue. Its 64-lane Xbox workgroup counts visible instances, reserves space in the queue, and writes each instance ID in lane order. TuxBox also handles the path that writes small projected instances directly into the visibility texture. Frosty’s first-boot profile includes the variant requested by the title, global entry 3444. [Retail comparison and list of variants](../evidence/matrix-awakens/instance-cull-retail.json)
 
-Four of the 76 packaged `InstanceCull` variants pass GPU readback on both NVIDIA and Radeon. Across 34 dispatches per adapter, all 11,424 buffer words and 2,754 visibility texels matched. The checks include an empty queue, instances on either side of lane 32, a full queue, and two instances competing for the same pixel at the same depth. The remaining 72 variants use instruction sequences the translator still rejects. [NVIDIA results](../evidence/matrix-awakens/instance-cull-nvidia.json) · [Radeon results](../evidence/matrix-awakens/instance-cull-amd.json)
+Twelve of the 76 packaged `InstanceCull` variants pass GPU readback on both NVIDIA and Radeon. Each GPU ran 149 dispatches and matched 89,838 buffer words and 12,069 visibility texels. The checks cover ordered per-view queues, capacity limits, impostor depth and occlusion against a four-level depth pyramid. Paired controls confirm that selecting mip 1 changes which instances survive. Two second-pass variants recheck previously hidden instances against the current depth and append the survivors to the three-word node queue. [NVIDIA results](../evidence/matrix-awakens/instance-cull-nvidia.json) · [Radeon results](../evidence/matrix-awakens/instance-cull-amd.json)
 
 ```sh
 python build.py d3d12
@@ -43,11 +43,55 @@ python tools/check_frosty_instance_cull.py /path/to/Mount --adapter 10de:2705 \
 
 After instance culling, `PersistentClusterCull` walks the scene hierarchy, requests missing mesh data and builds the lists of visible clusters for hardware and software rasterization. TuxBox keeps the Xbox workgroup’s 64 lanes together during queue updates, including on GPUs that execute 32 lanes at a time. The translator handles the lane shuffles, shared memory and atomic updates used by these kernels. [AMD RDNA 2 instruction reference](https://docs.amd.com/api/khub/documents/Et~wpu9g~Ffl7d9q0QZ~Og/content)
 
-Four of the 32 packaged variants pass DXIL validation and GPU readback on both Radeon and NVIDIA. Each GPU ran 58 dispatches and matched all 23,200 buffer words. The checks cover nested hierarchy traversal, clipping in two camera views, streaming requests and draw counts for both rasterizers. The remaining 28 variants use other resource layouts and sample textures. TuxBox prepares global entry 1825 before launching Frosty. [Retail run and family census](../evidence/matrix-awakens/persistent-cluster-retail.json) · [Radeon results](../evidence/matrix-awakens/persistent-cull-amd.json) · [NVIDIA results](../evidence/matrix-awakens/persistent-cull-nvidia.json)
+Five of the 32 packaged variants pass DXIL validation and GPU readback on both Radeon and NVIDIA. Each GPU ran 86 dispatches and matched all 45,062 buffer words. The checks cover nested hierarchy traversal, streaming requests, camera selection and draw counts for both rasterizers. Entry 1827 uses the previous frame’s instance transforms and depth pyramid to defer hidden geometry. Its controls check which clusters survive at two mip levels, the records written across a 64-cluster batch boundary and the child masks saved for the next pass. [Retail run and family census](../evidence/matrix-awakens/persistent-cluster-retail.json) · [Radeon results](../evidence/matrix-awakens/persistent-cull-amd.json) · [NVIDIA results](../evidence/matrix-awakens/persistent-cull-nvidia.json)
 
 ```sh
 python tools/check_frosty_persistent_cull.py /path/to/Mount --adapter 10de:2705 \
     --output build/persistent-cull.json
+```
+
+## Nanite micropolygon rasterization
+
+`MicropolyRasterize` draws small triangles from Nanite’s visible-cluster list. The variant Frosty requests, global entry 3246, stores depth and triangle ID together in a 64-bit visibility value. When triangles overlap, one atomic maximum selects the winning pair. TuxBox preserves the Xbox shader’s choice of scanline loop for each 64-lane wave. [Shader Model 6.6 atomic operations](https://microsoft.github.io/DirectX-Specs/d3d/HLSL_SM_6_6_Int64_and_Float_Atomics.html)
+
+All 96 packaged variants passed DXIL validation and created an Xbox compute pipeline on Radeon and NVIDIA. Entry 3246 also matched all 9,269 texels in 13 GPU tests per adapter. These cover narrow and wide triangles, interpolated depth, overlap, and pixels outside the viewport. The retail Radeon run passed this pipeline and reached graphics command-list slot 96. [Retail traces](../evidence/matrix-awakens/micropoly-retail.json) · [Radeon results](../evidence/matrix-awakens/micropoly-amd.json) · [NVIDIA results](../evidence/matrix-awakens/micropoly-nvidia.json)
+
+```sh
+python tools/check_frosty_micropoly.py /path/to/Mount --adapter 10de:2705 \
+    --all-pipelines --output build/micropoly.json
+```
+
+## Nanite material classification
+
+Frosty’s `ClassifyMaterials` shader reads the triangles visible in each 64 × 64 tile and records which materials to draw there. Tests of the packaged shader at global entry 2725 checked its draw arguments and material tile masks on both GPUs. The eight cases cover empty tiles, mixed materials, streamed cluster pages and tiles offset from the origin. [NVIDIA readbacks](../evidence/matrix-awakens/classify-materials-nvidia.json) · [Radeon readbacks](../evidence/matrix-awakens/classify-materials-amd.json)
+
+## Pixel shader stencil export
+
+Frosty’s global pixel shaders 1748 and 1763 read visibility data and write depth and a stencil byte for each surviving pixel. Radeon supports this output directly. On the tested RTX, TuxBox routes the stencil byte to an extra integer render target and copies it back to the depth/stencil texture. This path handles a single-sample texture with full-byte replacement on a passing fragment. In two draws per shader, all 128 depth and stencil pairs matched on each GPU, including pixels discarded by the shader and pixels rejected by the depth test. [NVIDIA readbacks](../evidence/matrix-awakens/stencil-export-nvidia.json) · [Radeon readbacks](../evidence/matrix-awakens/stencil-export-amd.json)
+
+```sh
+python tools/check_frosty_stencil.py /path/to/Mount --adapter 10de:2705 \
+    --output build/stencil-export.json
+```
+
+## Temporal super-resolution
+
+Frosty requested global compute entry 2653 when it loaded the city sandbox. The packaged shader map identifies it as `FTSRFilterFrequenciesCS`, a temporal super-resolution (TSR) filter. Its 256 threads use a value shared within each Xbox wave to select the image coordinates to process. The default first-boot profile now includes this permutation. [First-boot shader list](../tools/reference/frosty-menu-shaders.json)
+
+The packaged shader wrote two color images and a filter weight on both NVIDIA and Radeon. Five GPU tests covered black, uniform and patterned images, swapped color inputs, and a clipped output rectangle. Each GPU returned the same bytes for all 15 output images. The tests check constant colors, local color bounds and untouched pixels outside the rectangle. [NVIDIA readbacks](../evidence/matrix-awakens/tsr-filter-nvidia.json) · [Radeon readbacks](../evidence/matrix-awakens/tsr-filter-amd.json)
+
+The next flyover pass, `FTSRUpdateHistoryCS` at global entry 3385, combines current-frame color and translucency and can generate a lower-resolution mip. TuxBox translates its packed halfword arithmetic and the shared-memory exchanges across its 32-thread group. The default launch now prepares this shader too. On both GPUs the original Xbox dispatch produced identical images across five cases, including a half-transparent overlay and a patterned input. The tests compare the mip against a CPU 2 × 2 average and check the pixels outside the written region. [NVIDIA history tests](../evidence/matrix-awakens/tsr-history-nvidia.json) · [Radeon history tests](../evidence/matrix-awakens/tsr-history-amd.json)
+
+All 34 compute programs in the game’s 14 packaged TSR shader maps passed standalone DXIL validation, including all eight history-update permutations. Eleven were observed during the retail replay that reached entry 3385. [Per-program survey and retail trace](../evidence/matrix-awakens/tsr-maps.json)
+
+The map survey uses either Python’s `cityhash` module or the Abseil development libraries with `pkg-config` and a C++ compiler.
+
+```sh
+python tools/check_frosty_tsr_filter.py /path/to/Mount --adapter 10de:2705 \
+    --output build/tsr-filter.json
+python tools/check_frosty_tsr_filter.py /path/to/Mount --adapter 10de:2705 \
+    --update-history --output build/tsr-history.json
+python tools/map_frosty_tsr.py /path/to/Mount --output build/tsr-maps.json
 ```
 
 ## View or update the map

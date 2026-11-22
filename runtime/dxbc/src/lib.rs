@@ -157,6 +157,15 @@ fn signature(code: &[u8], tags: &[&[u8; 4]]) -> Option<Vec<SigElement>> {
     .ok()
 }
 
+/// A scalar, unsigned SV_StencilRef export from a pixel shader.
+pub fn exports_stencil_reference(code: &[u8]) -> bool {
+    signature(code, &[b"OSG1", b"OSG5", b"OSGN"]).is_some_and(|outputs| {
+        outputs
+            .iter()
+            .any(|e| e.sysval == 69 && e.index == 0 && e.comp_type == 1 && e.mask == 1)
+    })
+}
+
 /// Physical register and component order from the compiled pixel input signature.
 pub fn pixel_input_order(code: &[u8]) -> Vec<String> {
     let mut inputs = signature(code, &[b"ISG1", b"ISGN"]).unwrap_or_default();

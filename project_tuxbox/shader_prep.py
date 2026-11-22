@@ -285,7 +285,8 @@ def prepare_for_launch(executable, host):
     provider = executable.with_name(plan["provider"])
     if not provider.is_file() or not matching_tuxbox_provider(provider, digest(provider)):
         return False
-    plan, source_profile = tuxbox_plan(profile, plan, os.environ.get("TUXBOX_SHADER_PREP") == "menu")
+    mode = os.environ.get("TUXBOX_SHADER_PREP")
+    plan, source_profile = tuxbox_plan(profile, plan, mode in ("menu", "chase"))
     if digest(executable) != plan["executable_sha256"]:
         return False
     pak = executable.parent / plan["shader_package"]
@@ -311,5 +312,12 @@ def prepare_for_launch(executable, host):
                                                exact_sources=True, linked=True)
                 compiled += built
                 reused += found
+        if mode == "chase":
+            from .chase_warmup import prepare_chase
+            chase_profile = json.loads(profile.with_name("frosty-chase-warmup.json").read_text())
+            built, found = prepare_chase(pak, cache, chase_profile, plan["executable_sha256"],
+                                         {row["dxbc_sha256"] for row in plan["shaders"]}, progress)
+            compiled += built
+            reused += found
         print(f"{plan['title']} shaders ready: {compiled} compiled, {reused} cached.", file=sys.stderr, flush=True)
     return True

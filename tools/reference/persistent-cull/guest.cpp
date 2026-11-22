@@ -1,6 +1,6 @@
 // Run the original persistent Nanite compute program against GPU-visible work queues.
 #include "mesh_fixture.h"
-#include "frame_cli.h"
+#include "../visibility_fixture.h"
 #include <filesystem>
 #include <fstream>
 #include <vector>
@@ -31,8 +31,12 @@ void dispatch(const Context& ctx, ID3D12RootSignature* root, const fs::path& dir
     auto cb = input(dev, constants);
     D3D12_CONSTANT_BUFFER_VIEW_DESC cbv{cb->GetGPUVirtualAddress(), static_cast<UINT>(constants.size())};
     dev->CreateConstantBufferView(&cbv, ctx.cpu(64));
+    const bool has_hzb = fs::exists(dir / "hzb");
+    ComPtr<ID3D12Resource> depth, depth_seed;
+    ComPtr<ID3D12DescriptorHeap> samplers;
+    if (has_hzb) visibility_fixture::hzb_texture(ctx, dir, depth, depth_seed, samplers, 5);
     std::array<ComPtr<ID3D12Resource>, 7> srvs;
-    constexpr UINT strides[]{16, 16, 4, 0, 768, 0, 8};
+    constexpr UINT strides[]{16, 16, 16, 0, 800, 0, 8};
     for (UINT i = 0; i < srvs.size(); ++i) {
         const auto data = load(dir / ("t" + std::to_string(i)));
         const UINT stride = strides[i];
@@ -44,7 +48,7 @@ void dispatch(const Context& ctx, ID3D12RootSignature* root, const fs::path& dir
         view.Buffer.NumElements = static_cast<UINT>(data.size()) / (stride ? stride : 4);
         view.Buffer.StructureByteStride = stride;
         view.Buffer.Flags = stride ? D3D12_BUFFER_SRV_FLAG_NONE : D3D12_BUFFER_SRV_FLAG_RAW;
-        dev->CreateShaderResourceView(srvs[i].Get(), &view, ctx.cpu(i));
+        dev->CreateShaderResourceView(srvs[i].Get(), &view, ctx.cpu(has_hzb && i >= 5 ? i + 1 : i));
     }
 
     std::array<ComPtr<ID3D12Resource>, 6> uavs, uploads, reads;
@@ -58,7 +62,7 @@ void dispatch(const Context& ctx, ID3D12RootSignature* root, const fs::path& dir
         reads[i] = buffer(dev, D3D12_HEAP_TYPE_READBACK, sizes[i], D3D12_RESOURCE_STATE_COPY_DEST);
         list->CopyBufferRegion(uavs[i].Get(), 0, uploads[i].Get(), 0, sizes[i]);
         transition(list, uavs[i].Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        const UINT stride = i == 0 ? 12 : i == 1 ? 24 : 0;
+        const UINT stride = i == 0 ? 12 : i == 1 ? 44 : 0;
         const bool raw = i >= 2 && i <= 4;
         D3D12_UNORDERED_ACCESS_VIEW_DESC view{};
         view.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
@@ -68,13 +72,14 @@ void dispatch(const Context& ctx, ID3D12RootSignature* root, const fs::path& dir
         view.Buffer.Flags = raw ? D3D12_BUFFER_UAV_FLAG_RAW : D3D12_BUFFER_UAV_FLAG_NONE;
         dev->CreateUnorderedAccessView(uavs[i].Get(), nullptr, &view, ctx.cpu(80 + i));
     }
-    ID3D12DescriptorHeap* heaps[]{ctx.views.Get()};
-    method<BindHeaps>(list, 32)(list, 1, heaps);
+    ID3D12DescriptorHeap* heaps[]{ctx.views.Get(), samplers.Get()};
+    method<BindHeaps>(list, 32)(list, has_hzb ? 2 : 1, heaps);
     method<BindRoot>(list, 33)(list, root);
     auto set = method<SetTable>(list, 35);
     const auto base = method<GpuHandle>(ctx.views.Get(), 10)(ctx.views.Get());
     for (const auto [table, slot] : {std::pair{0u, 0u}, {1u, 64u}, {3u, 80u}})
         set(list, table, {base + UINT64(slot) * ctx.stride});
+    if (has_hzb) set(list, 2, {method<GpuHandle>(samplers.Get(), 10)(samplers.Get())});
     list->Dispatch(groups, 1, 1);
     for (UINT i = 0; i < uavs.size(); ++i) {
         transition(list, uavs[i].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);

@@ -256,7 +256,7 @@ def verify(host, output, adapter, selected=None, samples=1):
             ("tables", r"words=16/16 guards=4 heaps=2 rejected=3 placed-srv=16/16 range-copies=4 descriptor-mode=1"),
             ("queues", r"queues=3 bytes=64 wait=1 signal-x=2"),
             ("queries", r"timestamps=2 occlusion=0 guards=2 heaps=6 rejected=3"),
-            ("indirect", r"sdk=0x20004 device=41 list=59 words=64/64 counts=direct,one,zero flush=global,range mesh=0x[0-9a-f]{8} rays=0x[0-9a-f]{8}"),
+            ("indirect", r"sdk=0x20004 device=41 list=59 words=64/64 counts=direct,one,zero flush=global,range budget=default,rejected2 mesh=0x[0-9a-f]{8} rays=0x[0-9a-f]{8}"),
         ):
             name = f"d3d12-{suite}"
             if name in selected:

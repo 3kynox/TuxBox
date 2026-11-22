@@ -3,14 +3,14 @@
   "adapter": "10de:2705",
   "host": "1793301796 experimental-11.0-20261027b-x86_64",
   "global_archive_sha256": "afab84fa891e491d64f1c2a9bdf26a66afc2054aef2cd9110e358402473b4fb2",
-  "guest_sha256": "e637944a5fab5bfbeae43159334e143d32f2e8933309bcbd76b1315add6ebfc0",
-  "provider_sha256": "847b82925c9311b93b4beaa8cf141959b2435f0f87c35de7bd818aa6e6357a6a",
-  "compiler_sha256": "32d16ac56a82035fe4edb895299f0a0c59f9e649e729c4410f4024cc7c1aeb2f",
+  "guest_sha256": "f5ba10a091f304bbefedeed3539b8114ed8d7ae287faaf90c45c32bdadf9f540",
+  "provider_sha256": "85c107da7251484e0e6890ad5d2fb482901f4bb95b12abc97f73140e44c424da",
+  "compiler_sha256": "732513553bab1f580e7530f3d1640e6117420495e585e757177947975523f48f",
   "programs": [
     {
       "entry": 1790,
       "source_sha256": "708c697a5b8d94454f00f83f7eb91bf962b53138ad3560c87f6e1217959af4ad",
-      "dxil_sha256": "40008f49bb4a80b08df5c3f18758924c4eb4b62d5f23c9ab2414a187d29063d5",
+      "dxil_sha256": "0b05db27648d9b9d2b6eff711bbbcb74e37a49b5d83bb4bc6a1e6c94c3531103",
       "cases": {
         "empty": {
           "queue_words": [
@@ -29,7 +29,7 @@
             5
           ],
           "visible_records": [],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "empty-groups": {
           "queue_words": [
@@ -48,7 +48,7 @@
             5
           ],
           "visible_records": [],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "culled": {
           "queue_words": [
@@ -67,7 +67,7 @@
             5
           ],
           "visible_records": [],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "software": {
           "queue_words": [
@@ -92,7 +92,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "hardware": {
           "queue_words": [
@@ -122,7 +122,7 @@
               0
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "offset": {
           "queue_words": [
@@ -152,7 +152,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "hardware-capacity": {
           "queue_words": [
@@ -177,7 +177,7 @@
               0
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "wave": {
           "queue_words": [
@@ -227,7 +227,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "lod": {
           "queue_words": [
@@ -257,7 +257,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "mixed-routing": {
           "queue_words": [
@@ -307,7 +307,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "hierarchy": {
           "queue_words": [
@@ -346,7 +346,46 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
+        },
+        "indexed-hierarchy": {
+          "queue_words": [
+            0,
+            2,
+            2,
+            8,
+            1,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [
+            [
+              1,
+              0
+            ],
+            [
+              1,
+              8388608
+            ]
+          ],
+          "draw_counts": [
+            4,
+            3,
+            5
+          ],
+          "visible_records": [
+            [
+              2,
+              1,
+              0
+            ],
+            [
+              3,
+              1,
+              8388608
+            ]
+          ],
+          "verified_uav_words": 409
         },
         "nested-hierarchy": {
           "queue_words": [
@@ -385,7 +424,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "multiple-groups": {
           "queue_words": [
@@ -435,7 +474,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "stream-request": {
           "queue_words": [
@@ -460,7 +499,7 @@
             5
           ],
           "visible_records": [],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "two-views": {
           "queue_words": [
@@ -490,14 +529,14 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         }
       }
     },
     {
       "entry": 1807,
       "source_sha256": "b0cd492f0c3d2067856de6da743dabac06824a3e4a9b48d2f5cafdf6a1bae205",
-      "dxil_sha256": "215a55f1d5180a4722bb2da9ef08b9f0356c2ee2c5a70642f0307e998c84f80f",
+      "dxil_sha256": "8687f48a63678b35fb32b12e0cd8eb0fa63825dd11b4ae0e48e8d9a446ebe597",
       "cases": {
         "empty": {
           "queue_words": [
@@ -516,7 +555,7 @@
             5
           ],
           "visible_records": [],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "empty-groups": {
           "queue_words": [
@@ -535,7 +574,7 @@
             5
           ],
           "visible_records": [],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "culled": {
           "queue_words": [
@@ -554,7 +593,7 @@
             5
           ],
           "visible_records": [],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "software": {
           "queue_words": [
@@ -579,7 +618,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "hardware": {
           "queue_words": [
@@ -609,7 +648,7 @@
               0
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "offset": {
           "queue_words": [
@@ -639,7 +678,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "hardware-capacity": {
           "queue_words": [
@@ -664,7 +703,7 @@
               0
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "wave": {
           "queue_words": [
@@ -714,7 +753,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "lod": {
           "queue_words": [
@@ -744,7 +783,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "mixed-routing": {
           "queue_words": [
@@ -794,7 +833,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "hierarchy": {
           "queue_words": [
@@ -833,7 +872,46 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
+        },
+        "indexed-hierarchy": {
+          "queue_words": [
+            0,
+            2,
+            2,
+            8,
+            1,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [
+            [
+              1,
+              0
+            ],
+            [
+              1,
+              8388608
+            ]
+          ],
+          "draw_counts": [
+            4,
+            3,
+            5
+          ],
+          "visible_records": [
+            [
+              2,
+              1,
+              0
+            ],
+            [
+              3,
+              1,
+              8388608
+            ]
+          ],
+          "verified_uav_words": 409
         },
         "nested-hierarchy": {
           "queue_words": [
@@ -872,7 +950,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "multiple-groups": {
           "queue_words": [
@@ -922,7 +1000,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "stream-request": {
           "queue_words": [
@@ -947,14 +1025,14 @@
             5
           ],
           "visible_records": [],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         }
       }
     },
     {
       "entry": 1814,
       "source_sha256": "f06a25d40bb2fd4878c6ef759dd470badfca8dfa175103cbb23b95fddedb0e9a",
-      "dxil_sha256": "d8fa524856063936e039aec9a757d160e4cafe1b96d8c1b21731972bbe003745",
+      "dxil_sha256": "149266cfbe71aadf0393848f57167ed13526b64d0bec057233e7e9c4b6b23a20",
       "cases": {
         "empty": {
           "queue_words": [
@@ -973,7 +1051,7 @@
             5
           ],
           "visible_records": [],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "empty-groups": {
           "queue_words": [
@@ -992,7 +1070,7 @@
             5
           ],
           "visible_records": [],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "culled": {
           "queue_words": [
@@ -1011,7 +1089,7 @@
             5
           ],
           "visible_records": [],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "software": {
           "queue_words": [
@@ -1036,7 +1114,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "hardware": {
           "queue_words": [
@@ -1066,7 +1144,7 @@
               0
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "offset": {
           "queue_words": [
@@ -1096,7 +1174,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "hardware-capacity": {
           "queue_words": [
@@ -1121,7 +1199,7 @@
               0
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "wave": {
           "queue_words": [
@@ -1171,7 +1249,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "lod": {
           "queue_words": [
@@ -1201,7 +1279,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "mixed-routing": {
           "queue_words": [
@@ -1251,7 +1329,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "hierarchy": {
           "queue_words": [
@@ -1290,7 +1368,46 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
+        },
+        "indexed-hierarchy": {
+          "queue_words": [
+            0,
+            2,
+            2,
+            8,
+            1,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [
+            [
+              1,
+              0
+            ],
+            [
+              1,
+              8388608
+            ]
+          ],
+          "draw_counts": [
+            4,
+            3,
+            5
+          ],
+          "visible_records": [
+            [
+              2,
+              1,
+              0
+            ],
+            [
+              3,
+              1,
+              8388608
+            ]
+          ],
+          "verified_uav_words": 409
         },
         "nested-hierarchy": {
           "queue_words": [
@@ -1329,7 +1446,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "multiple-groups": {
           "queue_words": [
@@ -1379,7 +1496,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "stream-request": {
           "queue_words": [
@@ -1404,7 +1521,7 @@
             5
           ],
           "visible_records": [],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "two-views": {
           "queue_words": [
@@ -1434,14 +1551,14 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         }
       }
     },
     {
       "entry": 1825,
       "source_sha256": "5feb276685031ace58dc8e00634bb712f13caf79dd7cb25ed314177f36fb6e6a",
-      "dxil_sha256": "65cbd2ba33008312dbb82f8db5c139f65733dcaa7a7e6383797ad87fdeb40a2f",
+      "dxil_sha256": "22b8074a438ab58ce1d762bfc9f8a1f6ac873168d9ea465a694d8a99b2f42a67",
       "cases": {
         "empty": {
           "queue_words": [
@@ -1460,7 +1577,7 @@
             5
           ],
           "visible_records": [],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "empty-groups": {
           "queue_words": [
@@ -1479,7 +1596,7 @@
             5
           ],
           "visible_records": [],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "culled": {
           "queue_words": [
@@ -1498,7 +1615,7 @@
             5
           ],
           "visible_records": [],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "software": {
           "queue_words": [
@@ -1523,7 +1640,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "hardware": {
           "queue_words": [
@@ -1553,7 +1670,7 @@
               0
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "offset": {
           "queue_words": [
@@ -1583,7 +1700,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "hardware-capacity": {
           "queue_words": [
@@ -1608,7 +1725,7 @@
               0
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "wave": {
           "queue_words": [
@@ -1658,7 +1775,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "lod": {
           "queue_words": [
@@ -1688,7 +1805,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "mixed-routing": {
           "queue_words": [
@@ -1738,7 +1855,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "hierarchy": {
           "queue_words": [
@@ -1777,7 +1894,46 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
+        },
+        "indexed-hierarchy": {
+          "queue_words": [
+            0,
+            2,
+            2,
+            8,
+            1,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [
+            [
+              1,
+              0
+            ],
+            [
+              1,
+              8388608
+            ]
+          ],
+          "draw_counts": [
+            4,
+            3,
+            5
+          ],
+          "visible_records": [
+            [
+              2,
+              1,
+              0
+            ],
+            [
+              3,
+              1,
+              8388608
+            ]
+          ],
+          "verified_uav_words": 409
         },
         "nested-hierarchy": {
           "queue_words": [
@@ -1816,7 +1972,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "multiple-groups": {
           "queue_words": [
@@ -1866,7 +2022,7 @@
               8388608
             ]
           ],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
         },
         "stream-request": {
           "queue_words": [
@@ -1891,10 +2047,908 @@
             5
           ],
           "visible_records": [],
-          "verified_uav_words": 400
+          "verified_uav_words": 409
+        }
+      }
+    },
+    {
+      "entry": 1827,
+      "source_sha256": "178e312aad98103a2c922b3c394f39f45f0248383b962cf12e21027810aa5d36",
+      "dxil_sha256": "dd232e0992ba7428f3acaa4bc86782bedb8ea13f4fdb477d8055fb6a80e83c77",
+      "cases": {
+        "empty": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [],
+          "queue_words": [
+            0,
+            1,
+            0,
+            8,
+            0,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [],
+          "draw_counts": [
+            2,
+            3,
+            5
+          ],
+          "visible_records": [],
+          "verified_uav_words": 821
+        },
+        "empty-groups": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [],
+          "queue_words": [
+            0,
+            3,
+            0,
+            24,
+            0,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [],
+          "draw_counts": [
+            2,
+            3,
+            5
+          ],
+          "visible_records": [],
+          "verified_uav_words": 821
+        },
+        "culled": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [],
+          "queue_words": [
+            0,
+            2,
+            2,
+            8,
+            0,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [],
+          "draw_counts": [
+            2,
+            3,
+            5
+          ],
+          "visible_records": [],
+          "verified_uav_words": 821
+        },
+        "software": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [],
+          "queue_words": [
+            0,
+            2,
+            2,
+            8,
+            0,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [],
+          "draw_counts": [
+            3,
+            3,
+            5
+          ],
+          "visible_records": [
+            [
+              2,
+              1212417,
+              8388608
+            ]
+          ],
+          "verified_uav_words": 821
+        },
+        "hardware": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [],
+          "queue_words": [
+            0,
+            2,
+            3,
+            8,
+            0,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [],
+          "draw_counts": [
+            2,
+            3,
+            7
+          ],
+          "visible_records": [
+            [
+              73,
+              1605633,
+              0
+            ],
+            [
+              74,
+              65537,
+              0
+            ]
+          ],
+          "verified_uav_words": 821
+        },
+        "offset": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [],
+          "queue_words": [
+            0,
+            2,
+            2,
+            8,
+            0,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [],
+          "draw_counts": [
+            4,
+            3,
+            5
+          ],
+          "visible_records": [
+            [
+              5,
+              163841,
+              0
+            ],
+            [
+              6,
+              1212417,
+              8388608
+            ]
+          ],
+          "verified_uav_words": 821
+        },
+        "hardware-capacity": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [],
+          "queue_words": [
+            0,
+            2,
+            3,
+            8,
+            0,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [],
+          "draw_counts": [
+            2,
+            6,
+            5
+          ],
+          "visible_records": [
+            [
+              0,
+              98305,
+              0
+            ]
+          ],
+          "verified_uav_words": 821
+        },
+        "wave": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [],
+          "queue_words": [
+            0,
+            2,
+            64,
+            8,
+            0,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [],
+          "draw_counts": [
+            8,
+            3,
+            5
+          ],
+          "visible_records": [
+            [
+              2,
+              1,
+              0
+            ],
+            [
+              3,
+              229377,
+              8388608
+            ],
+            [
+              4,
+              1015809,
+              8388608
+            ],
+            [
+              5,
+              1048577,
+              0
+            ],
+            [
+              6,
+              1212417,
+              8388608
+            ],
+            [
+              7,
+              2064385,
+              8388608
+            ]
+          ],
+          "verified_uav_words": 821
+        },
+        "lod": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [],
+          "queue_words": [
+            0,
+            2,
+            5,
+            8,
+            0,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [],
+          "draw_counts": [
+            4,
+            3,
+            5
+          ],
+          "visible_records": [
+            [
+              2,
+              229377,
+              8388608
+            ],
+            [
+              3,
+              1212417,
+              8388608
+            ]
+          ],
+          "verified_uav_words": 821
+        },
+        "mixed-routing": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [],
+          "queue_words": [
+            0,
+            2,
+            64,
+            8,
+            0,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [],
+          "draw_counts": [
+            4,
+            3,
+            9
+          ],
+          "visible_records": [
+            [
+              2,
+              1,
+              0
+            ],
+            [
+              3,
+              1048577,
+              0
+            ],
+            [
+              71,
+              2064385,
+              8388608
+            ],
+            [
+              72,
+              1212417,
+              8388608
+            ],
+            [
+              73,
+              1015809,
+              8388608
+            ],
+            [
+              74,
+              229377,
+              8388608
+            ]
+          ],
+          "verified_uav_words": 821
+        },
+        "hierarchy": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [],
+          "queue_words": [
+            2,
+            2,
+            2,
+            8,
+            1,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [
+            [
+              1,
+              0
+            ],
+            [
+              1,
+              8388608
+            ]
+          ],
+          "draw_counts": [
+            4,
+            3,
+            5
+          ],
+          "visible_records": [
+            [
+              2,
+              1,
+              0
+            ],
+            [
+              3,
+              1,
+              8388608
+            ]
+          ],
+          "verified_uav_words": 821
+        },
+        "indexed-hierarchy": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [],
+          "queue_words": [
+            2,
+            2,
+            2,
+            8,
+            1,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [
+            [
+              1,
+              0
+            ],
+            [
+              1,
+              8388608
+            ]
+          ],
+          "draw_counts": [
+            4,
+            3,
+            5
+          ],
+          "visible_records": [
+            [
+              2,
+              1,
+              0
+            ],
+            [
+              3,
+              1,
+              8388608
+            ]
+          ],
+          "verified_uav_words": 821
+        },
+        "nested-hierarchy": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [],
+          "queue_words": [
+            2,
+            2,
+            2,
+            8,
+            2,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [
+            [
+              1,
+              0
+            ],
+            [
+              1,
+              8388608
+            ]
+          ],
+          "draw_counts": [
+            4,
+            3,
+            5
+          ],
+          "visible_records": [
+            [
+              2,
+              1,
+              0
+            ],
+            [
+              3,
+              1,
+              8388608
+            ]
+          ],
+          "verified_uav_words": 821
+        },
+        "multiple-groups": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [],
+          "queue_words": [
+            0,
+            4,
+            64,
+            24,
+            0,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [],
+          "draw_counts": [
+            8,
+            3,
+            5
+          ],
+          "visible_records": [
+            [
+              2,
+              1,
+              0
+            ],
+            [
+              3,
+              229377,
+              8388608
+            ],
+            [
+              4,
+              1015809,
+              8388608
+            ],
+            [
+              5,
+              1048577,
+              0
+            ],
+            [
+              6,
+              1212417,
+              8388608
+            ],
+            [
+              7,
+              2064385,
+              8388608
+            ]
+          ],
+          "verified_uav_words": 821
+        },
+        "stream-request": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [],
+          "queue_words": [
+            0,
+            1,
+            0,
+            8,
+            1,
+            0
+          ],
+          "streaming_requests": [
+            [
+              22272,
+              596224,
+              2415919104
+            ]
+          ],
+          "generated_candidates": [],
+          "draw_counts": [
+            2,
+            3,
+            5
+          ],
+          "visible_records": [],
+          "verified_uav_words": 821
+        },
+        "hzb-clear": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [],
+          "queue_words": [
+            0,
+            2,
+            4,
+            8,
+            0,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [],
+          "draw_counts": [
+            6,
+            3,
+            5
+          ],
+          "visible_records": [
+            [
+              2,
+              32769,
+              0
+            ],
+            [
+              3,
+              1015809,
+              8388608
+            ],
+            [
+              4,
+              1048577,
+              0
+            ],
+            [
+              5,
+              2064385,
+              8388608
+            ]
+          ],
+          "verified_uav_words": 821
+        },
+        "hzb-covered": {
+          "post_head": 4,
+          "occluded_records": [
+            [
+              255,
+              32768,
+              0
+            ],
+            [
+              254,
+              1015808,
+              8388608
+            ],
+            [
+              253,
+              1048576,
+              0
+            ],
+            [
+              252,
+              2064384,
+              8388608
+            ]
+          ],
+          "occluded_nodes": [],
+          "queue_words": [
+            4,
+            2,
+            4,
+            8,
+            0,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [],
+          "draw_counts": [
+            2,
+            3,
+            5
+          ],
+          "visible_records": [],
+          "verified_uav_words": 821
+        },
+        "hzb-mip1-clear": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [],
+          "queue_words": [
+            0,
+            2,
+            4,
+            8,
+            0,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [],
+          "draw_counts": [
+            6,
+            3,
+            5
+          ],
+          "visible_records": [
+            [
+              2,
+              32769,
+              0
+            ],
+            [
+              3,
+              1015809,
+              8388608
+            ],
+            [
+              4,
+              1048577,
+              0
+            ],
+            [
+              5,
+              2064385,
+              8388608
+            ]
+          ],
+          "verified_uav_words": 821
+        },
+        "hzb-mip1-covered": {
+          "post_head": 4,
+          "occluded_records": [
+            [
+              255,
+              32768,
+              0
+            ],
+            [
+              254,
+              1015808,
+              8388608
+            ],
+            [
+              253,
+              1048576,
+              0
+            ],
+            [
+              252,
+              2064384,
+              8388608
+            ]
+          ],
+          "occluded_nodes": [],
+          "queue_words": [
+            4,
+            2,
+            4,
+            8,
+            0,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [],
+          "draw_counts": [
+            2,
+            3,
+            5
+          ],
+          "visible_records": [],
+          "verified_uav_words": 821
+        },
+        "hzb-batch-boundary": {
+          "post_head": 66,
+          "occluded_records": [
+            [
+              193,
+              32770,
+              0
+            ],
+            [
+              192,
+              1015810,
+              8388608
+            ],
+            [
+              191,
+              1048578,
+              0
+            ],
+            [
+              190,
+              2064386,
+              8388608
+            ]
+          ],
+          "occluded_nodes": [],
+          "queue_words": [
+            66,
+            2,
+            4,
+            8,
+            0,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [],
+          "draw_counts": [
+            2,
+            3,
+            5
+          ],
+          "visible_records": [],
+          "verified_uav_words": 821
+        },
+        "hzb-left-half": {
+          "post_head": 2,
+          "occluded_records": [
+            [
+              255,
+              32768,
+              0
+            ],
+            [
+              254,
+              1015808,
+              0
+            ]
+          ],
+          "occluded_nodes": [],
+          "queue_words": [
+            2,
+            2,
+            4,
+            8,
+            0,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [],
+          "draw_counts": [
+            4,
+            3,
+            5
+          ],
+          "visible_records": [
+            [
+              2,
+              65537,
+              8388608
+            ],
+            [
+              3,
+              1048577,
+              8388608
+            ]
+          ],
+          "verified_uav_words": 821
+        },
+        "hzb-resident-node": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [],
+          "queue_words": [
+            2,
+            2,
+            2,
+            8,
+            1,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [
+            [
+              1,
+              0
+            ],
+            [
+              1,
+              8388608
+            ]
+          ],
+          "draw_counts": [
+            4,
+            3,
+            5
+          ],
+          "visible_records": [
+            [
+              2,
+              1,
+              0
+            ],
+            [
+              3,
+              1,
+              8388608
+            ]
+          ],
+          "verified_uav_words": 821
+        },
+        "hzb-covered-node": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [
+            [
+              0,
+              0,
+              129
+            ]
+          ],
+          "queue_words": [
+            0,
+            1,
+            0,
+            8,
+            1,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [],
+          "draw_counts": [
+            2,
+            3,
+            5
+          ],
+          "visible_records": [],
+          "verified_uav_words": 821
+        },
+        "hzb-covered-parent": {
+          "post_head": 0,
+          "occluded_records": [],
+          "occluded_nodes": [
+            [
+              0,
+              0,
+              32
+            ]
+          ],
+          "queue_words": [
+            0,
+            1,
+            0,
+            8,
+            1,
+            0
+          ],
+          "streaming_requests": [],
+          "generated_candidates": [],
+          "draw_counts": [
+            2,
+            3,
+            5
+          ],
+          "visible_records": [],
+          "verified_uav_words": 821
         }
       }
     }
   ],
-  "scope": "Original Xbox compute programs and embedded root signatures at device slot 62. Every case reads all six UAVs. Fixtures check queue reservations, resident children, streaming requests, projection clipping, LOD rejection, hardware and software lists, previous-pass offsets and visible-list capacity. Visible records contain the slot followed by the two packed words."
+  "scope": "Original Xbox compute programs and embedded root signatures at device slot 62. Every case reads all six UAVs. Fixtures check queue reservations, resident children, streaming requests, projection clipping, LOD rejection, hardware and software lists, previous-pass offsets and visible-list capacity. All variants read an indexed 16-byte hierarchy lookup, and the two multiview variants select the second 800-byte view. The HZB checks cover previous transforms, mixed visibility and post-pass cluster reservations across a 64-record batch boundary. Each visible or occluded record contains the slot followed by the two packed words."
 }
