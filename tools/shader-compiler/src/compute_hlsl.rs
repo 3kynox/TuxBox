@@ -2,6 +2,9 @@
 //! single structured UAV. Native load/store fields follow AMD's GFX10 ISA.
 //! The FSSM tables below are read from Series X compute programs.
 
+pub(crate) mod page_list;
+mod compact_views;
+
 use std::fmt::Write;
 
 use crate::rdna2::{instructions, Enc, Opnd};
@@ -55,12 +58,12 @@ fn structured_stride(shader: &ShaderExtract) -> Option<u32> {
     single_uav_stride(image)
 }
 
-fn single_uav_stride(image: &[u8]) -> Option<u32> {
+fn series_resource_bindings(image: &[u8]) -> Option<&[u8]> {
     if image.get(..8)? != 6u64.to_le_bytes() {
         return None;
     }
     let descriptor = image.get(section(image, image, 0x60)?..)?;
-    if (word(descriptor, 0x38)?, word(descriptor, 0x3c)?) != (4, 1) {
+    if word(descriptor, 0x38)? != 4 {
         return None;
     }
     let table = image.get(section(image, descriptor, 0x28)?..)?.get(..80)?;
@@ -74,7 +77,17 @@ fn single_uav_stride(image: &[u8]) -> Option<u32> {
             return None;
         }
     }
-    let binding = image.get(section(image, descriptor, 0x30)?..)?;
+    let count = usize::try_from(word(descriptor, 0x3c)?).ok()?;
+    image
+        .get(section(image, descriptor, 0x30)?..)?
+        .get(..count.checked_mul(20)?)
+}
+
+fn single_uav_stride(image: &[u8]) -> Option<u32> {
+    let binding = series_resource_bindings(image)?;
+    if binding.len() != 20 {
+        return None;
+    }
     let stride = word(binding, 12)?;
     if word(binding, 0)? != 0x303
         || word(binding, 4)? != 0
@@ -227,6 +240,12 @@ pub(super) fn hlsl(shader: &ShaderExtract) -> Option<String> {
             return None;
         }
         return Some(format!("[numthreads({x}, {y}, {z})]\nvoid main() {{}}\n"));
+    }
+    if let Some(source) = compact_views::translate(shader) {
+        return Some(source);
+    }
+    if let Some(source) = page_list::pack_free_pages(shader) {
+        return Some(source);
     }
     if dims != [1, 1, 1] {
         return None;

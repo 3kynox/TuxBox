@@ -1,8 +1,7 @@
 //! Nanite's software rasterizer shares a 4×4 transform and up to 256
 //! transformed vertices across the workgroup. Each 64-lane wave separately
 //! chooses a scanline loop when one of its triangles is wider than four pixels.
-use super::{compute_group, fssm_bindings, r, Emitter, Enc, Insn, Opnd, Res};
-use std::collections::BTreeSet;
+use super::{compute_group, fssm_bindings, r, Emitter, Enc, Insn, Opnd};
 
 pub(super) fn prepare(em: &mut Emitter<'_>) -> Result<(), String> {
     if compute_group(em.ex) != [128, 1, 1]
@@ -13,34 +12,6 @@ pub(super) fn prepare(em: &mut Emitter<'_>) -> Result<(), String> {
     for (&(uav, slot), words) in &mut em.sbuf {
         *words = fssm_bindings::structured_words(em.ex, slot, uav)?;
     }
-    let mut narrow = BTreeSet::new();
-    for (i, op) in em
-        .insns
-        .iter()
-        .enumerate()
-        .filter(|(_, op)| op.enc == Enc::Mimg)
-    {
-        let Some([Res::Uav(slot, 1)]) = em.res.get(&i).map(Vec::as_slice) else {
-            continue;
-        };
-        if !em
-            .ex
-            .resources
-            .iter()
-            .any(|t| (t.res_type, t.space, t.lower, t.upper) == (6, 0, *slot, *slot))
-        {
-            return Err("unexpected raster image resource type".into());
-        }
-        if op.mnemonic == "image_atomic_umax" && matches!(op.raw.as_slice(), [0xf05c1308, _]) {
-            em.wide_visibility_uavs.insert(*slot);
-        } else {
-            narrow.insert(*slot);
-        }
-    }
-    if !em.wide_visibility_uavs.is_disjoint(&narrow) {
-        return Err("mixed access widths on a raster image".into());
-    }
-
     let mut counts = em
         .insns
         .iter()

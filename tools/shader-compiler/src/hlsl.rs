@@ -44,6 +44,9 @@ mod lds_order;
 mod ps09_classify;
 mod subsurface_setup;
 mod packed_root;
+mod light_grid;
+mod page_waves;
+mod wave_cull;
 mod wave_sum;
 mod wave_scan;
 use packed_root::{PackedRoot, RootAbi};
@@ -395,6 +398,9 @@ struct Emitter<'a> {
     indexed_lane: bool,
     /// Complete 32-thread wave using independent one-word vector comparison masks.
     single_wave32: bool,
+    light_grid: bool,
+    page_waves: bool,
+    wave_cull: bool,
     regs: BTreeSet<String>,
     body: String,
     tmp: usize,
@@ -854,8 +860,10 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     let subsurface_setup = subsurface_setup::prepare(ex, &mut insns);
     let material_classify = ps09_classify::prepare(ex, &mut insns);
     let classify_tiles = classify_materials::prepare(ex, &mut insns);
-    let allocation_wave64 = mark_wave_allocations(&mut insns)?;
-    let required_wave_size = lower_wave_reductions(&mut insns)?;
+    let wave_cull = wave_cull::recognize(ex);
+    let page_waves = page_waves::recognize(ex);
+    let allocation_wave64 = !wave_cull && !page_waves && mark_wave_allocations(&mut insns)?;
+    let required_wave_size = if wave_cull { None } else { lower_wave_reductions(&mut insns)? };
     let uses_bpermute = insns.iter().any(|ins| ins.mnemonic == "ds_bpermute_b32");
     if uses_bpermute && insns.iter().any(|ins| ins.enc == Enc::Sopp && Emitter::branch_cond(ins.op).is_some()) {
         return Err("backward permute with scalar branches needs verified convergent control flow".into());
@@ -864,11 +872,13 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     if uses_quad_add && insns.iter().any(|i| i.enc == Enc::Sopp && Emitter::branch_cond(i.op).is_some() && i.aux.imm < 0) {
         return Err("DPP quad add inside a shader with backward control flow".into());
     }
-    let scan = wave_scan::prepare(ex, &mut insns)?;
+    let scan = if wave_cull { None } else { wave_scan::prepare(ex, &mut insns)? };
     let scan_width = scan.as_ref().map(|s| s.width);
     let indexed_lane = ex.stage == Stage::Compute && indexed_lane::prepare(compute_group(ex), &mut insns);
-    lower_lane_spills(&mut insns)?;
+    if !wave_cull && !page_waves { lower_lane_spills(&mut insns)?; }
     let mut em = Emitter::new(ex, insns);
+    em.page_waves = page_waves;
+    em.wave_cull = wave_cull;
     em.indexed_lane = indexed_lane;
     em.single_wave32 = single_wave32;
     if matches!(ex.stage, Stage::Vertex | Stage::Geometry) {
@@ -913,7 +923,8 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
         }
         em.tbuf_uint.extend(list_slots);
     }
-    let requires_ballot = allocation_wave64 || em.packed.as_ref().is_some_and(|p| !p.ballots.is_empty());
+    let light_grid = allocation_wave64 && light_grid::prepare(&mut em)?;
+    let requires_ballot = (allocation_wave64 && !light_grid) || em.packed.as_ref().is_some_and(|p| !p.ballots.is_empty());
     if (requires_ballot && scan_width.or(required_wave_size) == Some(32))
         || matches!((scan_width, required_wave_size), (Some(a), Some(b)) if a != b) {
         return Err("conflicting wave widths for ballot and reduction".into());
@@ -978,7 +989,18 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     if instance_cull { instance_cull::resources(&mut em)?; }
     if post_cull { instance_cull_post::resources(&mut em)?; }
     if hzb_cull { instance_cull_hzb::resources(&mut em)?; }
+    if ex.stage == Stage::Compute && ex.entry.as_deref() == Some("InstanceCullVSM") {
+        // Scalar loads address individual words of the 800-byte packed views,
+        // and the compacted ranges, counters and scene streams have distinct strides.
+        for (&(uav, slot), words) in &mut em.sbuf {
+            *words = fssm_bindings::structured_words(ex, slot, uav)?;
+        }
+    }
     if let Some(program) = view_cull { program.resources(&mut em)?; }
+    if (ex.stage == Stage::Compute || (ex.stage == Stage::Pixel && ex.entry.as_deref() == Some("HWRasterizePS")))
+        && em.packed.is_none() && !em.uav_uint.is_empty() {
+        em.resolve_wide_image_atomics()?;
+    }
     if ex.entry.as_deref() == Some("MicropolyRasterize") && ex.stage == Stage::Compute {
         micropoly::prepare(&mut em)?;
     }
@@ -995,6 +1017,7 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     let live_in = em.live_in();
     em.live = live_in.clone();
     em.view_cull = view_cull;
+    em.light_grid = light_grid;
     em.emit_body(is_ps)?;
     if ex.stage == Stage::Pixel
         || (ex.stage == Stage::Compute
@@ -1027,6 +1050,8 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
         hlsl.insert_str(0, &instance_cull::queue_declarations(3));
         hlsl.insert_str(0, instance_cull_hzb::HIDDEN_DECLARATIONS);
     }
+    if light_grid { hlsl.insert_str(0, light_grid::DECLARATIONS); }
+    if page_waves || wave_cull { hlsl.insert_str(0, page_waves::DECLARATIONS); }
     if particle_sort { hlsl.insert_str(0, particle_sort::DECLARATIONS); }
     if hair_cluster { hlsl.insert_str(0, hair_cluster::DECLARATIONS); }
     if instance_cull { hlsl.insert_str(0, &instance_cull::queue_declarations(1)); }
@@ -1045,7 +1070,7 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
         needs_barycentrics: !em.pulled_attrs.is_empty(),
         typed_int64_atomics: !em.wide_visibility_uavs.is_empty() || em.packed.as_ref().is_some_and(|p| !p.wide_images.is_empty()),
         required_wave_size,
-        portable_compute_group,
+        portable_compute_group: portable_compute_group.or(light_grid.then(|| compute_group(ex))),
         ps_input_interp: std::mem::take(&mut em.ps_in_interp),
     })
 }
@@ -1312,6 +1337,9 @@ impl<'a> Emitter<'a> {
             compute_swizzle: false,
             indexed_lane: false,
             single_wave32: false,
+            light_grid: false,
+            page_waves: false,
+            wave_cull: false,
             regs: if has_mode { BTreeSet::from(["tb_fp_mode".into()]) } else { BTreeSet::new() },
             body: String::new(),
             tmp: 0,
@@ -2252,6 +2280,12 @@ impl<'a> Emitter<'a> {
                         self.bsel.insert(idx, (rs, out));
                     }
                 }
+                Enc::Mimg if matches!(ins.op, 230 | 231) => {
+                    return Err(format!(
+                        "raw BVH node intersection requires traversal translation at {:#x}",
+                        ins.offset
+                    ));
+                }
                 Enc::Mimg => {
                     let n = ins.src.len();
                     let rs = ins.src.get(n - 2).and_then(sg).ok_or("mimg: bad srsrc")?;
@@ -2318,6 +2352,44 @@ impl<'a> Emitter<'a> {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// A two-word, non-returning IMAGE_ATOMIC_UMAX addresses one uint64 texel.
+    /// Use that declaration only when every access to its typed UAV agrees.
+    fn resolve_wide_image_atomics(&mut self) -> Result<(), String> {
+        let mut wide = BTreeSet::new();
+        let mut other = BTreeSet::new();
+        for (&i, resources) in &self.res {
+            let op = &self.insns[i];
+            if op.enc != Enc::Mimg {
+                continue;
+            }
+            if let Some(selection) = self.msel.get(&i) {
+                for (_, resource) in &selection.tex {
+                    if let Res::Uav(slot, _) = resource {
+                        other.insert(*slot);
+                    }
+                }
+                continue;
+            }
+            let [Res::Uav(slot, 1)] = resources.as_slice() else {
+                continue;
+            };
+            if matches!(op.raw.as_slice(), [0xf05c1308, flags] if flags & 0xc000_0000 == 0)
+                && self.ex.resources.iter().any(|r| {
+                    (r.res_type, r.space, r.lower, r.upper) == (6, 0, *slot, *slot)
+                })
+            {
+                wide.insert(*slot);
+            } else {
+                other.insert(*slot);
+            }
+        }
+        if !wide.is_disjoint(&other) || !self.wide_visibility_uavs.is_disjoint(&other) {
+            return Err("mixed access widths on a raster image".into());
+        }
+        self.wide_visibility_uavs.extend(wide);
         Ok(())
     }
 
@@ -2622,6 +2694,13 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             let mut active: Vec<usize> =
                 labels.iter().copied().filter(|&t| t > i && target.iter().any(|(&b, &bt)| bt == t && b < i)).collect();
+            if self.page_waves {
+                if let Some(code) = page_waves::rendezvous(i, ins)? {
+                    if open { self.line("}"); open = false; }
+                    cur.clear();
+                    self.line(&code);
+                }
+            }
             // Exited guest waves no longer count towards S_BARRIER. Their host
             // threads still belong to the group and must participate in the HLSL
             // barrier. Only lift the barrier if every enclosing skip exits the
@@ -2706,7 +2785,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 }
                 let exits: Vec<String> = labels.iter().filter(|&&t| t > i).map(|t| format!("j{t}")).collect();
                 let exit = if exits.is_empty() { String::new() } else { format!(" && !({})", exits.join(" || ")) };
-                let guard = if self.packed.as_ref().is_some_and(|p| p.copy_backedges.contains(&i)) {
+                let guard = if self.wave_cull || self.light_grid || self.packed.as_ref().is_some_and(|p| p.copy_backedges.contains(&i)) {
                     ""
                 } else {
                     " && ++tb_guard < 65536u"
@@ -2900,7 +2979,23 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         let d = ins.dst.first().cloned();
         self.line(&format!("// {:#06x} {m}", ins.offset));
         self.cur_idx = idx;
+        if self.wave_cull && self.ex.entry.as_deref() == Some("CullPerPageDrawCommandsCs")
+            && ins.enc == Enc::Ds && matches!(m, "ds_read_b32" | "ds_read2st64_b32" | "ds_write_b32" | "ds_write2st64_b32")
+        {
+            // The native wave64 shares one PC across its LDS prefix scan.
+            // Host wave32 halves must finish each access before the next one.
+            self.line("GroupMemoryBarrierWithGroupSync();");
+        }
+        if self.wave_cull {
+            wave_cull::prepare_insn(self, idx, ins)?;
+            if wave_cull::emit(self, idx, ins, br)? { return Ok(()); }
+        }
+        if self.page_waves && page_waves::emit(self, idx, ins, br)? { return Ok(()); }
         match m {
+            "tb_light_grid_reserve" => {
+                self.line(light_grid::RESERVE);
+                return Ok(());
+            }
             "tb_indexed_readlane" => {
                 self.line(&format!("tb_swizzle[tb_lane] = {};", r(&s[0])?));
                 self.line("GroupMemoryBarrierWithGroupSync();");
@@ -3678,11 +3773,19 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 self.tmp += 1;
                 match m {
                     "ds_read_b32" => {
-                        self.line(&format!("uint t{t} = {};", at(off & 0xffff)));
+                        if self.wave_cull && self.ex.entry.as_deref() == Some("CullPerPageDrawCommandsCs") {
+                            self.line(&format!("uint t{t} = 0u; if (exec_lo & 1u) t{t} = {};", at(off & 0xffff)));
+                        } else {
+                            self.line(&format!("uint t{t} = {};", at(off & 0xffff)));
+                        }
                         self.wv(&Opnd::Vgpr(vd), &format!("t{t}"))
                     }
                     "ds_read2_b32" | "ds_read2st64_b32" => {
-                        self.line(&format!("uint t{t}a = {}; uint t{t}b = {};", at(off0 * 4), at(off1 * 4)));
+                        if self.wave_cull && self.ex.entry.as_deref() == Some("CullPerPageDrawCommandsCs") {
+                            self.line(&format!("uint t{t}a = 0u, t{t}b = 0u; if (exec_lo & 1u) {{ t{t}a = {}; t{t}b = {}; }}", at(off0 * 4), at(off1 * 4)));
+                        } else {
+                            self.line(&format!("uint t{t}a = {}; uint t{t}b = {};", at(off0 * 4), at(off1 * 4)));
+                        }
                         self.wv(&Opnd::Vgpr(vd), &format!("t{t}a"))?;
                         self.wv(&Opnd::Vgpr(vd + 1), &format!("t{t}b"))
                     }
@@ -5347,13 +5450,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 // operand in and the previous value out.
                 if ins.aux.mask == 3 && as_uint && dim == 1 {
                     let visibility = match (self.ex.stage, ins.raw.as_slice()) {
-                        (Stage::Pixel, [0xf05c1308, 0x00000301]) => {
-                            slot == 0 && self.ex.entry.as_deref() == Some("HWRasterizePS")
-                                && matches!(self.ex.resources.as_slice(), [r] if
-                                    (r.res_type, r.space, r.lower, r.upper) == (6, 0, 0, 0))
-                                && (packed_root::matches_program(&self.ex.isa, 104, 0x62a4894f274d7459)
-                                    || packed_root::matches_program(&self.ex.isa, 120, 0xc974f220d28f72d8))
-                        }
+                        (Stage::Pixel, [0xf05c1308, _]) =>
+                            self.ex.entry.as_deref() == Some("HWRasterizePS")
+                                && self.wide_visibility_uavs.contains(&slot),
                         (Stage::Compute, [0xf05c1308, _]) => self.wide_visibility_uavs.contains(&slot),
                         _ => false,
                     };
@@ -5675,9 +5774,23 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         if gather {
             // gather4: dmask picks the channel; the four texels fill vdata..vdata+3.
             if modi == 4 && dim == 1 && !cmp && !has_off && !d16 && !a16 && !unorm
-                && ins.aux.mask == 1 && self.is_cs && sslot == 0
-                && matches!((self.ex.entry.as_deref(), tslot), (Some("InstanceCull"), 3) | (Some("PersistentClusterCull"), 5))
-                && ins.raw.first() == Some(&0xf110010a)
+                && ins.aux.mask == 1 && sslot == 0
+                && ((self.is_cs && (matches!((self.ex.entry.as_deref(), tslot), (Some("InstanceCull" | "InstanceCullVSM"), 3) | (Some("PersistentClusterCull"), 3 | 5)) || (self.wave_cull && self.ex.entry.as_deref() == Some("CullPerPageDrawCommandsCs") && tslot == 0) || (self.ex.entry.as_deref() == Some("VirtualSmInvalidateInstancePagesCS") && tslot == 4 && packed_root::matches_program(&self.ex.isa, 4604, 0x3a8e759a33ecc608))
+                    || (self.ex.entry.as_deref() == Some("InstanceCullBuildInstanceIdBufferCS") && tslot == 4
+                        && [
+                            (7072, 0x1fe3061314fe6030), (9944, 0x41f68c7d6b4a40ec),
+                            (4492, 0x21c1b76c01e1b9ff), (7428, 0x94a6f79d724d3e25),
+                            (7480, 0xf939a9961a9370bf), (10112, 0x056954bb8a896632),
+                            (4372, 0x8279f28dabfc3ed1), (7008, 0xa4b009faa821ebab),
+                            (6952, 0x54a23d7bfe154e74), (4316, 0xc0486c5c6f4e7160),
+                            (7536, 0x6ae08e11efe46334), (7372, 0x17c731ece44188a8),
+                            (10052, 0xf857b533d91c99c5), (4436, 0x7d6788e101f4109b),
+                            (10008, 0x8685661900d8e524), (6912, 0x9381ab449cbbb186),
+                        ].into_iter().any(|(size, hash)| packed_root::matches_program(&self.ex.isa, size, hash)))))
+                    || (self.ex.stage == Stage::Pixel && tslot == 0
+                        && self.ex.entry.as_deref() == Some("HZBTestPS")
+                        && packed_root::matches_program(&self.ex.isa, 2108, 0x49d7bcccdaa0f843)))
+                && matches!(ins.raw.first(), Some(0xf1100108 | 0xf110010a))
             {
                 // This HZB program supplies an integer mip and a point sampler.
                 // Gather around floor(uv * size - 0.5) in D3D component order.
@@ -6132,7 +6245,8 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         if self.micropoly_vote.is_some() {
             writeln!(h, "groupshared uint tb_lds[784];\ngroupshared uint tb_raster_votes[2];").unwrap();
         } else if self.is_cs && self.uses_lds {
-            let _ = writeln!(h, "groupshared uint tb_lds[8192];");
+            let words = if self.wave_cull && self.ex.entry.as_deref() == Some("CullPerPageDrawCommandsCs") { 320 } else { 8192 };
+            let _ = writeln!(h, "groupshared uint tb_lds[{words}];");
         }
         Ok(h)
     }
@@ -6168,6 +6282,9 @@ void main(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {{");
                 self.regs.insert(format!("s{}", g + k));
             }
             let _ = writeln!(h, "{}", self.reg_decls());
+            if self.page_waves || self.wave_cull {
+                writeln!(h, "    uint tb_wave_tid = gtid.x + {tx}u * (gtid.y + {ty_}u * gtid.z);").unwrap();
+            }
             if self.compute_swizzle || self.indexed_lane || self.single_wave32 {
                 writeln!(h, "    uint tb_lane = gtid.x + {tx}u * (gtid.y + {ty_}u * gtid.z);").unwrap();
             }

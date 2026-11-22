@@ -10,6 +10,7 @@ pub mod meta;
 mod native_compute;
 mod psv;
 pub mod rdna2;
+pub mod ray;
 mod rootsig;
 mod xdat;
 

@@ -24,6 +24,9 @@ TABLES = {
     "Pipeline state": "device::compute::PIPELINE",
     "Query heap": "device::queries::HEAP",
     "Command signature": "device::indirect::SIGNATURE",
+    "State object": "device::state_object::TABLE",
+    "State object properties": "device::state_object::inspection::PROPERTIES",
+    "Ray shader inspection": "device::state_object::inspection::INSPECTOR",
 }
 
 

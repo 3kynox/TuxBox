@@ -12,7 +12,7 @@ from project_tuxbox.shader_prep import matching_tuxbox_provider
 if sys.platform != "linux":
     raise unittest.SkipTest("Frosty's staging and launch tools require Linux")
 
-from tools.prepare_frosty import verify_staged_files
+from tools.prepare_frosty import BIN, ENGINE_INI, TITLE, verify_staged_files
 
 
 class FrostyPreparationTests(unittest.TestCase):
@@ -54,6 +54,15 @@ class FrostyPreparationTests(unittest.TestCase):
         self.manifest.write_text(json.dumps(self.records))
         with self.assertRaisesRegex(ValueError, "original retail binaries"):
             verify_staged_files(self.work)
+
+    def test_preserves_existing_graphics_settings(self):
+        staged = self.work / "Mount" / ENGINE_INI
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        legacy = (Path(__file__).parent / "fixtures/frosty-legacy-user-engine.ini").read_bytes()
+        for contents in (legacy, b"existing user settings"):
+            staged.write_bytes(contents)
+            verify_staged_files(self.work)
+            self.assertEqual(staged.read_bytes(), contents)
 
     def test_staged_provider_survives_removal_of_shared_build(self):
         shared = self.work / "build/d3d12-smoke/d3d12_xs.dll"

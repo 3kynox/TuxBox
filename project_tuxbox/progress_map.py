@@ -151,6 +151,17 @@ def retail_summary(evidence, report):
             rows.append(("Free roam", "Verified" if movement else "Unverified", GREEN if movement else MUTED))
         else:
             rows.append(("Driving and shooting", "Unverified", MUTED))
+        packaged = read_json(evidence / "matrix-awakens/packaged-graphics.json")
+        boot = packaged.get("retail_boot", {})
+        renderer = read_json(evidence / "matrix-awakens/packaged-renderer.json")
+        if renderer.get("title_sha256") == report["sha256"] and renderer.get("first_present"):
+            milestone = "Menu displayed" if renderer.get("menu_verified") else "First 4K frame"
+            rows[:0] = [("Packaged graphics settings", milestone, GREEN if renderer.get("menu_verified") else AMBER),
+                        ("Earlier reduced-effects tests", "", MUTED)]
+        elif (packaged.get("title_sha256") == report["sha256"] and boot.get("exit_code")
+                and boot.get("mangohud_frames") == 0 and boot.get("first_present") is False):
+            rows[:0] = [("Packaged graphics settings", "Blocked before first frame", RED),
+                        ("Earlier reduced-effects tests", "", MUTED)]
         host = independent.get("proton", "")
         if "experimental" in host.casefold():
             host = "Proton Experimental"
@@ -509,6 +520,31 @@ def culling_readbacks(evidence, archive, compiler, name):
 
 def shader_checks(evidence, data):
     notes = [validation] if (validation := shader_validation(data)) else []
+    raster = read_json(evidence / "matrix-awakens/raster-archive-survey.json")
+    for name in ("global", "material"):
+        archive = raster.get("archives", {}).get(name, {})
+        if archive.get("archive_sha256") != data.get("archives", {}).get(name, {}).get("member_sha256"):
+            continue
+        stages = archive.get("stages", {})
+        if not archive.get("compiler_sha256") or not all(
+                key in stages and all(field in stages[key] for field in ("entries", "translated"))
+                for key in ("vertex", "pixel", "geometry")):
+            continue
+        total = sum(row["entries"] for row in stages.values())
+        translated = sum(row["translated"] for row in stages.values())
+        if total:
+            notes.append(f"{name.capitalize()} raster archive · {translated:,}/{total:,} entries emitted HLSL "
+                         f"({translated/total:.1%}) · compiler {archive['compiler_sha256'][:8]}")
+    census = read_json(evidence / "matrix-awakens/ray-state-census.json")
+    ray_archives = census.get("archives", {})
+    if ray_archives and all(
+            info.get("archive_sha256") == data.get("archives", {}).get(name, {}).get("member_sha256")
+            and "compiled_entries" in info.get("desktop_translation", {})
+            for name, info in ray_archives.items()):
+        compiled = sum(info["desktop_translation"]["compiled_entries"] for info in ray_archives.values())
+        total = sum(sum(info["entries"].values()) for info in ray_archives.values())
+        if total:
+            notes.append(f"Ray tracing · {compiled:,} of {total:,} packaged entries compiled to DXIL ({compiled/total:.1%})")
     archive = data.get("archives", {}).get("global", {}).get("member_sha256")
     warmup = read_json(evidence / "matrix-awakens/chase-warmup.json")
     if (warmup and warmup["title_sha256"] == data.get("executable_sha256")
@@ -598,6 +634,7 @@ def shader_table(evidence):
         lines.append(f"{row['stage']:<16} {row['global'] + row['material']:>9,} {hlsl:>21} "
                      f"{independent.get(row['stage'], '—'):>12} {row['profiled_dxbc']:>11} {observed:>23}")
     lines.append(f"The preparation profile includes {data['linked_variants']} additional linked variants.")
+    lines.append(f"Stage table uses compiler snapshot {data['compiler_sha256'][:8]}; newer archive surveys follow.")
     lines.extend(shader_checks(evidence, data))
     for material in data.get("menu_materials", ()):
         requested = [f"{row['stage']} #{row['entry']}" for row in material["members"] if row["observed_in"]]
@@ -630,7 +667,7 @@ def draw_shaders(svg, y, evidence):
     text(group, INNER-18, 68, f"{packages:,} shipped entries · {sources} in profile · "
          f"{data['linked_variants']} linked variants", 14, MUTED, anchor="end")
     text(group, 18, 97, "HLSL counts all translated programs. TuxBox only counts those translated with the legacy emitter disabled.", 14, MUTED)
-    text(group, 18, 118, "Requests are distinct programs seen in captured title runs. A pipeline can request a shader before drawing.", 14, MUTED)
+    text(group, 18, 118, f"Stage table uses compiler snapshot {data['compiler_sha256'][:8]}. Requests can precede a draw.", 14, MUTED)
     columns = [(18, "Stage"), (211, "Packaged"), (463, "HLSL / unique DXBC"), (584, "TuxBox only"),
                (694, "In profile"), (INNER-18, "In profile / requested")]
     for x, label in columns:
@@ -654,7 +691,7 @@ def draw_shaders(svg, y, evidence):
         text(group, 694, top+17, f"{row['profiled_dxbc']:,}", 15, TEXT, anchor="end")
     for line, check in enumerate(checks):
         text(group, 18, height-14-21*(len(checks)-line), check, 14, TEXT)
-    text(group, 18, height-14, "Ray-tracing entries contain serialized state objects. Their translation has a separate path.", 14, MUTED)
+    text(group, 18, height-14, "Ray-tracing entries are packaged separately from the DXBC programs counted in the table.", 14, MUTED)
     return y+height+GAP
 
 

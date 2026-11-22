@@ -14,7 +14,10 @@ pub(super) unsafe extern "system" fn root(list: &List, signature: *mut c_void) {
         return;
     }
     match unsafe { root_signature(signature, parent(&list.parent)) } {
-        Ok(root) => unsafe { list.native.SetGraphicsRootSignature(root) },
+        Ok(root) => {
+            state.bindings.graphics_root(root);
+            unsafe { list.native.SetGraphicsRootSignature(root) };
+        }
         Err(error) => state.error = error,
     }
 }
@@ -39,6 +42,9 @@ pub(super) unsafe extern "system" fn pipeline(list: &List, guest: *mut c_void) {
     match unsafe { crate::device::compute::pipeline(guest, parent(&list.parent)) } {
         Ok(Some(host)) => {
             state.stencil_slot = host.state.stencil_slot;
+            state.bindings.pipeline = Some(super::compute_bindings::Pipeline::Regular(
+                host.native.clone(),
+            ));
             unsafe { list.native.SetPipelineState(&host.native) };
         }
         _ => state.error = E_INVALIDARG,

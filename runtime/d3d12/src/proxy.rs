@@ -244,16 +244,21 @@ unsafe extern "system" fn get_device<N, S>(
     unsafe { parent.query(iid, out) }
 }
 
-pub(crate) const fn object_slots<N, S, const L: usize>() -> Slots<L>
-where
-    for<'a> &'a N: Into<&'a ID3D12Object>,
-{
+pub(crate) const fn unsupported_slots<const L: usize>() -> Slots<L> {
     let mut slots = [MISSING[0]; L];
-    let mut i = 7;
+    let mut i = 1;
     while i < L {
         slots[i] = MISSING[i];
         i += 1;
     }
+    slots
+}
+
+pub(crate) const fn object_slots<N, S, const L: usize>() -> Slots<L>
+where
+    for<'a> &'a N: Into<&'a ID3D12Object>,
+{
+    let mut slots = unsupported_slots();
     slots[0] = crate::slot!(query::<N, S>);
     slots[1] = crate::slot!(add_ref::<N, S>);
     slots[2] = crate::slot!(release::<N, S>);

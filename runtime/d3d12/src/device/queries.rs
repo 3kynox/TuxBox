@@ -50,6 +50,14 @@ pub(super) unsafe extern "system" fn create_heap(
     }
 }
 
+pub(super) unsafe fn native<'a>(
+    object: *mut c_void,
+    device: *mut c_void,
+) -> Option<&'a ID3D12QueryHeap> {
+    let heap: &Heap = unsafe { unwrap(object, device, &HEAP) }?;
+    Some(&heap.native)
+}
+
 /// Returns the native heap and result stride after checking owner, type and range.
 pub(crate) unsafe fn range<'a>(
     object: *mut c_void,

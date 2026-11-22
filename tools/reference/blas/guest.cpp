@@ -1,6 +1,11 @@
 #include "frame_abi.h"
 #include "query_dxil.h"
+#include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <fstream>
+#include <iterator>
+#include <vector>
 
 using frame_abi::check;
 using frame_abi::ComPtr;
@@ -26,21 +31,27 @@ static ComPtr<ID3D12Resource> buffer(ID3D12Device* dev, UINT64 bytes, D3D12_HEAP
     return res;
 }
 
-static ComPtr<ID3D12Resource> upload(ID3D12Device* dev, const void* data, size_t bytes) {
-    auto res = buffer(dev, bytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
+static void write_upload(ID3D12Resource* res, const void* data, size_t bytes) {
     D3D12_RANGE empty{}, written{0, bytes};
     void* dest{};
     check(res->Map(0, &empty, &dest), "map upload");
     std::memcpy(dest, data, bytes);
     res->Unmap(0, &written);
+}
+
+static ComPtr<ID3D12Resource> upload(ID3D12Device* dev, const void* data, size_t bytes) {
+    auto res = buffer(dev, bytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
+    write_upload(res.Get(), data, bytes);
     return res;
 }
 
 static ComPtr<ID3D12RootSignature> root_signature(ID3D12Device* device) {
-    D3D12_ROOT_PARAMETER params[2]{};
+    D3D12_ROOT_PARAMETER params[3]{};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
-    D3D12_ROOT_SIGNATURE_DESC desc{2, params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+    params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    params[2].Descriptor.ShaderRegister = 1;
+    D3D12_ROOT_SIGNATURE_DESC desc{3, params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
     ComPtr<ID3DBlob> blob;
     check(D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &blob, nullptr), "serialize root");
     ComPtr<ID3D12RootSignature> root;
@@ -65,8 +76,7 @@ static ComPtr<ID3D12Device> provider_device(bool xbox) {
     return device;
 }
 
-static void submit(ID3D12Device* owner, ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* list) {
-    check(list->Close(), "close list");
+static void submit_closed(ID3D12Device* owner, ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* list) {
     ID3D12CommandList* lists[] = {list};
     ComPtr<ID3D12Fence> fence;
     check(owner->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)), "create fence");
@@ -82,13 +92,145 @@ static void submit(ID3D12Device* owner, ID3D12CommandQueue* queue, ID3D12Graphic
         throw std::runtime_error("GPU fence did not complete");
 }
 
-// Only the guest prebuild and BLAS build go through Xbox ABI slots. The same desktop
-// device creates the inputs, builds the verification TLAS and runs the ray queries.
-static void run(bool xbox, bool guest_build, FILE* receipt) {
-    const auto provider = provider_device(xbox);
-    const auto root = root_signature(provider.Get());
+static void submit(ID3D12Device* owner, ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* list) {
+    check(list->Close(), "close list");
+    submit_closed(owner, queue, list);
+}
+
+static std::vector<char> read_file(const char* path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) throw std::runtime_error(std::string("cannot open ") + path);
+    return {std::istreambuf_iterator<char>{in}, std::istreambuf_iterator<char>{}};
+}
+
+static void same_adapter(ID3D12Device* owner, ID3D12Device* guest) {
+    LUID guest_id{}, host_id = owner->GetAdapterLuid();
+    using Adapter = LUID* (WINAPI*)(ID3D12Device*, LUID*);
+    method<Adapter>(guest, 43)(guest, &guest_id);
+    if (std::memcmp(&guest_id, &host_id, sizeof(host_id)))
+        throw std::runtime_error("Xbox and desktop tests require the same adapter");
+}
+
+static void copy_structures(ID3D12Device* owner, UINT64 bytes,
+                            std::array<ComPtr<ID3D12Resource>, 2>& structures) {
+    const auto guest = provider_device(true);
+    same_adapter(owner, guest.Get());
+    D3D12_COMMAND_QUEUE_DESC queue_desc{};
+    ComPtr<ID3D12CommandQueue> queue;
+    ComPtr<ID3D12CommandAllocator> allocator;
+    check(guest->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&queue)), "Xbox copy queue");
+    check(guest->CreateCommandAllocator(queue_desc.Type, IID_PPV_ARGS(&allocator)), "Xbox copy allocator");
+    const UINT params[]{0, 0, 1, 0};
+    auto create = method<frame_abi::CreateList>(guest.Get(), 73);
+    using Copy = void(WINAPI*)(ID3D12GraphicsCommandList4*, UINT64, UINT64,
+                              D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE);
+    ComPtr<ID3D12GraphicsCommandList> list;
+    check(create(guest.Get(), params, allocator.Get(), nullptr, IID_PPV_ARGS(&list)), "Xbox copy list");
+    ComPtr<ID3D12GraphicsCommandList4> list4;
+    check(list.As(&list4), "Xbox List4 query");
+    if (static_cast<void*>(list.Get()) != static_cast<void*>(list4.Get()))
+        throw std::runtime_error("Xbox List4 identity");
+    auto copy = method<Copy>(list4.Get(), 119);
+    std::array<ComPtr<ID3D12Resource>, 2> destinations;
+    for (unsigned i = 0; i < destinations.size(); ++i) {
+        destinations[i] = buffer(owner, bytes, D3D12_HEAP_TYPE_DEFAULT,
+            D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, true);
+        auto mode = i == 0 ? D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_CLONE :
+                             D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT;
+        copy(list4.Get(), destinations[i]->GetGPUVirtualAddress(), structures[i]->GetGPUVirtualAddress(), mode);
+    }
+    D3D12_RESOURCE_BARRIER ready{};
+    ready.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    list->ResourceBarrier(1, &ready);
+    submit(guest.Get(), queue.Get(), list.Get());
+    auto expect_error = [&](UINT64 dst, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE mode, HRESULT expected) {
+        ComPtr<ID3D12GraphicsCommandList> invalid;
+        check(create(guest.Get(), params, allocator.Get(), nullptr, IID_PPV_ARGS(&invalid)), "Xbox negative list");
+        ComPtr<ID3D12GraphicsCommandList4> interface4;
+        check(invalid.As(&interface4), "Xbox negative List4 query");
+        copy(interface4.Get(), dst, structures[0]->GetGPUVirtualAddress(), mode);
+        if (invalid->Close() != expected) throw std::runtime_error("incorrect Xbox AS copy rejection");
+    };
+    expect_error(destinations[0]->GetGPUVirtualAddress()+1,
+                 D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_CLONE, E_INVALIDARG);
+    expect_error(destinations[0]->GetGPUVirtualAddress(),
+                 D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_VISUALIZATION_DECODE_FOR_TOOLS, E_NOTIMPL);
+    structures.swap(destinations);
+}
+
+struct Entry {
+    Build build;
+    std::array<UINT64, 4> reserved;
+};
+static_assert(sizeof(Inputs) == 24 && sizeof(Sizes) == 24 && sizeof(Entry) == 80);
+
+static ComPtr<ID3D12GraphicsCommandList> guest_list(ID3D12Device* guest, ID3D12CommandAllocator* allocator) {
+    const UINT params[]{0, 0, 1, 0};
+    ComPtr<ID3D12GraphicsCommandList> list;
+    check(method<frame_abi::CreateList>(guest, 73)(guest, params, allocator, nullptr, IID_PPV_ARGS(&list)),
+          "create Xbox build list");
+    return list;
+}
+
+#ifdef TUXBOX_RAY_LIBRARY_PROBE
+#include "ray_library_probe.h"
+#endif
+#ifdef TUXBOX_MATERIAL_HIT_PROBE
+#include "material_probe.h"
+#endif
+#ifdef TUXBOX_GPU_INSTANCE_PROBE
+#include "gpu_instances.h"
+#endif
+#ifdef TUXBOX_LIGHTING_PROBE
+#include "lighting_probe.h"
+#endif
+#if defined(TUXBOX_SCREEN_OCCLUSION_PROBE) || defined(TUXBOX_SCREEN_GATHER_PROBE) || defined(TUXBOX_CARD_TILE_PROBE)
+#include "observed_ray_pipeline.h"
+#endif
+#ifdef TUXBOX_CARD_TILE_PROBE
+#include "card_tile_probe.h"
+#endif
+#ifdef TUXBOX_SCREEN_GATHER_PROBE
+#include "screen_gather_probe.h"
+#endif
+#ifdef TUXBOX_RADIANCE_PROBE
+#include "radiance_probe.h"
+#endif
+#ifdef TUXBOX_SCREEN_OCCLUSION_PROBE
+#include "occlusion_probe.h"
+#endif
+#ifdef TUXBOX_LUMEN_VOLUME_PROBE
+#include "lumen_volume_probe.h"
+#endif
+#ifdef TUXBOX_REFLECTION_PROBE
+#include "reflection_probe.h"
+#endif
+
+static void guest_batch(ID3D12GraphicsCommandList* list, UINT count, const Entry* entries) {
+#ifdef TUXBOX_SINGLE_BUILD_PROBE
+    ComPtr<ID3D12GraphicsCommandList4> list4;
+    check(list->QueryInterface(IID_PPV_ARGS(&list4)), "Xbox List4 query");
+    using Single = void(WINAPI*)(ID3D12GraphicsCommandList4*, const Build*, UINT, const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC*);
+    for (UINT i = 0; i < count; ++i)
+        method<Single>(list4.Get(), 117)(list4.Get(), &entries[i].build, 0, nullptr);
+#else
+    const IID iid{0xc3827890, 0x4024, 0x474c, {0x98, 0xcf, 0x64, 0x5b, 0x51, 0xdc, 0x48, 0x74}};
+    ComPtr<IUnknown> list6;
+    check(list->QueryInterface(iid, reinterpret_cast<void**>(list6.GetAddressOf())), "Xbox List6 query");
+    if (static_cast<void*>(list) != static_cast<void*>(list6.Get()))
+        throw std::runtime_error("List6 did not preserve Xbox command list identity");
+    using BatchBuild = void(WINAPI*)(IUnknown*, UINT, const Entry*);
+    method<BatchBuild>(list6.Get(), 131)(list6.Get(), count, entries);
+#endif
+}
+
+static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, FILE* receipt, bool sphere) {
+    const auto desktop = provider_device(false);
+    const auto provider = xbox ? provider_device(true) : desktop;
+    const auto root = root_signature(desktop.Get());
     ComPtr<ID3D12Device5> owner;
-    check(root->GetDevice(IID_PPV_ARGS(&owner)), "root owning device");
+    check(desktop.As(&owner), "desktop DXR device");
+    if (xbox) same_adapter(owner.Get(), provider.Get());
     ComPtr<IDXGIFactory4> factory;
     ComPtr<IDXGIAdapter1> adapter;
     DXGI_ADAPTER_DESC1 gpu{};
@@ -103,23 +245,30 @@ static void run(bool xbox, bool guest_build, FILE* receipt) {
 
     const float vertices[][3] = {{-1.5f,-0.5f,0},{-0.5f,-0.5f,0},{-1,0.5f,0},
                                  {0.5f,-0.5f,1},{1.5f,-0.5f,1},{1,0.5f,1}};
-    auto mesh = upload(owner.Get(), vertices, sizeof(vertices));
+    constexpr UINT triangle_bytes = 9 * sizeof(float);
+    auto packed = sphere ? read_file("sphere.xyz") : std::vector<char>{};
+    if (sphere && packed.size() != 528 * triangle_bytes)
+        throw std::runtime_error("unexpected sphere geometry size");
+    auto mesh = sphere ? upload(owner.Get(), packed.data(), packed.size())
+                       : upload(owner.Get(), vertices, sizeof(vertices));
     static_assert(sizeof(D3D12_RAYTRACING_GEOMETRY_DESC) == 56);
     std::array<D3D12_RAYTRACING_GEOMETRY_DESC, 2> geometries{};
-    for (UINT i = 0; i < geometries.size(); ++i) {
+    const UINT geometry_count = sphere ? 1u : 2u;
+    for (UINT i = 0; i < geometry_count; ++i) {
         auto& g = geometries[i];
         g.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
-        g.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+        g.Flags = sphere ? D3D12_RAYTRACING_GEOMETRY_FLAG_NONE : D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
         g.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
-        g.Triangles.VertexCount = 3;
+        g.Triangles.VertexCount = sphere ? static_cast<UINT>(packed.size() / sizeof(vertices[0])) : 3;
         g.Triangles.VertexBuffer.StartAddress = mesh->GetGPUVirtualAddress() + i * 3 * sizeof(vertices[0]);
         g.Triangles.VertexBuffer.StrideInBytes = sizeof(vertices[0]);
     }
     Inputs bottom{};
     bottom.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
-    bottom.NumDescs = static_cast<UINT>(geometries.size());
+    bottom.NumDescs = geometry_count;
     bottom.pGeometryDescs = geometries.data();
     bottom.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+    if (guest_copy || guest_build || sphere) bottom.Flags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_COMPACTION;
     Sizes native{};
     owner->GetRaytracingAccelerationStructurePrebuildInfo(&bottom, &native);
     if (!native.ResultDataMaxSizeInBytes || !native.ScratchDataSizeInBytes) throw std::runtime_error("empty prebuild");
@@ -136,12 +285,6 @@ static void run(bool xbox, bool guest_build, FILE* receipt) {
                  sizes.ResultDataMaxSizeInBytes, sizes.ScratchDataSizeInBytes);
     std::fflush(receipt);
     std::array<ComPtr<ID3D12Resource>, 2> structures, scratch;
-    // Frosty copies each 48-byte desktop description into an 80-byte batch entry.
-    struct Entry {
-        Build build;
-        std::array<UINT64, 4> reserved;
-    };
-    static_assert(sizeof(Inputs) == 24 && sizeof(Sizes) == 24 && sizeof(Entry) == 80);
     std::array<Entry, 2> batch{};
     for (size_t i = 0; i < batch.size(); ++i) {
         structures[i] = buffer(owner.Get(), sizes.ResultDataMaxSizeInBytes, D3D12_HEAP_TYPE_DEFAULT,
@@ -154,50 +297,111 @@ static void run(bool xbox, bool guest_build, FILE* receipt) {
     }
     D3D12_COMMAND_QUEUE_DESC queue_desc{};
     ComPtr<ID3D12CommandQueue> queue;
-    check(provider->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&queue)), "create queue");
+    check(owner->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&queue)), "create verification queue");
     ComPtr<ID3D12CommandAllocator> allocator;
-    check(owner->CreateCommandAllocator(queue_desc.Type, IID_PPV_ARGS(&allocator)), "create allocator");
-    ComPtr<ID3D12GraphicsCommandList> list;
-    if (guest_build) {
-        const UINT params[]{0, 0, 1, 0};
-        check(method<frame_abi::CreateList>(provider.Get(), 73)(provider.Get(), params, allocator.Get(), nullptr,
-                                                                IID_PPV_ARGS(&list)), "Xbox list create");
-    } else {
-        check(owner->CreateCommandList(0, queue_desc.Type, allocator.Get(), nullptr, IID_PPV_ARGS(&list)),
-              "create list");
-    }
-    if (guest_build) {
-        const IID list6_iid{0xc3827890, 0x4024, 0x474c, {0x98, 0xcf, 0x64, 0x5b, 0x51, 0xdc, 0x48, 0x74}};
-        ComPtr<IUnknown> list6;
-        check(list->QueryInterface(list6_iid, reinterpret_cast<void**>(list6.GetAddressOf())), "Xbox List6 query");
-        if (static_cast<void*>(list.Get()) != static_cast<void*>(list6.Get()))
-            throw std::runtime_error("List6 did not preserve Xbox command list identity");
-        using BatchBuild = void(WINAPI*)(IUnknown*, UINT, const Entry*);
-        method<BatchBuild>(list6.Get(), 131)(list6.Get(), static_cast<UINT>(batch.size()), batch.data());
-    } else {
-        ComPtr<ID3D12GraphicsCommandList4> list4;
-        check(list.As(&list4), "List4 query");
-        for (const auto& entry : batch)
-            list4->BuildRaytracingAccelerationStructure(&entry.build, 0, nullptr);
-    }
+    check(owner->CreateCommandAllocator(queue_desc.Type, IID_PPV_ARGS(&allocator)), "create verification allocator");
+    ComPtr<ID3D12CommandQueue> guest_queue;
+    ComPtr<ID3D12CommandAllocator> guest_allocator;
     D3D12_RESOURCE_BARRIER ready{};
     ready.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-    list->ResourceBarrier(1, &ready);
-    submit(owner.Get(), queue.Get(), list.Get());
+    if (guest_build) {
+        check(provider->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&guest_queue)), "Xbox build queue");
+        check(provider->CreateCommandAllocator(queue_desc.Type, IID_PPV_ARGS(&guest_allocator)), "Xbox build allocator");
+        auto list = guest_list(provider.Get(), guest_allocator.Get());
+        guest_batch(list.Get(), 0, nullptr);
+        ComPtr<ID3D12Resource> cooked;
+        std::vector<char> bytes;
+        if (deserialize) {
+            bytes = read_file("sphere.serialized");
+            if (bytes.size() != 31296) throw std::runtime_error("unexpected serialized sphere size");
+            // Swap one primitive from each of two leaves. Ray hits must use the
+            // original IDs that the guest restores between Close and Execute.
+            auto recorded = bytes;
+            UINT leaf_offset{};
+            std::memcpy(&leaf_offset, bytes.data() + 64 + 52, sizeof(leaf_offset));
+            const size_t first_id = 64ull + leaf_offset + 52;
+            if (first_id + 64 + sizeof(UINT) > bytes.size())
+                throw std::runtime_error("bad sphere leaf table");
+            auto id = recorded.data() + first_id;
+            std::swap_ranges(id, id + sizeof(UINT), id + 64);
+            cooked = upload(provider.Get(), recorded.data(), recorded.size());
+            using Copy = void(WINAPI*)(IUnknown*, UINT64, UINT64, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE);
+            for (auto& structure : structures) {
+                structure = buffer(provider.Get(), 31232, D3D12_HEAP_TYPE_DEFAULT,
+                    D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, true);
+                method<Copy>(list.Get(), 119)(list.Get(), structure->GetGPUVirtualAddress(),
+                    cooked->GetGPUVirtualAddress(), D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_DESERIALIZE);
+            }
+        } else {
+            guest_batch(list.Get(), static_cast<UINT>(batch.size()), batch.data());
+        }
+        list->ResourceBarrier(1, &ready);
+        check(list->Close(), "close guest build list");
+        if (deserialize) {
+            write_upload(cooked.Get(), bytes.data(), bytes.size());
+            std::fprintf(receipt, "serialized_upload=updated_after_close\n");
+        }
+        submit_closed(provider.Get(), guest_queue.Get(), list.Get());
+        auto invalid = guest_list(provider.Get(), guest_allocator.Get());
+        auto bad_batch = batch;
+        bad_batch[1].build.DestAccelerationStructureData |= 1;
+        guest_batch(invalid.Get(), static_cast<UINT>(bad_batch.size()), bad_batch.data());
+        if (invalid->Close() != E_INVALIDARG) throw std::runtime_error("unaligned batch accepted");
+        auto extended = guest_list(provider.Get(), guest_allocator.Get());
+#ifdef TUXBOX_SINGLE_BUILD_PROBE
+        ComPtr<ID3D12GraphicsCommandList4> single;
+        check(extended.As(&single), "Xbox negative List4 query");
+        using Single = void(WINAPI*)(ID3D12GraphicsCommandList4*, const Build*, UINT, const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC*);
+        method<Single>(single.Get(), 117)(single.Get(), &batch[1].build, 1, nullptr);
+        if (extended->Close() != E_NOTIMPL) throw std::runtime_error("unsupported postbuild request accepted");
+#else
+        bad_batch[1] = batch[1];
+        bad_batch[1].reserved[0] = 1;
+        guest_batch(extended.Get(), static_cast<UINT>(bad_batch.size()), bad_batch.data());
+        if (extended->Close() != E_NOTIMPL) throw std::runtime_error("unknown batch extension accepted");
+#endif
+    } else {
+        ComPtr<ID3D12GraphicsCommandList4> list;
+        check(owner->CreateCommandList(0, queue_desc.Type, allocator.Get(), nullptr, IID_PPV_ARGS(&list)), "create list");
+        for (const auto& entry : batch)
+            list->BuildRaytracingAccelerationStructure(&entry.build, 0, nullptr);
+        list->ResourceBarrier(1, &ready);
+        submit(owner.Get(), queue.Get(), list.Get());
+    }
 
+    auto original_blas = structures;
+    if (guest_copy) {
+        copy_structures(owner.Get(), sizes.ResultDataMaxSizeInBytes, structures);
+        std::fprintf(receipt, "copy_modes=clone,compact\ninvalid_copies=2\n");
+    }
     std::array<D3D12_RAYTRACING_INSTANCE_DESC, 2> instances{};
     for (UINT i = 0; i < instances.size(); ++i) {
         auto& instance = instances[i];
         for (UINT axis = 0; axis < 3; ++axis) instance.Transform[axis][axis] = 1;
-        instance.Transform[0][3] = static_cast<float>(i * 4);
+        instance.Transform[0][3] = static_cast<float>(i) * (sphere ? 512.0f : 4.0f);
         instance.InstanceMask = 0xff;
         instance.InstanceID = 7 + i;
         instance.AccelerationStructure = structures[i]->GetGPUVirtualAddress();
     }
-    auto instance_buffer = upload(owner.Get(), instances.data(), sizeof(instances));
+    ComPtr<ID3D12Resource> instance_buffer;
+    UINT instance_count = static_cast<UINT>(instances.size());
+#ifdef TUXBOX_GPU_INSTANCE_PROBE
+    std::array<D3D12_RAYTRACING_INSTANCE_DESC, 3> gpu_instances{instances[0], instances[1], instances[0]};
+    ComPtr<ID3D12Resource> tiny;
+    if (guest_build && !sphere) {
+        tiny = buffer(provider.Get(), 192, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, true);
+        gpu_instances[2].AccelerationStructure = tiny->GetGPUVirtualAddress();
+        gpu_instances[2].InstanceID = 11;
+        gpu_instances[2].Transform[0][3] = 10.0f;
+        ++instance_count;
+    }
+    instance_buffer = upload(guest_build ? provider.Get() : desktop.Get(), gpu_instances.data(), sizeof(gpu_instances));
+#else
+    instance_buffer = upload(guest_build ? provider.Get() : desktop.Get(), instances.data(), sizeof(instances));
+#endif
     Inputs top{};
     top.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
-    top.NumDescs = static_cast<UINT>(instances.size());
+    top.NumDescs = instance_count;
     top.InstanceDescs = instance_buffer->GetGPUVirtualAddress();
     Sizes top_sizes{};
     owner->GetRaytracingAccelerationStructurePrebuildInfo(&top, &top_sizes);
@@ -214,21 +418,118 @@ static void run(bool xbox, bool guest_build, FILE* receipt) {
     ComPtr<ID3D12GraphicsCommandList4> verify;
     check(owner->CreateCommandList(0, queue_desc.Type, allocator.Get(), pso.Get(), IID_PPV_ARGS(&verify)),
           "create verification list");
+    ComPtr<ID3D12Resource> size_readback, size_output;
+    if (sphere || guest_build) {
+        constexpr UINT bytes = 4 * sizeof(UINT64);
+        size_output = buffer(owner.Get(), bytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
+        size_readback = buffer(owner.Get(), bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+        const UINT64 sources[] = {original_blas[0]->GetGPUVirtualAddress(), original_blas[1]->GetGPUVirtualAddress()};
+        const auto dst = size_output->GetGPUVirtualAddress();
+        ComPtr<ID3D12GraphicsCommandList> query;
+        if (guest_build) query = guest_list(provider.Get(), guest_allocator.Get());
+        using SizeQuery = void(WINAPI*)(IUnknown*, const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC*,
+                                        UINT, const UINT64*);
+        auto sizes_for = [&](auto type, UINT64 address) {
+            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC info{address, type};
+            if (query) method<SizeQuery>(query.Get(), 118)(query.Get(), &info, ARRAYSIZE(sources), sources);
+            else verify->EmitRaytracingAccelerationStructurePostbuildInfo(&info, ARRAYSIZE(sources), sources);
+        };
+        sizes_for(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_CURRENT_SIZE, dst);
+        sizes_for(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_COMPACTED_SIZE, dst + 2 * sizeof(UINT64));
+        if (query) {
+            submit(provider.Get(), guest_queue.Get(), query.Get());
+            auto invalid = guest_list(provider.Get(), guest_allocator.Get());
+            const UINT64 unaligned[] = {sources[0], sources[1] + 4};
+            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC info{
+                dst, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_COMPACTED_SIZE};
+            method<SizeQuery>(invalid.Get(), 118)(invalid.Get(), &info, ARRAYSIZE(unaligned), unaligned);
+            if (invalid->Close() != E_INVALIDARG) throw std::runtime_error("unaligned postbuild source accepted");
+        }
+        D3D12_RESOURCE_BARRIER to_copy{};
+        to_copy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        to_copy.Transition = {size_output.Get(), 0, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE};
+        verify->ResourceBarrier(1, &to_copy);
+        verify->CopyBufferRegion(size_readback.Get(), 0, size_output.Get(), 0, bytes);
+    }
     Build tlas{};
     tlas.Inputs = top;
     tlas.DestAccelerationStructureData = scene->GetGPUVirtualAddress();
     tlas.ScratchAccelerationStructureData = scene_scratch->GetGPUVirtualAddress();
-    verify->BuildRaytracingAccelerationStructure(&tlas, 0, nullptr);
+    if (guest_build) {
+        auto list = guest_list(provider.Get(), guest_allocator.Get());
+#ifdef TUXBOX_GPU_INSTANCE_PROBE
+        InstanceBindings bindings;
+        bindings.bind(provider.Get(), list.Get());
+        auto initial = gpu_instances;
+        for (auto& i : initial) i.InstanceMask = 0;
+        write_upload(instance_buffer.Get(), initial.data(), sizeof(initial));
+        constexpr UINT offset = 32;
+        auto gpu_records = buffer(provider.Get(), offset + sizeof(gpu_instances), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST, true);
+        list->CopyBufferRegion(gpu_records.Get(), offset, instance_buffer.Get(), 0, sizeof(gpu_instances));
+        D3D12_RESOURCE_BARRIER readable{};
+        readable.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        readable.Transition = {gpu_records.Get(), 0, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
+        list->ResourceBarrier(1, &readable);
+        tlas.Inputs.InstanceDescs = gpu_records->GetGPUVirtualAddress() + offset;
+#endif
+        Entry entry{tlas, {}};
+        guest_batch(list.Get(), 1, &entry);
+        list->ResourceBarrier(1, &ready);
+#ifdef TUXBOX_GPU_INSTANCE_PROBE
+        bindings.dispatch(list.Get());
+        check(list->Close(), "close scene list");
+        if (tiny) {
+            const auto native_size = publish_quad(provider.Get(), guest_queue.Get(), guest_allocator.Get(), tiny.Get());
+            if (native_size <= 192) throw std::runtime_error("quad fits guest destination on this adapter, missing relocation coverage");
+            std::fprintf(receipt, "quad_guest_bytes=192\nquad_native_bytes=%llu\n", native_size);
+        }
+        auto short_list = guest_list(provider.Get(), guest_allocator.Get());
+        auto outside = entry;
+        outside.build.Inputs.InstanceDescs += 2 * sizeof(D3D12_RAYTRACING_INSTANCE_DESC);
+        guest_batch(short_list.Get(), 1, &outside);
+        if (short_list->Close() != E_INVALIDARG) throw std::runtime_error("partially unmapped GPU instance array accepted");
+        write_upload(instance_buffer.Get(), gpu_instances.data(), sizeof(gpu_instances));
+        submit_closed(provider.Get(), guest_queue.Get(), list.Get());
+        bindings.check_result();
+        submit_closed(provider.Get(), guest_queue.Get(), list.Get());
+        bindings.check_result();
+        std::fprintf(receipt, "restored_compute_bindings=17,23,37,53\nclosed_list_executions=2\n");
+        std::fprintf(receipt, "instance_memory=default_heap_gpu_copy_after_close\n");
+#else
+        submit(provider.Get(), guest_queue.Get(), list.Get());
+#endif
+        std::fprintf(receipt, "guest_tlas_instances=%u\ninvalid_batches=2\n", instance_count);
+    } else {
+        verify->BuildRaytracingAccelerationStructure(&tlas, 0, nullptr);
+    }
     ready.UAV.pResource = scene.Get();
     verify->ResourceBarrier(1, &ready);
-    // The hit words encode instance ID, geometry index and distance in sixteenths.
-    constexpr UINT64 bytes = 5 * sizeof(UINT);
+    struct Probe { float origin[3], minimum, direction[3], maximum; UINT flags; };
+    static_assert(sizeof(Probe) == 36);
+    const Probe original[] = {
+        {{-1, 0, -1}, 0, {0, 0, 1}, 10, 0}, {{1, 0, -1}, 0, {0, 0, 1}, 10, 0},
+        {{3, 0, -1}, 0, {0, 0, 1}, 10, 0}, {{5, 0, -1}, 0, {0, 0, 1}, 10, 0},
+        {{7, 0, -1}, 0, {0, 0, 1}, 10, 0},
+#ifdef TUXBOX_GPU_INSTANCE_PROBE
+        {{10.25f, .25f, -1}, 0, {0, 0, 1}, 10, 0}, {{10.75f, .75f, -1}, 0, {0, 0, 1}, 10, 0},
+        {{11.5f, .5f, -1}, 0, {0, 0, 1}, 10, 0},
+#endif
+    };
+    const auto probes = sphere ? read_file("sphere-rays.bin") : std::vector<char>{};
+    if (sphere && (probes.empty() || probes.size() % sizeof(original[0])
+                   || probes.size() / sizeof(original[0]) > D3D12_CS_DISPATCH_MAX_THREAD_GROUPS_PER_DIMENSION))
+        throw std::runtime_error("invalid ray probe input");
+    const UINT ray_count = sphere ? static_cast<UINT>(probes.size() / sizeof(original[0])) : static_cast<UINT>(std::size(original));
+    auto ray_buffer = sphere ? upload(owner.Get(), probes.data(), probes.size())
+                             : upload(owner.Get(), original, sizeof(original));
+    const size_t bytes = 4 * sizeof(UINT) * ray_count;
     auto output = buffer(owner.Get(), bytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
     auto readback = buffer(owner.Get(), bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
     verify->SetComputeRootSignature(root.Get());
     verify->SetComputeRootShaderResourceView(0, scene->GetGPUVirtualAddress());
     verify->SetComputeRootUnorderedAccessView(1, output->GetGPUVirtualAddress());
-    verify->Dispatch(1, 1, 1);
+    verify->SetComputeRootShaderResourceView(2, ray_buffer->GetGPUVirtualAddress());
+    verify->Dispatch(ray_count, 1, 1);
     D3D12_RESOURCE_BARRIER copy{};
     copy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     copy.Transition = {output.Get(), 0, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE};
@@ -238,23 +539,124 @@ static void run(bool xbox, bool guest_build, FILE* receipt) {
     D3D12_RANGE read{0, bytes}, empty{};
     void* data{};
     check(readback->Map(0, &read, &data), "map ray query results");
-    std::array<UINT, 5> values{};
-    std::memcpy(values.data(), data, bytes);
+    std::vector<std::array<UINT, 4>> hits(ray_count);
+    std::memcpy(hits.data(), data, bytes);
     readback->Unmap(0, &empty);
+    if (size_readback) {
+        const D3D12_RANGE range{0, 4 * sizeof(UINT64)};
+        check(size_readback->Map(0, &range, &data), "map BLAS sizes");
+        std::array<UINT64, 4> measured{};
+        std::memcpy(measured.data(), data, sizeof(measured));
+        size_readback->Unmap(0, &empty);
+        std::fprintf(receipt, "blas_current_bytes=%llu\nblas_compacted_bytes=%llu\n", measured[0], measured[2]);
+        if (!measured[0] || !measured[2] || measured[2] > sizes.ResultDataMaxSizeInBytes
+                || measured[0] != measured[1] || measured[2] != measured[3])
+            throw std::runtime_error("invalid postbuild size array");
+        if (guest_build) std::fprintf(receipt, "guest_postbuild_source_count=2\n");
+    }
+    if (sphere) {
+        std::ofstream file("sphere-hits.bin", std::ios::binary);
+        file.write(reinterpret_cast<const char*>(hits.data()), bytes);
+        file.close();
+        if (!file) throw std::runtime_error("write sphere ray hits");
+        std::fprintf(receipt, "rays=%u\n", ray_count);
+        return;
+    }
+#ifdef TUXBOX_GPU_INSTANCE_PROBE
+    if (guest_build) {
+        if (hits[5] != std::array<UINT,4>{11,0,1,0x3f800000} ||
+            hits[6] != std::array<UINT,4>{11,0,0,0x3f800000} || hits[7][0] != ~0u)
+            throw std::runtime_error("late relocated instance rays differ");
+        std::fprintf(receipt, "late_relocation_rays=11/0/1/1,11/0/0/1,miss\n");
+    }
+#endif
+    std::array<UINT, 5> values{};
+    for (size_t i = 0; i < values.size(); ++i) {
+        const auto& hit = hits[i];
+        if (hit[0] == ~0u) { values[i] = 0xdead; continue; }
+        float distance;
+        std::memcpy(&distance, &hit[3], sizeof(float));
+        if (hit[2] != 0 || !(distance >= 0 && distance <= 10)) throw std::runtime_error("unexpected triangle hit");
+        values[i] = (hit[0] << 16) | (hit[1] << 8) | static_cast<UINT>(std::round(16 * distance));
+    }
     std::fprintf(receipt, "ray_query_results=%x,%x,%x,%x,%x\n",
                  values[0], values[1], values[2], values[3], values[4]);
     if (values != std::array<UINT, 5>{0x70010, 0x70120, 0x80010, 0x80120, 0xdead})
         throw std::runtime_error("ray queries differ");
+#ifdef TUXBOX_RAY_LIBRARY_PROBE
+    for (bool indirect : {false, true})
+        probe_ray_libraries(owner.Get(), queue.Get(), scene.Get(), receipt, xbox ? provider.Get() : nullptr, indirect);
+#endif
+#ifdef TUXBOX_MATERIAL_HIT_PROBE
+    probe_materials(owner.Get(), queue.Get(), scene.Get(), instances, receipt, xbox ? provider.Get() : nullptr);
+#endif
+#ifdef TUXBOX_CARD_TILE_PROBE
+    if (!xbox) {
+        for (UINT entry : {218u,1064u}) for (bool active : {false,true})
+            probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,entry,active);
+        probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,1064,true,true);
+    }
+#endif
+#ifdef TUXBOX_SCREEN_GATHER_PROBE
+    if (!xbox) for (UINT entry : {64u,71u}) {
+        probe_screen_gather(owner.Get(),queue.Get(),scene.Get(),receipt,entry,false,false);
+        probe_screen_gather(owner.Get(),queue.Get(),scene.Get(),receipt,entry,true,false);
+        probe_screen_gather(owner.Get(),queue.Get(),scene.Get(),receipt,entry,true,true);
+    }
+#endif
+#ifdef TUXBOX_LIGHTING_PROBE
+    if (!xbox) probe_lighting(owner.Get(), queue.Get(), scene.Get(), receipt);
+#endif
+#ifdef TUXBOX_SCREEN_OCCLUSION_PROBE
+    if (!xbox) {
+#ifdef TUXBOX_RADIANCE_PROBE
+        probe_radiance_cache(owner.Get(), queue.Get(), scene.Get(), receipt, RadianceInput::empty);
+        probe_radiance_cache(owner.Get(), queue.Get(), scene.Get(), receipt, RadianceInput::tile);
+        probe_radiance_cache(owner.Get(), queue.Get(), scene.Get(), receipt, RadianceInput::geometry);
+        probe_radiance_cache(owner.Get(), queue.Get(), scene.Get(), receipt, RadianceInput::tile, 299);
+        probe_radiance_cache(owner.Get(), queue.Get(), scene.Get(), receipt, RadianceInput::tile, 311);
+        probe_radiance_cache(owner.Get(), queue.Get(), scene.Get(), receipt, RadianceInput::geometry, 299);
+        probe_radiance_cache(owner.Get(), queue.Get(), scene.Get(), receipt, RadianceInput::geometry, 311);
+        probe_radiance_cache(owner.Get(), queue.Get(), scene.Get(), receipt, RadianceInput::tile, 264);
+        probe_radiance_cache(owner.Get(), queue.Get(), scene.Get(), receipt, RadianceInput::tile, 266);
+#endif
+        probe_screen_occlusion(owner.Get(), queue.Get(), scene.Get(), receipt, 3801);
+        probe_screen_occlusion(owner.Get(), queue.Get(), scene.Get(), receipt, 3801, ShadowInput::scene_masked);
+        probe_screen_occlusion(owner.Get(), queue.Get(), scene.Get(), receipt, 3824);
+#ifdef TUXBOX_LUMEN_VOLUME_PROBE
+        probe_lumen_volume(owner.Get(), queue.Get(), scene.Get(), receipt, 619);
+        probe_lumen_volume(owner.Get(), queue.Get(), scene.Get(), receipt, 620);
+#endif
+#ifdef TUXBOX_REFLECTION_PROBE
+        probe_reflections(owner.Get(), queue.Get(), scene.Get(), receipt, 467);
+        probe_reflections(owner.Get(), queue.Get(), scene.Get(), receipt, 425);
+        probe_reflections(owner.Get(), queue.Get(), scene.Get(), receipt, 456);
+        probe_reflections(owner.Get(), queue.Get(), scene.Get(), receipt, 421);
+        probe_reflections(owner.Get(), queue.Get(), scene.Get(), receipt, 432);
+        probe_reflections(owner.Get(), queue.Get(), scene.Get(), receipt, 456, true);
+#endif
+#ifdef TUXBOX_VOXEL_OCCLUSION_PROBE
+        probe_screen_occlusion(owner.Get(), queue.Get(), scene.Get(), receipt, 3810, ShadowInput::absent_page);
+        probe_screen_occlusion(owner.Get(), queue.Get(), scene.Get(), receipt, 3810, ShadowInput::empty_page);
+        probe_screen_occlusion(owner.Get(), queue.Get(), scene.Get(), receipt, 3810, ShadowInput::occupied_page);
+        probe_screen_occlusion(owner.Get(), queue.Get(), scene.Get(), receipt, 3810, ShadowInput::hair_masked);
+        probe_screen_occlusion(owner.Get(), queue.Get(), scene.Get(), receipt, 3810, ShadowInput::hair_lit);
+#endif
+    }
+#endif
 }
 
 int wmain(int argc, wchar_t** argv) {
-    if (argc != 3 || (wcscmp(argv[1], L"desktop") && wcscmp(argv[1], L"xbox") &&
-                      wcscmp(argv[1], L"xbox-prebuild"))) return 2;
+    if ((argc != 3 && (argc != 4 || wcscmp(argv[3], L"sphere"))) || (wcscmp(argv[1], L"desktop") && wcscmp(argv[1], L"xbox") &&
+                      wcscmp(argv[1], L"xbox-prebuild") && wcscmp(argv[1], L"xbox-copy") && wcscmp(argv[1], L"xbox-deserialize"))) return 2;
     FILE* receipt{};
     if (_wfopen_s(&receipt, argv[2], L"wb")) return 2;
     int status = 0;
     try {
-        run(wcscmp(argv[1], L"desktop") != 0, wcscmp(argv[1], L"xbox") == 0, receipt);
+        const bool deserialize = wcscmp(argv[1], L"xbox-deserialize") == 0;
+        const bool build = !wcscmp(argv[1], L"xbox") || deserialize;
+        run(build || wcscmp(argv[1], L"xbox-prebuild") == 0, build,
+            wcscmp(argv[1], L"xbox-copy") == 0, deserialize, receipt, argc == 4);
     } catch (const std::exception& e) {
         std::fprintf(receipt, "error=%s\n", e.what());
         status = 1;

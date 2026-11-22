@@ -19,6 +19,7 @@ pub(super) enum Stage {
     Pixel,
     Vertex,
     Geometry,
+    Library,
     Compute,
     Mesh,
     Amplification,
@@ -29,10 +30,12 @@ impl Stage {
         static PIXEL: Once = Once::new();
         static VERTEX: Once = Once::new();
         static GEOMETRY: Once = Once::new();
+        static LIBRARY: Once = Once::new();
         static COMPUTE: Once = Once::new();
         static MESH: Once = Once::new();
         static AMPLIFICATION: Once = Once::new();
         let (name, first_hit) = match self {
+            Self::Library => ("ray library", &LIBRARY),
             Self::Pixel => ("pixel", &PIXEL),
             Self::Vertex => ("vertex", &VERTEX),
             Self::Geometry => ("geometry", &GEOMETRY),
@@ -111,6 +114,7 @@ fn shader_code(data: &[u8]) -> Option<(Stage, ShaderCode)> {
         1 => Stage::Vertex,
         2 => Stage::Geometry,
         5 => Stage::Compute,
+        6 => Stage::Library,
         13 => Stage::Mesh,
         14 => Stage::Amplification,
         _ => return None,
@@ -201,6 +205,17 @@ pub(super) fn link_on_demand(
 pub(super) fn stencil_target(shader: &[u8], slot: u32) -> Option<Vec<u8>> {
     let source = source_digest(shader)?;
     compile::stencil(shader, &source, slot)
+}
+
+pub(super) fn portable_library(bytes: &[u8]) -> bool {
+    shader_code(bytes) == Some((Stage::Library, ShaderCode::Portable))
+}
+
+pub(super) fn ray_library(bytes: &[u8], source: &str) -> Option<Vec<u8>> {
+    let library = read_portable("by_source", source, Stage::Library)
+        .or_else(|| compile::on_demand(bytes, source, Stage::Library));
+    Stage::Library.report(source, library.is_some());
+    library
 }
 
 pub(super) fn prepared(shader: &[u8]) -> Option<Vec<u8>> {

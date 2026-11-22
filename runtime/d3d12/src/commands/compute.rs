@@ -16,7 +16,10 @@ pub(super) unsafe extern "system" fn bind_root(list: &List, signature: *mut c_vo
     // SAFETY: the guest holds its signature during this call. Only a native
     // interface belonging to this list's device is passed to the driver.
     match unsafe { device::compute::root_signature(signature, parent(&list.parent)) } {
-        Ok(root) => unsafe { list.native.SetComputeRootSignature(root) },
+        Ok(root) => {
+            state.bindings.compute_root(root);
+            unsafe { list.native.SetComputeRootSignature(root) };
+        }
         Err(error) => state.error = error,
     }
 }
@@ -32,20 +35,36 @@ pub(super) unsafe extern "system" fn constants(
     if !state.can_record(&list.native) || count == 0 {
         return;
     }
-    if data.is_null() {
+    if data.is_null() || offset.checked_add(count).is_none_or(|end| end > 64) {
         state.error = E_INVALIDARG;
         return;
     }
     // SAFETY: the caller supplies count readable DWORDs for this command.
+    state.bindings.constants(index, offset, unsafe {
+        core::slice::from_raw_parts(data.cast(), count as usize)
+    });
     unsafe {
         list.native
             .SetComputeRoot32BitConstants(index, count, data, offset)
     };
 }
 
+pub(super) unsafe extern "system" fn shader_resource(list: &List, index: u32, address: u64) {
+    let mut state = recording(list);
+    if state.can_record(&list.native) {
+        state
+            .bindings
+            .arg(index, super::compute_bindings::Argument::Srv(address));
+        unsafe { list.native.SetComputeRootShaderResourceView(index, address) };
+    }
+}
+
 pub(super) unsafe extern "system" fn unordered_access(list: &List, index: u32, gpu_address: u64) {
     let mut state = recording(list);
     if state.can_record(&list.native) {
+        state
+            .bindings
+            .arg(index, super::compute_bindings::Argument::Uav(gpu_address));
         // SAFETY: native GPU addresses are shared with this device's guest resources.
         unsafe {
             list.native

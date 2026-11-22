@@ -7,8 +7,12 @@ triangle geometries on the same device as their TLAS and inline ray query.
 """
 import argparse
 import json
+import math
+import os
+import re
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -18,6 +22,78 @@ sys.path.insert(0, str(ROOT))
 from build import Toolchain, find_dxc
 from project_tuxbox.host import Host
 from project_tuxbox.inspect import digest
+from project_tuxbox.runtime_shaders import runtime_shader_compiler
+from project_tuxbox.shader_prep import shader_compiler
+
+
+SPHERE_SHA256 = "5381a79d200954ba9c317f325cdb10fa476e420c6915971dfc11458a1602f9a1"
+TRIANGLE = struct.Struct("<9f")
+RAY = struct.Struct("<8fI")
+CULL_OPAQUE = 0x40
+CULL_NON_OPAQUE = 0x80
+MISS = (0xffffffff, 0xffffffff, 0xffffffff, 0)
+HIT = struct.Struct("<3If")
+
+
+def sphere_probes(path, work):
+    # The audited stream is the indexed render mesh expanded in primitive-ID order.
+    if digest(path) != SPHERE_SHA256:
+        raise ValueError("Expected the verified retail sphere triangle stream")
+    shutil.copyfile(path, work / "sphere.xyz")
+    triangles = (work / "sphere.xyz").read_bytes()
+    rays = bytearray()
+    expected = []
+    for instance in range(2):
+        for primitive, v in enumerate(TRIANGLE.iter_unpack(triangles)):
+            center = [sum(v[axis::3]) / 3 for axis in range(3)]
+            radius = math.hypot(*center)
+            normal = [x / radius for x in center]
+            distance = 1 + (primitive % 13) * 0.25
+            origin = [x + n * distance for x, n in zip(center, normal)]
+            origin[0] += 512 * instance
+            for flags in (0, CULL_OPAQUE, CULL_NON_OPAQUE):
+                rays.extend(RAY.pack(*origin, 0, *(-n for n in normal), distance + 1, flags))
+                expected.append(MISS if flags == CULL_NON_OPAQUE else (7 + instance, 0, primitive, distance))
+    for x in (0, 256, 512):
+        rays.extend(RAY.pack(x, 200, -180, 0, 0, 0, 1, 360, 0))
+        expected.append(MISS)
+    (work / "sphere-rays.bin").write_bytes(rays)
+    return expected
+
+
+def sphere_results(path, expected):
+    hits = list(HIT.iter_unpack(path.read_bytes()))
+    if len(hits) != len(expected):
+        raise ValueError(f"Expected {len(expected)} retail sphere ray results, got {len(hits)}")
+    worst = 0.0
+    for i, (hit, wanted) in enumerate(zip(hits, expected)):
+        distance_error = abs(hit[3] - wanted[3])
+        if hit[:3] != wanted[:3] or not distance_error <= 0.0002:
+            raise ValueError(f"Sphere ray {i} returned {hit}, expected {wanted}")
+        worst = max(worst, distance_error)
+    misses = expected.count(MISS)
+    return dict(hits=len(expected) - misses, misses=misses, max_distance_error=worst, readback_sha256=digest(path))
+
+
+MATERIAL_HITS = (3559, 15261, 17501, 17901, 18610, 18676, 19004, 28725, 29878, 29890, 30995, 38210)
+
+
+def extract_material_states(mount, work):
+    from check_frosty_shaders import ARCHIVES, ENTRY, decoder, decompress, parse_tables, serialized_state
+    import hashlib
+
+    offset, size, expected = ARCHIVES["material"]
+    with (mount / "Frosty/Content/Paks/Frosty-XSX.pak").open("rb") as archive:
+        archive.seek(offset)
+        data = memoryview(archive.read(size))
+    if hashlib.sha256(data).hexdigest() != expected:
+        raise ValueError("Unexpected material archive fingerprint")
+    _, _, table, _, payload = parse_tables(data)
+    lz4 = decoder()
+    for entry in MATERIAL_HITS:
+        row = ENTRY.unpack_from(table, entry * ENTRY.size)
+        _, state = serialized_state(decompress(payload, row, lz4))
+        (work / f"material-{entry}.sptr").write_bytes(state)
 
 
 def main():
@@ -26,10 +102,57 @@ def main():
     parser.add_argument("--proton", type=Path)
     parser.add_argument("--prefix", type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--prebuild-only", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--prebuild-only", action="store_true")
+    mode.add_argument("--copy-only", action="store_true", help="Verify Xbox clone and compact with ray queries against both copies")
+    mode.add_argument("--deserialize", type=Path, metavar="FILE",
+                      help="Rebuild the verified serialized retail sphere through Xbox slot 119 and trace it through slot 131")
+    parser.add_argument("--sphere-vertices", type=Path, metavar="FILE",
+                        help="ray-test retail sphere vertices from check_frosty_serialized_blas.py --vertices FILE")
+    rays = parser.add_mutually_exclusive_group()
+    rays.add_argument("--ray-states", type=Path, metavar="DIR",
+                        help="translate and dispatch retail 1280/1282/1284/1286.sptr against two test instances")
+    rays.add_argument("--ray-archive", type=Path, metavar="MOUNT",
+                      help="read and dispatch the same four states directly from the retail Global shader archive")
+    parser.add_argument("--xshader", type=Path, help="select the translator for retail ray libraries")
+    parser.add_argument("--screen-occlusion", action="store_true",
+                        help="dispatch the packaged 3801 and 3824 shadow raygens with controlled texture inputs")
+    parser.add_argument("--voxel-occlusion", action="store_true", help="also dispatch the virtual voxel shadow variant")
+    parser.add_argument("--screen-gather", action="store_true", help="dispatch Frosty’s two screen-probe gather ray generators against a compacted ray queue")
+    parser.add_argument("--card-tiles", action="store_true", help="dispatch the direct-light shadow masks and radiosity atlas tile programs")
+    parser.add_argument("--radiance-cache", action="store_true", help="dispatch a radiance-cache tile and inspect its packed colors and distances")
+    parser.add_argument("--lumen-volume", action="store_true", help="dispatch the two packaged Lumen translucency ray generators")
+    parser.add_argument("--lumen-reflections", action="store_true", help="dispatch the material and compact reflection raygens used by the opening scene")
+    parser.add_argument("--lumen-material", action="store_true", help="dispatch the packaged five-word Lumen geometry closest-hit and miss pair")
+    parser.add_argument("--material-hits", action="store_true", help="check the 12 closest-hit shaders in the first retail ray pipeline")
+    parser.add_argument("--lighting-hits", action="store_true", help="dispatch the retail lighting miss and hidden material shaders")
+    parser.add_argument("--single-build", action="store_true", help="use Xbox List4 slot 117 for both BLAS and TLAS builds")
+    parser.add_argument("--gpu-instances", action="store_true", help="populate the TLAS instance array on the GPU before the scene build and update its transforms after Close")
     args = parser.parse_args()
-    if args.prebuild_only and not args.provider:
-        parser.error("--prebuild-only requires --provider")
+    if args.gpu_instances and (not args.provider or args.copy_only or args.prebuild_only):
+        parser.error("--gpu-instances requires a provider and a build run")
+    if args.single_build and (not args.provider or args.prebuild_only or args.copy_only):
+        parser.error("--single-build needs an Xbox provider and a build run")
+    if (args.material_hits or args.lumen_material or args.lighting_hits) and not (args.ray_states or args.ray_archive):
+        parser.error("material and lighting probes need --ray-states or --ray-archive")
+    if args.card_tiles and not (args.ray_states or args.ray_archive):
+        parser.error("--card-tiles needs --ray-states or --ray-archive")
+    if args.voxel_occlusion or args.lumen_volume or args.lumen_reflections or args.radiance_cache or args.screen_gather:
+        args.screen_occlusion = True
+    if (args.prebuild_only or args.copy_only) and not args.provider:
+        parser.error("select --provider for an Xbox test")
+    if (args.ray_states or args.ray_archive) and args.sphere_vertices:
+        parser.error("the ray library probe needs the two test triangle geometries")
+    if args.xshader and not (args.ray_states or args.ray_archive):
+        parser.error("--xshader requires --ray-states or --ray-archive")
+    if args.screen_occlusion and not (args.ray_states or args.ray_archive):
+        parser.error("--screen-occlusion requires --ray-states or --ray-archive")
+    if args.xshader:
+        # Pin the in-process Proton compiler worker to the desktop control's translator.
+        os.environ["TUXBOX_XSHADER"] = str(args.xshader.resolve())
+    if args.deserialize and (not args.provider or not args.sphere_vertices or
+                             digest(args.deserialize) != "38bd71be9dd00e74952a9612f87f7df37a1617ca9f9847bb531b40bc5a4ad6af"):
+        parser.error("--deserialize needs the retail sphere payload, --sphere-vertices and --provider")
     host = Host(None, args.proton, args.prefix)
     src = ROOT / "tools/reference/blas"
     build = ROOT / "build/frosty-blas"
@@ -38,27 +161,160 @@ def main():
         work = Path(tmp)
         subprocess.run([find_dxc(None), "-T", "cs_6_5", "-E", "main", "-O3", "-Fh", "query_dxil.h",
                         "-Vn", "query_dxil", str(src / "query.hlsl")], cwd=work, check=True)
+        probe_flags, ray_inputs = [], {}
+        if args.gpu_instances:
+            probe_flags.append("/DTUXBOX_GPU_INSTANCE_PROBE")
+            subprocess.run([find_dxc(None), "-T", "cs_6_0", "-E", "main", "-O3", "-Fh", work / "instance_bindings_dxil.h",
+                            "-Vn", "instance_bindings_dxil", src / "instance_bindings.hlsl"], check=True)
+        if args.single_build:
+            probe_flags.append("/DTUXBOX_SINGLE_BUILD_PROBE")
+        ray_entries = (1280, 1282, 1284, 1286, 3801, 3824) if args.screen_occlusion else (1280, 1282, 1284, 1286)
+        if args.voxel_occlusion:
+            ray_entries += (3810,)
+            probe_flags.append("/DTUXBOX_VOXEL_OCCLUSION_PROBE")
+        if args.lumen_reflections:
+            ray_entries += (467, 425, 456, 421, 432)
+            probe_flags.append("/DTUXBOX_REFLECTION_PROBE")
+        if args.lumen_reflections or args.radiance_cache:
+            subprocess.run([find_dxc(None), "-T", "lib_6_3", "-O3", "-DTRACE_PROBE_INPUTS", "-Fo",
+                            work / "ray-input-observer.dxil", src / "occlusion_observer.hlsl"], check=True)
+        if args.lumen_material:
+            ray_entries += (1237, 1238)
+        if args.lighting_hits:
+            ray_entries += (2670, 2752)
+            probe_flags.append("/DTUXBOX_LIGHTING_PROBE")
+            subprocess.run([find_dxc(None), "-T", "lib_6_3", "-O3", "-Fo", work / "lighting-observer.dxil",
+                            src / "lighting_observer.hlsl"], check=True)
+        if args.card_tiles:
+            ray_entries += (218, 1064)
+            probe_flags.append("/DTUXBOX_CARD_TILE_PROBE")
+            subprocess.run([find_dxc(None), "-T", "lib_6_3", "-O3", "-Fo", work / "occlusion-observer.dxil",
+                            src / "occlusion_observer.hlsl"], check=True)
+            subprocess.run([find_dxc(None), "-T", "lib_6_3", "-O3", "-DTRACE_CARD_INPUTS", "-Fo",
+                            work / "card-input-observer.dxil", src / "occlusion_observer.hlsl"], check=True)
+        if args.screen_gather:
+            subprocess.run([find_dxc(None), "-T", "lib_6_3", "-O3", "-Fo", work / "screen-gather-observer.dxil",
+                            src / "screen_gather_observer.hlsl"], check=True)
+            ray_entries += (64, 71)
+            probe_flags.append("/DTUXBOX_SCREEN_GATHER_PROBE")
+        if args.radiance_cache:
+            ray_entries += (323, 299, 311, 264, 266)
+            probe_flags.append("/DTUXBOX_RADIANCE_PROBE")
+        if args.lumen_volume:
+            ray_entries += (619, 620)
+            probe_flags.append("/DTUXBOX_LUMEN_VOLUME_PROBE")
+        if args.ray_archive:
+            from check_frosty_shaders import decoder, decompress, global_archive, serialized_state
+            payload, entries = global_archive(args.ray_archive)
+            lz4 = decoder()
+            for entry in ray_entries:
+                _, state = serialized_state(decompress(payload, entries[entry], lz4))
+                (work / f"{entry}.sptr").write_bytes(state)
+        material_names = []
+        if args.material_hits:
+            if args.ray_archive:
+                extract_material_states(args.ray_archive, work)
+            ray_entries += tuple(f"material-{i}" for i in MATERIAL_HITS)
+        if args.material_hits or args.lumen_material:
+            probe_flags.append("/DTUXBOX_MATERIAL_HIT_PROBE")
+        if args.ray_states or args.ray_archive:
+            translator = args.xshader.resolve() if args.xshader else shader_compiler()
+            for entry in ray_entries:
+                state = (args.ray_states or work) / f"{entry}.sptr"
+                if args.ray_states and args.provider:
+                    shutil.copyfile(state, work / state.name)
+                hlsl, profile, dxil = (work / f"{entry}.{ext}" for ext in ("hlsl", "profile", "dxil"))
+                generation = subprocess.run([translator, state, "--hlsl-out", hlsl, "--profile-out", profile],
+                                            check=True, text=True, stdout=subprocess.PIPE)
+                if entry == 1238 or isinstance(entry, str) and entry.startswith("material-"):
+                    export = re.fullmatch(r"entry=((?:LumenHardwareRayTracing)?MaterialCHS_[a-f0-9]{8})", generation.stdout.strip())
+                    if export is None:
+                        raise ValueError(f"Unexpected closest-hit export for {entry}")
+                    views = ["0"] * 64
+                    kinds = {"StructuredBuffer<uint4>": "s", "Buffer<float4>": "b",
+                             "Texture2D<uint4>": "i", "Texture2D<float4>": "f"}
+                    for kind, slot in re.findall(r"(\w+<\w+>) tbSrv\d+ : register\(t(\d+),space0\)", hlsl.read_text()):
+                        views[int(slot)] = kinds[kind]
+                    if entry != 1238 and "s" not in views:
+                        raise ValueError(f"Missing material scene buffers for {entry}")
+                    raw = state.read_bytes()
+                    pattern = r"HitGroup_[a-f0-9]{8}_[a-f0-9]{8}"
+                    groups = {g for k in (0, 1) for g in re.findall(pattern, raw[k:].decode("utf-16-le", "ignore"))}
+                    if len(groups) != 1:
+                        raise ValueError(f"Unexpected hit group in {entry}")
+                    material_names.append(f'{{"{entry}", L"{export.group(1)}", L"{groups.pop()}", "{"".join(views)}"}},')
+                if profile.read_text() != "lib_6_3":
+                    raise ValueError(f"Unexpected desktop profile for state {entry}")
+                subprocess.run([find_dxc(None), "-T", "lib_6_3", "-O3", "-Fo", dxil, hlsl], check=True)
+                ray_inputs[entry] = {"state_sha256": digest(state), "dxil_sha256": digest(dxil)}
+            probe_flags.append("/DTUXBOX_RAY_LIBRARY_PROBE")
+            if args.screen_occlusion:
+                subprocess.run([find_dxc(None), "-T", "lib_6_3", "-O3", "-Fo", work / "occlusion-observer.dxil",
+                                src / "occlusion_observer.hlsl"], check=True)
+                probe_flags.append("/DTUXBOX_SCREEN_OCCLUSION_PROBE")
+        if args.material_hits or args.lumen_material:
+            (work / "material_inputs.h").write_text("\n".join(material_names) + "\n")
+            subprocess.run([find_dxc(None), "-T", "lib_6_3", "-O3", "-Fo", work / "material-observer.dxil",
+                            src / "material_observer.hlsl"], check=True)
         toolchain = Toolchain()
-        obj = toolchain.compile(src / "guest.cpp", work, "/W4", "/WX", f"/I{work}", f"/I{ROOT / 'runtime/d3d12'}")
+        obj = toolchain.compile(src / "guest.cpp", work, "/W4", "/WX", *probe_flags,
+                                f"/I{work}", f"/I{ROOT / 'runtime/d3d12'}")
         exe = work / "blas.exe"
         toolchain.link(exe, obj, "d3d12.lib", "dxgi.lib", "kernel32.lib")
         result = {"guest_sha256": digest(exe), "host": host.version, "runs": {}}
+        if args.single_build:
+            result["xbox_build_slot"] = 117
+        if ray_inputs:
+            result["translated_ray_libraries"] = ray_inputs
         modes = ["desktop"]
+        if args.deserialize:
+            shutil.copyfile(args.deserialize, work / "sphere.serialized")
+            result["serialized_sha256"] = digest(args.deserialize)
         if args.provider:
             shutil.copyfile(args.provider, work / "d3d12_xs.dll")
             result["d3d12_xs_sha256"] = digest(work / "d3d12_xs.dll")
-            modes.append("xbox-prebuild" if args.prebuild_only else "xbox")
+            modes.append("xbox-deserialize" if args.deserialize else "xbox-copy" if args.copy_only else "xbox-prebuild" if args.prebuild_only else "xbox")
+        expected_rays = sphere_probes(args.sphere_vertices, work) if args.sphere_vertices else None
+        if expected_rays:
+            result["geometry"] = dict(asset="EngineMeshes/Sphere", triangles=528, instances=2,
+                                      xyz_sha256=SPHERE_SHA256, rays_sha256=digest(work / "sphere-rays.bin"),
+                                      distance_tolerance=0.0002, guest_blas_bytes=31232,
+                                      geometry_flags="NONE", query_flags=["NONE", "CULL_OPAQUE", "CULL_NON_OPAQUE"],
+                                      build_flags="PREFER_FAST_TRACE | ALLOW_COMPACTION")
+        passed = True
         for mode in modes:
             receipt = work / (mode + ".txt")
-            run = host.run(exe, [mode, receipt.name], timeout=60, capture=True)
+            output = work / "sphere-hits.bin"
+            output.unlink(missing_ok=True)
+            command = [mode, receipt.name] + (["sphere"] if expected_rays else [])
+            if ray_inputs and mode != "desktop":
+                with runtime_shader_compiler(host.backend, host.env, exe, print):
+                    run = host.run(exe, command, timeout=90, capture=True)
+            else:
+                run = host.run(exe, command, timeout=60, capture=True)
             observation = dict(line.split("=", 1) for line in receipt.read_text().splitlines()) if receipt.exists() else {}
             if not observation or run.returncode:
                 sys.stderr.buffer.write(run.stdout[-4096:])
             result["runs"][mode] = {"exit": run.returncode, **observation}
+            if run.returncode or not observation:
+                passed = False
+            elif expected_rays:
+                result["runs"][mode]["ray_queries"] = sphere_results(output, expected_rays)
+            elif observation.get("ray_query_results") != "70010,70120,80010,80120,dead":
+                passed = False
+        if (args.material_hits or args.lumen_material) and args.provider and "xbox" in result["runs"]:
+            desktop = result["runs"]["desktop"]
+            xbox = result["runs"]["xbox"]
+            hits = [f"material-{entry}" for entry in MATERIAL_HITS] if args.material_hits else []
+            if args.lumen_material:
+                hits.append("1238")
+            fields = [f"hit_{entry}_{ray}" for entry in hits for ray in range(5)]
+            mismatches = [field for field in fields if field not in desktop or desktop[field] != xbox.get(field)]
+            result["material_payload_comparison"] = {"rays": len(fields), "words_per_ray": 16, "mismatches": mismatches}
+            passed = passed and not mismatches
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    return int(any(run["exit"] or run.get("ray_query_results") != "70010,70120,80010,80120,dead"
-                   for run in result["runs"].values()))
+    return int(not passed)
 
 
 if __name__ == "__main__":

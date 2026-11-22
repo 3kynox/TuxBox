@@ -20,8 +20,7 @@ use core::ffi::c_void;
 use core::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use windows::Win32::Foundation::{E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER};
-use windows::Win32::Graphics::Direct3D12::{ID3D12Device, ID3D12Device1, ID3D12Device2};
-use windows::core::{GUID, HRESULT, Interface};
+use windows::core::{GUID, HRESULT};
 
 // Release/default record supplied by the 0x20002 caller.
 const PROFILE_20002: [u32; 16] = [
@@ -110,7 +109,7 @@ pub unsafe extern "system" fn create_device(
     // SAFETY: The caller supplies a readable GUID. Compare Windows GUID fields
     // without casting guest storage to an aligned Rust reference.
     let requested = unsafe { iid.read_unaligned() };
-    if ![ID3D12Device::IID, ID3D12Device1::IID, ID3D12Device2::IID].contains(&requested) {
+    if !device::DEVICE_INTERFACES.contains(&requested) {
         return E_NOINTERFACE;
     }
     if params.is_null() {

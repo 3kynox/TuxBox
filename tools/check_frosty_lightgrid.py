@@ -26,8 +26,6 @@ def main():
     parser.add_argument("--proton", type=Path)
     parser.add_argument("--xshader", type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--expect-unsupported-wave64", action="store_true",
-                        help="verify an adapter reports a maximum below 64 and rejects the exact pipeline")
     args = parser.parse_args()
     xshader = args.xshader.resolve() if args.xshader else shader_compiler()
     host = Host(None, args.proton, args.prefix)
@@ -42,13 +40,13 @@ def main():
         work = Path(temp)
         native, source, desktop = (work / name for name in ("native.dxbc", "converted.hlsl", "converted.dxil"))
         native.write_bytes(cooked)
-        report = subprocess.check_output([xshader, native, "--hlsl-out", source], text=True)
+        report = subprocess.check_output([xshader, native, "--hlsl-out", source, "--profile-out", work / "profile"], text=True)
         require('entry=Some("LightGridInjectionCS")' in report, "Unexpected shader entry")
         dxc = find_dxc(None)
-        subprocess.run([dxc, "-E", "main", "-T", "cs_6_6", "-O3", "-Fo", desktop, source], check=True)
+        subprocess.run([dxc, "-E", "main", "-T", (work / "profile").read_text().strip(), "-O3", "-Fo", desktop, source], check=True)
         dump = subprocess.check_output([dxc, "-dumpbin", desktop], text=True)
-        require("NumThreads=(4,4,4)" in dump and "atomicBinOp" in dump and "waveActiveBallot" in dump,
-                "Expected 4x4x4 shader with wave ballots and typed UAV atomics")
+        require("NumThreads=(4,4,4)" in dump and "atomicBinOp" in dump and "dx.op.barrier" in dump and "WaveSize=" not in dump,
+                "Expected a 4x4x4 group with barriers, typed UAV atomics and a portable subgroup width")
         header = work / "lightgrid_blobs.h"
         header.write_text("".join(f"const unsigned char {name}[] = {{" + ",".join(map(str, value)) + "};\n"
                                   for name, value in (("cooked_shader", cooked), ("desktop_shader", desktop.read_bytes()))))
@@ -62,20 +60,16 @@ def main():
         observed = dict(line.split("=", 1) for line in receipt.read_text().splitlines()) if receipt.exists() else {}
         result = dict(archive_sha256=GLOBAL_SHA, entry=3260, shader="LightGridInjectionCS", native_sha256=digest(native),
                       hlsl_sha256=digest(source), dxil_sha256=digest(desktop), dxil_bytes=desktop.stat().st_size,
-                      guest_sha256=digest(exe), host=host.version, groups=[1, 1, 1],
-                      scope="One 64-lane workgroup. A broad local light covers 24 cells, a small local light only lane 34, and a reflection capture covers all 24 in both dispatches.",
+                      guest_sha256=digest(exe), host=host.version, groups=[2, 2, 2],
+                      scope="Eight 4x4x4 groups. One or two groups cover 24 or 48 active cells. Broad and lane-34 lights, repeated reflection captures, linked chains, capacity overflow, each empty list and both empty.",
                       readback=observed, exit=run.returncode)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2) + "\n")
-        if args.expect_unsupported_wave64:
-            require(run.returncode == 1 and 0 < int(observed.get("wave_max", "0")) < 64
-                    and observed.get("error") == "create native wave64 PSO failed: 0x80070057",
-                    f"Expected explicit wave64 pipeline rejection, got {observed}")
-        else:
-            if run.returncode or not observed:
-                sys.stderr.buffer.write(run.stdout)
-            require(not run.returncode and observed.get("broad_matched_words") == "512"
-                    and observed.get("small_matched_words") == "512", str(observed))
+        if run.returncode or not observed:
+            sys.stderr.buffer.write(run.stdout)
+        cases = ("two_productive_groups", "broad", "small", "chained", "limited", "captures", "lights", "empty")
+        require(not run.returncode and all(observed.get(f"{case}_matched_words") == "1024" for case in cases),
+                str(observed))
 
 
 if __name__ == "__main__":

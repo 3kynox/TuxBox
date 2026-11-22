@@ -25,6 +25,7 @@ pub(super) unsafe extern "system" fn bind_heaps(
         unsafe { slice::from_raw_parts(heaps, count as usize) }
     };
     let mut native = [ptr::null_mut(); 2];
+    let mut retained = [None, None];
     let mut previous = None;
     let mut resource_heap = None;
     for (index, &object) in guest.iter().enumerate() {
@@ -42,8 +43,10 @@ pub(super) unsafe extern "system" fn bind_heaps(
         }
         previous = Some(desc.Type);
         native[index] = heap.native.as_raw();
+        retained[index] = Some(heap.native.clone());
     }
     state.resource_heap = resource_heap;
+    state.bindings.heaps(&retained[..count as usize]);
     unsafe {
         (list.native.vtable().SetDescriptorHeaps)(list.native.as_raw(), count, native.as_ptr())
     };
@@ -58,6 +61,7 @@ pub(super) unsafe extern "system" fn table<const COMPUTE: bool>(
     if !state.can_record(&list.native) {
         return;
     }
+    state.bindings.table::<COMPUTE>(index, base);
     if COMPUTE {
         unsafe { list.native.SetComputeRootDescriptorTable(index, base) };
     } else {

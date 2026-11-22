@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GPU-check the two cooked Nanite visibility pixel shaders against unsigned 64-bit max."""
+"""GPU-check cooked Nanite visibility pixel shaders against unsigned 64-bit max."""
 import argparse
 from contextlib import closing
 import ctypes
@@ -23,7 +23,8 @@ from project_tuxbox.shader_prep import shader_compiler
 from project_tuxbox.inspect import digest
 
 SHADERS = {2989: "6a68ec901fb2697f60bf3cfbda888e7c3653d28ef94b6961e552b05e6231fb7e",
-           2853: "33c3a3b5c3045ac280b15ccaf78e951227c87833ec919c0fbb787c6316d970a6"}
+           2853: "33c3a3b5c3045ac280b15ccaf78e951227c87833ec919c0fbb787c6316d970a6",
+           3050: "28000052530a61c5eccae78f762383ef4d53d93f4c23a0b12b2c1ea5564d029b"}
 
 
 
@@ -94,7 +95,9 @@ def main():
             subprocess.run([xshader, dxbc, "--hlsl-out", hlsl], check=True, stdout=subprocess.DEVNULL)
             for stage, text, profile in [("vs", source / "vertex.hlsl", "vs_6_0"), ("ps", hlsl, "ps_6_6")]:
                 dxil = work / f"{stage}{index}.dxil"
-                defines = ["-DMESH_INPUT=1"] if stage == "vs" and index == 2853 else []
+                defines = ["-DMESH_INPUT=1"] if stage == "vs" and index in (2853, 3050) else []
+                if stage == "vs" and index == 3050:
+                    defines.append("-DCLIP_INPUT=1")
                 subprocess.run([dxc, *defines, "-T", profile, "-E", "main", "-Fo", dxil, text], check=True)
                 blobs.append(f"const unsigned char {stage}{index}[] = {{" + ",".join(map(str, dxil.read_bytes())) + "};\n")
             shaders.append(dict(entry=index, input_sha256=fingerprint, hlsl_sha256=digest(hlsl), dxil_sha256=digest(dxil)))

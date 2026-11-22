@@ -7,7 +7,7 @@ constexpr UINT width = 19, height = 13, pitch = 256;
 constexpr DXGI_FORMAT format = DXGI_FORMAT_R32G32_UINT;
 constexpr D3D12_RECT region{3, 2, 16, 10};
 
-static void draw(ID3D12Device* device, bool meshInputs, FILE* out) {
+static void draw(ID3D12Device* device, bool meshInputs, bool clipped, FILE* out) {
     D3D12_DESCRIPTOR_RANGE range{D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0, 0, 0};
     D3D12_ROOT_PARAMETER table{};
     table.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -19,8 +19,8 @@ static void draw(ID3D12Device* device, bool meshInputs, FILE* out) {
     ComPtr<ID3D12RootSignature> root;
     check(device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&root)), "create root");
     D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
-    pso.VS = meshInputs ? D3D12_SHADER_BYTECODE{vs2853, sizeof(vs2853)} : D3D12_SHADER_BYTECODE{vs2989, sizeof(vs2989)};
-    pso.PS = meshInputs ? D3D12_SHADER_BYTECODE{ps2853, sizeof(ps2853)} : D3D12_SHADER_BYTECODE{ps2989, sizeof(ps2989)};
+    pso.VS = clipped ? D3D12_SHADER_BYTECODE{vs3050, sizeof(vs3050)} : meshInputs ? D3D12_SHADER_BYTECODE{vs2853, sizeof(vs2853)} : D3D12_SHADER_BYTECODE{vs2989, sizeof(vs2989)};
+    pso.PS = clipped ? D3D12_SHADER_BYTECODE{ps3050, sizeof(ps3050)} : meshInputs ? D3D12_SHADER_BYTECODE{ps2853, sizeof(ps2853)} : D3D12_SHADER_BYTECODE{ps2989, sizeof(ps2989)};
     pso.pRootSignature = root.Get();
     pso.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
     pso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
@@ -94,14 +94,15 @@ static void draw(ID3D12Device* device, bool meshInputs, FILE* out) {
     for (LONG y = 0; y < LONG(height); ++y)
         for (LONG x = 0; x < LONG(width); ++x) {
             const UINT offset = y * pitch / 8 + x;
-            const bool inside = x >= region.left && x < region.right && y >= region.top && y < region.bottom;
+            const bool inside = clipped ? x >= 5 && x < 12 && y >= 4 && y < 8
+                                        : x >= region.left && x < region.right && y >= region.top && y < region.bottom;
             const UINT64 expected = inside ? (std::max)(initial[offset], winner) : initial[offset];
             matched += words[offset] == expected;
             changed += words[offset] != initial[offset];
         }
     result->Unmap(0, nullptr);
-    std::fprintf(out, "entry_%u_matched=%u\nentry_%u_changed=%u\n", meshInputs ? 2853 : 2989, matched,
-                 meshInputs ? 2853 : 2989, changed);
+    const UINT entry = clipped ? 3050 : meshInputs ? 2853 : 2989;
+    std::fprintf(out, "entry_%u_matched=%u\nentry_%u_changed=%u\n", entry, matched, entry, changed);
     if (matched != width * height) throw std::runtime_error("visibility comparison failed");
 }
 
@@ -122,8 +123,9 @@ int main() {
         check(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS9, &opts, sizeof(opts)), "OPTIONS9");
         std::fprintf(out, "typed_int64_atomics=%u\n", unsigned(opts.AtomicInt64OnTypedResourceSupported));
         if (!opts.AtomicInt64OnTypedResourceSupported) throw std::runtime_error("typed integer atomics unavailable");
-        draw(device.Get(), false, out);
-        draw(device.Get(), true, out);
+        draw(device.Get(), false, false, out);
+        draw(device.Get(), true, false, out);
+        draw(device.Get(), true, true, out);
     } catch (const std::exception& error) {
         std::fprintf(out, "error=%s\n", error.what());
         std::fclose(out);

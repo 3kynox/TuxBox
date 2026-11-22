@@ -118,7 +118,20 @@ fn run() -> Result<(), String> {
     if pixel_order.is_some() && consumer.is_none() {
         return Err("--pixel-order requires --link-pixel".into());
     }
-    let shader = extract(&read(source.as_ref())?)?;
+    let source_bytes = read(source.as_ref())?;
+    if source_bytes.starts_with(&2_u32.to_le_bytes()) {
+        if consumer.is_some() || stencil_target.is_some() {
+            return Err("raster linking options cannot be applied to a ray library".into());
+        }
+        let (name, library) = tuxbox_xshader::ray::library(&source_bytes)?;
+        fs::write(&output, library).map_err(|e| format!("{}: {e}", output.display()))?;
+        if let Some(path) = profile_output {
+            fs::write(&path, "lib_6_3").map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        println!("entry={name}");
+        return Ok(());
+    }
+    let shader = extract(&source_bytes)?;
     let (hlsl, model) = translate(
         &shader,
         consumer.as_deref(),

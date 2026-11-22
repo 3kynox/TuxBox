@@ -19,6 +19,7 @@ pub(super) struct DxgiDevice {
     use_descriptor_api: u8,
     adapter: OnceLock<IDXGIAdapter>,
     pub(super) pipeline_device: Option<ID3D12Device2>,
+    pub(super) blas: super::blas::Buffers,
     pub(super) media: super::media::Sources,
     pub(super) placements: super::placement::Placements,
     pub(super) emulate_stencil: OnceLock<bool>,
@@ -47,6 +48,7 @@ impl DxgiDevice {
             emulate_stencil: Default::default(),
             depth_views: Default::default(),
             frames: Default::default(),
+            blas: Default::default(),
             media: Default::default(),
             placements: Default::default(),
         })

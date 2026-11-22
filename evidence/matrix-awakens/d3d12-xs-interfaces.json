@@ -20,7 +20,13 @@
     "mesh_gpu": "matrix-awakens/mesh-command-list-nvidia.json",
     "micropoly": "matrix-awakens/micropoly-retail.json",
     "async_budget_amd": "providers/async-compute-budget-amd.json",
-    "async_budget_nvidia": "providers/async-compute-budget-nvidia.json"
+    "async_budget_nvidia": "providers/async-compute-budget-nvidia.json",
+    "residency": "matrix-awakens/residency-priority.json",
+    "ray_copy": "matrix-awakens/raytracing-copy.json",
+    "sphere": "matrix-awakens/retail-sphere-blas.json",
+    "dxr": "matrix-awakens/ray-library-dispatch.json",
+    "as_sizes": "matrix-awakens/as-postbuild-sizes.json",
+    "ray_commands": "matrix-awakens/ray-command-paths.json"
   },
   "interfaces": [
     {
@@ -191,14 +197,59 @@
       "table": "Device"
     },
     {
+      "name": "Device5",
+      "slots": [
+        {
+          "slot": 85,
+          "method": "SetResidencyPriority",
+          "identified": "residency",
+          "checks": {
+            "residency": "Four pageable objects in one batch, with null-array, null-object and foreign-device checks"
+          }
+        },
+        {
+          "slot": 101,
+          "method": "CreateStateObject",
+          "identified": "dxr",
+          "checks": {
+            "dxr": "Linked four collections through the Xbox device and queried shader identifiers"
+          }
+        },
+        {
+          "slot": 102,
+          "method": "GetRaytracingAccelerationStructurePrebuildInfo",
+          "identified": "sphere",
+          "checks": {
+            "sphere": "Compared all three sizes and output guards with desktop D3D12 before tracing the retail mesh"
+          }
+        }
+      ],
+      "table": "Device"
+    },
+    {
+      "name": "Device7",
+      "slots": [
+        {
+          "slot": 106,
+          "method": "AddToStateObject",
+          "identified": "ray"
+        }
+      ],
+      "table": "Device"
+    },
+    {
       "name": "Device8",
       "slots": [
         {
           "slot": 115,
           "method": "DeserializeStateObjectX",
-          "identified": "ray"
+          "identified": "ray",
+          "checks": {
+            "dxr": "Four packaged state objects deserialized and linked, followed by two ray dispatches with GPU readbacks"
+          }
         }
-      ]
+      ],
+      "table": "Device"
     },
     {
       "name": "Graphics command list",
@@ -220,12 +271,21 @@
           }
         },
         {
+          "slot": 43,
+          "method": "SetComputeRootShaderResourceView",
+          "identified": "dxr",
+          "checks": {
+            "dxr": "Bound the TLAS and ray input to a linked guest pipeline"
+          }
+        },
+        {
           "slot": 59,
           "method": "ExecuteIndirect",
           "identified": "profile",
           "checks": {
             "placed": "Indirect compute argument buffer and count controls",
-            "mesh_gpu": "GPU count and argument buffers execute two 16-byte Xbox mesh dispatch records"
+            "mesh_gpu": "GPU count and argument buffers execute two 16-byte Xbox mesh dispatch records",
+            "ray_commands": "Executed 104-byte indirect records from a nonzero offset and verified hit, miss and intersection data on NVIDIA and Radeon."
           }
         },
         {
@@ -263,11 +323,60 @@
           }
         },
         {
+          "slot": 117,
+          "method": "BuildRaytracingAccelerationStructure",
+          "identified": "ray_commands",
+          "checks": {
+            "ray_commands": "Built two triangle structures and their scene with the single-build ABI, then compared four hits and a miss with desktop D3D12 on two adapters."
+          }
+        },
+        {
+          "slot": 118,
+          "method": "EmitRaytracingAccelerationStructurePostbuildInfo",
+          "identified": "as_sizes",
+          "checks": {
+            "as_sizes": "Queried two rebuilt retail sphere BLASes in one call and verified compacted sizes and ray results on NVIDIA and Radeon."
+          }
+        },
+        {
+          "slot": 119,
+          "method": "CopyRaytracingAccelerationStructure",
+          "identified": "ray_copy",
+          "checks": {
+            "ray_copy": "Clone and compact two native BLASes via Xbox List4 and verify four hits and a miss. Serialized Xbox data requires translation.",
+            "sphere": "Deserialized a packaged mesh on two adapters and preserved primitive IDs through 3,171 ray queries per adapter"
+          }
+        },
+        {
+          "slot": 120,
+          "method": "SetPipelineState1",
+          "identified": "dxr",
+          "checks": {
+            "dxr": "Bound the linked guest pipeline before two ray dispatches"
+          }
+        },
+        {
+          "slot": 121,
+          "method": "DispatchRays",
+          "identified": "dxr",
+          "checks": {
+            "dxr": "Read back occlusion, distance, instance and barycentrics for hits and misses"
+          }
+        },
+        {
           "slot": 127,
           "method": "DispatchMesh",
           "identified": "mesh_abi",
           "checks": {
             "mesh_gpu": "Direct mesh and amplified mesh dispatch with asymmetric group dimensions, zero-group and invalid-size controls"
+          }
+        },
+        {
+          "slot": 131,
+          "method": "BuildRaytracingAccelerationStructures",
+          "identified": "sphere",
+          "checks": {
+            "sphere": "Submitted a TLAS with two instances of a rebuilt retail mesh and rejected malformed batches"
           }
         }
       ]
@@ -349,7 +458,10 @@
         {
           "slot": 8,
           "method": "Inspect state object",
-          "identified": "ray"
+          "identified": "ray",
+          "checks": {
+            "dxr": "The guest retrieves the inspector from the linked pipeline and reads 14 native functions"
+          }
         }
       ]
     },
@@ -359,7 +471,23 @@
         {
           "slot": 7,
           "method": "Query properties",
-          "identified": "ray"
+          "identified": "ray",
+          "checks": {
+            "dxr": "Selector 1 returns four named exports with identifiers matching the native pipeline"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Ray shader inspection",
+      "slots": [
+        {
+          "slot": 9,
+          "method": "Get function symbols",
+          "identified": "dxr",
+          "checks": {
+            "dxr": "The guest checks function names, count, maximum VGPR use and null-output handling"
+          }
         }
       ]
     }
@@ -405,7 +533,12 @@
       79,
       80,
       81,
-      86
+      85,
+      86,
+      101,
+      102,
+      106,
+      115
     ],
     "Graphics command list": [
       0,
@@ -439,6 +572,7 @@
       35,
       36,
       39,
+      43,
       45,
       47,
       48,
@@ -454,7 +588,13 @@
       83,
       84,
       96,
-      127
+      117,
+      118,
+      119,
+      120,
+      121,
+      127,
+      131
     ],
     "DMA command list": [
       0,
@@ -602,6 +742,33 @@
       5,
       6,
       7
+    ],
+    "State object": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "State object properties": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "Ray shader inspection": [
+      0,
+      1,
+      2,
+      9
     ]
   }
 }

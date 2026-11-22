@@ -27,6 +27,7 @@ PROVIDERS = {"d3d12": "d3d12-smoke/d3d12_xs.dll", "dxc-utils": "dxc-utils/dxcomp
              "acphal": "acphal/AcpHal.dll", "xcrdapi": "xcrdapi/xcrdapi.dll",
              "xgameruntime": "xgameruntime/xgameruntime.dll", "gameconfig": "gameconfig/gameconfighelper.dll"}
 POINTER = OUTPUT / "frosty-native/latest-independent"
+ENGINE_INI = Path("Frosty/Config/UserEngine.ini")
 
 
 def publish(path, data):
@@ -131,9 +132,6 @@ def prepare(source, packaged_os, work, proton, windows_dxc, *, select=True):
                       "frosty_packaged_h264.dll": "Packaged Xbox H.264"}.get(name, "TuxBox media")
             record(guest_bin / name, origin)
         register_frosty_media(guest_bin, proton, prefix)
-        config = stage / "Frosty/Config/UserEngine.ini"
-        config.parent.mkdir(exist_ok=True)
-        shutil.copyfile(ROOT / "tools/reference/frosty-reduced-effects.ini", config)
         publish(work / "providers.json", json.dumps(files, indent=2) + "\n")
         if os.environ.get("TUXBOX_SHADER_PREP") != "chase":
             os.environ["TUXBOX_SHADER_PREP"] = "menu"
@@ -149,7 +147,10 @@ def prepare(source, packaged_os, work, proton, windows_dxc, *, select=True):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path, nargs="?", help="original Frosty Mount directory")
-    parser.add_argument("--check", action="store_true", help="check the prepared DLL files and exit")
+    checks = parser.add_mutually_exclusive_group()
+    checks.add_argument("--check", action="store_true", help="verify the staged binaries and check for old graphics overrides")
+    # The launcher already holds launch.lock during this check.
+    checks.add_argument("--check-launch", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--packaged-os", type=Path, help="default: EmbeddedXvd beside Mount")
     parser.add_argument("--work", type=Path, required=True, help="dedicated directory, preferably on the game's filesystem")
     parser.add_argument("--windows-dxc", type=Path, help="Microsoft DXC Windows release zip or bin/x64 directory")
@@ -157,7 +158,7 @@ def main():
     parser.add_argument("--no-select", action="store_true", help="keep the current default working directory")
     args = parser.parse_args()
     try:
-        if args.check:
+        if args.check or args.check_launch:
             verify_staged_files(args.work.resolve())
             return
         if not args.source or not args.windows_dxc:

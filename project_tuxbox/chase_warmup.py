@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory
 from .inspect import digest
 from .runtime_shaders import MAX_SHADER_BYTES, compile_request, portable_stage, snapshot_compiler_cache
 from .shader_prep import run_tool
-from .shader_inventory import ARCHIVES, ENTRY, decoder, dxbc, parse_tables
+from .shader_inventory import ARCHIVES, ENTRY, STAGES, decoder, dxbc, parse_tables, serialized_state
 
 
 def extract_programs(stream, archive, indices, work, decode):
@@ -27,7 +27,7 @@ def extract_programs(stream, archive, indices, work, decode):
             raise ValueError(f"Invalid {archive} chase shader index {index!r}")
         ref = f"{archive}/{index}"
         start, stored, length, stage = ENTRY.unpack_from(descriptors, index * ENTRY.size)
-        if stage >= 6 or not 0 < stored <= length or start + stored > len(payload):
+        if stage >= len(STAGES) or not 0 < stored <= length <= MAX_SHADER_BYTES or start + stored > len(payload):
             raise ValueError(f"Invalid chase shader descriptor {ref}")
         cooked = bytes(payload[start:start + stored])
         if stored != length:
@@ -35,7 +35,7 @@ def extract_programs(stream, archive, indices, work, decode):
             if decode(cooked, raw, stored, length) != length:
                 raise ValueError(f"Unable to decompress chase shader {ref}")
             cooked = raw.raw
-        source = dxbc(cooked)
+        source = serialized_state(cooked)[1] if stage >= 6 else dxbc(cooked)
         key = hashlib.sha256(source).hexdigest()
         (work / (key + ".dxbc")).write_bytes(source)
         sources[ref] = (key, stage)
@@ -107,8 +107,10 @@ def prepare_chase(pak, by_source, profile, title_sha256, prepared_sources, progr
             if staged.is_file() and staged.stat().st_size <= MAX_SHADER_BYTES:
                 with staged.open("rb") as stream:
                     code = stream.read(MAX_SHADER_BYTES + 1)
-                # UE archive frequencies: VS, MS, AS, PS, GS, CS.
-                if len(code) <= MAX_SHADER_BYTES and portable_stage(code) == (1, 13, 14, 0, 2, 5)[programs[key]]:
+                # UE archive frequencies: VS, MS, AS, PS, GS, CS, then DXR libraries.
+                stage = programs[key]
+                expected = 6 if stage >= 6 else (1, 13, 14, 0, 2, 5)[stage]
+                if len(code) <= MAX_SHADER_BYTES and portable_stage(code) == expected:
                     dest.write_bytes(code)
                     run_tool([tools[2], dest], timeout=10)
                     return False

@@ -14,12 +14,17 @@ use crate::device::placement::{self, Texture};
 use crate::present::Presentation;
 use crate::proxy::{Proxy, Slots, allocate, child_slots, unwrap};
 
+mod build_raytracing;
 mod compute;
+mod compute_bindings;
 mod depth;
 mod descriptors;
 mod graphics;
 mod media;
 mod queries;
+mod ray_dispatch;
+mod raytracing;
+pub(crate) mod serialized_blas;
 mod stencil;
 
 enum ListState {
@@ -29,6 +34,10 @@ enum ListState {
 }
 
 struct Recording {
+    resources: device::MediaResources,
+    blas_inputs: Vec<device::blas::Input>,
+    instance_uploads: Vec<build_raytracing::Instances>,
+    bindings: compute_bindings::Bindings,
     stencil_slot: Option<u32>,
     stencil_targets: Option<stencil::Targets>,
     dsv_bound: bool,
@@ -124,6 +133,7 @@ struct ListData {
     extended: OnceLock<Option<ID3D12GraphicsCommandList1>>,
     enhanced_barriers: OnceLock<Option<ID3D12GraphicsCommandList7>>,
     mesh: OnceLock<Option<ID3D12GraphicsCommandList6>>,
+    raytracing: Option<ID3D12GraphicsCommandList4>,
 }
 
 type List = Proxy<ID3D12GraphicsCommandList, ListData>;
@@ -217,6 +227,10 @@ unsafe extern "system" fn reset(
     };
     if hr.is_ok() {
         state.phase = ListState::Open;
+        state.resources = allocator.state.clone();
+        state.blas_inputs.clear();
+        state.instance_uploads.clear();
+        state.bindings = compute_bindings::Bindings::new(initial.map(|p| &p.native));
         if state.media.is_some() {
             state.media = Some(media::Recording::new(allocator));
         }
@@ -375,10 +389,16 @@ unsafe extern "system" fn transition(
                             device::resource_proxy(object.as_raw(), parent(&list.parent))
                         }
                         .ok_or(E_INVALIDARG)?;
-                        r.state
-                            .depth()
-                            .map_or(&r.native, |pair| &pair.image)
-                            .as_raw()
+                        if device::blas::is_structure(r) {
+                            // A guest AS pool may contain individually relocated structures.
+                            // Order their host writes even when the barrier was recorded first.
+                            ptr::null_mut()
+                        } else {
+                            r.state
+                                .depth()
+                                .map_or(&r.native, |pair| &pair.image)
+                                .as_raw()
+                        }
                     }
                     None => ptr::null_mut(),
                 };
@@ -824,6 +844,7 @@ static LIST_SLOTS: Slots<149> = {
     slots[35] = crate::slot!(descriptors::table::<true>);
     slots[36] = crate::slot!(descriptors::table::<false>);
     slots[39] = crate::slot!(compute::constants);
+    slots[43] = crate::slot!(compute::shader_resource);
     slots[45] = crate::slot!(compute::unordered_access);
     slots[47] = crate::slot!(graphics::index_buffer);
     slots[48] = crate::slot!(graphics::vertex_buffers);
@@ -839,7 +860,13 @@ static LIST_SLOTS: Slots<149> = {
     slots[83] = crate::slot!(copy_texture);
     slots[84] = crate::slot!(copy_resource);
     slots[96] = crate::slot!(compute::async_compute_budget);
+    slots[117] = crate::slot!(build_raytracing::single);
+    slots[118] = crate::slot!(raytracing::postbuild);
+    slots[119] = crate::slot!(raytracing::copy);
+    slots[120] = crate::slot!(ray_dispatch::pipeline);
+    slots[121] = crate::slot!(ray_dispatch::dispatch);
     slots[127] = crate::slot!(graphics::dispatch_mesh);
+    slots[131] = crate::slot!(build_raytracing::batch);
     slots
 };
 
@@ -886,6 +913,14 @@ unsafe extern "system" fn execute(queue: &Queue, count: u32, lists: *const *mut 
                 || unsafe { list.native.GetType() } != queue.state.kind
             {
                 return Err(E_INVALIDARG);
+            }
+            for input in &state.blas_inputs {
+                let owner = list.parent.as_ref().ok_or(E_INVALIDARG)?;
+                unsafe { input.prepare(owner) }.map_err(|e| e.code())?;
+            }
+            for instances in &state.instance_uploads {
+                let owner = list.parent.as_ref().ok_or(E_INVALIDARG)?;
+                unsafe { instances.prepare(owner) }.map_err(|e| e.code())?;
             }
             textures
                 .try_reserve(state.placed_reads.len())
@@ -1076,6 +1111,13 @@ pub(crate) unsafe fn wrap_command_list(
     compact: bool,
     out: *mut *mut c_void,
 ) -> HRESULT {
+    let raytracing = if compact {
+        None
+    } else {
+        native.cast::<ID3D12GraphicsCommandList4>().ok()
+    };
+    let has_list4 = raytracing.is_some();
+    let has_list6 = has_list4 && native.cast::<ID3D12GraphicsCommandList6>().is_ok();
     let state = ListData {
         reserved0: [0; 2],
         write_cursor: 0,
@@ -1086,7 +1128,12 @@ pub(crate) unsafe fn wrap_command_list(
         extended: OnceLock::new(),
         enhanced_barriers: OnceLock::new(),
         mesh: OnceLock::new(),
+        raytracing,
         recording: Mutex::new(Recording {
+            resources: allocator.state.clone(),
+            blas_inputs: Vec::new(),
+            instance_uploads: Vec::new(),
+            bindings: compute_bindings::Bindings::new(initial),
             stencil_slot,
             stencil_targets: None,
             dsv_bound: false,
@@ -1107,6 +1154,21 @@ pub(crate) unsafe fn wrap_command_list(
                     ID3D12DeviceChild::IID,
                     ID3D12CommandList::IID,
                     device::media::DMA_IID,
+                ]
+            } else if has_list6 {
+                &[
+                    ID3D12DeviceChild::IID,
+                    ID3D12CommandList::IID,
+                    ID3D12GraphicsCommandList::IID,
+                    ID3D12GraphicsCommandList4::IID,
+                    build_raytracing::LIST6,
+                ]
+            } else if has_list4 {
+                &[
+                    ID3D12DeviceChild::IID,
+                    ID3D12CommandList::IID,
+                    ID3D12GraphicsCommandList::IID,
+                    ID3D12GraphicsCommandList4::IID,
                 ]
             } else {
                 &[

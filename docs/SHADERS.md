@@ -2,6 +2,8 @@
 
 The progress map shows which shader stages TuxBox can translate and which programs Frosty requests while creating pipelines. The reviewed Xbox build contains 4,576 global entries and 38,831 material entries. A single native program can appear in several entries and material shader maps. [Progress map](progress.svg) · [Shader inventory](../evidence/matrix-awakens/shader-inventory.json)
 
+Offline raster surveys cover 1,566 of 1,571 global entries and all 32,122 material entries. Each survey records its compiler hash in the evidence. These counts measure HLSL generation. DXIL validation and rendering are checked separately. The five remaining global pixel entries require cross-half wave64 behavior. [Archive survey](../evidence/matrix-awakens/raster-archive-survey.json)
+
 | Column | What it measures |
 | --- | --- |
 | Packaged | Entries in the two shader archives shipped with this build. |
@@ -12,6 +14,41 @@ The progress map shows which shader stages TuxBox can translate and which progra
 
 The green code on the camera plane uses material shader map **136**. The verified main-menu trace includes its vertex shader at material entry 2 and pixel shader at entry 3530. The post-process filter uses map **66**, including pixel shader 1461. The inventory lists each map member, its archive index, stage and the runs that requested it. A request identifies a program used to create a pipeline. Checking a draw or a captured frame establishes whether that pipeline produced visible output. The packaged ray-tracing entries use Xbox serialized state objects and have their own translation path. [Rendered menu](../evidence/matrix-awakens/green-code-menu.webp) · [Cooked material references](../evidence/matrix-awakens/menu-materials.json) · [Ray-state samples](../evidence/matrix-awakens/retail-shaders.json)
 
+Frosty ships 6,280 ray-tracing state objects. TuxBox translates 1,110 of them to desktop DXR libraries, including the occlusion shader Frosty requests at startup. DXC compiled 220 of the 305 global entries and 890 of the 5,975 material entries. Each state includes three traversal programs and a fourth program containing the shader exports. The compiler recognizes the supported instruction sequences, reads their resource bindings and gives the ray to the host GPU for traversal. [Archive census](../evidence/matrix-awakens/ray-state-census.json)
+
+On GeForce and Radeon, TuxBox accepted four raw retail states through the Xbox device, compiled them on demand and linked them into one pipeline. The Xbox command list ran the occlusion and intersection ray generators against two instances. Each processed six rays and matched a desktop D3D12 control. Occlusion returned four hits and two misses. Intersection returned the expected distances, primitive and instance indices, and barycentric coordinates. One miss passed beside the scene and one stopped short of the triangle. [GeForce readback](../evidence/matrix-awakens/ray-library-dispatch.json) · [Radeon readback](../evidence/matrix-awakens/ray-library-dispatch-amd.json)
+
+Frosty requests screen-space shadow shaders at global entries 3801 and 3824. Both read six G-buffer textures and resume shading after a ray hits or misses. In a 4 × 2 dispatch, GeForce and Radeon returned the expected colors for an occluded pixel, a visible pixel and a two-sided material that traced back through a surface. The zero-depth and out-of-bounds pixels issued no rays. Entry 3824 also wrote a hit distance that matched the GPU’s triangle intersection on each adapter. [Shadow textures and callback counts](../evidence/matrix-awakens/occlusion-ray-dispatch.json)
+
+Entry 3810 also traces hair shadows through a virtual voxel volume. On Radeon, a ray that missed every triangle stayed lit with a missing page or a page with zero density. Giving the voxel a density of 1,024 shadowed the same pixel. The two-sided material then fired its second ray. The test also enabled a hair surface at one pixel. When its lighting-channel mask matched the light, the shader traced one additional ray and wrote white to its separate hair-lighting texture. A disjoint mask left that texture black. [Voxel shadow readback](../evidence/matrix-awakens/occlusion-ray-dispatch.json)
+
+TuxBox also translates both Lumen translucency volume shaders at global entries 619 and 620. On Radeon, each traced 32 rays into a sky cube with six different colors. The returned light matched the expected face for every ray. Depth testing excluded 32 other cells, and a dispatch coordinate outside the volume left its output untouched. [Volume lighting and hit distances](../evidence/matrix-awakens/lumen-translucency-volume.json)
+
+Radeon ran the five Lumen reflection shaders used by Frosty’s first two ray pipelines. Two jobs in reverse pixel order returned distinct sky colors and a signed distance of −17. A second test placed a triangle 0.175 units along one ray. Shader 456 wrote the measured distance to its reflection pixel and trace record while the other ray returned the sky. The unused pixel and queue record kept their original values. [Reflection pixels, trace records and callback counts](../evidence/matrix-awakens/lumen-reflections.json)
+
+GeForce and Radeon ran the retail lighting miss shader at global entry 2752. Adjacent rays used different shader records to select an unlit or colored directional light. Across 24 rays, the output preserved the incoming radiance in darkness and added the expected RGB contribution on a front-facing white surface. The back-facing surface stayed dark. Two more rays exercised the hidden material at entry 2670. Its any-hit shader ignored the triangle, and its closest-hit shader preserved the payload when the ray forced the triangle opaque. [Two-GPU lighting and hidden material readback](../evidence/matrix-awakens/lighting-and-hidden-rays.json)
+
+The radiance-cache shader at global entry 323 traces an 8 × 8 tile and packs RGB and distance into two words per ray. GeForce and Radeon matched all six sky colors and the miss distance on the empty scene rays. Moving the probe beside a triangle gave 18 surface hits. Each packed distance matched the GPU intersection rounded to half precision. An empty work queue left every output untouched. Radeon also ran the opening scene’s record-writing and far-field variants at entries 299 and 311. Each reproduced all 18 intersections. Shader 264 traced two rays per cell and shader 266 packed all 64 retrace records with no traversal. [Radiance-cache tile readbacks](../evidence/matrix-awakens/lumen-radiance-cache.json)
+
+All 64 packaged Lumen screen-probe gather variants compile and validate through DXIL and Vulkan SPIR-V. Frosty requests entries 64 and 71 in its second scene pipeline. On GeForce and Radeon, both left the output untouched for an empty queue and hit a triangle at 0.49 units when a probe pointed toward it. Facing empty space, entry 64 issued one miss and entry 71 issued two, then wrote the expected 20-byte retrace record. [Screen-probe dispatch results](../evidence/matrix-awakens/screen-probe-gather.json)
+
+The virtual-shadow cache shader at entry 1228 reuses eligible pages from a previous frame and updates their age. A GeForce and Radeon control checked four combinations of cached data, page invalidation and missing mappings. Each dispatch matched all 88,436 words of the CPU reference, including five statistics counters and both layers of the page tables. [Cached shadow page results](../evidence/matrix-awakens/cached-shadow-pages.json)
+
+The opening pipeline also uses 12 closest-hit material shaders. On Radeon, TuxBox ran all 12 from their packaged state objects and matched the desktop control on every word returned by 48 triangle hits and 12 misses. Reversing the ray changed the surface-facing flag. Two materials returned the exact RGB values supplied through the shader record. [Material payloads and shader inputs](../evidence/matrix-awakens/material-hit-dispatch.json)
+
+Frosty’s second ray pipeline uses a smaller Lumen material shader at global entry 1238. It returns the hit distance, geometry data, a packed surface normal and two instance identifiers. On Radeon and GeForce, TuxBox matched the desktop results for four triangle hits and the paired miss shader at entry 1237. A scaled, sheared instance produced the expected change in its surface normal. [Lumen geometry and miss readbacks](../evidence/matrix-awakens/lumen-material-rays.json)
+
+Frosty compiles many shadow shaders when it first builds its ray-tracing pipeline. At global entry 3770, TuxBox now merges branches with a single entry and shares one traversal call across eight shader continuations. On an RTX 4070 Ti SUPER, cold compilation of that collection fell from 38.67 to 7.26 seconds. Peak process memory fell from 2.81 GB to 0.86 GB. [Compiler timings and GPU controls](../evidence/matrix-awakens/shadow-ray-compilation.json)
+
+To repeat the archive count or GPU check with a mounted copy of Frosty, use the following commands.
+
+```sh
+python tools/check_frosty_shaders.py "$MOUNT" --compile-ray-census --output build/ray-census.json
+python tools/check_frosty_blas.py --ray-archive "$MOUNT" --lighting-hits --output build/lighting-rays.json
+python tools/check_frosty_blas.py --ray-archive "$MOUNT" \
+    --provider build/d3d12-smoke/d3d12_xs.dll --voxel-occlusion --lumen-volume --lumen-reflections --lumen-material --material-hits --radiance-cache --output build/ray-dispatch.json
+```
+
 The menu pixel shader uses 28 Xbox instructions to share values across groups of four pixels. Each instruction reads from one fixed lane. TuxBox now emits one broadcast per instruction. On the RTX 4070 Ti SUPER, the captured menu draw took a median of 0.941 ms, down from 1.022 ms, with identical pixels across the entire HDR target. [GPU timings and shader identities](../evidence/matrix-awakens/pixel-quad-broadcast.json)
 
 Pixel shaders now check the Xbox execution mask once for consecutive register writes that use only arithmetic. Stock Proton translated Frosty’s material shader 18160 to SPIR-V in 336 ms on the test PC, down from 10.94 seconds. Two other chase materials took 158 ms and 48 ms, down from 2.15 seconds and 1.18 seconds. On the RTX 4070 Ti SUPER, nine test draws with those shaders retained the same coverage. The largest difference in any color channel was 0.00000012. In the captured green-code draw, five of 3,686,400 pixels changed by one step in the half-precision target. [Shader identities, CPU timings and GPU readbacks](../evidence/matrix-awakens/pixel-exec-groups.json)
@@ -19,6 +56,8 @@ Pixel shaders now check the Xbox execution mask once for consecutive register wr
 All 19,634 distinct vertex shaders now translate to HLSL. GPU readbacks check the cubemap shadow shader’s vertex outputs and the compute instructions used by 94 newly translated programs. Across 30 traces of startup, the menu, Nanite, the chase and city free roam, all 2,550 observed programs passed standalone DXIL validation. Normal gameplay preparation covers every shader observed in the full chase into the city. [Cubemap shadow readback](../evidence/matrix-awakens/cubemap-shadow-vertex.json) · [Clip-distance outputs](../evidence/matrix-awakens/clip-distance-vertex.json) · [Compute instruction checks](../evidence/matrix-awakens/compute-instructions.json)
 
 Four street materials in Frosty’s city read packed page-table entries from the same `R32_UINT` texture. TuxBox now preserves those integer loads when the Xbox shader range-checks a value from the first active lane and extracts a bit field. This changed 147 packaged pixel shaders, all of which passed DXIL validation. In a replay of an asphalt draw, the black pavement patch appeared with both texture declarations. [Street texture and draw measurements](../evidence/matrix-awakens/street-page-table.json)
+
+Global shader 475 converts screen probes to irradiance using wave64 reductions. TuxBox maps its 8×8 workgroup to 64 logical lanes on the host. Full-shader readbacks on Radeon and GeForce matched a Radeon native-wave64 translation for probe widths one through five and eight when the sampled depth texture was constant. With a gradient point-sampled texture at width three, a direct capture showed the GPUs selecting adjacent texels at a coordinate boundary. [Probe irradiance GPU results](../evidence/matrix-awakens/probe-irradiance-wave64.json)
 
 ## Independent translation
 
@@ -68,6 +107,10 @@ python tools/check_frosty_nanite_mesh.py /path/to/Mount --adapter 10de:2705 \
     --all-mesh --output build/nanite-mesh.json
 ```
 
+## Virtual shadow maps
+
+Frosty uses compute shaders to allocate physical shadow pages, choose pages for initialization and merging, and compact the views that need rendering. GeForce and Radeon ran ten packaged shaders and matched every one of the 137,694 output words checked on each GPU. The cases include an exhausted free-page pool, requests in both halves of a 64-lane wave, and selected mip levels from multiple views. Raising the depth texture from zero to one culled all six shadow instances that previously reached the work queue. [Shadow page and view readbacks](../evidence/matrix-awakens/virtual-shadow-pages.json)
+
 ## Nanite instance culling
 
 Frosty calls `InstanceCull` to decide which scene instances enter Nanite’s work queue. Its 64-lane Xbox workgroup counts visible instances, reserves space in the queue, and writes each instance ID in lane order. TuxBox also handles the path that writes small projected instances directly into the visibility texture. Frosty’s first-boot profile includes the variant requested by the title, global entry 3444. [Retail comparison and list of variants](../evidence/matrix-awakens/instance-cull-retail.json)
@@ -93,6 +136,8 @@ python tools/check_frosty_persistent_cull.py /path/to/Mount --adapter 10de:2705 
 
 ## Nanite micropolygon rasterization
 
+All 120 packaged `HWRasterizePS` variants now translate and pass DXIL validation. Three variants were dispatched on GeForce and Radeon, including the clipped variant requested by Frosty. Each matched all 247 texels in the test, including competing depth values and untouched pixels outside the clip rectangle. [Shader census and GPU results](../evidence/matrix-awakens/hwraster-visibility.json)
+
 `MicropolyRasterize` draws small triangles from Nanite’s visible-cluster list. The variant Frosty requests, global entry 3246, stores depth and triangle ID together in a 64-bit visibility value. When triangles overlap, one atomic maximum selects the winning pair. TuxBox preserves the Xbox shader’s choice of scanline loop for each 64-lane wave. [Shader Model 6.6 atomic operations](https://microsoft.github.io/DirectX-Specs/d3d/HLSL_SM_6_6_Int64_and_Float_Atomics.html)
 
 All 96 packaged variants passed DXIL validation and created an Xbox compute pipeline on Radeon and NVIDIA. Entry 3246 also matched all 9,269 texels in 13 GPU tests per adapter. These cover narrow and wide triangles, interpolated depth, overlap, and pixels outside the viewport. The retail Radeon run passed this pipeline and reached graphics command-list slot 96. [Retail traces](../evidence/matrix-awakens/micropoly-retail.json) · [Radeon results](../evidence/matrix-awakens/micropoly-amd.json) · [NVIDIA results](../evidence/matrix-awakens/micropoly-nvidia.json)
@@ -101,6 +146,10 @@ All 96 packaged variants passed DXIL validation and created an Xbox compute pipe
 python tools/check_frosty_micropoly.py /path/to/Mount --adapter 10de:2705 \
     --all-pipelines --output build/micropoly.json
 ```
+
+## Hair strand visibility
+
+Frosty’s 24 hair raster compute shaders use a 32-bit hit counter and up to four 64-bit visibility images. The earlier compiler rejected their unsigned atomic maximum. TuxBox now translates all 24, and the original compute pipelines were created on Radeon and GeForce. Across both packaged archives, compute translation increased from 2,868 to 2,892 of 3,233 distinct programs. A separate stage compacts the visible samples for shading. Both compute-raster compaction shaders still stop at a wave-lane election, and character hair needs an in-game check. [Hair raster results](../evidence/matrix-awakens/hair-visibility-raster.json) · [RDNA 2 instruction set](https://www.amd.com/content/dam/amd/en/documents/radeon-tech-docs/instruction-set-architectures/rdna2-shader-instruction-set-architecture.pdf) · [Direct3D typed atomic operations](https://microsoft.github.io/DirectX-Specs/d3d/HLSL_SM_6_6_Int64_and_Float_Atomics.html)
 
 ## Nanite material classification
 

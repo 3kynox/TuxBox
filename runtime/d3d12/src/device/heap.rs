@@ -2,7 +2,7 @@
 use super::{Device, Out, RESOURCE, identity, wrap_pageable};
 use crate::proxy::{Proxy, Slots, check_output, child_slots, unwrap};
 use core::ffi::c_void;
-use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL, E_POINTER};
+use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL, E_OUTOFMEMORY, E_POINTER};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::{GUID, HRESULT, Interface};
 
@@ -49,6 +49,56 @@ pub(super) unsafe extern "system" fn create(
     // GetDesc reflects the size and alignment the driver actually granted.
     let actual = unsafe { native.GetDesc() };
     unsafe { wrap_pageable(Ok(native), &HEAP, device, actual, out) }
+}
+
+// At RVA 0x57a4b6a Frosty calls Device5 slot 85 with a pageable and
+// D3D12_RESIDENCY_PRIORITY_HIGH after allocating an acceleration-structure buffer.
+pub(super) unsafe extern "system" fn residency_priority(
+    device: &Device,
+    count: u32,
+    objects: *const *mut c_void,
+    priorities: *const D3D12_RESIDENCY_PRIORITY,
+) -> HRESULT {
+    if count != 0 && (objects.is_null() || priorities.is_null()) {
+        return E_INVALIDARG;
+    }
+    let Some(host) = device.state.pipeline_device.as_ref() else {
+        return E_NOTIMPL;
+    };
+    let owner = identity(device).as_raw();
+    let mut native = Vec::new();
+    if native.try_reserve_exact(count as usize).is_err() {
+        return E_OUTOFMEMORY;
+    }
+    for i in 0..count as usize {
+        // SAFETY: the guest supplies count borrowed COM pointers. Each unwrap
+        // verifies our vtable and owning device before accessing a native pointer.
+        let object = unsafe { objects.add(i).read() };
+        let pageable = unsafe {
+            if let Some(resource) = super::resource(object, owner) {
+                resource.as_raw()
+            } else if let Some(heap) = unwrap::<ID3D12Heap, D3D12_HEAP_DESC>(object, owner, &HEAP) {
+                heap.native.as_raw()
+            } else if let Some(heap) = super::descriptor_heap(object, owner) {
+                heap.native.as_raw()
+            } else if let Some(heap) = super::queries::native(object, owner) {
+                heap.as_raw()
+            } else {
+                return E_INVALIDARG;
+            }
+        };
+        native.push(pageable);
+    }
+    // SAFETY: all four interface types derive from ID3D12Pageable. The guest
+    // owns their references and the priority array until the host call returns.
+    unsafe {
+        (host.vtable().base__.SetResidencyPriority)(
+            host.as_raw(),
+            count,
+            native.as_ptr(),
+            priorities,
+        )
+    }
 }
 
 pub(super) unsafe extern "system" fn place(
@@ -123,6 +173,7 @@ pub(super) unsafe extern "system" fn place(
             &heap.state.Properties,
             desc,
             primary.as_ref(),
+            initial,
             native,
             out,
         )

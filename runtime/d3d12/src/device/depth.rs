@@ -122,6 +122,7 @@ pub(super) unsafe fn wrap(
     heap: &D3D12_HEAP_PROPERTIES,
     guest: &D3D12_RESOURCE_DESC,
     primary: Option<&D3D12_RESOURCE_DESC>,
+    initial: D3D12_RESOURCE_STATES,
     native: Option<ID3D12Resource>,
     out: Out,
 ) -> HRESULT {
@@ -135,13 +136,10 @@ pub(super) unsafe fn wrap(
             Err(error) => return error.code(),
         },
     };
-    unsafe {
-        wrap_pageable(
-            Ok(native),
-            &RESOURCE,
-            device,
-            super::ResourceState::from(backing),
-            out,
-        )
-    }
+    let mut state = super::ResourceState::from(backing);
+    state.blas_buffer = device
+        .state
+        .blas
+        .register(&native, heap.Type, guest, initial);
+    unsafe { wrap_pageable(Ok(native), &RESOURCE, device, state, out) }
 }

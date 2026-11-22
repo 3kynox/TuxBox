@@ -17,14 +17,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from project_tuxbox.chase_warmup import extract_programs
 from project_tuxbox.inspect import digest
-from project_tuxbox.shader_inventory import ARCHIVES, TITLE, decoder, parse_tables
+from project_tuxbox.shader_inventory import ARCHIVES, ENTRY, STAGES, TITLE, decoder, parse_tables
 from project_tuxbox.shader_prep import compiler_tools
 
 CACHE = "d6640174767d44dfa1049fd147b495bab214bd3c5a27d931d628b3e2e95cf37c"
 TSR_DIR = "/Engine/Private/TemporalSuperResolution/"
 
 
-def name_keys(executable, work):
+def name_keys(executable, work, *, all_families=False):
     data = executable.read_bytes()
     # Both the registered shader type name and its virtual source filename survive in the shipping PE.
     suffix = rb"(?:[A-Za-z0-9]\x00)+"
@@ -32,9 +32,20 @@ def name_keys(executable, work):
         regex = re.compile(re.escape(prefix.encode("utf-16le")) + suffix + re.escape(ending.encode("utf-16le")) + b"\0\0")
         return [m.group()[:-2].decode("utf-16le") for m in regex.finditer(data)]
 
-    identifiers = sorted(set(names(TSR_DIR + "TSR", ".usf") + names("FTSR", "CS")))
+    if all_families:
+        # Shader type names and source paths are UTF-16 literals in the
+        # executable. Only retain plausible names; matching a map still
+        # requires its 64-bit FHashedName in the packaged cache.
+        wide = rb"(?:[A-Za-z0-9_/\.\-]\x00)"
+        pattern = re.compile(rb"(?<![A-Za-z0-9_/\.\-]\x00)" + wide + rb"{3,200}\x00\x00")
+        candidates = (m.group()[:-2].decode("utf-16le") for m in pattern.finditer(data))
+        identifiers = sorted({name for name in candidates
+                              if (name.startswith("F") and name.endswith(("CS", "VS", "PS", "GS", "MS", "AS", "RGS", "CHS", "AHS")))
+                              or (name.startswith("/") and name.endswith((".usf", ".ush")))})
+    else:
+        identifiers = sorted(set(names(TSR_DIR + "TSR", ".usf") + names("FTSR", "CS")))
     if not identifiers:
-        raise ValueError("No TSR shader identifiers in this build")
+        raise ValueError("No shader identifiers in this build")
     # FHashedName's non-numbered names are CityHash64WithSeed(uppercase ANSI bytes, 0).
     try:
         from cityhash import CityHash64WithSeed
@@ -57,6 +68,59 @@ int main() {
     else:
         hashes = [CityHash64WithSeed(name.upper().encode("ascii"), 0) for name in identifiers]
     return dict(zip(identifiers, hashes, strict=True))
+
+
+def survey_families(mount, work):
+    """Match packaged global shader maps to executable shader names."""
+    executable = mount / "Frosty/Binaries/XSX/Frosty-XSX-Shipping.exe"
+    if digest(executable) != TITLE:
+        raise ValueError("Unexpected retail executable")
+    keys = name_keys(executable, work, all_families=True)
+    key_names = {}
+    for name, key in keys.items():
+        key_names.setdefault(struct.pack("<Q", key), []).append(name)
+    with (mount / "Frosty/Content/Paks/Frosty-XSX.pak").open("rb") as stream:
+        offset, size, expected = ARCHIVES["global"]
+        stream.seek(offset)
+        archive = stream.read(size)
+        if hashlib.sha256(archive).hexdigest() != expected:
+            raise ValueError("Unexpected global shader archive")
+        map_ids, shader_ids, descriptors, groups, _ = parse_tables(memoryview(archive))
+        cache = cache_member(stream)
+        programs = []
+        for index, ((key,), (_, _, _, stage)) in enumerate(zip(
+                struct.iter_unpack("20s", shader_ids), ENTRY.iter_unpack(descriptors), strict=True)):
+            if stage >= len(STAGES):
+                raise ValueError(f"Unknown shader stage {stage} at {index}")
+            programs.append(dict(entry=index, archive_sha1=key.hex(), stage=STAGES[stage]))
+    boundaries = []
+    for index, (key,) in enumerate(struct.iter_unpack("20s", map_ids)):
+        first = cache.find(key)
+        if first < 0 or first != cache.rfind(key):
+            raise ValueError(f"Shader map {index} lacks a unique record boundary")
+        boundaries.append((first + 20, index, key.hex()))
+    if len(boundaries) != struct.unpack_from("<I", cache)[0]:
+        raise ValueError("Shader map count differs")
+    memberships = [[] for _ in boundaries]
+    for index, maps in enumerate(groups):
+        for member in maps:
+            memberships[member].append(index)
+    maps = []
+    start = 4
+    for end, index, key in sorted(boundaries):
+        record = cache[start:end]
+        start = end
+        names = set()
+        for at in range(max(0, len(record) - 7)):
+            names.update(key_names.get(bytes(record[at:at + 8]), ()))
+        maps.append(dict(map=index, map_sha1=key, names=sorted(names),
+                         entries=memberships[index]))
+    return dict(title_sha256=TITLE, global_archive_sha256=expected,
+                global_shader_map_cache_sha256=CACHE,
+                scope="Packaged global shader-map membership and name-hash matches. Matches do not establish runtime requests.",
+                matched_names=len(keys), shader_maps=len(maps),
+                named_shader_maps=sum(bool(row["names"]) for row in maps),
+                maps=sorted(maps, key=lambda row: row["map"]), programs=programs)
 
 
 def cache_member(stream):
@@ -177,10 +241,14 @@ def main():
     parser.add_argument("mount", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--trace", type=Path, help="Optional retail tuxbox.log to match against packaged programs")
+    parser.add_argument("--all-families", action="store_true",
+                        help="export all packaged global map memberships and matching executable names without compiling")
     args = parser.parse_args()
     with TemporaryDirectory(prefix="tsr-map-") as tmp:
-        report = survey(args.mount, Path(tmp))
+        report = survey_families(args.mount, Path(tmp)) if args.all_families else survey(args.mount, Path(tmp))
     if args.trace:
+        if args.all_families:
+            parser.error("--trace is supported by the TSR survey")
         report["retail_trace"] = trace_requests(args.trace, report)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")

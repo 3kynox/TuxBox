@@ -2,6 +2,7 @@
 
 mod container;
 mod raster;
+pub mod ray;
 mod signature;
 
 pub use container::{Chunk, Dxbc};

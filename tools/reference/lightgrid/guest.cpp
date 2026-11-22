@@ -1,10 +1,17 @@
-// Dispatch the original LightGridInjectionCS in one 4x4x4 group with sparse active cells.
+// Dispatch the original grid shader over sparse cells and overlapping reservations.
 #include "../compute_buffers.h"
 #include "lightgrid_blobs.h"
 #include <vector>
 using namespace compute_buffers;
 
-static void run(FILE* out, bool small_light) {
+struct Scenario {
+    const char* name;
+    UINT lights, captures, per_cell;
+    bool first_small;
+    bool multi = false;
+};
+
+static void run(FILE* out, const Scenario& scenario) {
     ComPtr<ID3D12Device> dev;
     check(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&dev)), "create device");
     ComPtr<IDXGIFactory4> factory;
@@ -24,13 +31,14 @@ static void run(FILE* out, bool small_light) {
     pd.pRootSignature = root.Get();
     pd.CS = {desktop_shader, sizeof(desktop_shader)};
     ComPtr<ID3D12PipelineState> pso;
-    check(dev->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso)), "create native wave64 PSO");
+    check(dev->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso)), "create light grid PSO");
     const auto upload_heap = [&](UINT size) {
         return buffer(dev.Get(), size, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
     };
     std::vector<UINT> b0(1024), b1(16384), b2(64);
     std::array<float, 4> sphere{0, 0, 0, 1000000}, direction{};
-    constexpr UINT one = 0x3f800000, cells = 24, first = 5, sentinel = 0xdeadbeef;
+    constexpr UINT one = 0x3f800000, first = 5, sentinel = 0xdeadbeef;
+    const UINT cells = scenario.multi ? 48u : 24u;
     // Finite screen/depth transforms, one local sphere and one capture volume.
     for (UINT i = 0; i < 4; ++i) {
         b0[4 * (36 + i) + i] = one;
@@ -43,26 +51,28 @@ static void run(FILE* out, bool small_light) {
     b0[4 * 65 + 3] = one;
     b0[4 * 134 + 2] = one;
     b0[4 * 134 + 3] = one;
-    std::memcpy(&b1[3], &sphere[3], 4);
-    b2[0] = 1;
-    b2[1] = 1;
+    for (UINT i = 0; i < scenario.captures; ++i)
+        std::memcpy(&b1[4 * i + 3], &sphere[3], 4);
+    b2[0] = scenario.lights;
+    b2[1] = scenario.captures;
     b2[3] = cells;
-    b2[4] = 3;
+    b2[4] = scenario.multi ? 6u : 3u;
     b2[5] = 2;
     b2[6] = 4;
-    b2[7] = 4;
+    b2[7] = scenario.per_cell;
     b2[12] = one;
     b2[14] = one;
     auto params0 = upload_heap(4096), params1 = upload_heap(65536), params2 = upload_heap(256);
     upload(params0.Get(), b0.data(), 4096);
     upload(params1.Get(), b1.data(), 65536);
     upload(params2.Get(), b2.data(), 256);
-    auto lights = upload_heap(16), directions = upload_heap(16);
-    if (small_light)
-        sphere = {4.0f, 0.0f, 6.0f, 0.25f};
-    upload(lights.Get(), sphere.data(), 16);
-    upload(directions.Get(), direction.data(), 16);
-    constexpr UINT words = 512, bytes = words * 4, heads = 16, links = 128;
+    std::array<float, 4> small_volume{4.0f, 0.0f, 6.0f, 0.25f};
+    std::array<std::array<float, 4>, 2> volumes{scenario.first_small ? small_volume : sphere, small_volume};
+    std::array<std::array<float, 4>, 2> cones{direction, direction};
+    auto lights = upload_heap(sizeof(volumes)), directions = upload_heap(sizeof(cones));
+    upload(lights.Get(), volumes.data(), sizeof(volumes));
+    upload(directions.Get(), cones.data(), sizeof(cones));
+    constexpr UINT words = 1024, bytes = words * 4, heads = 16, links = 192;
     std::vector<UINT> initial(words, sentinel);
     initial[0] = first;
     for (UINT i = 0; i < cells * 2; ++i)
@@ -87,7 +97,7 @@ static void run(FILE* out, bool small_light) {
     srv.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
     srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
     srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv.Buffer.NumElements = 1;
+    srv.Buffer.NumElements = 2;
     dev->CreateShaderResourceView(lights.Get(), &srv, cpu(0));
     dev->CreateShaderResourceView(directions.Get(), &srv, cpu(1));
     const D3D12_CONSTANT_BUFFER_VIEW_DESC cbvs[] = {{params0->GetGPUVirtualAddress(), 4096},
@@ -118,7 +128,7 @@ static void run(FILE* out, bool small_light) {
     list->SetComputeRootDescriptorTable(0, handle(0));
     list->SetComputeRootDescriptorTable(1, handle(64));
     list->SetComputeRootDescriptorTable(3, handle(80));
-    list->Dispatch(1, 1, 1);
+    list->Dispatch(2, 2, 2);
     transition(list.Get(), dst.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
     list->CopyBufferRegion(read.Get(), 0, dst.Get(), 0, bytes);
     submit_and_wait(dev.Get(), queue.Get(), list.Get());
@@ -128,25 +138,44 @@ static void run(FILE* out, bool small_light) {
     auto values = static_cast<const UINT*>(mapped);
     auto expected = initial;
     UINT allocated = first;
-    for (UINT i = 0; i < cells * 2; ++i) {
-        // The orthographic x/y/z bounds of cell (2,0,2) are [3,5], [-1,1], and [5,9].
-        // The small local sphere therefore enables just physical lane 34. The capture still covers all cells.
-        if (small_light && i < cells && i != 14)
-            continue;
-        expected[heads + i] = allocated;
-        expected[links + 2 * allocated] = 0;
-        expected[links + 2 * allocated + 1] = initial[heads + i];
-        ++allocated;
+    for (UINT volume = 0; volume < scenario.lights + scenario.captures; ++volume) {
+        bool capture = volume >= scenario.lights;
+        std::array<UINT, 2> previous{};
+        UINT index = capture ? volume - scenario.lights : volume;
+        for (UINT cell = 0; cell < cells; ++cell) {
+            // The small local light overlaps only cell (2,0,2), logical wave lane 34.
+            if (!capture && (index != 0 || scenario.first_small) && cell != 14)
+                continue;
+            const UINT head_index = (capture ? cells : 0) + cell;
+            const UINT link = scenario.multi ? values[heads + head_index] : allocated;
+            ++allocated;
+            if (scenario.multi && (link < first || link >= first + 2 * cells || expected[links + 2 * link] != sentinel))
+                throw std::runtime_error("shared allocator returned duplicate or out of bounds node");
+            if (scenario.multi) {
+                // Different workgroups may reserve in either order, but each
+                // reservation assigns consecutive nodes in Xbox lane order.
+                UINT& last = previous[(cell % 6u) / 4u];
+                if (last && link != last + 1)
+                    throw std::runtime_error("light grid reordered lanes within a workgroup");
+                last = link;
+            }
+            if (link >= 2 * cells * scenario.per_cell)
+                continue;
+            UINT head = heads + head_index;
+            expected[links + 2 * link] = index;
+            expected[links + 2 * link + 1] = expected[head];
+            expected[head] = link;
+        }
     }
     expected[0] = allocated;
     UINT matched = 0;
     for (UINT i = 0; i < words; ++i) {
         matched += expected[i] == values[i];
         if (expected[i] != values[i] && i < 25)
-            std::fprintf(out, "mismatch_%u_%u=%08x/%08x\n", unsigned(small_light), i, values[i], expected[i]);
+            std::fprintf(out, "mismatch_%s_%u=%08x/%08x\n", scenario.name, i, values[i], expected[i]);
     }
-    std::fprintf(out, "%s_counter=%u\n%s_matched_words=%u\n", small_light ? "small" : "broad", values[0],
-                 small_light ? "small" : "broad", matched);
+    std::fprintf(out, "%s_counter=%u\n%s_matched_words=%u\n", scenario.name, values[0],
+                 scenario.name, matched);
     read->Unmap(0, &empty);
     if (matched != words)
         throw std::runtime_error("light grid mismatch");
@@ -157,8 +186,14 @@ int main() {
         return 2;
     int status = 0;
     try {
-        run(out, false);
-        run(out, true);
+        run(out, {"two_productive_groups", 1, 1, 4, false, true});
+        run(out, {"broad", 1, 1, 4, false});
+        run(out, {"small", 1, 1, 4, true});
+        run(out, {"chained", 2, 2, 4, false});
+        run(out, {"limited", 2, 2, 1, false});
+        run(out, {"captures", 0, 2, 4, false});
+        run(out, {"lights", 2, 0, 4, false});
+        run(out, {"empty", 0, 0, 4, false});
     } catch (const std::exception& e) {
         std::fprintf(out, "error=%s\n", e.what());
         status = 1;

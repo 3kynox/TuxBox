@@ -153,6 +153,27 @@ std::string run(const wchar_t* requested, bool) {
     D3D12_DESCRIPTOR_HEAP_DESC view{D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1, D3D12_DESCRIPTOR_HEAP_FLAG_NONE, 0};
     ComPtr<ID3D12DescriptorHeap> views;
     check(device->CreateDescriptorHeap(&view, IID_PPV_ARGS(&views)), "display descriptor heap");
+    ComPtr<ID3D12Device5> residency;
+    check(device.As(&residency), "Xbox Device5 for residency priority");
+    using SetPriority = HRESULT (WINAPI*)(ID3D12Device5*, UINT, ID3D12Pageable* const*,
+                                          const D3D12_RESIDENCY_PRIORITY*);
+    const auto set_priority = method<SetPriority>(residency.Get(), 85);
+    D3D12_QUERY_HEAP_DESC query_desc{D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 1, 0};
+    ComPtr<ID3D12QueryHeap> queries;
+    check(device->CreateQueryHeap(&query_desc, IID_PPV_ARGS(&queries)), "residency query heap");
+    ID3D12Pageable* pageables[]{heap.Get(), back.Get(), views.Get(), queries.Get()};
+    const D3D12_RESIDENCY_PRIORITY priorities[]{D3D12_RESIDENCY_PRIORITY_HIGH,
+        D3D12_RESIDENCY_PRIORITY_NORMAL, D3D12_RESIDENCY_PRIORITY_HIGH, D3D12_RESIDENCY_PRIORITY_LOW};
+    check(set_priority(residency.Get(), 4, pageables, priorities), "four pageable priorities");
+    ComPtr<ID3D12Device5> other_residency;
+    check(second.As(&other_residency), "second Xbox Device5");
+    ID3D12Pageable* null_pageable = nullptr;
+    if (set_priority(residency.Get(), 1, &null_pageable, priorities) != E_INVALIDARG ||
+        set_priority(other_residency.Get(), 1, pageables, priorities) != E_INVALIDARG ||
+        set_priority(residency.Get(), 1, nullptr, priorities) != E_INVALIDARG ||
+        set_priority(residency.Get(), 1, pageables, nullptr) != E_INVALIDARG)
+        throw std::runtime_error("residency priority accepted an invalid argument");
+
     const D3D12_CPU_DESCRIPTOR_HANDLE rtv{method<CpuHandle>(views.Get(), 9)(views.Get())};
     device->CreateRenderTargetView(back.Get(), nullptr, rtv);
     auto pixel = compute_fixture::buffer(device.Get(), D3D12_HEAP_TYPE_READBACK, 256, D3D12_RESOURCE_STATE_COPY_DEST);
@@ -228,9 +249,9 @@ std::string run(const wchar_t* requested, bool) {
     std::memcpy(&packed, mapped, sizeof(packed));
     pixel->Unmap(0, &empty);
     if (packed != 0xc00ffc00u) throw std::runtime_error("incorrect R10G10B10A2 surface readback");
-    char receipt[170];
+    char receipt[208];
     std::snprintf(receipt, sizeof(receipt), "d3d12-heaps PASS pci=%04x:%04x heap=32MiB offsets=0,65536 "
-                  "words=256/256 invalid=4 display=3840x2160/RGB10A2 pixel=c00ffc00 volume=45/45",
+                  "words=256/256 invalid=4 display=3840x2160/RGB10A2 pixel=c00ffc00 volume=45/45 priorities=4/4 invalid_priority_calls=4",
                   selected.VendorId, selected.DeviceId);
     return receipt;
 }

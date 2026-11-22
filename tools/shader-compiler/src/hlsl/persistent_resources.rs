@@ -21,6 +21,9 @@ pub(super) fn prepare(em: &mut Emitter<'_>) -> Result<(), String> {
     {
         return Err("unsupported PersistentClusterCull descriptor tables".into());
     }
+    if has_resource(em, 3, 3) {
+        return shadow_resources(em);
+    }
     let hzb = em
         .ex
         .resources
@@ -164,6 +167,69 @@ pub(super) fn prepare(em: &mut Emitter<'_>) -> Result<(), String> {
             words = stride;
         }
         em.sbuf.insert((false, slot), words);
+    }
+    em.persistent_queue = true;
+    Ok(())
+}
+
+// The virtual-shadow permutations bind the HZB before their hierarchy
+// resources. The larger layout also has page flags, a page table and b1.
+fn has_resource(em: &Emitter<'_>, kind: u32, slot: u32) -> bool {
+    em.ex
+        .resources
+        .iter()
+        .any(|r| (r.res_type, r.space, r.lower, r.upper) == (kind, 0, slot, slot))
+}
+
+fn shadow_resources(em: &mut Emitter<'_>) -> Result<(), String> {
+    // PSV resource kinds identify typed, structured and byte-address views.
+    let mut bindings = vec![
+        (2, 0),
+        (1, 0),
+        (5, 0),
+        (5, 1),
+        (5, 2),
+        (3, 3),
+        (8, 0),
+        (8, 1),
+        (7, 2),
+        (7, 3),
+        (7, 4),
+        (6, 5),
+    ];
+    if has_resource(em, 2, 1) {
+        bindings.extend([
+            (2, 1),
+            (5, 4),
+            (5, 5),
+            (5, 6),
+            (5, 7),
+            (4, 8),
+            (5, 9),
+            (4, 10),
+        ]);
+        if has_resource(em, 5, 11) {
+            bindings.push((5, 11));
+        }
+        if has_resource(em, 8, 6) {
+            bindings.push((8, 6));
+        }
+    } else if has_resource(em, 4, 4) {
+        bindings.extend([(4, 4), (5, 5), (4, 6), (3, 7), (5, 8)]);
+        // The post pass reads its previously generated R32_UINT counts.
+        em.tbuf_ty.insert((false, 7), 1);
+    } else {
+        bindings.extend([(5, 4), (5, 5), (4, 6), (5, 7), (4, 8)]);
+    }
+    if bindings.len() != em.ex.resources.len()
+        || !bindings
+            .into_iter()
+            .all(|(kind, slot)| has_resource(em, kind, slot))
+    {
+        return Err("unrecognized persistent shadow resource layout".into());
+    }
+    for (&(uav, slot), words) in &mut em.sbuf {
+        *words = fssm_bindings::structured_words(em.ex, slot, uav)?;
     }
     em.persistent_queue = true;
     Ok(())

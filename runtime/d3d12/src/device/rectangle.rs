@@ -49,7 +49,15 @@ fn source(vertex: &[u8], primitive_id: bool) -> Result<String> {
         if el.name.eq_ignore_ascii_case("SV_Position") && width == 4 && el.comp_type == 3 {
             position = Some(i);
         }
-        writeln!(hlsl, "{ty}{width} v{i}: {}{};", el.name, el.index).unwrap();
+        // DXIL packs attributes with the same interpolation mode together.
+        // Integer varyings are flat, so a float sharing their register is
+        // flat as well. Preserve that layout in the pass-through GS.
+        let flat = el.sysval == 0
+            && elements.iter().any(|other| {
+                other.sysval == 0 && other.register == el.register && other.comp_type != 3
+            });
+        let interpolation = if flat { "nointerpolation " } else { "" };
+        writeln!(hlsl, "{interpolation}{ty}{width} v{i}: {}{};", el.name, el.index).unwrap();
     }
     let position = position.ok_or(E_NOTIMPL)?;
     hlsl.push_str("};\n");

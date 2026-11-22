@@ -87,6 +87,19 @@ def dxbc(program):
     return program[start:start + size]
 
 
+def serialized_state(program):
+    # Frosty's RHI passes the bytes between the SPTR label and the optional-data
+    # trailer to DeserializeStateObjectX. The embedded DXBCs are root signatures.
+    marker = program.find(b"SPTR")
+    start = marker + 4
+    if marker < 0 or len(program) < start + 4 + 14 or program[start:start + 4] != b"\x02\0\0\0":
+        raise ValueError("Expected a packaged version 2 ray state")
+    tail, = struct.unpack_from("<I", program, len(program) - 4)
+    if tail != 14:
+        raise ValueError("Unexpected shader optional-data length")
+    return start, program[start:-tail]
+
+
 def decoder():
     library = find_library("lz4")
     if not library:

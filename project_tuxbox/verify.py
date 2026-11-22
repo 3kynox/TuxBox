@@ -245,7 +245,7 @@ def verify(host, output, adapter, selected=None, samples=1):
                                                    "D3D12XboxSetProcessDebugFlags")})
         for suite, expected in (
             ("features", r"queries=7 binding=[1-3] heap=[12] root=1 dxr=0 allocations=4 footprints=4"),
-            ("heaps", r"heap=32MiB offsets=0,65536 words=256/256 invalid=4 display=3840x2160/RGB10A2 pixel=c00ffc00 volume=45/45"),
+            ("heaps", r"heap=32MiB offsets=0,65536 words=256/256 invalid=4 display=3840x2160/RGB10A2 pixel=c00ffc00 volume=45/45 priorities=4/4 invalid_priority_calls=4"),
             ("placement", r"slot=44 VA-offsets=0,4096,0 passes=2 BC1-blocks=522 cube-blocks=16404 R8-texels=262144 rejected=3"),
             ("copy-resource", r"slot=84 buffer_bytes=1028 texture_subresources=8 nonzero_option=E_NOTIMPL "
                               r"self_copy=E_INVALIDARG source_and_destination=verified placed_uploads=2 placed_dst=verified "

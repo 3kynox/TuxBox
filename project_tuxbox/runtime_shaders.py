@@ -96,10 +96,11 @@ def compile_request(source, key, tools, cache, session):
         target = profile.read_text()
         # Mesh and amplification stages start at shader model 6.5. Linked
         # requests currently repack the outputs of vertex and geometry shaders.
-        profiles = r"(vs|gs)_6_[016]" if linked else r"((cs|ps|vs|gs)_6_[016]|(ms|as)_6_[56])"
+        profiles = r"(vs|gs)_6_[016]" if linked else r"((cs|ps|vs|gs)_6_[016]|(ms|as)_6_[56]|lib_6_3)"
         if not re.fullmatch(profiles, target):
             raise ValueError(f"unsupported compiler profile {target!r}")
-        run_tool([dxc, "-T", target, "-E", "main", "-Fo", output, hlsl], timeout=50)
+        entry = [] if target == "lib_6_3" else ["-E", "main"]
+        run_tool([dxc, "-T", target, *entry, "-Fo", output, hlsl], timeout=50)
         run_tool([dxv, output], timeout=10)
         if not has_dxil_container(output.read_bytes()):
             raise ValueError("compiler returned an invalid DXIL container")

@@ -1,0 +1,137 @@
+// Dispatch the packaged virtual-shadow-map shaders using their embedded root signatures.
+#include "../independent-shaders/context.h"
+
+using namespace shader_control;
+#include "instance_hzb.h"
+
+static std::vector<char> read_file(const std::string &name) {
+    std::ifstream file(name, std::ios::binary);
+    if (!file) throw std::runtime_error(name);
+    return {std::istreambuf_iterator<char>(file), {}};
+}
+
+static void dispatch(Context &ctx, const std::string &name, UINT entry, UINT groups_x, UINT groups_y,
+                     UINT srv_stride, const std::vector<UINT> &strides) {
+    auto dev = ctx.device.Get();
+    auto cooked = read_file(std::to_string(entry) + ".dxbc"), code = read_file(std::to_string(entry) + ".dxil");
+    ComPtr<ID3D12RootSignature> root;
+    check(dev->CreateRootSignature(0, cooked.data(), cooked.size(), IID_PPV_ARGS(&root)), "VSM shader root");
+    D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};
+    pd.pRootSignature = root.Get();
+    pd.CS = {code.data(), code.size()};
+    ComPtr<ID3D12PipelineState> pipeline;
+    check(dev->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pipeline)), "VSM compute pipeline");
+    ComPtr<ID3D12CommandAllocator> alloc;
+    ComPtr<ID3D12GraphicsCommandList> list;
+    check(dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&alloc)), "VSM allocator");
+    check(dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, alloc.Get(), pipeline.Get(), IID_PPV_ARGS(&list)), "VSM list");
+    D3D12_DESCRIPTOR_HEAP_DESC hd{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 96, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0};
+    ComPtr<ID3D12DescriptorHeap> heap;
+    check(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap)), "VSM heap");
+    const UINT step = dev->GetDescriptorHandleIncrementSize(hd.Type);
+    auto cpu = [&](UINT i) { return D3D12_CPU_DESCRIPTOR_HANDLE{heap->GetCPUDescriptorHandleForHeapStart().ptr + i * step}; };
+    auto gpu = [&](UINT i) { return D3D12_GPU_DESCRIPTOR_HANDLE{heap->GetGPUDescriptorHandleForHeapStart().ptr + i * step}; };
+    auto source = [&](const std::vector<char> &bytes) {
+        auto resource = buffer(dev, static_cast<UINT>(bytes.size()), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
+        upload(resource.Get(), bytes.data(), bytes.size());
+        return resource;
+    };
+    // A cached shadow page also reads the previous frame's tables and
+    // metadata. The other page selectors read one table and one CBV.
+    const bool cached = entry == 1228, instance = entry == 3403, cluster = entry == 1793;
+    const bool depth_cull = instance || cluster;
+    const bool cards = entry == 1243 || entry == 1257;
+    InstanceDepth hzb;
+    const std::vector<UINT> srvs = cluster ? std::vector<UINT>{16,16,16,4,4,4,4,16,4,800,4}
+                                           : instance ? std::vector<UINT>{16,16,16,4,4,4,4,800,8,4}
+                                           : cards ? std::vector<UINT>{16, 4, 4, 4}
+                                           : cached ? std::vector<UINT>{4, 4, 4, 8, 4, 4}
+                                           : entry == 3477 ? std::vector<UINT>{16, 800} : std::vector<UINT>{srv_stride};
+    std::vector<ComPtr<ID3D12Resource>> bound;
+    for (UINT i = 0; i < (cached || depth_cull || cards ? 2u : 1u); ++i) {
+        auto bytes = read_file(name + (cached || depth_cull || cards ? ".b" + std::to_string(i) : ".cbv"));
+        bound.push_back(source(bytes));
+        D3D12_CONSTANT_BUFFER_VIEW_DESC cb{bound.back()->GetGPUVirtualAddress(), static_cast<UINT>(bytes.size())};
+        dev->CreateConstantBufferView(&cb, cpu(64 + i));
+    }
+    for (UINT i = 0; i < srvs.size(); ++i) {
+        auto bytes = read_file(name + (srvs.size() > 1 ? ".t" + std::to_string(i) : ".srv"));
+        if (depth_cull && i == 3) { hzb.bind(dev, list.Get(), cpu(i), bytes); continue; }
+        bound.push_back(source(bytes));
+        D3D12_SHADER_RESOURCE_VIEW_DESC view{};
+        view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        view.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        view.Buffer.NumElements = static_cast<UINT>(bytes.size()) / srvs[i];
+        view.Buffer.StructureByteStride = srvs[i];
+        if (entry == 1019) {
+            view.Buffer.StructureByteStride = 0;
+            view.Format = DXGI_FORMAT_R32_UINT;
+        }
+        if (cluster && (i == 8 || i == 10)) {
+            view.Buffer.StructureByteStride = 0;
+            view.Format = DXGI_FORMAT_R32_TYPELESS;
+            view.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+        }
+        dev->CreateShaderResourceView(bound.back().Get(), &view, cpu(i));
+    }
+    std::vector<ComPtr<ID3D12Resource>> inputs(strides.size()), outputs(strides.size()), readbacks(strides.size());
+    std::vector<UINT> sizes(strides.size());
+    for (UINT i = 0; i < strides.size(); ++i) {
+        auto bytes = read_file(name + ".u" + std::to_string(i));
+        sizes[i] = static_cast<UINT>(bytes.size());
+        inputs[i] = source(bytes);
+        outputs[i] = buffer(dev, sizes[i], D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        readbacks[i] = buffer(dev, sizes[i], D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+        list->CopyBufferRegion(outputs[i].Get(), 0, inputs[i].Get(), 0, sizes[i]);
+        transition(list.Get(), outputs[i].Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
+        u.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        u.Buffer.NumElements = sizes[i] / strides[i];
+        const bool typed = (entry == 1019 && i == 0) || (cluster && i == 5) || ((entry == 1213 || entry == 1215 || entry == 1230) && i == 0)
+                        || ((entry == 1219 || entry == 1236) && i == 1);
+        u.Buffer.StructureByteStride = typed ? 0 : strides[i];
+        if (typed) u.Format = DXGI_FORMAT_R32_UINT;
+        if ((instance && i == 0) || (cluster && i >= 2 && i <= 4)) {
+            u.Buffer.NumElements = sizes[i] / 4;
+            u.Buffer.StructureByteStride = 0;
+            u.Format = DXGI_FORMAT_R32_TYPELESS;
+            u.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+        }
+        dev->CreateUnorderedAccessView(outputs[i].Get(), nullptr, &u, cpu(80 + i));
+    }
+    ID3D12DescriptorHeap *heaps[] = {heap.Get(), hzb.samplers.Get()};
+    list->SetDescriptorHeaps(depth_cull ? 2 : 1, heaps);
+    list->SetComputeRootSignature(root.Get());
+    list->SetComputeRootDescriptorTable(0, gpu(0));
+    list->SetComputeRootDescriptorTable(1, gpu(64));
+    list->SetComputeRootDescriptorTable(3, gpu(80));
+    if (depth_cull) list->SetComputeRootDescriptorTable(2, hzb.samplers->GetGPUDescriptorHandleForHeapStart());
+    list->Dispatch(groups_x, groups_y, 1);
+    for (UINT i = 0; i < strides.size(); ++i) {
+        transition(list.Get(), outputs[i].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        list->CopyBufferRegion(readbacks[i].Get(), 0, outputs[i].Get(), 0, sizes[i]);
+    }
+    submit_and_wait(dev, ctx.queue.Get(), list.Get());
+    for (UINT i = 0; i < strides.size(); ++i)
+        write_buffer(readbacks[i].Get(), name + ".out" + std::to_string(i), sizes[i]);
+}
+
+int main() {
+    FILE *receipt{};
+    if (fopen_s(&receipt, "vsm.txt", "wb")) return 2;
+    int status = 0;
+    try {
+        Context ctx(receipt);
+        std::ifstream manifest("vsm.inputs");
+        std::string name;
+        UINT entry, gx, gy, srv, count;
+        while (manifest >> name >> entry >> gx >> gy >> srv >> count) {
+            std::vector<UINT> strides(count);
+            for (UINT &x : strides) manifest >> x;
+            if (!manifest) throw std::runtime_error("incomplete VSM fixture");
+            dispatch(ctx, name, entry, gx, gy, srv, strides);
+        }
+    } catch (const std::exception &err) { std::fprintf(receipt, "error=%s\n", err.what()); status = 1; }
+    std::fclose(receipt);
+    return status;
+}

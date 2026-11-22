@@ -31,6 +31,7 @@ from check_frame_profile import decoded, interface, require, rip
 from check_frosty_profile import BUILD, check_rows, symbols
 from project_tuxbox.inspect import digest
 from project_tuxbox.shader_prep import shader_compiler
+from project_tuxbox.shader_inventory import ARCHIVES, STAGES, decoder, parse_tables, serialized_state
 
 GLOBAL_SHA = "afab84fa891e491d64f1c2a9bdf26a66afc2054aef2cd9110e358402473b4fb2"
 ENTRY = struct.Struct("<QIIB")  # offset in code area, stored bytes, decoded bytes, frequency
@@ -149,24 +150,12 @@ def survey_globals(payload, entries, lz4, xscan, work):
             "translated": translated, "failed": failed, "stages": stages}
 
 
-def ray_state(data, llvm_mc):
-    # On the audited build RHICreateRayTracingShader consumes the SPTR label and strips
-    # FShaderCode's optional-data tail. The remaining span is the Device8 method input.
-    marker = data.index(b"SPTR", 0, 128)
-    tail, = struct.unpack_from("<I", data, len(data) - 4)
-    require(tail == 14, "Unexpected shader optional-data length")
-    blob = data[marker + 4:-tail]
-    version, = struct.unpack_from("<I", blob)
-    require(version == 2, "Unexpected serialized object version")
-    hash64 = 0xcbf29ce484222325
-    for byte in blob:
-        hash64 = (hash64 ^ byte) * 0x100000001b3 & 0xffffffffffffffff
-
-    programs = []
+def state_programs(blob):
+    previous_end = 0
     for pos, root, chunks in containers(blob):
-        require(chunks == ["RTS0"], "Unexpected chunk in embedded root signature")
+        require(chunks == ["RTS0"] and pos >= previous_end, "Unexpected container in ray state")
+        metadata = blob[previous_end:pos]
         cursor = pos + len(root)
-        # Each sampled program follows two size-prefixed records and its own byte count.
         for expected_size in (28, 20):
             size, = struct.unpack_from("<I", blob, cursor)
             require(size == expected_size, "Unexpected program metadata length")
@@ -174,7 +163,20 @@ def ray_state(data, llvm_mc):
         size, = struct.unpack_from("<I", blob, cursor)
         offset = cursor + 4
         code = blob[offset:offset + size]
-        require(len(code) == size and size % 4 == 0, "Invalid native program length")
+        require(size and len(code) == size and size % 4 == 0, "Invalid native program length")
+        previous_end = offset + size
+        yield offset, code, metadata
+
+
+def ray_state(data, llvm_mc):
+    start, blob = serialized_state(data)
+    hash64 = 0xcbf29ce484222325
+    for byte in blob:
+        hash64 = (hash64 ^ byte) * 0x100000001b3 & 0xffffffffffffffff
+
+    programs = []
+    for offset, code, _ in state_programs(blob):
+        size = len(code)
         endpgm = [idx for idx in range(0, size, 4) if code[idx:idx + 4] == bytes.fromhex("000081bf")]
         require(len(endpgm) == 1, "Cannot locate a unique aligned native endpgm")
         encoded = " ".join(f"0x{x:02x}" for x in code[:endpgm[0] + 4])
@@ -186,19 +188,88 @@ def ray_state(data, llvm_mc):
         programs.append({"offset": offset, "bytes": size, "sha256": hashlib.sha256(code).hexdigest(),
                          "gfx1030_opcodes_observed": ops, "decoder_warnings": disassembly.stderr.count("warning:")})
     require(len(programs) == 4, "Ray object program count differs")
-    return {"version": version, "offset_in_decoded_entry": marker + 4, "bytes": len(blob),
+    return {"version": 2, "offset_in_decoded_entry": start, "bytes": len(blob),
             "fnv1a64": f"{hash64:016x}", "sha256": hashlib.sha256(blob).hexdigest(), "programs": programs}
+
+
+def ray_census(mount, work=None, xshader=None, dxc=None):
+    decode = decoder()
+    archives = {}
+    hashes = [Counter() for _ in range(4)]
+    label = "XDXR_TraceRay".encode("utf-16-le")
+    with (mount / "Frosty/Content/Paks/Frosty-XSX.pak").open("rb") as pak:
+        for name, (offset, length, expected) in ARCHIVES.items():
+            pak.seek(offset)
+            data = memoryview(pak.read(length))
+            require(hashlib.sha256(data).hexdigest() == expected, f"Unexpected {name} archive")
+            _, _, entries, _, payload = parse_tables(data)
+            counts = Counter()
+            compiled = set()
+            accepted = 0
+            for entry in ENTRY.iter_unpack(entries):
+                if entry[3] < 6:
+                    continue
+                _, state = serialized_state(decompress(payload, entry, decode))
+                programs = list(state_programs(state))
+                require(len(programs) == 4, "Unexpected ray state program count")
+                for stage, (_, code, metadata) in enumerate(programs):
+                    if stage < 3:
+                        require(metadata.count(label) == 2, "Unrecognized traversal program label")
+                    hashes[stage][hashlib.sha256(code).hexdigest()] += 1
+                counts[STAGES[entry[3]]] += 1
+                if xshader:
+                    raw, hlsl, dxil = (work / f"state.{ext}" for ext in ("sptr", "hlsl", "dxil"))
+                    raw.write_bytes(state)
+                    run = subprocess.run([xshader, raw, "--hlsl-out", hlsl], capture_output=True)
+                    if run.returncode:
+                        require(run.returncode == 1 and run.stderr.strip(),
+                                f"Ray translator failed unexpectedly: {run.stderr.decode(errors='replace')}")
+                        continue
+                    key = digest(hlsl)
+                    if key not in compiled:
+                        subprocess.run([dxc, "-T", "lib_6_3", "-O3", "-Fo", dxil, hlsl], check=True)
+                        compiled.add(key)
+                    accepted += 1
+            archives[name] = {"archive_sha256": expected, "entries": dict(counts)}
+            if xshader:
+                archives[name]["desktop_translation"] = {"compiled_entries": accepted,
+                    "unsupported_entries": sum(counts.values()) - accepted, "distinct_libraries": len(compiled)}
+    return {
+        "archives": archives,
+        "serialized_state_objects": sum(sum(a["entries"].values()) for a in archives.values()),
+        "layout": "Version 2. Each of the four native programs follows a DXBC root signature containing only RTS0 and two size-prefixed metadata records. Each of the first three program headers contains the UTF-16 name XDXR_TraceRay twice.",
+        "traversal_programs_by_position_and_sha256": [dict(group) for group in hashes[:3]],
+        "distinct_fourth_programs": len(hashes[3]),
+    }
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mount", type=Path)
+    parser.add_argument("--ray-census-only", action="store_true", help="inspect serialized ray states in both archives")
+    parser.add_argument("--compile-ray-census", action="store_true",
+                        help="also run xshader and DXC over the full ray state census")
     parser.add_argument("--xshader", type=Path)
     parser.add_argument("--xscan", type=Path, help="also survey HLSL translation across the non-ray global archive")
     parser.add_argument("--dxc", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--compat-log", type=Path, help="verify the retail DeserializeStateObjectX input against the archive")
     args = parser.parse_args()
+    if args.ray_census_only or args.compile_ray_census:
+        xshader = (args.xshader or shader_compiler()).resolve() if args.compile_ray_census else None
+        dxc = Path(find_dxc(args.dxc)).resolve() if args.compile_ray_census else None
+        with TemporaryDirectory() as temp:
+            work = Path(temp)
+            # A full archive scan can overlap a compiler rebuild.
+            if xshader:
+                xshader = Path(shutil.copy2(xshader, work / "xshader"))
+            results = {"device_contract": device_calls(args.mount), **ray_census(args.mount, work, xshader, dxc)}
+            if xshader:
+                results["xshader_sha256"] = digest(xshader)
+                results["dxc_sha256"] = digest(dxc)
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(results, indent=2) + "\n")
+        return
     llvm_mc = shutil.which("llvm-mc")
     require(llvm_mc, "llvm-mc is required")
     xshader = args.xshader.resolve() if args.xshader else shader_compiler()

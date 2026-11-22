@@ -14,6 +14,7 @@ use crate::commands::{wrap_command_list, wrap_command_queue};
 use crate::proxy::{Proxy, Slot, Slots, allocate, check_output, child_slots, object_slots, unwrap};
 
 mod allocation;
+pub(crate) mod blas;
 pub(crate) mod compute;
 pub(crate) mod depth;
 mod descriptor_copy;
@@ -26,8 +27,12 @@ pub(crate) mod indirect;
 pub(crate) mod media;
 pub(crate) mod placement;
 pub(crate) mod queries;
+pub(crate) mod ray_build;
+mod ray_compile;
+mod ray_pipeline;
 pub(crate) mod rectangle;
 mod shader_cache;
+mod state_object;
 pub(crate) mod stencil;
 mod stream;
 mod views;
@@ -54,12 +59,14 @@ impl Backing {
 }
 pub(crate) struct ResourceState {
     backing: Backing,
+    blas_buffer: Option<blas::Registration>,
     stencil: std::sync::OnceLock<std::sync::Arc<stencil::Surface>>,
 }
 impl From<Backing> for ResourceState {
     fn from(backing: Backing) -> Self {
         Self {
             backing,
+            blas_buffer: None,
             stencil: Default::default(),
         }
     }
@@ -72,6 +79,13 @@ impl core::ops::Deref for ResourceState {
 }
 type Resource = Proxy<ID3D12Resource, ResourceState>;
 type Out = *mut *mut c_void;
+
+pub(crate) unsafe fn ray_state<'a>(
+    guest: *mut c_void,
+    owner: *mut c_void,
+) -> Option<&'a ID3D12StateObject> {
+    unsafe { state_object::native(guest, owner) }
+}
 
 fn identity(device: &Device) -> InterfaceRef<'_, IUnknown> {
     // SAFETY: A device proxy begins with the device table, whose first three
@@ -450,7 +464,7 @@ unsafe extern "system" fn create_resource(
     } {
         return error.code();
     }
-    unsafe { depth::wrap(this, heap, desc, primary.as_ref(), native, out) }
+    unsafe { depth::wrap(this, heap, desc, primary.as_ref(), initial, native, out) }
 }
 
 unsafe extern "system" fn create_fence(
@@ -706,9 +720,26 @@ static DEVICE: Slots<160> = {
     slots[79] = crate::slot!(frame_events::schedule);
     slots[80] = crate::slot!(frame_events::wait);
     slots[81] = crate::slot!(frame_events::statistics);
+    slots[85] = crate::slot!(heap::residency_priority);
     slots[86] = crate::slot!(stream::create_pipeline);
+    slots[101] = crate::slot!(ray_pipeline::create);
+    slots[102] = crate::slot!(ray_build::prebuild);
+    slots[106] = crate::slot!(ray_pipeline::add);
+    slots[115] = crate::slot!(state_object::deserialize);
     slots
 };
+
+pub(crate) const DEVICE_INTERFACES: &[GUID] = &[
+    ID3D12Device::IID,
+    ID3D12Device1::IID,
+    ID3D12Device2::IID,
+    ID3D12Device3::IID,
+    ID3D12Device4::IID,
+    ID3D12Device5::IID,
+    ID3D12Device6::IID,
+    ID3D12Device7::IID,
+    state_object::DEVICE8,
+];
 
 /// # Safety
 /// `adapter` must be null or a borrowed DXGI adapter. The caller must supply
@@ -732,7 +763,15 @@ pub(crate) unsafe fn create(adapter: *mut c_void, requested: GUID, out: Out) -> 
     crate::diagnostics::device_created(&native);
     // SAFETY: the caller holds the selected adapter through factory return.
     let pipeline_device = native.cast::<ID3D12Device2>().ok();
-    let interfaces: &'static [GUID] = if pipeline_device.is_some() {
+    let interfaces: &'static [GUID] = if native.cast::<ID3D12Device8>().is_ok() {
+        DEVICE_INTERFACES
+    } else if native.cast::<ID3D12Device7>().is_ok() {
+        &DEVICE_INTERFACES[..8]
+    } else if native.cast::<ID3D12Device6>().is_ok() {
+        &DEVICE_INTERFACES[..7]
+    } else if native.cast::<ID3D12Device5>().is_ok() {
+        &DEVICE_INTERFACES[..6]
+    } else if pipeline_device.is_some() {
         &[ID3D12Device::IID, ID3D12Device1::IID, ID3D12Device2::IID]
     } else {
         &[ID3D12Device::IID]
