@@ -168,7 +168,7 @@ def selection(entry, count, extra):
         "pages": count, "selected": len(base), "additional_pages": len(second), "initial_indirect_x": 32}
 
 
-def visibility_instance(visible, occluders, protected=None):
+def visibility_instance(visible, occluders, protected=None, post=False, stats_variant=False):
     # Exercise the packaged shader with an actual depth texture and visibility UAVs.
     with TemporaryDirectory(dir=ROOT / "build") as tmp:
         scene = Path(tmp) / "scene"
@@ -184,8 +184,26 @@ def visibility_instance(visible, occluders, protected=None):
     depth = f32(protected if protected is not None else .25)
     seed = [[0x77] * (9 * 9 * 4), [depth] * 81,
             [0xa5c3e749] * 512, [0] * 64, [0xa5c3e749] * 512, [0] * 22]
+    if post:
+        srv += [[word for lane in visible for word in (lane, 0)] or [0, 0],
+                [1, 1, 1, len(visible)] + [0xa5c3e749] * 4]
+        seed = seed[:2] + [[0xa5c3e749] * 512, [0xa5c3e749] * 11]
+        seed[3][9:11] = [3, 29]
+    if stats_variant:
+        seed += [[0xa5c3e749] * 14]
+        seed[-1][8] = 43
     expected = [row.copy() for row in seed]
-    if not occluders:
+    if stats_variant and post:
+        expected[-1][7] = len(visible)
+        expected[-1][8] = 43 + (0 if occluders else len(visible))
+    if stats_variant and not post and not occluders:
+        expected[-1][4] = 0xa5c3e749 + len(visible)
+    if post and not occluders:
+        start = (32 << 4) // 8 // 4 + 128 * 2 + 3 * 3
+        for i, lane in enumerate(visible):
+            expected[2][start + i * 3:start + i * 3 + 3] = [(lane << 3) | 5, 0, 255]
+        expected[3][9:11] = [3 + len(visible), 29 + len(visible)]
+    elif not post and not occluders:
         expected[4][8:16] = [9, 0, 249, 0, 257, 0, 505, 0]
         expected[5][4:6] = [4, 4]
     elif protected is None:
@@ -195,7 +213,7 @@ def visibility_instance(visible, occluders, protected=None):
     for i, width in ((0, 36), (1, 9)):
         expected[i] = [v for y in range(9) for v in
                        (expected[i][y * width:(y + 1) * width] + [0] * (64 - width))]
-    return cb, srv, seed, [16, 4, 8, 4, 4, 44], 16, 1, 1, expected, {
+    return cb, srv, seed, (([16, 4, 4, 44] if post else [16, 4, 8, 4, 4, 44]) + ([56] if stats_variant else [])), 16, 1, 1, expected, {
         "visible": visible, "occluders": occluders, "protected": protected}
 
 
@@ -205,7 +223,7 @@ def main():
     p.add_argument("--prefix", type=Path)
     p.add_argument("--proton", type=Path)
     p.add_argument("--xshader", type=Path)
-    p.add_argument("--entry", type=int, choices=(1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3403, 3477),
+    p.add_argument("--entry", type=int, choices=(1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3397, 3398, 3399, 3403, 3412, 3477),
                    help="run the controls for one archive entry")
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
@@ -264,6 +282,10 @@ def main():
         ("protected", [1, 32], [1, 32], 1.0),
     ):
         cases["visibility_" + name] = (3396, visibility_instance(visible, occluders, protected))
+        cases["visibility_post_" + name] = (3397, visibility_instance(visible, occluders, protected, post=True))
+        for entry in (3398, 3399, 3412):
+            cases[f"visibility_{entry}_" + name] = (entry, visibility_instance(
+                visible, occluders, protected, post=entry != 3399, stats_variant=True))
     if args.entry is not None:
         cases = {name: case for name, case in cases.items() if case[0] == args.entry}
         if not cases:
@@ -287,7 +309,7 @@ def main():
                     words(work / f"{name}.b{i}", constants)
             else:
                 words(work / (name+".cbv"), cb)
-            if entry in (1016, 1243, 1257, 1793, 3477, 3396, 3403):
+            if entry in (1016, 1243, 1257, 1793, 3477, 3396, 3397, 3398, 3399, 3403, 3412):
                 for i, records in enumerate(srv):
                     words(work / f"{name}.t{i}", records)
             else:
@@ -312,7 +334,7 @@ def main():
                 if len(array) != len(actual):
                     diffs.append([i, "missing readback"])
                 else:
-                    if entry == 3396 and i < 2:
+                    if entry in (3396, 3397, 3398, 3399, 3412) and i < 2:
                         width = 36 if i == 0 else 9
                         for y in range(9):
                             actual[y * 64 + width:(y + 1) * 64] = [0] * (64 - width)

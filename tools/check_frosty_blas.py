@@ -150,8 +150,6 @@ def main():
     args = parser.parse_args()
     if args.shadow_tlas and not args.sphere_vertices:
         parser.error("--shadow-tlas needs --sphere-vertices")
-    if args.shadow_tlas and args.gpu_instances:
-        parser.error("--shadow-tlas and --gpu-instances use different instance fixtures")
     if args.gpu_instances and (not args.provider or args.copy_only or args.prebuild_only):
         parser.error("--gpu-instances requires a provider and a build run")
     if args.single_build and (not args.provider or args.prebuild_only or args.copy_only):

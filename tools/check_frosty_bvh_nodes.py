@@ -46,14 +46,12 @@ def box_reference(node, box16, origin, inverse, extent, sort_children):
                                (bound[i + 3] - origin[i]) * inverse[i]) for i in range(3)))
         far = min(extent, *(max((bound[i] - origin[i]) * inverse[i],
                                 (bound[i + 3] - origin[i]) * inverse[i]) for i in range(3)))
-        if node[child] != INVALID and near <= far:
-            results.append((near, child, node[child]))
+        results.append((near, node[child] if near <= far else INVALID))
     if sort_children:
-        results.sort()
-    else:
-        hits = {row[1]: row[2] for row in results}
-        return [hits.get(i, INVALID) for i in range(4)]
-    return [row[2] for row in results] + [INVALID] * (4 - len(results))
+        for a, b in ((0, 2), (1, 3), (0, 1), (2, 3), (1, 2)):
+            if results[a][1] == INVALID or (results[b][1] != INVALID and results[b][0] < results[a][0]):
+                results[a], results[b] = results[b], results[a]
+    return [item[1] for item in results]
 
 
 def subtract(a, b):
@@ -102,6 +100,7 @@ def main():
     inputs = [(box_node(bounds, kind), kind, "synthetic") for kind in (True, False)]
     source_hash = None
     retail_triangle = None
+    retail_pair = None
     if args.serialized:
         data = args.serialized.read_bytes()
         source_hash = hashlib.sha256(data).hexdigest()
@@ -120,6 +119,22 @@ def main():
             raise ValueError("serialized leaf extends outside the input")
         positions = struct.unpack_from("<9f", body, leaf_offset)
         retail_triangle = tuple(tuple(positions[3 * i:3 * i + 3]) for i in range(3))
+        leaf_count = struct.unpack_from("<I", body, 56)[0]
+        for leaf_index in range(leaf_count):
+            raw_leaf = body[leaf_offset + leaf_index * 64:leaf_offset + (leaf_index + 1) * 64]
+            if len(raw_leaf) != 64:
+                break
+            leaf_words = words(raw_leaf)
+            selectors = leaf_words[15]
+            if not (leaf_words[12] & 0x80 and (selectors & 0xff) in (9, 2, 4)
+                    and ((selectors >> 8) & 0xff) in (9, 2, 4)):
+                continue
+            vertices = struct.unpack_from("<12f", raw_leaf)
+            vertices = [tuple(vertices[3*i:3*i+3]) for i in range(4)]
+            edge_a, edge_b = subtract(vertices[3], vertices[1]), subtract(vertices[2], vertices[1])
+            if abs(cross(edge_a, edge_b)[2]) > 1e-4:
+                retail_pair = (leaf_words + [0] * 16, vertices)
+                break
     boxes = []
     for node, box16, label in inputs:
         for origin, inverse, extent, sorting in [
@@ -132,6 +147,16 @@ def main():
             ((0, 0, -4), (0.25, 0.25, 1), 100, False),
         ]:
             boxes.append((node, box16, label, origin, inverse, extent, sorting))
+    # The network can reorder equal distances when an earlier lane misses.
+    # Keep these distinct from a stable sort even though native tie order is
+    # not established without an instruction-level hardware oracle.
+    ties = [(10, 10, 2, 12, 12, 4), (-1, -1, 2, 1, 1, 4),
+            (-1, -1, 2, 1, 1, 4), (-1, -1, 2, 1, 1, 4)]
+    for box16 in (True, False):
+        node = box_node(ties, box16)
+        node[3] = 36
+        boxes.append((node, box16, "equal-distance lanes", (0, 0, -4),
+                      (1, 1, 1), 100, True))
     triangles = [
         ((0.25, 0.25, -1), (0, 0, 1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
         ((0.25, 0.25, 1), (0, 0, -1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
@@ -162,12 +187,38 @@ def main():
         shader += f"{{ uint node[32] = {{ {values} }}; float4 r = tb_bvh_triangle_leaf(node, {vector(case[0])}, {vector(case[1])});"
         shader += "".join(f" output[{index + i}] = asuint(r[{i}]);" for i in range(4)) + " }\n"
         expected.append(("triangle", "synthetic", triangle_reference(*case)))
+    # Validate each documented selector against independently rotated vertices.
+    # The two triangles share an edge but use opposite vertex winding.
+    paired_cases = []
+    corners = [(0., 0., 0.), (1., 0., 0.), (0., 1., 0.), (1., 1., 0.)]
+    for side in (0, 1):
+        for selector in (9, 2, 4):
+            node = words(struct.pack("<12f", *(v for vertex in corners for v in vertex)).ljust(128, b"\0"))
+            node[15] = 9 | (9 << 8)
+            node[15] = (node[15] & ~(0xff << (8 * side))) | (selector << (8 * side))
+            paired_cases.append((node, corners, side, selector, "synthetic pair"))
+    if retail_pair:
+        node, corners = retail_pair
+        paired_cases.append((node, corners, 1, (node[15] >> 8) & 0xff, "serialized pair"))
+    for node, corners, side, selector, label in paired_cases:
+        raw_corners = ([0, 1, 2], [1, 3, 2])[side]
+        rotation = {9: 0, 2: 1, 4: 2}[selector]
+        ordered = raw_corners[rotation:] + raw_corners[:rotation]
+        vertices = [corners[i] for i in ordered]
+        center = tuple(sum(v[axis] for v in vertices) / 3 for axis in range(3))
+        origin = (center[0], center[1], center[2] - 16)
+        direction = (0, 0, 1)
+        values = ", ".join(f"0x{word:08x}u" for word in node)
+        index = len(expected) * 4
+        shader += f"{{ uint node[32] = {{ {values} }}; float4 r = tb_bvh_paired_triangle(node, {side}u, {vector(origin)}, {vector(direction)});"
+        shader += "".join(f" output[{index + i}] = asuint(r[{i}]);" for i in range(4)) + " }\n"
+        expected.append(("triangle", label, triangle_reference(origin, direction, *vertices)))
     shader += "}\n"
     if len(expected) * 4 > 192:
         raise ValueError("control exceeds the guarded UAV")
     report = {"scope": "Finite-input BVH node math compared with CPU calculations; no native instruction oracle",
               "serialized_sha256": source_hash, "box_cases": len(boxes),
-              "triangle_cases": len(triangles), "adapters": {}}
+              "triangle_cases": len(triangles) + len(paired_cases), "adapters": {}}
     with TemporaryDirectory(prefix="tuxbox-bvh-node-") as directory:
         work = Path(directory)
         hlsl, cso = work / "node.hlsl", work / "node.cso"

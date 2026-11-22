@@ -402,7 +402,11 @@ static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, 
     ComPtr<ID3D12Resource> instance_buffer;
     UINT instance_count = static_cast<UINT>(instances.size());
 #ifdef TUXBOX_GPU_INSTANCE_PROBE
+#ifdef TUXBOX_SHADOW_TLAS_PROBE
+    auto gpu_instances = instances;
+#else
     std::array<D3D12_RAYTRACING_INSTANCE_DESC, 3> gpu_instances{instances[0], instances[1], instances[0]};
+#endif
     ComPtr<ID3D12Resource> tiny;
     if (guest_build && !sphere) {
         tiny = buffer(provider.Get(), 192, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, true);

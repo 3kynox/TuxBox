@@ -31,15 +31,17 @@ uint4 tb_bvh_boxes(uint node[32], bool box16, float3 origin,
         distance[i] = nearT;
     }
     if (sortChildren) {
-        // Stable insertion sort keeps the node order for equal entry distances.
-        [unroll] for (uint i = 1; i < 4; ++i) {
-            [unroll] for (uint j = i; j > 0; --j) {
-                bool swap = child[j - 1] == 0xffffffffu ||
-                    (child[j] != 0xffffffffu && distance[j] < distance[j - 1]);
-                if (swap) {
-                    uint c = child[j - 1]; child[j - 1] = child[j]; child[j] = c;
-                    float d = distance[j - 1]; distance[j - 1] = distance[j]; distance[j] = d;
-                }
+        // Four-way comparator network. Equal keys can change relative order;
+        // tie order has not been checked against the native instruction.
+        static const uint left[5] = {0, 1, 0, 2, 1};
+        static const uint right[5] = {2, 3, 1, 3, 2};
+        [unroll] for (uint i = 0; i < 5; ++i) {
+            uint a = left[i], b = right[i];
+            bool swap = child[a] == 0xffffffffu ||
+                (child[b] != 0xffffffffu && distance[b] < distance[a]);
+            if (swap) {
+                uint c = child[a]; child[a] = child[b]; child[b] = c;
+                float d = distance[a]; distance[a] = distance[b]; distance[b] = d;
             }
         }
     }
@@ -77,4 +79,23 @@ float4 tb_bvh_triangle_leaf(uint node[32], float3 origin, float3 direction) {
     float3 b = asfloat(uint3(node[3], node[4], node[5]));
     float3 c = asfloat(uint3(node[6], node[7], node[8]));
     return tb_bvh_triangle(origin, direction, a, b, c);
+}
+
+// TRI0 and TRI1 of an uncompressed paired leaf, with the verified selector
+// values 9, 2 and 4. Callers must validate the node type and selector first.
+// Types TRI2/TRI3 and compressed triangle layouts remain unsupported.
+float4 tb_bvh_paired_triangle(uint node[32], uint side,
+                              float3 origin, float3 direction) {
+    uint ia = side == 0 ? 0 : 1;
+    uint ib = side == 0 ? 1 : 3;
+    uint ic = 2;
+    float3 a = asfloat(uint3(node[3 * ia], node[3 * ia + 1], node[3 * ia + 2]));
+    float3 b = asfloat(uint3(node[3 * ib], node[3 * ib + 1], node[3 * ib + 2]));
+    float3 c = asfloat(uint3(node[3 * ic], node[3 * ic + 1], node[3 * ic + 2]));
+    float4 result = tb_bvh_triangle(origin, direction, a, b, c);
+    uint selector = (node[15] >> (8 * side)) & 0xffu;
+    float bary[3] = {result.y - result.z - result.w, result.z, result.w};
+    result.z = bary[selector & 3u];
+    result.w = bary[(selector >> 2) & 3u];
+    return result;
 }

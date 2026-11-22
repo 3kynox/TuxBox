@@ -243,6 +243,11 @@ impl Instances {
         }
     }
 
+    // Each recorded fixup owns its heap, so other lists can execute with older
+    // tables concurrently. D3D12 requires a direct list's previous execution to
+    // complete before that same list is submitted again; only then may its heap
+    // be updated for replay. The output retained by the allocator also retains
+    // the heap and table if the command list is reset while execution is pending.
     pub(crate) unsafe fn prepare(&self, owner: &IUnknown) -> Result<()> {
         let mut latest = lock(&self.latest);
         let device = unsafe { guest(owner) };

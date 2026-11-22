@@ -41,7 +41,11 @@ pub(super) fn resources(em: &mut Emitter<'_>) -> Result<(), String> {
     for (i, op) in em.insns.iter().enumerate().filter(|(_,op)| op.mnemonic == "image_atomic_umax") {
         // This variant uses a 32-bit visibility depth texture at u1 and
         // consumes the old value returned by the atomic max.
-        if matches_program(&em.ex.isa, 6164, 0xc9a78b1d5994aff1)
+        if (matches_program(&em.ex.isa, 6164, 0xc9a78b1d5994aff1)
+            || matches_program(&em.ex.isa, 5568, 0x136f372983992807)
+            || matches_program(&em.ex.isa, 6964, 0x1729a67e96889c85)
+            || matches_program(&em.ex.isa, 6900, 0xbc567b72ca1da0bf)
+            || matches_program(&em.ex.isa, 6884, 0x910d535f5eff32df))
             && em.res.get(&i).map(Vec::as_slice) == Some(&[Res::Uav(1,1)][..])
             && matches!(op.raw.as_slice(), [0xf05c3108, _])
         {

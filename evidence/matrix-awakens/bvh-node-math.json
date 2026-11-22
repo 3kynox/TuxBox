@@ -1,22 +1,22 @@
 {
   "scope": "Finite-input BVH node math compared with CPU calculations; no native instruction oracle",
   "serialized_sha256": "38bd71be9dd00e74952a9612f87f7df37a1617ca9f9847bb531b40bc5a4ad6af",
-  "box_cases": 21,
-  "triangle_cases": 9,
+  "box_cases": 23,
+  "triangle_cases": 16,
   "adapters": {
     "AMD": {
       "adapter": "1002:13c0",
       "exit": 0,
-      "cases": 30,
-      "guard_words": 264
+      "cases": 39,
+      "guard_words": 228
     },
     "NVIDIA": {
       "adapter": "10de:2705",
       "exit": 0,
-      "cases": 30,
-      "guard_words": 264
+      "cases": 39,
+      "guard_words": 228
     }
   },
-  "hlsl_sha256": "0ed8caddce8f3642d8bc6ba89e9d038b86c0d2a1187b0294da75307dbd1518bd",
-  "dxil_sha256": "a6f63a886b9a115916eecf3138a0b519aa028622d2272971bbb9802bfaf35ae4"
+  "hlsl_sha256": "cd94f1b23c5317875ea3a03ba8eca07fcac03aadbe911fe13822e1c81fa04c40",
+  "dxil_sha256": "d9f0e44b490c633946415f82b1f69ba130879d0f18f184ad008fc5db11cd127a"
 }
