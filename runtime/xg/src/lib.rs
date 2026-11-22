@@ -286,6 +286,96 @@ unsafe extern "system" fn create_texture_1d(
     unsafe { allocate_computer(plane, 2, out) }
 }
 
+/// Xbox-specific 3D texture descriptor.
+#[repr(C)]
+pub struct Texture3DDesc {
+    width: u32,
+    height: u32,
+    depth: u32,
+    mips: u32,
+    format: u32,
+    usage: u32,
+    bind_flags: u32,
+    cpu_access: u32,
+    misc_flags: u32,
+    swizzle: u32,
+    pitch: u32,
+}
+
+fn texture_3d_plane(desc: &Texture3DDesc) -> Result<Plane, i32> {
+    // Only the native-verified linear, single-plane color subset is supported.
+    if !matches!(desc.usage, 0 | 1 | 3)
+        || desc.bind_flags != 8
+        || desc.cpu_access != 0
+        || desc.misc_flags != 0
+        || desc.swizzle != 0
+        || desc.pitch != 0
+        || desc.mips == 0
+        || (70..=84).contains(&desc.format)
+        || (94..=99).contains(&desc.format)
+    {
+        return Err(E_NOTIMPL);
+    }
+    if desc.width > 2048 || desc.height > 2048 || desc.depth > 2048 {
+        return Err(E_NOTIMPL);
+    }
+    // The existing 2D plane calculator determines levels from width/height;
+    // depth-only mip chains need their own validated implementation.
+    if desc.width != 0 && desc.height != 0 && desc.mips > 1 + desc.width.max(desc.height).ilog2() {
+        return Err(E_NOTIMPL);
+    }
+    let mips = u16::try_from(desc.mips).map_err(|_| E_INVALIDARG)?;
+    let depth = u16::try_from(desc.depth).map_err(|_| E_INVALIDARG)?;
+    Plane::compute_linear_volume(&Desc {
+        dimension: 3,
+        alignment: 0,
+        width: u64::from(desc.width),
+        height: desc.height,
+        slices: depth,
+        mips,
+        format: desc.format,
+        samples: 1,
+        quality: 0,
+        layout: 256,
+        flags: 0,
+    })
+}
+
+/// # Safety
+/// Non-null pointers must reference a readable descriptor and a disjoint,
+/// writable layout. Unsupported descriptor combinations return an error.
+#[unsafe(export_name = "XGComputeTexture3DLayout")]
+unsafe extern "system" fn compute_texture_3d(desc: *const Texture3DDesc, out: *mut Layout) -> i32 {
+    if desc.is_null() || out.is_null() {
+        return E_INVALIDARG;
+    }
+    let plane = match texture_3d_plane(unsafe { &*desc }) {
+        Ok(plane) => plane,
+        Err(hr) => return hr,
+    };
+    unsafe { write_texture_layout(out, plane, 4) };
+    S_OK
+}
+
+/// # Safety
+/// Non-null pointers must reference a readable descriptor and a disjoint,
+/// writable output pointer. Release a successful object through slot 1.
+#[unsafe(export_name = "XGCreateTexture3DComputer")]
+unsafe extern "system" fn create_texture_3d(
+    desc: *const Texture3DDesc,
+    out: *mut *mut Computer,
+) -> i32 {
+    if desc.is_null() || out.is_null() {
+        return E_INVALIDARG;
+    }
+    unsafe { out.write(ptr::null_mut()) };
+    let plane = match texture_3d_plane(unsafe { &*desc }) {
+        Ok(plane) => plane,
+        Err(hr) => return hr,
+    };
+    unsafe { allocate_computer(plane, 4, out) }
+}
+
 /// # Safety
 /// `out` must be a valid writable pointer, disjoint from the new object.
 unsafe fn allocate_computer(plane: Plane, dimension: u32, out: *mut *mut Computer) -> i32 {
@@ -322,9 +412,12 @@ unsafe extern "system" fn element_offset(
     if plane != 0 || sample != 0 {
         return u64::MAX;
     }
-    this.plane
-        .element_offset_in_slice(slice, mip, x, y)
-        .unwrap_or(u64::MAX)
+    let offset = if this.dimension == 4 {
+        this.plane.element_offset_in_volume(slice, mip, x, y)
+    } else {
+        this.plane.element_offset_in_slice(slice, mip, x, y)
+    };
+    offset.unwrap_or(u64::MAX)
 }
 
 /// Returns an owned texture computer for a supported single-plane descriptor.

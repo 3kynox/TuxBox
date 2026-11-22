@@ -81,6 +81,23 @@ const _: () = {
 };
 
 impl Plane {
+    /// Compute a single-plane, linear 3D texture layout. `desc.slices` is the
+    /// original volume depth. Mip storage is padded to that original depth,
+    /// while each mip's visible depth shrinks with the level.
+    pub fn compute_linear_volume(desc: &Desc) -> Result<Self, i32> {
+        if desc.layout != LINEAR || desc.slices > 2048 {
+            return Err(E_NOTIMPL);
+        }
+        let depth = u32::from(desc.slices);
+        let mut plane = Self::compute(desc)?;
+        let mip_count = plane.mip_count() as usize;
+        for (level, mip) in plane.mips[..mip_count].iter_mut().enumerate() {
+            mip.size = mip.size.checked_mul(u64::from(depth)).ok_or(E_INVALIDARG)?;
+            mip.depth = (depth >> level).max(1);
+        }
+        Ok(plane)
+    }
+
     pub fn compute(desc: &Desc) -> Result<Self, i32> {
         let (block, element_bytes, tile_width, tile_height): (u32, u32, u32, u32) =
             match desc.format {
@@ -218,6 +235,14 @@ impl Plane {
 
     pub fn element_offset(&self, level: u32, x: u64, y: u32) -> Option<u64> {
         self.element_offset_in_slice(0, level, x, y)
+    }
+
+    /// Element address in a 3D plane returned by `compute_linear_volume`.
+    pub fn element_offset_in_volume(&self, z: u32, level: u32, x: u64, y: u32) -> Option<u64> {
+        if z >= self.mips.get(level as usize)?.depth {
+            return None;
+        }
+        self.element_offset_in_slice(z, level, x, y)
     }
 
     pub fn element_offset_in_slice(&self, slice: u32, level: u32, x: u64, y: u32) -> Option<u64> {
