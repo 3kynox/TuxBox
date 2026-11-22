@@ -94,7 +94,7 @@ static D3D12_TEXTURE_COPY_LOCATION uploadLocation(ID3D12Resource *b,
                                  width * sizeof(Color)};
   return l;
 }
-static void run(FILE *f, UINT capacity) {
+static void run(FILE *f, UINT capacity, bool depth_only) {
   auto module = LoadLibraryW(L"d3d12_xs.dll");
   using Create = HRESULT(WINAPI *)(IUnknown *, const void *, REFIID, void **);
   auto make = module ? reinterpret_cast<Create>(
@@ -124,26 +124,24 @@ static void run(FILE *f, UINT capacity) {
         "Xbox compute slot 62");
   ComPtr<ID3D12Device> dev;
   check(root->GetDevice(IID_PPV_ARGS(&dev)), "native device");
-  ComPtr<IDXGIFactory4> factory;
-  ComPtr<IDXGIAdapter1> adapter;
-  DXGI_ADAPTER_DESC1 ad{};
-  check(CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "factory");
-  check(
-      factory->EnumAdapterByLuid(dev->GetAdapterLuid(), IID_PPV_ARGS(&adapter)),
-      "adapter");
-  check(adapter->GetDesc1(&ad), "descriptor");
-  std::fprintf(f, "adapter=%04x:%04x\n", ad.VendorId, ad.DeviceId);
   auto handles = heap(dev.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 96),
        samplers = heap(dev.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, 16);
   auto stride = dev->GetDescriptorHandleIncrementSize(
       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  using GpuHandle = UINT64(WINAPI *)(ID3D12DescriptorHeap *);
+  const auto cpuStart =
+      frame_abi::method<frame_abi::CpuHandle>(handles.Get(), 9)(handles.Get());
+  const auto gpuStart =
+      frame_abi::method<GpuHandle>(handles.Get(), 10)(handles.Get());
+  const auto samplerCpu = frame_abi::method<frame_abi::CpuHandle>(
+      samplers.Get(), 9)(samplers.Get());
+  const auto samplerGpu =
+      frame_abi::method<GpuHandle>(samplers.Get(), 10)(samplers.Get());
   auto cpu = [&](UINT i) {
-    return D3D12_CPU_DESCRIPTOR_HANDLE{
-        handles->GetCPUDescriptorHandleForHeapStart().ptr + i * stride};
+    return D3D12_CPU_DESCRIPTOR_HANDLE{cpuStart + i * stride};
   };
   auto gpu = [&](UINT i) {
-    return D3D12_GPU_DESCRIPTOR_HANDLE{
-        handles->GetGPUDescriptorHandleForHeapStart().ptr + i * stride};
+    return D3D12_GPU_DESCRIPTOR_HANDLE{gpuStart + i * stride};
   };
   std::array<ComPtr<ID3D12Resource>, 4> tex;
   std::array<ComPtr<ID3D12Resource>, 3> cb;
@@ -193,10 +191,9 @@ static void run(FILE *f, UINT capacity) {
   sd.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
   sd.MaxLOD = D3D12_FLOAT32_MAX;
   for (UINT i = 0; i < 2; ++i)
-    dev->CreateSampler(&sd,
-                       {samplers->GetCPUDescriptorHandleForHeapStart().ptr +
-                        i * dev->GetDescriptorHandleIncrementSize(
-                                D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER)});
+    dev->CreateSampler(
+        &sd, {samplerCpu + i * dev->GetDescriptorHandleIncrementSize(
+                                   D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER)});
   std::array<UINT, 2 * words> seed;
   seed.fill(0xabcd9876);
   seed[0] = 1;
@@ -227,13 +224,16 @@ static void run(FILE *f, UINT capacity) {
   check(dev->CreateCommandQueue(&q, IID_PPV_ARGS(&queue)), "queue");
   check(dev->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&allocator)),
         "allocator");
-  check(dev->CreateCommandList(0, q.Type, allocator.Get(), pso.Get(),
-                               IID_PPV_ARGS(&list)),
+  const UINT params[]{static_cast<UINT>(q.Type), 0, 1, 0};
+  check(frame_abi::method<frame_abi::CreateList>(dev.Get(), 73)(
+            dev.Get(), params, allocator.Get(), pso.Get(), IID_PPV_ARGS(&list)),
         "list");
+  check(list->Reset(allocator.Get(), pso.Get()), "reset list");
   for (UINT i = 0; i < 4; ++i) {
     auto src = uploadLocation(texUp.Get(), i * texBytes),
          dst = imageLocation(tex[i].Get());
-    list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    frame_abi::method<frame_abi::Copy>(list.Get(), 83)(list.Get(), &dst, 0, 0,
+                                                       0, &src, nullptr, 0);
     transition(list.Get(), tex[i].Get(), D3D12_RESOURCE_STATE_COPY_DEST,
                i < 3 ? D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
                      : D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -242,13 +242,19 @@ static void run(FILE *f, UINT capacity) {
   transition(list.Get(), lists.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   ID3D12DescriptorHeap *heaps[] = {handles.Get(), samplers.Get()};
-  list->SetDescriptorHeaps(2, heaps);
-  list->SetComputeRootSignature(root.Get());
-  list->SetComputeRootDescriptorTable(0, gpu(0));
-  list->SetComputeRootDescriptorTable(1, gpu(64));
-  list->SetComputeRootDescriptorTable(
-      2, samplers->GetGPUDescriptorHandleForHeapStart());
-  list->SetComputeRootDescriptorTable(3, gpu(80));
+  using Heaps = void(WINAPI *)(ID3D12GraphicsCommandList *, UINT,
+                               ID3D12DescriptorHeap *const *);
+  using Root =
+      void(WINAPI *)(ID3D12GraphicsCommandList *, ID3D12RootSignature *);
+  using Table = void(WINAPI *)(ID3D12GraphicsCommandList *, UINT,
+                               D3D12_GPU_DESCRIPTOR_HANDLE);
+  frame_abi::method<Heaps>(list.Get(), 32)(list.Get(), 2, heaps);
+  frame_abi::method<Root>(list.Get(), 33)(list.Get(), root.Get());
+  const auto table = frame_abi::method<Table>(list.Get(), 35);
+  table(list.Get(), 0, gpu(0));
+  table(list.Get(), 1, gpu(64));
+  table(list.Get(), 2, D3D12_GPU_DESCRIPTOR_HANDLE{samplerGpu});
+  table(list.Get(), 3, gpu(80));
   list->Dispatch(2, 2, 1);
   transition(list.Get(), lists.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
              D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -256,7 +262,8 @@ static void run(FILE *f, UINT capacity) {
              D3D12_RESOURCE_STATE_COPY_SOURCE);
   list->CopyBufferRegion(read.Get(), texBytes, lists.Get(), 0, 2 * listBytes);
   auto dst = uploadLocation(read.Get(), 0), src = imageLocation(tex[3].Get());
-  list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+  frame_abi::method<frame_abi::Copy>(list.Get(), 83)(list.Get(), &dst, 0, 0, 0,
+                                                     &src, nullptr, 0);
   submit_and_wait(dev.Get(), queue.Get(), list.Get());
   void *mapped{};
   D3D12_RANGE range{0, texBytes + 2 * listBytes}, none{};
@@ -266,6 +273,8 @@ static void run(FILE *f, UINT capacity) {
   for (UINT y = 0; y < height; ++y)
     for (UINT x = 0; x < width; ++x) {
       auto c = expected(x, y);
+      if (depth_only && x < 15 && y < 15)
+        c[0] = c[1] = c[2] = 0;
       for (UINT k = 0; k < 4; ++k) {
         float a = values[y * width + x][k];
         if (std::abs(a - c[k]) <= 0.00001f)
@@ -304,8 +313,10 @@ int main() {
     return 2;
   int status = 0;
   try {
-    run(f, 5);
-    run(f, 1);
+    const bool depth_only =
+        GetFileAttributesW(L"depth-only") != INVALID_FILE_ATTRIBUTES;
+    run(f, 5, depth_only);
+    run(f, 1, depth_only);
   } catch (const std::exception &e) {
     std::fprintf(f, "error=%s\n", e.what());
     status = 1;

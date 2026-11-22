@@ -175,6 +175,10 @@ python tools/check_frosty_micropoly.py /path/to/Mount --adapter 10de:2705 \
     --all-pipelines --output build/micropoly.json
 ```
 
+## Subsurface setup
+
+The depth-only subsurface indirect setup shader now passes provider-level checks on Radeon and GeForce. The controls compare depth and material outputs, indirect counters, list capacity and guard values. The existing color-output variant also passes its Radeon regression check. These checks cover setup rather than complete skin rendering. [GPU readbacks](../evidence/matrix-awakens/subsurface-847-provider-gpus.json)
+
 ## Hair strand visibility
 
 Frosty’s 24 hair raster compute shaders use a 32-bit hit counter and up to four 64-bit visibility images. TuxBox translates all 24, and the original compute pipelines were created on Radeon and GeForce. The two compute-raster compaction shaders also translate and pass CPU-modeled readbacks on both GPUs, including empty, full, sparse and multiple-sample inputs. These tests cover the compaction stage; character hair still needs an in-game check. [Hair raster results](../evidence/matrix-awakens/hair-visibility-raster.json) · [Compaction readbacks](../evidence/matrix-awakens/hair-visibility-compaction-gpus.json) · [RDNA 2 instruction set](https://www.amd.com/content/dam/amd/en/documents/radeon-tech-docs/instruction-set-architectures/rdna2-shader-instruction-set-architecture.pdf) · [Direct3D typed atomic operations](https://microsoft.github.io/DirectX-Specs/d3d/HLSL_SM_6_6_Int64_and_Float_Atomics.html)

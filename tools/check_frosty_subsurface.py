@@ -46,7 +46,7 @@ def main():
                       test_inputs="Four qualifying pixels with material IDs 5/9 in three groups. Checkerboard taps, independent depth dithering and viewport guards.",
                       expected_allocations=[[0, 0], [1, 0], [1, 1]], initial_count=1,
                       pixel_tolerance=0.00001, readback=actual, guest_sha256=digest(exe),
-                      provider_sha256=digest(args.provider), patch_sha256=digest(ROOT / "tools/reference/tombox-subsurface-setup.patch"),
+                      provider_sha256=digest(args.provider),
                       proton=(proton / "version").read_text().strip())
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
