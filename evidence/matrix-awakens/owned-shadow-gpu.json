@@ -1,9 +1,10 @@
 {
   "scope": "Isolated Rust-owned immutable upload and default-heap GPU copy with private-fence retention; not runtime queue-ordered source capture or shader integration",
   "serialized_sha256": "38bd71be9dd00e74952a9612f87f7df37a1617ca9f9847bb531b40bc5a4ad6af",
-  "rust_sha256": "f0af77eb8e8d4d355b0f826fb2ed4f5bd35ab5276ae4771a256eed16ab9095ad",
+  "rust_sha256": "8292033802c2e635ab3065711bd43d398543662ebfd23b8ec0bcf6eb8a2415b6",
   "validator_sha256": "cff765144d8eb27d635fd0700a5d4102ef41eb1e08444a2206ba7df93dbd9e6d",
   "shader_sha256": "475fbf72ee83146b9ab041ea69d565f5c6e42b41c99ea7b0e63a9588c33cc606",
+  "verification_shader_sha256": "b4ab13c4d473ebbce9643befcc8e5eb7047092a8aa0b8688b28331b2461c1ced",
   "adapters": {
     "AMD": {
       "adapter": "1002:13c0",
@@ -17,7 +18,9 @@
       "closed_list_retention": true,
       "inflight_copy_after_list_reset": true,
       "validated_source_update": true,
-      "inflight_update_rejected": true
+      "inflight_update_rejected": true,
+      "gpu_written_source_verified": true,
+      "last_dword_mismatch_preserves_shadow": true
     },
     "NVIDIA": {
       "adapter": "10de:2705",
@@ -31,7 +34,9 @@
       "closed_list_retention": true,
       "inflight_copy_after_list_reset": true,
       "validated_source_update": true,
-      "inflight_update_rejected": true
+      "inflight_update_rejected": true,
+      "gpu_written_source_verified": true,
+      "last_dword_mismatch_preserves_shadow": true
     }
   }
 }

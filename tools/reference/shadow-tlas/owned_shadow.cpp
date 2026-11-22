@@ -1,10 +1,12 @@
 // GPU control for the isolated Rust-owned, immutable serialized BLAS snapshot.
 #include "../independent-shaders/context.h"
 #include "owned_shadow_dxil.h"
+#include "verified_shadow_dxil.h"
 using namespace shader_control;
 extern "C" int tb_shadow_create(ID3D12Device*, const unsigned char*, size_t, void**);
 extern "C" int tb_shadow_update(void*, const unsigned char*, size_t);
 extern "C" int tb_shadow_record_copy(void*, ID3D12GraphicsCommandList*);
+extern "C" int tb_shadow_gpu_resources(const void*, ID3D12Resource**, UINT64*);
 extern "C" int tb_shadow_retain_recording(void*);
 extern "C" int tb_shadow_release_recording(void*);
 extern "C" int tb_shadow_info(const void*, UINT64*, UINT64*);
@@ -161,13 +163,112 @@ int main() {
         identical = std::memcmp(mapped, expected.data(), 64) == 0;
         readback->Unmap(0, &none);
         if (!identical) throw std::runtime_error("replayed GPU copy differed");
+        // GPU-source control: an earlier copy populates the source after Close.
+        // A single bounded GPU thread verifies every DWORD against the validated
+        // private snapshot before copying any bytes into the shadow.
+        updated[64] ^= 0x5a;
+        if ((size & 3) || size > 65536) throw std::runtime_error("verification control size unsupported");
+        ID3D12Resource* shadow_resource{}; UINT64 validation_address{};
+        if (tb_shadow_gpu_resources(handle, &shadow_resource, &validation_address) || !shadow_resource || !validation_address)
+            throw std::runtime_error("verification resources");
+        auto guest_upload = buffer(ctx.device.Get(), static_cast<UINT>(size + 256), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
+        auto guest_gpu = buffer(ctx.device.Get(), static_cast<UINT>(size + 128), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        auto verify_status = buffer(ctx.device.Get(), 4, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        auto verify_output = buffer(ctx.device.Get(), 64, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        auto verify_readback = buffer(ctx.device.Get(), 68, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+        auto verify_body_readback = buffer(ctx.device.Get(), static_cast<UINT>(size), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+        D3D12_ROOT_PARAMETER verify_params[5]{};
+        verify_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+        verify_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+        verify_params[1].Descriptor.ShaderRegister = 1;
+        verify_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+        verify_params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+        verify_params[3].Descriptor.ShaderRegister = 1;
+        verify_params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        verify_params[4].Constants.Num32BitValues = 1;
+        D3D12_ROOT_SIGNATURE_DESC verify_desc{5, verify_params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+        ComPtr<ID3DBlob> verify_blob;
+        check(D3D12SerializeRootSignature(&verify_desc, D3D_ROOT_SIGNATURE_VERSION_1, &verify_blob, nullptr), "verification root serialization");
+        ComPtr<ID3D12RootSignature> verify_root;
+        check(ctx.device->CreateRootSignature(0, verify_blob->GetBufferPointer(), verify_blob->GetBufferSize(), IID_PPV_ARGS(&verify_root)), "verification root");
+        D3D12_COMPUTE_PIPELINE_STATE_DESC verify_pd{}; verify_pd.pRootSignature = verify_root.Get();
+        verify_pd.CS = {verified_shadow_dxil, sizeof(verified_shadow_dxil)};
+        ComPtr<ID3D12PipelineState> verify_pso;
+        check(ctx.device->CreateComputePipelineState(&verify_pd, IID_PPV_ARGS(&verify_pso)), "verification pipeline");
+        ComPtr<ID3D12CommandAllocator> verify_allocator; ComPtr<ID3D12GraphicsCommandList> verify_list;
+        check(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&verify_allocator)), "verification allocator");
+        check(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, verify_allocator.Get(), nullptr, IID_PPV_ARGS(&verify_list)), "verification list");
+        if (tb_shadow_retain_recording(handle) != 0) throw std::runtime_error("verification recording hold");
+        transition(verify_list.Get(), guest_gpu.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+        verify_list->CopyBufferRegion(guest_gpu.Get(), 128, guest_upload.Get(), 256, size);
+        transition(verify_list.Get(), guest_gpu.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        transition(verify_list.Get(), shadow_resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        verify_list->SetComputeRootSignature(verify_root.Get());
+        verify_list->SetPipelineState(verify_pso.Get());
+        verify_list->SetComputeRootShaderResourceView(0, guest_gpu->GetGPUVirtualAddress() + 128);
+        verify_list->SetComputeRootShaderResourceView(1, validation_address);
+        verify_list->SetComputeRootUnorderedAccessView(2, address);
+        verify_list->SetComputeRootUnorderedAccessView(3, verify_status->GetGPUVirtualAddress());
+        verify_list->SetComputeRoot32BitConstant(4, static_cast<UINT>(size), 0);
+        verify_list->Dispatch(1, 1, 1);
+        transition(verify_list.Get(), shadow_resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        transition(verify_list.Get(), verify_status.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        verify_list->CopyBufferRegion(verify_readback.Get(), 0, verify_status.Get(), 0, 4);
+        verify_list->SetComputeRootSignature(root.Get());
+        verify_list->SetPipelineState(pso.Get());
+        verify_list->SetComputeRootShaderResourceView(0, address);
+        verify_list->SetComputeRootUnorderedAccessView(1, verify_output->GetGPUVirtualAddress());
+        verify_list->Dispatch(1, 1, 1);
+        transition(verify_list.Get(), verify_output.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        verify_list->CopyBufferRegion(verify_readback.Get(), 4, verify_output.Get(), 0, 64);
+        transition(verify_list.Get(), shadow_resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        verify_list->CopyBufferRegion(verify_body_readback.Get(), 0, shadow_resource, 0, size);
+        transition(verify_list.Get(), shadow_resource, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        check(verify_list->Close(), "close verification list");
+        std::vector<unsigned char> source_data(256 + size);
+        std::memcpy(source_data.data() + 256, updated.data() + 64, size);
+        upload(guest_upload.Get(), source_data.data(), source_data.size());
+        auto inspect_verification = [&](UINT expected_status) {
+            D3D12_RANGE read{0,68}, no_write{}; void* bytes{};
+            check(verify_readback->Map(0, &read, &bytes), "verification readback");
+            UINT status{}; std::memcpy(&status, bytes, 4);
+            bool same = std::memcmp(static_cast<unsigned char*>(bytes) + 4, expected.data(), 64) == 0;
+            verify_readback->Unmap(0, &no_write);
+            D3D12_RANGE full{0, static_cast<SIZE_T>(size)};
+            check(verify_body_readback->Map(0, &full, &bytes), "verification body readback");
+            same = same && std::memcmp(bytes, updated.data() + 64, size) == 0;
+            verify_body_readback->Unmap(0, &no_write);
+            if (status != expected_status || !same) throw std::runtime_error("GPU source validation mismatch");
+        };
+        if (tb_shadow_hold(handle, complete.Get(), 3) != 0) throw std::runtime_error("verification hold");
+        ID3D12CommandList* verification[] = {verify_list.Get()};
+        ctx.queue->ExecuteCommandLists(1, verification);
+        check(ctx.queue->Signal(complete.Get(), 3), "verification signal");
+        wait(complete.Get(), 3);
+        inspect_verification(1);
+        // Reset the transient states, then mutate only the last DWORD after the
+        // list was closed. Mismatch must not modify even the old shadow header.
+        ComPtr<ID3D12CommandAllocator> verify_reset_allocator;
+        ComPtr<ID3D12GraphicsCommandList> verify_reset;
+        check(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&verify_reset_allocator)), "verification reset allocator");
+        check(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, verify_reset_allocator.Get(), nullptr, IID_PPV_ARGS(&verify_reset)), "verification reset list");
+        transition(verify_reset.Get(), verify_status.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        transition(verify_reset.Get(), verify_output.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        submit_and_wait(ctx.device.Get(), ctx.queue.Get(), verify_reset.Get());
+        source_data.back() ^= 0x5a;
+        upload(guest_upload.Get(), source_data.data(), source_data.size());
+        if (tb_shadow_hold(handle, complete.Get(), 4) != 0) throw std::runtime_error("verification replay hold");
+        ctx.queue->ExecuteCommandLists(1, verification);
+        check(ctx.queue->Signal(complete.Get(), 4), "verification replay signal");
+        wait(complete.Get(), 4);
+        inspect_verification(2);
         if (tb_shadow_try_release(handle) != 0) throw std::runtime_error("released while lists can replay");
         ComPtr<ID3D12Fence> final_fence;
         check(ctx.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&final_fence)), "final fence");
         if (tb_shadow_hold(handle, final_fence.Get(), 1) != 0) throw std::runtime_error("final hold");
-        list.Reset(); list2.Reset(); // neither recorded list can be replayed now
+        list.Reset(); list2.Reset(); verify_list.Reset(); // no recorded list can be replayed now
         if (tb_shadow_release_recording(handle) != 0 || tb_shadow_release_recording(handle) != 0 ||
-            tb_shadow_release_recording(handle) != -2) throw std::runtime_error("recording release mismatch");
+            tb_shadow_release_recording(handle) != 0 || tb_shadow_release_recording(handle) != -2) throw std::runtime_error("recording release mismatch");
         if (tb_shadow_try_release(handle) != 0) throw std::runtime_error("released with private fence pending");
         check(final_fence->Signal(1), "final fence signal");
         if (tb_shadow_try_release(handle) != 1) throw std::runtime_error("completed resource not retired");
@@ -199,7 +300,7 @@ int main() {
         check(pending_gate->Signal(1), "unblock pending copy");
         wait(pending_done.Get(), 1);
         if (tb_shadow_try_release(pending_handle) != 1) throw std::runtime_error("pending shadow not retired");
-        std::fprintf(receipt, "inflight_copy_after_list_reset=1\nvalidated_source_update=1\ninflight_update_rejected=1\nimmutable_gpu_snapshot=1\nmalformed_rejected=1\nblocked_gpu_retained=1\ntwo_fence_retirement=1\ntwo_gpu_queues=1\ndefault_heap_gpu_copy=1\ncompleted_list_copy_replay=1\nclosed_list_retention=1\nbody_bytes=%llu\n", size);
+        std::fprintf(receipt, "gpu_written_source_verified=1\nlast_dword_mismatch_preserves_shadow=1\ninflight_copy_after_list_reset=1\nvalidated_source_update=1\ninflight_update_rejected=1\nimmutable_gpu_snapshot=1\nmalformed_rejected=1\nblocked_gpu_retained=1\ntwo_fence_retirement=1\ntwo_gpu_queues=1\ndefault_heap_gpu_copy=1\ncompleted_list_copy_replay=1\nclosed_list_retention=1\nbody_bytes=%llu\n", size);
     } catch (const std::exception& e) { std::fprintf(receipt, "error=%s\n", e.what()); result = 1; }
     return std::fclose(receipt) ? 2 : result;
 }

@@ -168,6 +168,32 @@ def selection(entry, count, extra):
         "pages": count, "selected": len(base), "additional_pages": len(second), "initial_indirect_x": 32}
 
 
+def mesh_sdf_offsets(count, groups, dispatch_count, zero=False, wrap=False):
+    cb = [0] * 64
+    cb[10] = count
+    values = [0 if zero else (0xfffffff0 + lane % 8 if wrap else (lane * 7 + 3) % 9) for lane in range(64 * groups)]
+    seed = [[GUARD] * 160, [11] + [GUARD] * 15, [GUARD] * 16]
+    expected = [row.copy() for row in seed]
+    expected[2][:3] = [((dispatch_count + 63) & 0xffffffff) >> 6, 1, 1]
+    sizes = [sum(values[g * 64:min((g + 1) * 64, count)]) for g in range(groups)]
+    def offsets(order):
+        result = seed[0].copy()
+        base = 11
+        for group in order:
+            running = base
+            for lane in range(group * 64, min((group + 1) * 64, count)):
+                result[lane] = running
+                running = (running + values[lane]) & 0xffffffff
+            base = (base + sizes[group]) & 0xffffffff
+        return result
+    expected[0] = offsets(range(groups))
+    expected[1][0] = (expected[1][0] + sum(sizes)) & 0xffffffff
+    other = offsets(reversed(range(groups))) if groups == 2 else []
+    return cb, [[dispatch_count] * 64, values], seed, [4, 4, 4], 4, groups, 1, expected, {
+        "count": count, "groups": groups, "dispatch_count": dispatch_count,
+        "alternate_offsets": other}
+
+
 def compact_visualize_rays(entry, mode, groups):
     mask, flag = {248: (1, 1), 249: (1, 0), 259: (3, 1)}[entry]
     count = 64 * groups
@@ -291,7 +317,7 @@ def main():
     p.add_argument("--prefix", type=Path)
     p.add_argument("--proton", type=Path)
     p.add_argument("--xshader", type=Path)
-    p.add_argument("--entry", type=int, choices=(248, 249, 259, 507, 509, 512, 513, 517, 1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470, 3477),
+    p.add_argument("--entry", type=int, choices=(728, 248, 249, 259, 507, 509, 512, 513, 517, 1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470, 3477),
                    help="run the controls for one archive entry")
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
@@ -300,6 +326,14 @@ def main():
     compiler = args.xshader.resolve() if args.xshader else compiler
     data, entries = global_archive(args.mount)
     cases, libraries = {}, {}
+    for name, count, groups, dispatch, zero, wrap in (
+        ("empty", 0, 1, 0, False, False), ("single", 1, 1, 1, False, False),
+        ("lower", 32, 1, 64, False, False), ("boundary", 33, 1, 65, False, False),
+        ("full", 64, 1, 127, False, False), ("zero_weights", 64, 1, 128, True, False),
+        ("two_groups", 128, 2, 129, False, False), ("partial_groups", 97, 2, 64, False, False),
+        ("wrapping", 64, 1, 0xffffffff, False, True),
+    ):
+        cases["mesh_offsets_" + name] = (728, mesh_sdf_offsets(count, groups, dispatch, zero, wrap))
     for entry in (248, 249, 259):
         for mode, groups in (("all", 1), ("none", 1), ("mixed", 1), ("mixed", 2)):
             cases[f"visualize_{entry}_{mode}_{groups}"] = (entry, compact_visualize_rays(entry, mode, groups))
@@ -406,7 +440,7 @@ def main():
                     words(work / f"{name}.b{i}", constants)
             else:
                 words(work / (name+".cbv"), cb)
-            if entry in (248, 249, 259, 507, 509, 512, 513, 517, 1016, 1243, 1257, 1793, 3477, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470):
+            if entry in (728, 248, 249, 259, 507, 509, 512, 513, 517, 1016, 1243, 1257, 1793, 3477, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470):
                 for i, records in enumerate(srv):
                     words(work / f"{name}.t{i}", records)
             else:
@@ -456,6 +490,8 @@ def main():
                         first, end = 15, 15 + 5 * len(metadata["selected"])
                         actual[first:end] = [word for row in sorted(
                             [actual[j:j + 5] for j in range(first, end, 5)]) for word in row]
+                    if entry == 728 and i == 0 and metadata["alternate_offsets"] == actual:
+                        array = metadata["alternate_offsets"]
                     if entry == 1223:
                         actual = unordered_wave_ranges(actual, array, metadata["initial"], metadata["selected_pages"])
                     diffs.extend([i, j, x, y] for j,(x,y) in enumerate(zip(array,actual)) if x != y)

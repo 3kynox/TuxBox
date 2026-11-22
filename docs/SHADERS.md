@@ -121,6 +121,8 @@ Three visualization ray-compaction variants preserve matching data and ray recor
 
 Four hardware ray-compaction variants select five-word ray records, including variants with different flag masks. Tests on Radeon and GeForce check sparse and full waves, per-lane limits and two groups. [GPU readbacks](../evidence/matrix-awakens/hwrt-compact-rays.json)
 
+The mesh distance-field offset shader builds object ranges and indirect dispatch arguments. Radeon and GeForce controls cover wave boundaries, multiple groups and integer wrapping. [GPU readbacks](../evidence/matrix-awakens/mesh-sdf-offsets.json)
+
 The distance-field streaming request shader compacts changed nonzero mip requests into a bounded queue. Radeon and GeForce match CPU controls for full, sparse, partial and capacity-limited groups. [GPU readbacks](../evidence/matrix-awakens/distance-field-requests.json)
 
 ## Nanite instance culling
