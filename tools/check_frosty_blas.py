@@ -147,9 +147,12 @@ def main():
     parser.add_argument("--lighting-hits", action="store_true", help="dispatch the retail lighting miss and hidden material shaders")
     parser.add_argument("--single-build", action="store_true", help="use Xbox List4 slot 117 for both BLAS and TLAS builds")
     parser.add_argument("--gpu-instances", action="store_true", help="populate the TLAS instance array on the GPU before the scene build and update its transforms after Close")
+    parser.add_argument("--ambiguous-as", action="store_true", help="reject ambiguous overlapping placed acceleration-structure buffers")
     args = parser.parse_args()
     if args.shadow_tlas and not args.sphere_vertices:
         parser.error("--shadow-tlas needs --sphere-vertices")
+    if args.ambiguous_as and (not args.provider or args.copy_only or args.prebuild_only):
+        parser.error("--ambiguous-as requires a provider and a build run")
     if args.gpu_instances and (not args.provider or args.copy_only or args.prebuild_only):
         parser.error("--gpu-instances requires a provider and a build run")
     if args.single_build and (not args.provider or args.prebuild_only or args.copy_only):
@@ -185,6 +188,8 @@ def main():
         probe_flags, ray_inputs = [], {}
         if args.shadow_tlas:
             probe_flags.append("/DTUXBOX_SHADOW_TLAS_PROBE")
+        if args.ambiguous_as:
+            probe_flags.append("/DTUXBOX_AMBIGUOUS_AS_PROBE")
         if args.gpu_instances:
             probe_flags.append("/DTUXBOX_GPU_INSTANCE_PROBE")
             subprocess.run([find_dxc(None), "-T", "cs_6_0", "-E", "main", "-O3", "-Fh", work / "instance_bindings_dxil.h",
@@ -344,6 +349,11 @@ def main():
                 sys.stderr.buffer.write(run.stdout[-4096:])
             result["runs"][mode] = {"exit": run.returncode, **observation}
             if run.returncode or not observation:
+                passed = False
+            elif args.ambiguous_as and mode.startswith("xbox") and (
+                    observation.get("ambiguous_as_equal_va") != "1" or
+                    observation.get("ambiguous_as_rejections") != "4" or
+                    observation.get("unique_as_after_release") != "1"):
                 passed = False
             elif expected_rays:
                 result["runs"][mode]["ray_queries"] = sphere_results(output, expected_rays)

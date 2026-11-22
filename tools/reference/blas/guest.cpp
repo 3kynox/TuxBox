@@ -224,6 +224,60 @@ static void guest_batch(ID3D12GraphicsCommandList* list, UINT count, const Entry
 #endif
 }
 
+#ifdef TUXBOX_AMBIGUOUS_AS_PROBE
+static void probe_ambiguous_as(ID3D12Device* guest, ID3D12CommandAllocator* allocator,
+                               const Entry& valid, UINT64 ordinary, FILE* receipt) {
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    desc.Width = 131072;
+    desc.Height = desc.DepthOrArraySize = desc.MipLevels = desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    D3D12_HEAP_DESC hd{};
+    hd.SizeInBytes = 131072;
+    hd.Properties.Type = D3D12_HEAP_TYPE_DEFAULT;
+    hd.Properties.CreationNodeMask = hd.Properties.VisibleNodeMask = 1;
+    hd.Flags = D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS;
+    ComPtr<ID3D12Heap> heap;
+    check(guest->CreateHeap(&hd, IID_PPV_ARGS(&heap)), "ambiguous AS heap");
+    ComPtr<ID3D12Resource> a, b;
+    check(guest->CreatePlacedResource(heap.Get(), 0, &desc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
+                                     nullptr, IID_PPV_ARGS(&a)), "first aliased AS buffer");
+    check(guest->CreatePlacedResource(heap.Get(), 0, &desc, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
+                                     nullptr, IID_PPV_ARGS(&b)), "second aliased AS buffer");
+    const UINT64 va = a->GetGPUVirtualAddress();
+    if (!va || va != b->GetGPUVirtualAddress()) {
+        std::fprintf(receipt, "ambiguous_as_equal_va=0\n");
+        return;
+    }
+    auto buildList = guest_list(guest, allocator);
+    auto ambiguous = valid;
+    ambiguous.build.DestAccelerationStructureData = va;
+    guest_batch(buildList.Get(), 1, &ambiguous);
+    if (buildList->Close() != E_NOTIMPL) throw std::runtime_error("ambiguous AS build was accepted");
+    auto updateList = guest_list(guest, allocator);
+    auto update = valid;
+    update.build.Inputs.Flags |= D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
+    update.build.SourceAccelerationStructureData = va;
+    guest_batch(updateList.Get(), 1, &update);
+    if (updateList->Close() != E_NOTIMPL) throw std::runtime_error("ambiguous AS update source was accepted");
+    using Copy = void(WINAPI*)(IUnknown*, UINT64, UINT64, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE);
+    auto reject_copy = [&](UINT64 destination, UINT64 source) {
+        auto list = guest_list(guest, allocator);
+        method<Copy>(list.Get(), 119)(list.Get(), destination, source, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_CLONE);
+        if (list->Close() != E_NOTIMPL) throw std::runtime_error("ambiguous AS copy was accepted");
+    };
+    reject_copy(ordinary, va);
+    reject_copy(va, ordinary);
+    b.Reset();
+    auto unambiguous = guest_list(guest, allocator);
+    guest_batch(unambiguous.Get(), 1, &ambiguous);
+    check(unambiguous->Close(), "unique placed AS build after alias release");
+    std::fprintf(receipt, "ambiguous_as_equal_va=1\nambiguous_as_rejections=4\nunique_as_after_release=1\n");
+}
+#endif
+
+
 static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, FILE* receipt, bool sphere) {
     const auto desktop = provider_device(false);
     const auto provider = xbox ? provider_device(true) : desktop;
@@ -307,6 +361,9 @@ static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, 
     if (guest_build) {
         check(provider->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&guest_queue)), "Xbox build queue");
         check(provider->CreateCommandAllocator(queue_desc.Type, IID_PPV_ARGS(&guest_allocator)), "Xbox build allocator");
+#ifdef TUXBOX_AMBIGUOUS_AS_PROBE
+        probe_ambiguous_as(provider.Get(), guest_allocator.Get(), batch[0], structures[0]->GetGPUVirtualAddress(), receipt);
+#endif
         auto list = guest_list(provider.Get(), guest_allocator.Get());
         guest_batch(list.Get(), 0, nullptr);
         ComPtr<ID3D12Resource> cooked;

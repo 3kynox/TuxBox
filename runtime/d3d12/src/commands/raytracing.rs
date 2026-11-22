@@ -36,12 +36,12 @@ fn record(
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_CLONE
         | D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT => {
             // SAFETY: owner is the controlling device retained by the list.
-            let source_as = unsafe { blas::resolve(owner, source) };
+            let source_as = unsafe { blas::resolve(owner, source) }?;
             let (src, dst) = if let Some(backing) = source_as {
                 let (dst, va) = unsafe { blas::copy_dest(owner, destination, &backing) }?;
                 retain(state, &[&backing.resource, &dst])?;
                 (unsafe { backing.resource.GetGPUVirtualAddress() }, va)
-            } else if unsafe { blas::resolve(owner, destination) }.is_some() {
+            } else if unsafe { blas::resolve(owner, destination) }?.is_some() {
                 return Err(E_NOTIMPL.into()); // unknown native source size into a relocated destination
             } else {
                 (source, destination)
@@ -146,7 +146,7 @@ pub(super) unsafe extern "system" fn postbuild(
                 .try_reserve_exact(sources.len())
                 .map_err(|_| E_OUTOFMEMORY)?;
             for &va in sources {
-                if let Some(target) = unsafe { blas::resolve(owner, va) } {
+                if let Some(target) = unsafe { blas::resolve(owner, va) }? {
                     retain(&state, &[&target.resource])?;
                     patched.push(unsafe { target.resource.GetGPUVirtualAddress() });
                 } else {

@@ -139,7 +139,7 @@ fn translate(
     host: &ID3D12GraphicsCommandList4,
     mut desc: D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC,
 ) -> Result<D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC> {
-    let relocated = unsafe { blas::resolve(owner, desc.DestAccelerationStructureData) };
+    let relocated = unsafe { blas::resolve(owner, desc.DestAccelerationStructureData) }?;
     if relocated.is_some() || desc.ScratchAccelerationStructureData == 0 {
         let mut device = None::<ID3D12Device5>;
         unsafe { host.GetDevice(&mut device)? };
@@ -172,7 +172,7 @@ fn translate(
         }
     }
     if desc.SourceAccelerationStructureData != 0
-        && let Some(source) = unsafe { blas::resolve(owner, desc.SourceAccelerationStructureData) }
+        && let Some(source) = unsafe { blas::resolve(owner, desc.SourceAccelerationStructureData) }?
     {
         retain(state, &[&source.resource])?;
         desc.SourceAccelerationStructureData = unsafe { source.resource.GetGPUVirtualAddress() };

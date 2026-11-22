@@ -194,13 +194,21 @@ pub(crate) unsafe fn relocated(owner: &IUnknown) -> Arc<[(u64, u64)]> {
 
 /// # Safety
 /// The owner must identify the list's controlling TuxBox device.
-pub(crate) unsafe fn resolve(owner: &IUnknown, address: u64) -> Option<NativeAs> {
-    let buffer = unsafe { guest(owner) }
+pub(crate) unsafe fn resolve(owner: &IUnknown, address: u64) -> Result<Option<NativeAs>> {
+    let buffer = match unsafe { guest(owner) }
         .state
         .blas
         .find(address, Kind::Structure)
-        .ok()?;
-    lock(&buffer.targets).get(&address).and_then(Clone::clone)
+    {
+        Ok(buffer) => buffer,
+        // An unregistered address can be a native resource owned outside the
+        // guest provider. Overlapping registered resources are different: the
+        // backing cannot be chosen safely, so preserve the ambiguity error.
+        Err(error) if error.code() == E_INVALIDARG => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let result = lock(&buffer.targets).get(&address).and_then(Clone::clone);
+    Ok(result)
 }
 
 struct Upload {
