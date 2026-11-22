@@ -10,6 +10,7 @@ mod compact_visualize_rays;
 mod compact_hwrt_rays;
 mod distance_field_requests;
 mod voxel_indirect_setup;
+mod lumen_update_tiles;
 
 use std::fmt::Write;
 
@@ -246,6 +247,9 @@ pub(super) fn hlsl(shader: &ShaderExtract) -> Option<String> {
             return None;
         }
         return Some(format!("[numthreads({x}, {y}, {z})]\nvoid main() {{}}\n"));
+    }
+    if let Some(source) = lumen_update_tiles::translate(shader) {
+        return Some(source);
     }
     if let Some(source) = voxel_indirect_setup::translate(shader) {
         return Some(source);
