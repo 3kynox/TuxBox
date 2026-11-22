@@ -49,7 +49,6 @@ def main():
                       test_inputs="769 elements crossing two blocks, 512, one and zero. Nonzero offsets, wrapped unsigned values, exclusive/inclusive prefix, per-block totals and guard words.",
                       checked_words_per_case=2060, adapters=adapters, readback=actual,
                       guest_sha256=digest(exe), provider_sha256=digest(args.provider),
-                      patch_sha256=digest(ROOT / "tools/reference/tombox-buffer-store-format-xy.patch"),
                       proton=(proton / "version").read_text().strip())
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")

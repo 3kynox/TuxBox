@@ -59,13 +59,14 @@ static void run(FILE *f, UINT entry, UINT count) {
   ComPtr<ID3D12DescriptorHeap> heap;
   check(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap)), "heap");
   UINT stride = dev->GetDescriptorHandleIncrementSize(hd.Type);
+  using GpuHandle = UINT64(WINAPI *)(ID3D12DescriptorHeap *);
+  const auto cpuStart = frame_abi::method<frame_abi::CpuHandle>(heap.Get(), 9)(heap.Get());
+  const auto gpuStart = frame_abi::method<GpuHandle>(heap.Get(), 10)(heap.Get());
   auto cpu = [&](UINT i) {
-    return D3D12_CPU_DESCRIPTOR_HANDLE{
-        heap->GetCPUDescriptorHandleForHeapStart().ptr + i * stride};
+    return D3D12_CPU_DESCRIPTOR_HANDLE{cpuStart + i * stride};
   };
   auto gpu = [&](UINT i) {
-    return D3D12_GPU_DESCRIPTOR_HANDLE{
-        heap->GetGPUDescriptorHandleForHeapStart().ptr + i * stride};
+    return D3D12_GPU_DESCRIPTOR_HANDLE{gpuStart + i * stride};
   };
   for (UINT i = 0; i < 2; ++i) {
     D3D12_SHADER_RESOURCE_VIEW_DESC v{};
@@ -90,16 +91,21 @@ static void run(FILE *f, UINT entry, UINT count) {
   D3D12_COMMAND_QUEUE_DESC q{};
   check(dev->CreateCommandQueue(&q, IID_PPV_ARGS(&queue)), "queue");
   check(dev->CreateCommandAllocator(q.Type, IID_PPV_ARGS(&alloc)), "allocator");
-  check(dev->CreateCommandList(0, q.Type, alloc.Get(), pso.Get(),
-                               IID_PPV_ARGS(&list)),
-        "list");
+  const UINT params[]{static_cast<UINT>(q.Type), 0, 1, 0};
+  check(frame_abi::method<frame_abi::CreateList>(dev.Get(), 73)(
+            dev.Get(), params, alloc.Get(), pso.Get(), IID_PPV_ARGS(&list)), "list");
+  check(list->Reset(alloc.Get(), pso.Get()), "reset list");
   list->CopyBufferRegion(out.Get(), 0, seed.Get(), 0, sizeof(initial));
   transition(list.Get(), out.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  list->SetDescriptorHeaps(1, heap.GetAddressOf());
-  list->SetComputeRootSignature(root.Get());
-  list->SetComputeRootDescriptorTable(0, gpu(0));
-  list->SetComputeRootDescriptorTable(3, gpu(80));
+  using Heaps = void(WINAPI *)(ID3D12GraphicsCommandList *, UINT, ID3D12DescriptorHeap *const *);
+  using Root = void(WINAPI *)(ID3D12GraphicsCommandList *, ID3D12RootSignature *);
+  using Table = void(WINAPI *)(ID3D12GraphicsCommandList *, UINT, D3D12_GPU_DESCRIPTOR_HANDLE);
+  frame_abi::method<Heaps>(list.Get(), 32)(list.Get(), 1, heap.GetAddressOf());
+  frame_abi::method<Root>(list.Get(), 33)(list.Get(), root.Get());
+  const auto table = frame_abi::method<Table>(list.Get(), 35);
+  table(list.Get(), 0, gpu(0));
+  table(list.Get(), 3, gpu(80));
   list->Dispatch(entry == 500 ? 1 : 3, 1, 1);
   transition(list.Get(), out.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
              D3D12_RESOURCE_STATE_COPY_SOURCE);
