@@ -12,7 +12,7 @@ import pefile
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE = "adc182acae5340b0618a3d57a239ed2e8deb305dbefc49439cb8a2d06c7ce812"
-EXPECTED = "xmem-native-heap PASS attributes=40 alloc=40 free=40"
+EXPECTED = "xmem-native-heap PASS attributes=40 alloc=40 free=40 null-free=1"
 
 
 def main():

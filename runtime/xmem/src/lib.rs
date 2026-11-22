@@ -160,7 +160,7 @@ pub extern "system" fn alloc_default(bytes: usize, attributes: u64) -> *mut c_vo
 /// permission to free it, with no further use after release.
 #[unsafe(export_name = "XMemFreeDefault")]
 pub unsafe extern "system" fn free_default(memory: *mut c_void, attributes: u64) {
-    if memory.is_null() {
+    if memory.is_null() && !process_heap_attributes(attributes) {
         return;
     }
     match attributes {

@@ -13,7 +13,7 @@ The packaged HEVC, H.264 and AAC decoders request the process heap with attribut
 
 The packaged D3D12 drivers also use 16-byte-aligned process heap allocations for initialization (`0x04800092`), blob objects (`0x04800040`), and writable blob data (`0x04800078`). Both drivers created and released blobs with the TuxBox allocator on Linux. [D3D12 control runs](../../evidence/providers/d3d12-exports.json)
 
-Callers must supply the original attributes when releasing a live allocation. A zero-byte request returns null. Unknown attribute words return null with `ERROR_NOT_SUPPORTED`. Freeing null is a no-op.
+Callers must supply the original attributes when releasing a live allocation. A zero-byte request returns null. Unknown attribute words return null with `ERROR_NOT_SUPPORTED`. For ordinary heap attributes, a null free is forwarded to the host heap; its console-specific error behavior remains unverified.
 
 Frosty requests `XMemGetWorkingSetStatistics` (ordinal 16) with selector `0x20000001` during static initialization. Its 120-byte result uses the process commit counters and host-available memory to estimate a title budget. The guest checks the result against host measurements after touching an 8 MiB allocation.
 

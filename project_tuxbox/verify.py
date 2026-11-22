@@ -215,7 +215,7 @@ def verify(host, output, adapter, selected=None, samples=1):
                   r"xmem-heaps PASS title=1 private=4 invalid=2",
                   providers={"xmem-smoke/xmem.dll": ("XMemGetTitleHeap", "XMemCreateWin32Heap", "XMemAllocDefault", "XMemFreeDefault")})
             check("xmem-heap-profiles", "xmem-smoke/xmem-smoke.exe", ["--heap-profiles", "--report"],
-                  r"xmem-heap-profiles PASS attributes=40 alloc=80 free=80",
+                  r"xmem-heap-profiles PASS attributes=40 alloc=80 free=80 null-free=2",
                   providers={"xmem-smoke/xmem.dll": ("XMemAlloc", "XMemFree", "XMemAllocDefault", "XMemFreeDefault")})
             check("xmem-virtual-cpu", "xmem-smoke/xmem-smoke.exe", ["--virtual-cpu", "--report"],
                   r"xmem-virtual-cpu PASS protections=6 allocations=12 guards=5 invalid=1",

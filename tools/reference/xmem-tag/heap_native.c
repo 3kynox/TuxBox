@@ -7,7 +7,7 @@
 typedef void *(__attribute__((ms_abi)) *alloc_fn)(size_t, uint64_t);
 typedef void (__attribute__((ms_abi)) *free_fn)(void *, uint64_t);
 static char heap_sentinel[8], storage[32];
-static unsigned gets, allocations, frees;
+static unsigned gets, allocations, frees, null_frees;
 static __attribute__((ms_abi)) void *partition_heap(int partition)
 {
     if (partition != 1) return NULL;
@@ -22,7 +22,9 @@ static __attribute__((ms_abi)) void *heap_alloc(void *heap, uint32_t flags, size
 }
 static __attribute__((ms_abi)) int heap_free(void *heap, uint32_t flags, void *memory)
 {
-    if (heap != heap_sentinel || flags || memory != storage) return 0;
+    if (heap != heap_sentinel || flags) return 0;
+    if (!memory) { ++null_frees; return 0; }
+    if (memory != storage) return 0;
     ++frees;
     return 1;
 }
@@ -52,7 +54,8 @@ int main(int argc, char **argv)
             ++count;
         }
     }
-    if (count != 40 || allocations != 40 || frees != 40 || gets != 80) return 7;
-    puts("xmem-native-heap PASS attributes=40 alloc=40 free=40");
+    release(NULL, 0);
+    if (count != 40 || allocations != 40 || frees != 40 || gets != 81 || null_frees != 1) return 7;
+    puts("xmem-native-heap PASS attributes=40 alloc=40 free=40 null-free=1");
     return 0;
 }

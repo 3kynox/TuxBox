@@ -370,6 +370,16 @@ static int heap_profiles(void)
             XMemFree(memory, attributes);
         }
     }
+    // The supplied default routine calls HeapFree even for a null heap pointer.
+    SetLastError(0xabcdu);
+    (void)HeapFree(GetProcessHeap(), 0, NULL);
+    DWORD expected = GetLastError();
+    SetLastError(0xabcdu);
+    XMemFreeDefault(NULL, 0);
+    REQUIRE(GetLastError() == expected);
+    SetLastError(0xabcdu);
+    XMemFree(NULL, 0);
+    REQUIRE(GetLastError() == expected);
     return 0;
 }
 
@@ -577,7 +587,7 @@ int wmain(int argc, wchar_t **argv)
     }
     if (heap_only) {
         REQUIRE(!heap_profiles());
-        const char result[] = "xmem-heap-profiles PASS attributes=40 alloc=80 free=80\n";
+        const char result[] = "xmem-heap-profiles PASS attributes=40 alloc=80 free=80 null-free=2\n";
         if (report && (fputs(result, report) == EOF || fclose(report))) return 2;
         fputs(result, stdout);
         return 0;
