@@ -25,7 +25,10 @@ def main():
     host.env["WINEDEBUG"] = "-all"
     expected = {"initial": "1", "underflow": "1", "disable": "0", "nested": "1",
                 "restore1": "0", "thread": "0,1,0", "after_thread": "0",
-                "restore2": "1", "deep": "1,1"}
+                "restore2": "1", "deep": "1,1", "level0": "<null>,0",
+                "level1": "Assertion,124", "level2": "Error,12", "level3": "Warning,14",
+                "level4": "Trace,11", "level5": "Spam,3", "level6": "<null>,0",
+                "level7": "<null>,0", "large": "<null>,0"}
     with TemporaryDirectory(prefix="tuxbox-xtf-assert-") as temp:
         root = Path(temp)
         tools = Toolchain()
@@ -46,7 +49,7 @@ def main():
             runs[label] = dict(line.split("=", 1) for line in result.read_text().splitlines())
             if runs[label] != expected:
                 raise ValueError(f"Unexpected {label} output: {runs[label]}")
-    receipt = {"scope": "Assertion-enable state API only. Assertion callbacks, reporting, other XTF APIs and underflow diagnostic logging are not implemented.",
+    receipt = {"scope": "Assertion-enable state and severity label/color APIs only. Assertion callbacks, reporting, other XTF APIs and underflow diagnostic logging are not implemented.",
                "reference_sha256": digest(args.reference), "provider_sha256": digest(args.provider),
                "guest_sha256": guest_hash, "host": host.version, "runs": runs}
     args.output.parent.mkdir(parents=True, exist_ok=True)

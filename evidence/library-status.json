@@ -1878,7 +1878,7 @@
       "group": "Diagnostics and tooling",
       "status": "partial",
       "provider": "TuxBox Rust XTF assertion state.",
-      "scope": "Process-wide assertion enable, nested push and pop state match the checked no-handler reference cases.",
+      "scope": "Process-wide assertion enable, nested push and pop state match the checked no-handler reference cases. Diagnostic severity labels and console colors match the checked reference levels.",
       "remaining": "Assertion handlers, reporting, underflow diagnostics and other XTF services remain unimplemented; the partial provider is not staged automatically.",
       "evidence": [
         "evidence/frosty-xbox-library-inventory.json",
@@ -1898,7 +1898,9 @@
         "verified": [
           "XtfErrAreAssertsEnabled",
           "XtfErrPopAssertsEnabled",
-          "XtfErrPushAssertsEnabled"
+          "XtfErrPushAssertsEnabled",
+          "XtfLogGetDebugType",
+          "XtfLogGetTextColors"
         ],
         "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage."
       },

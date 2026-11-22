@@ -672,17 +672,17 @@
       <text x="480.0" y="1303" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">16.7%</text>
     </g>
     <g>
-      <title>xtfbaseservices.dll · Partial · Verified TuxBox exports 3/60 (5%). TuxBox Rust XTF assertion state. Process-wide assertion enable, nested push and pop state match the checked no-handler reference cases. No static PE import path found; dynamic loads are not measured.</title>
+      <title>xtfbaseservices.dll · Partial · Verified TuxBox exports 5/60 (8.3%). TuxBox Rust XTF assertion state. Process-wide assertion enable, nested push and pop state match the checked no-handler reference cases. Diagnostic severity labels and console colors match the checked reference levels. No static PE import path found; dynamic loads are not measured.</title>
       <g transform="translate(24.0 1327)">
         <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
         <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
       <text x="38.0" y="1332" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xtfbaseservices.dll</text>
       <rect x="315.09999999999997" y="1323" width="54.900000000000034" height="7" fill="#272733" />
-      <rect x="315.09999999999997" y="1323" width="2.745" height="7" fill="#6fc7d4" />
-      <text x="422.0" y="1332" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">3/60</text>
-      <text x="480.0" y="1332" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">5%</text>
-      <text x="38.0" y="1348" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">3/55 functions, 0/5 data</text>
+      <rect x="315.09999999999997" y="1323" width="4.575" height="7" fill="#6fc7d4" />
+      <text x="422.0" y="1332" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">5/60</text>
+      <text x="480.0" y="1332" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">8.3%</text>
+      <text x="38.0" y="1348" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">5/55 functions, 0/5 data</text>
     </g>
     <g>
       <title>xtfconsolecontrol.dll · Incomplete · Verified TuxBox exports 0/2 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. "XtfConsoleControl.dll" (Game OS). 2 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>

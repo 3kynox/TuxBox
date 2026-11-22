@@ -31,3 +31,29 @@ pub extern "system" fn pop_asserts_enabled() {
         state.enabled = previous;
     }
 }
+
+/// Return the label used by XTF diagnostic output for a severity level.
+#[unsafe(export_name = "XtfLogGetDebugType")]
+pub extern "system" fn get_debug_type(level: u32) -> *const std::ffi::c_char {
+    match level {
+        1 => c"Assertion".as_ptr(),
+        2 => c"Error".as_ptr(),
+        3 => c"Warning".as_ptr(),
+        4 => c"Trace".as_ptr(),
+        5 => c"Spam".as_ptr(),
+        _ => std::ptr::null(),
+    }
+}
+
+/// Return the Windows console color attributes for a severity level.
+#[unsafe(export_name = "XtfLogGetTextColors")]
+pub extern "system" fn get_text_colors(level: u32) -> u16 {
+    match level {
+        1 => 124,
+        2 => 12,
+        3 => 14,
+        4 => 11,
+        5 => 3,
+        _ => 0,
+    }
+}

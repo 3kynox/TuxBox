@@ -3,3 +3,5 @@ EXPORTS
     XtfErrAreAssertsEnabled @44
     XtfErrPopAssertsEnabled @46
     XtfErrPushAssertsEnabled @47
+    XtfLogGetDebugType @54
+    XtfLogGetTextColors @56

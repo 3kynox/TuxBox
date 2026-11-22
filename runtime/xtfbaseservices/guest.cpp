@@ -39,5 +39,16 @@ int main(int argc, char** argv) {
     bool deep = true;
     for (int i = 99; i >= 0; --i) { deep &= get_state() == (i & 1); pop_state(); }
     fprintf(out, "deep=%d,%u\n", deep ? 1 : 0, get_state());
+    FARPROC type_symbol = GetProcAddress(dll, "XtfLogGetDebugType");
+    FARPROC color_symbol = GetProcAddress(dll, "XtfLogGetTextColors");
+    if (!type_symbol || !color_symbol || type_symbol != GetProcAddress(dll, MAKEINTRESOURCEA(54)) ||
+        color_symbol != GetProcAddress(dll, MAKEINTRESOURCEA(56))) return 7;
+    auto type = reinterpret_cast<const char* (WINAPI*)(unsigned)>(type_symbol);
+    auto color = reinterpret_cast<unsigned short (WINAPI*)(unsigned)>(color_symbol);
+    for (unsigned i = 0; i < 8; ++i) {
+        const char* label = type(i);
+        fprintf(out, "level%u=%s,%u\n", i, label ? label : "<null>", color(i));
+    }
+    fprintf(out, "large=%s,%u\n", type(~0u) ? type(~0u) : "<null>", color(~0u));
     return fclose(out);
 }
