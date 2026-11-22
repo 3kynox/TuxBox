@@ -43,7 +43,7 @@ def main():
             "scope": "Xbox XDXR factory construction, COM identity and caller allocator only; no compilation methods were called. This does not implement or establish ray-compiler coverage.",
             "reference_sha256": digest(args.reference), "guest_sha256": digest(exe), "host": host.version,
             "class_guid": "16bb3c85-006d-4b72-9e10-63cd97df57f0",
-            "additional_interface_guid": "ecc8691b-c1db-4dc0-855e-65f6c551af49",
+            "ino_marshal_guid": "ecc8691b-c1db-4dc0-855e-65f6c551af49",
             "function_table_rvas": ["0x" + fields.pop(f"slot{i}") for i in range(13)],
             "observations": fields,
             "limits": ["Slots after IUnknown are not named or called by this probe.",

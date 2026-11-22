@@ -8,7 +8,7 @@
 #include <cstdint>
 
 constexpr GUID clsid{0x16bb3c85,0x006d,0x4b72,{0x9e,0x10,0x63,0xcd,0x97,0xdf,0x57,0xf0}};
-constexpr GUID custom{0xecc8691b,0xc1db,0x4dc0,{0x85,0x5e,0x65,0xf6,0xc5,0x51,0xaf,0x49}};
+constexpr GUID no_marshal{0xecc8691b,0xc1db,0x4dc0,{0x85,0x5e,0x65,0xf6,0xc5,0x51,0xaf,0x49}};
 constexpr GUID bad{0x12345678,0x8765,0x4321,{1,2,3,4,5,6,7,8}};
 using Factory = HRESULT (WINAPI*)(REFCLSID, REFIID, void**);
 using Factory2 = HRESULT (WINAPI*)(IMalloc*, REFCLSID, REFIID, void**);
@@ -42,27 +42,27 @@ int wmain(int argc, wchar_t **argv) {
     if(bad_iid!=E_NOINTERFACE || invalid) return 7;
     IUnknown* obj=nullptr; HRESULT hr=create(clsid,IID_IUnknown,reinterpret_cast<void**>(&obj));
     if(hr!=S_OK || !obj) return 8;
-    void* custom_obj=nullptr; void* class_obj=nullptr; void* identity=nullptr;
-    HRESULT custom_hr=obj->QueryInterface(custom,&custom_obj), class_hr=obj->QueryInterface(clsid,&class_obj);
+    void* no_marshal_obj=nullptr; void* class_obj=nullptr; void* identity=nullptr;
+    HRESULT no_marshal_hr=obj->QueryInterface(no_marshal,&no_marshal_obj), class_hr=obj->QueryInterface(clsid,&class_obj);
     HRESULT identity_hr=obj->QueryInterface(IID_IUnknown,&identity);
-    if(custom_hr!=S_OK || class_hr!=S_OK || identity_hr!=S_OK || custom_obj!=obj || class_obj!=obj || identity!=obj) return 9;
+    if(no_marshal_hr!=S_OK || class_hr!=S_OK || identity_hr!=S_OK || no_marshal_obj!=obj || class_obj!=obj || identity!=obj) return 9;
     void* bad_query = reinterpret_cast<void*>(uintptr_t(0x1234));
     const HRESULT query_hr = obj->QueryInterface(bad, &bad_query);
     if (query_hr != E_NOINTERFACE || bad_query != reinterpret_cast<void*>(uintptr_t(0x1234))) return 16;
     auto allocator = Microsoft::WRL::Make<Allocator>();
     if (!allocator) return 13;
     IUnknown* custom_alloc_obj=nullptr;
-    if (create2(allocator.Get(),clsid,custom,reinterpret_cast<void**>(&custom_alloc_obj))!=S_OK ||
+    if (create2(allocator.Get(),clsid,no_marshal,reinterpret_cast<void**>(&custom_alloc_obj))!=S_OK ||
         !custom_alloc_obj || !allocator->allocations) return 14;
     if (custom_alloc_obj->Release()!=0 || allocator->allocations!=allocator->frees) return 15;
     void* vtable=*reinterpret_cast<void**>(obj); auto slots=static_cast<void**>(vtable);
     const auto base=reinterpret_cast<uintptr_t>(module);
     FILE* f=nullptr;if(_wfopen_s(&f,argv[1],L"wb"))return 10;
-    std::fprintf(f,"bad_class=%08lx\nbad_iid=%08lx\ncustom_qi=%08lx\nclass_qi=%08lx\nidentity=%08lx\n",bad_class,bad_iid,custom_hr,class_hr,identity_hr);
+    std::fprintf(f,"bad_class=%08lx\nbad_iid=%08lx\nno_marshal_qi=%08lx\nclass_qi=%08lx\nidentity=%08lx\n",bad_class,bad_iid,no_marshal_hr,class_hr,identity_hr);
     std::fprintf(f,"bad_query=%08lx\nbad_query_output_unchanged=1\n",query_hr);
     std::fprintf(f,"allocator_allocations=%lu\nallocator_frees=%lu\n",allocator->allocations.load(),allocator->frees.load());
     for(int i=0;i<13;i++)std::fprintf(f,"slot%d=%llx\n",i,static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(slots[i])-base));
-    static_cast<IUnknown*>(identity)->Release(); static_cast<IUnknown*>(class_obj)->Release(); static_cast<IUnknown*>(custom_obj)->Release();
+    static_cast<IUnknown*>(identity)->Release(); static_cast<IUnknown*>(class_obj)->Release(); static_cast<IUnknown*>(no_marshal_obj)->Release();
     ULONG final=obj->Release(); std::fprintf(f,"last_release=%lu\n",final); if(std::fclose(f))return 11;
     return final==0?0:12;
 }

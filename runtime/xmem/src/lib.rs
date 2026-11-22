@@ -3,6 +3,7 @@ mod physical_pages;
 mod virtual_memory;
 
 use core::{ffi::c_void, mem::size_of, ptr};
+use std::sync::RwLock;
 
 use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, SetLastError};
 use windows_sys::Win32::System::Memory::{
@@ -16,6 +17,58 @@ use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORY
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 const PLACEMENT: u64 = 0x3080_4000;
+
+type AllocateHook = unsafe extern "system" fn(usize, u64) -> *mut c_void;
+type FreeHook = unsafe extern "system" fn(*mut c_void, u64);
+
+#[derive(Clone, Copy)]
+struct AllocationHooks {
+    allocate: AllocateHook,
+    release: Option<FreeHook>,
+}
+
+// Publish the pair together and release the read lock before invoking a guest
+// callback, so a callback can replace hooks without deadlocking.
+static ALLOCATION_HOOKS: RwLock<Option<AllocationHooks>> = RwLock::new(None);
+
+/// Install callbacks as a pair. A null allocator restores both defaults.
+///
+/// # Safety
+/// Nonnull callbacks must obey the Xbox allocation ABI and remain valid until
+/// no in-flight allocation or free call can invoke them.
+#[unsafe(export_name = "XMemSetAllocationHooks")]
+pub unsafe extern "system" fn set_allocation_hooks(
+    allocate: Option<AllocateHook>,
+    release: Option<FreeHook>,
+) {
+    let mut hooks = ALLOCATION_HOOKS.write().unwrap_or_else(|e| e.into_inner());
+    *hooks = allocate.map(|allocate| AllocationHooks { allocate, release });
+}
+
+/// Allocate through the installed callback or the default provider.
+#[unsafe(export_name = "XMemAlloc")]
+pub extern "system" fn alloc(bytes: usize, attributes: u64) -> *mut c_void {
+    let hooks = *ALLOCATION_HOOKS.read().unwrap_or_else(|e| e.into_inner());
+    match hooks {
+        // SAFETY: Installing the callback requires the caller to keep it valid.
+        Some(hooks) => unsafe { (hooks.allocate)(bytes, attributes) },
+        None => alloc_default(bytes, attributes),
+    }
+}
+
+/// Release through the installed callback or the default provider.
+///
+/// # Safety
+/// The pointer and attributes must satisfy the currently installed free callback.
+#[unsafe(export_name = "XMemFree")]
+pub unsafe extern "system" fn free(memory: *mut c_void, attributes: u64) {
+    let hooks = *ALLOCATION_HOOKS.read().unwrap_or_else(|e| e.into_inner());
+    match hooks {
+        Some(AllocationHooks { release: Some(release), .. }) => unsafe { release(memory, attributes) },
+        Some(_) => unsafe { SetLastError(ERROR_INVALID_PARAMETER) },
+        None => unsafe { free_default(memory, attributes) },
+    }
+}
 
 /// Encode the four-byte tag in the console allocation tag's high word.
 #[unsafe(export_name = "XMemMakeTag")]

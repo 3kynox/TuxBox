@@ -208,8 +208,8 @@
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox Rust CPU memory provider.",
-      "scope": "Nine exports cover heap allocation, working-set statistics, virtual memory, and the CPU side of the title\u2019s 64 KiB physical-page profile. The guest preserves 131,072 bytes across unmap and remap in reversed page order. XMemMakeTag matches the supplied routine on 5,120 inputs. XMemVirtualQuery explicitly reports unsupported pending a verified Xbox success path.",
-      "remaining": "GPU-visible backing, concurrent aliases, the Xbox partition allocator, additional allocation profiles and retail validation remain open. XMemVirtualQuery console metadata and success-path reference comparison remain open.",
+      "scope": "Nine exports cover heap allocation, working-set statistics, virtual memory, and the CPU side of the title\u2019s 64 KiB physical-page profile. The guest preserves 131,072 bytes across unmap and remap in reversed page order. XMemMakeTag matches the supplied routine on 5,120 inputs. XMemVirtualQuery explicitly reports unsupported pending a verified Xbox success path. Allocation and free calls route through installed callbacks; a local reference control checks argument forwarding and restoring defaults.",
+      "remaining": "GPU-visible backing, concurrent aliases, the Xbox partition allocator, additional allocation profiles and retail validation remain open. XMemVirtualQuery console metadata and success-path reference comparison remain open. Memory profiling callbacks and concurrent guest callback lifetime remain unverified.",
       "evidence": [
         "runtime/xmem/xmem.def",
         "runtime/xmem/README.md",
@@ -218,7 +218,8 @@
         "evidence/providers/xmem-ge.json",
         "evidence/matrix-awakens/xmem-physical-pages.json",
         "evidence/providers/xmem-pages.json",
-        "evidence/providers/xmem-query.json"
+        "evidence/providers/xmem-query.json",
+        "evidence/providers/xmem-hooks.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/xmem.dll",
@@ -237,7 +238,8 @@
           "XMemGetWorkingSetStatistics",
           "XMemMapPhysicalPages",
           "XMemVirtualAlloc",
-          "XMemMakeTag"
+          "XMemMakeTag",
+          "XMemSetAllocationHooks"
         ],
         "notes": "The physical-page controls validate CPU data and ownership for flags 0x20400000. The packaged DLL could not initialize xbthunk on either Proton build."
       },
@@ -269,8 +271,8 @@
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox texture address computer.",
-      "scope": "Computes linear and 4 KiB tiled 2D textures, array slices and packed mip chains. TuxBox and the supplied DLL matched on 9,231,018 texel or block addresses across 78 formats and 156 layouts. A separate check includes eight descriptors from Frosty. XGComputeBufferLayout matches the supplied DLL on 967 buffer descriptors, including invalid arguments and full output guards.",
-      "remaining": "Further formats and tiling modes, 3D textures, multisampling and subresource copies. Calling an unimplemented texture computer method terminates the guest.",
+      "scope": "Computes linear and 4 KiB tiled 2D textures, array slices and packed mip chains. TuxBox and the supplied DLL matched on 9,231,018 texel or block addresses across 78 formats and 156 layouts. A separate check includes eight descriptors from Frosty. XGComputeBufferLayout matches the supplied DLL on 967 buffer descriptors, including invalid arguments and full output guards. The 2D-specific layout and computer exports match the supplied DLL on 7,020 sampled layouts and 81,432 sampled addresses for the checked usage and swizzle profiles.",
+      "remaining": "Further formats and tiling modes, 3D textures, multisampling and subresource copies. Calling an unimplemented texture computer method terminates the guest. Other 2D-specific descriptor profiles return unsupported.",
       "evidence": [
         "runtime/xg-layout/src/lib.rs",
         "evidence/providers/xg-control.json",
@@ -279,7 +281,8 @@
         "evidence/providers/ge.json",
         "evidence/providers/xg-formats.json",
         "evidence/providers/xg-placement-layouts.json",
-        "evidence/providers/xg-buffer-layout.json"
+        "evidence/providers/xg-buffer-layout.json",
+        "evidence/providers/xg-texture2d-layout.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/xg_xs.dll",
@@ -288,7 +291,9 @@
         "data_exports": [],
         "verified": [
           "XGCreateTextureComputer",
-          "XGComputeBufferLayout"
+          "XGComputeBufferLayout",
+          "XGComputeTexture2DLayout",
+          "XGCreateTexture2DComputer"
         ]
       },
       "inventory": {

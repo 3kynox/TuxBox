@@ -4,7 +4,7 @@ use core::ptr;
 use core::sync::atomic::{AtomicU32, Ordering};
 use std::alloc::{Layout as Allocation, alloc};
 use tuxbox_xg_layout::{Desc, Layout, Plane};
-use windows_sys::Win32::Foundation::{E_INVALIDARG, E_OUTOFMEMORY, E_POINTER, S_OK};
+use windows_sys::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL, E_OUTOFMEMORY, E_POINTER, S_OK};
 
 #[repr(C)]
 pub struct Computer {
@@ -44,7 +44,11 @@ unsafe extern "system" fn compute_buffer_layout(desc: *const BufferDesc, out: *m
     unsafe {
         out.write_bytes(0, 1);
         (*out).bytes = u64::from(desc.size);
-        (*out).alignment = if desc.options & 0x0c00_0000 != 0 { 65536 } else { 4 };
+        (*out).alignment = if desc.options & 0x0c00_0000 != 0 {
+            65536
+        } else {
+            4
+        };
         (*out).mips = 1;
         (*out).dimension = 1;
     }
@@ -95,14 +99,123 @@ unsafe extern "system" fn get_layout(this: &Computer, out: *mut Layout) -> i32 {
     }
     // The guest supplies one complete layout. Inactive planes and reserved
     // fields have a defined zero representation, irrespective of prior contents.
+    unsafe { write_texture_layout(out, this.plane) };
+    S_OK
+}
+
+/// # Safety
+/// `out` points to a writable `Layout` disjoint from `plane`.
+unsafe fn write_texture_layout(out: *mut Layout, plane: Plane) {
     unsafe {
         out.write_bytes(0, 1);
-        (*out).bytes = this.plane.size;
-        (*out).alignment = this.plane.alignment;
-        (*out).mips = this.plane.mip_count();
+        (*out).bytes = plane.size;
+        (*out).alignment = plane.alignment;
+        (*out).mips = plane.mip_count();
         (*out).plane_count = 1;
-        (*out).planes[0] = this.plane;
+        (*out).planes[0] = plane;
         (*out).dimension = 3;
+    }
+}
+
+/// Xbox-specific 2D texture descriptor, distinct from a D3D12 resource desc.
+#[repr(C)]
+pub struct Texture2DDesc {
+    width: u32,
+    height: u32,
+    mips: u32,
+    slices: u32,
+    format: u32,
+    samples: u32,
+    quality: u32,
+    usage: u32,
+    bind_flags: u32,
+    cpu_access: u32,
+    misc_flags: u32,
+    swizzle: u32,
+    pitch: u32,
+}
+
+fn texture_2d_plane(desc: &Texture2DDesc) -> Result<Plane, i32> {
+    // Restrict support to the two usage/swizzle combinations compared against
+    // the supplied Xbox library. Other combinations are not equivalent to
+    // blindly substituting a D3D12 resource descriptor.
+    if !matches!((desc.usage, desc.swizzle), (3, 0) | (0 | 1, 5))
+        || desc.bind_flags != 8
+        || desc.cpu_access != 0
+        || desc.misc_flags != 0
+        || desc.pitch != 0
+        || desc.samples != 1
+        || desc.quality != 0
+        || desc.mips == 0
+    {
+        return Err(E_NOTIMPL);
+    }
+    let mips = u16::try_from(desc.mips).map_err(|_| E_INVALIDARG)?;
+    let slices = u16::try_from(desc.slices).map_err(|_| E_INVALIDARG)?;
+    Plane::compute(&Desc {
+        dimension: 3,
+        alignment: 0,
+        width: u64::from(desc.width),
+        height: desc.height,
+        slices,
+        mips,
+        format: desc.format,
+        samples: 1,
+        quality: 0,
+        layout: 256 + desc.swizzle,
+        flags: 0,
+    })
+}
+
+/// # Safety
+/// Non-null pointers must reference a readable descriptor and a disjoint,
+/// writable layout. Unsupported descriptor combinations return an error.
+#[unsafe(export_name = "XGComputeTexture2DLayout")]
+unsafe extern "system" fn compute_texture_2d(desc: *const Texture2DDesc, out: *mut Layout) -> i32 {
+    if desc.is_null() || out.is_null() {
+        return E_INVALIDARG;
+    }
+    let plane = match texture_2d_plane(unsafe { &*desc }) {
+        Ok(plane) => plane,
+        Err(hr) => return hr,
+    };
+    unsafe { write_texture_layout(out, plane) };
+    S_OK
+}
+
+/// # Safety
+/// Non-null pointers must reference a readable descriptor and a disjoint,
+/// writable output pointer. Release a successful object through slot 1.
+#[unsafe(export_name = "XGCreateTexture2DComputer")]
+unsafe extern "system" fn create_texture_2d(
+    desc: *const Texture2DDesc,
+    out: *mut *mut Computer,
+) -> i32 {
+    if desc.is_null() || out.is_null() {
+        return E_INVALIDARG;
+    }
+    unsafe { out.write(ptr::null_mut()) };
+    let plane = match texture_2d_plane(unsafe { &*desc }) {
+        Ok(plane) => plane,
+        Err(hr) => return hr,
+    };
+    unsafe { allocate_computer(plane, out) }
+}
+
+/// # Safety
+/// `out` must be a valid writable pointer, disjoint from the new object.
+unsafe fn allocate_computer(plane: Plane, out: *mut *mut Computer) -> i32 {
+    let object = unsafe { alloc(Allocation::new::<Computer>()).cast::<Computer>() };
+    if object.is_null() {
+        return E_OUTOFMEMORY;
+    }
+    unsafe {
+        object.write(Computer {
+            methods: &METHODS,
+            refs: AtomicU32::new(1),
+            plane,
+        });
+        out.write(object);
     }
     S_OK
 }
@@ -147,17 +260,5 @@ unsafe extern "system" fn create(desc: *const Desc, out: *mut *mut Computer) -> 
         Ok(p) => p,
         Err(hr) => return hr,
     };
-    let object = unsafe { alloc(Allocation::new::<Computer>()).cast::<Computer>() };
-    if object.is_null() {
-        return E_OUTOFMEMORY;
-    }
-    unsafe {
-        object.write(Computer {
-            methods: &METHODS,
-            refs: AtomicU32::new(1),
-            plane,
-        });
-        out.write(object);
-    }
-    S_OK
+    unsafe { allocate_computer(plane, out) }
 }

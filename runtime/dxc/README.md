@@ -14,3 +14,5 @@ python3 tuxbox.py verify --only dxc-utils --proton "/path/to/Proton" \
 ```
 
 Full verification includes this suite when the desktop DLL is staged. The TuxBox forwarders generate desktop DXIL. Xbox GPU instruction generation, Xbox-specific shader intrinsics and the two Scarlett XDXR factories remain open. The paired control uses the same guest executables beside the supplied console compiler and its shader backends. [Control results](../../evidence/providers/dxc-factories.json)
+
+The supplied Series compiler exposes two XDXR factories at ordinals 1 and 2. An original-DLL control verified object construction, COM identity, `INoMarshal`, rejected class and interface IDs, caller allocator lifetime, and release. Binary inspection identifies the object as `IXdxrCompiler` and its apparent 13-slot table; the control records slot addresses but does not call the compiler methods. Those methods and their inputs and outputs remain unimplemented and are not counted as covered. [Factory control and limitations](../../evidence/providers/xdxr-factory-abi.json)

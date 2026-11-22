@@ -178,6 +178,64 @@ static int allocation_tags(void)
     return 0;
 }
 
+static unsigned hook_alloc_calls, hook_free_calls;
+static SIZE_T hook_bytes;
+static UINT64 hook_alloc_attributes, hook_free_attributes;
+static void *hook_freed;
+static BYTE hook_storage[16];
+
+static void *WINAPI guest_alloc_hook(SIZE_T bytes, UINT64 attributes)
+{
+    ++hook_alloc_calls;
+    hook_bytes = bytes;
+    hook_alloc_attributes = attributes;
+    return hook_storage;
+}
+
+static void WINAPI guest_free_hook(void *memory, UINT64 attributes)
+{
+    ++hook_free_calls;
+    hook_freed = memory;
+    hook_free_attributes = attributes;
+}
+
+static void *WINAPI reentrant_alloc_hook(SIZE_T bytes, UINT64 attributes)
+{
+    (void)bytes; (void)attributes;
+    XMemSetAllocationHooks(NULL, NULL);
+    return hook_storage;
+}
+
+static int allocation_hooks(void)
+{
+    HMODULE module = GetModuleHandleW(L"xmem.dll");
+    REQUIRE(GetProcAddress(module, "XMemSetAllocationHooks") == GetProcAddress(module, MAKEINTRESOURCEA(25)));
+    REQUIRE(GetProcAddress(module, "XMemAlloc") != GetProcAddress(module, "XMemAllocDefault"));
+    REQUIRE(GetProcAddress(module, "XMemFree") != GetProcAddress(module, "XMemFreeDefault"));
+    XMemSetAllocationHooks(guest_alloc_hook, guest_free_hook);
+    REQUIRE(XMemAlloc(0, 0x1234567887654321ULL) == hook_storage);
+    REQUIRE(hook_alloc_calls == 1 && hook_bytes == 0 && hook_alloc_attributes == 0x1234567887654321ULL);
+    XMemFree(NULL, 0x1020304050607080ULL);
+    REQUIRE(hook_free_calls == 1 && hook_freed == NULL && hook_free_attributes == 0x1020304050607080ULL);
+    REQUIRE(XMemAlloc(17, 0x9988776655443322ULL) == hook_storage);
+    XMemFree(hook_storage, 0x8877665544332211ULL);
+    REQUIRE(hook_alloc_calls == 2 && hook_bytes == 17 && hook_alloc_attributes == 0x9988776655443322ULL);
+    REQUIRE(hook_free_calls == 2 && hook_freed == hook_storage && hook_free_attributes == 0x8877665544332211ULL);
+    // A null allocator resets the pair even when a release callback is supplied.
+    XMemSetAllocationHooks(NULL, guest_free_hook);
+    void *ordinary = XMemAlloc(32, XMEM_ORDINARY_ATTRIBUTES);
+    REQUIRE(ordinary && HeapValidate(GetProcessHeap(), 0, ordinary));
+    XMemFree(ordinary, XMEM_ORDINARY_ATTRIBUTES);
+    REQUIRE(hook_alloc_calls == 2 && hook_free_calls == 2);
+    XMemSetAllocationHooks(reentrant_alloc_hook, guest_free_hook);
+    REQUIRE(XMemAlloc(1, 0) == hook_storage);
+    ordinary = XMemAlloc(32, XMEM_ORDINARY_ATTRIBUTES);
+    REQUIRE(ordinary && HeapValidate(GetProcessHeap(), 0, ordinary));
+    XMemFree(ordinary, XMEM_ORDINARY_ATTRIBUTES);
+    XMemSetAllocationHooks(NULL, NULL);
+    return 0;
+}
+
 typedef void *(WINAPI *Allocation)(SIZE_T, UINT64);
 typedef void (WINAPI *Release)(void *, UINT64);
 
@@ -284,13 +342,21 @@ int wmain(int argc, wchar_t **argv)
     BOOL pages_only = argc >= 2 && !wcscmp(argv[1], L"--pages");
     BOOL query_only = argc >= 2 && !wcscmp(argv[1], L"--query");
     BOOL tag_only = argc >= 2 && !wcscmp(argv[1], L"--tags");
-    if (pages_only || query_only || tag_only) { --argc; ++argv; }
+    BOOL hooks_only = argc >= 2 && !wcscmp(argv[1], L"--hooks");
+    if (pages_only || query_only || tag_only || hooks_only) { --argc; ++argv; }
     if (!(argc == 1 || (argc == 3 && wcscmp(argv[1], L"--report") == 0))) {
-        fputs("usage: xmem-smoke.exe [--pages|--query|--tags] [--report FILE]\n", stderr);
+        fputs("usage: xmem-smoke.exe [--pages|--query|--tags|--hooks] [--report FILE]\n", stderr);
         return 2;
     }
     if (argc == 3 && _wfopen_s(&report, argv[2], L"wb") != 0) return 2;
     REQUIRE(app_local_provider());
+    if (hooks_only) {
+        REQUIRE(!allocation_hooks());
+        const char result[] = "xmem-hooks PASS calls=2/2 zero-size=1 null-free=1 restore=1 reentrant=1\n";
+        if (report && (fputs(result, report) == EOF || fclose(report))) return 2;
+        fputs(result, stdout);
+        return 0;
+    }
     if (tag_only) {
         REQUIRE(!allocation_tags());
         const char result[] = "xmem-tags PASS count=5120 hash=d4bf30c57509b176\n";
