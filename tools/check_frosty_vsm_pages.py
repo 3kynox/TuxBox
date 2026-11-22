@@ -21,6 +21,53 @@ from project_tuxbox.shader_prep import compiler_tools
 GUARD = 0xdeadbeef
 
 
+def compact_feedback(active, count, capacity, valid_limit):
+    # One guest wave reserves a contiguous range before checking the
+    # referenced material index. Invalid indices still consume a slot.
+    cb = [0] * 64
+    cb[12], cb[6], cb[18] = count, capacity, valid_limit
+    records = [word for i in range(64) for word in (0x12340000 + i, 0x40 + i)]
+    indices = list(range(64))
+    hits = [0] * 64
+    for lane in active:
+        hits[lane] = 7 + lane
+    seed = [[GUARD] * 160]
+    seed[0][0] = 2
+    expected = [seed[0].copy()]
+    selected = [i for i in active if i < count]
+    expected[0][0] += len(selected)
+    for rank, lane in enumerate(selected):
+        dst = 3 + rank
+        index = indices[lane]
+        if dst < capacity and index < valid_limit:
+            expected[0][2 * dst] = records[2 * index]
+            expected[0][2 * dst + 1] = (hits[lane] << 16) | records[2 * index + 1]
+    return cb, [records, indices, hits], seed, [8], 4, 1, 1, expected, {
+        "selected": len(selected), "count": count,
+        "capacity": capacity, "valid_limit": valid_limit,
+    }
+
+
+def cull_voxel(active, count, small):
+    cb = [0] * 64
+    cb[8] = count
+    cb[19] = 0x3f000000  # Minimum radius 0.5.
+    source = [0] * (128 * 4)
+    for lane in range(64):
+        center = 0 if lane in active else 0x42c80000  # 0.0 or 100.0.
+        extent = 0 if lane in small else 0x3f800000  # 0.0 or 1.0.
+        source[8 * lane:8 * lane + 3] = [center] * 3
+        source[8 * lane + 4:8 * lane + 7] = [extent] * 3
+    selected = [lane for lane in active if lane < count and lane not in small]
+    seed = [[5, GUARD], [GUARD] * 80]
+    expected = [row.copy() for row in seed]
+    expected[0][0] += len(selected)
+    expected[1][5:5 + len(selected)] = selected
+    return cb, source, seed, [4, 4], 16, 1, 1, expected, {
+        "count": count, "selected": len(selected),
+    }
+
+
 def command_space(counts):
     cb = [0] * 64
     cb[0] = len(counts)
@@ -126,7 +173,7 @@ def main():
     p.add_argument("--prefix", type=Path)
     p.add_argument("--proton", type=Path)
     p.add_argument("--xshader", type=Path)
-    p.add_argument("--entry", type=int, choices=(1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 3403, 3477),
+    p.add_argument("--entry", type=int, choices=(1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3403, 3477),
                    help="run the controls for one archive entry")
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
@@ -135,6 +182,23 @@ def main():
     compiler = args.xshader.resolve() if args.xshader else compiler
     data, entries = global_archive(args.mount)
     cases, libraries = {}, {}
+    for name, active, count, small in (
+        ("empty", [], 64, []),
+        ("sparse", [0, 2, 31, 32, 33, 63], 64, []),
+        ("partial", [0, 2, 31, 32, 33, 63], 33, []),
+        ("small", [0, 2, 31, 32, 33, 63], 64, [2, 32]),
+        ("full", list(range(64)), 64, []),
+    ):
+        cases["voxel_" + name] = (2138, cull_voxel(active, count, small))
+    for name, active, count, capacity, valid_limit in (
+        ("empty", [], 64, 80, 64),
+        ("sparse", [0, 2, 31, 32, 33, 63], 64, 80, 64),
+        ("partial", [0, 2, 31, 32, 33, 63], 33, 80, 64),
+        ("capacity", [0, 2, 31, 32, 33, 63], 64, 6, 64),
+        ("indices", [0, 2, 31, 32, 33, 63], 64, 80, 33),
+        ("full", list(range(64)), 64, 80, 64),
+    ):
+        cases["feedback_" + name] = (1016, compact_feedback(active, count, capacity, valid_limit))
     for name, counts in {
         "empty": [],
         "one": [3],
@@ -183,7 +247,7 @@ def main():
                     words(work / f"{name}.b{i}", constants)
             else:
                 words(work / (name+".cbv"), cb)
-            if entry in (1243, 1257, 1793, 3477, 3403):
+            if entry in (1016, 1243, 1257, 1793, 3477, 3403):
                 for i, records in enumerate(srv):
                     words(work / f"{name}.t{i}", records)
             else:

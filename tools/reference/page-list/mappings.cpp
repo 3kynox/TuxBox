@@ -45,6 +45,8 @@ static void dispatch(Context &ctx, const std::string &name, UINT entry, UINT gro
     const std::vector<UINT> srvs = cluster ? std::vector<UINT>{16,16,16,4,4,4,4,16,4,800,4}
                                            : instance ? std::vector<UINT>{16,16,16,4,4,4,4,800,8,4}
                                            : cards ? std::vector<UINT>{16, 4, 4, 4}
+                                           : entry == 1016 ? std::vector<UINT>{8, 4, 4}
+                                           : entry == 2138 ? std::vector<UINT>{16}
                                            : cached ? std::vector<UINT>{4, 4, 4, 8, 4, 4}
                                            : entry == 3477 ? std::vector<UINT>{16, 800} : std::vector<UINT>{srv_stride};
     std::vector<ComPtr<ID3D12Resource>> bound;
@@ -87,7 +89,7 @@ static void dispatch(Context &ctx, const std::string &name, UINT entry, UINT gro
         D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
         u.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
         u.Buffer.NumElements = sizes[i] / strides[i];
-        const bool typed = (entry == 1019 && i == 0) || (cluster && i == 5) || ((entry == 1213 || entry == 1215 || entry == 1230) && i == 0)
+        const bool typed = ((entry == 1019 || entry == 2138) && i == 0) || (cluster && i == 5) || ((entry == 1213 || entry == 1215 || entry == 1230) && i == 0)
                         || ((entry == 1219 || entry == 1236) && i == 1);
         u.Buffer.StructureByteStride = typed ? 0 : strides[i];
         if (typed) u.Format = DXGI_FORMAT_R32_UINT;

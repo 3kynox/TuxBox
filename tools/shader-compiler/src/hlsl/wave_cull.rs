@@ -15,6 +15,10 @@ pub(super) fn recognize(ex: &ShaderExtract) -> bool {
             && matches_program(&ex.isa, 4604, 0x3a8e759a33ecc608)
         || ex.entry.as_deref() == Some("AllocateCommandInstanceOutputSpaceCs")
             && matches_program(&ex.isa, 468, 0xf082cd3768ec31f0)
+        || ex.entry.as_deref() == Some("CompactFeedbackHashTableCS")
+            && matches_program(&ex.isa, 348, 0x5976decd660b00a3)
+        || ex.entry.as_deref() == Some("CullToVoxelClipmapCS")
+            && matches_program(&ex.isa, 404, 0xcc708f80a9096e5d)
         || ex.entry.as_deref() == Some("CullPerPageDrawCommandsCs")
             && matches_program(&ex.isa, 8052, 0x5d796603fd1dea38)
         || ex.entry.as_deref() == Some("BuildCardsUpdateListCS") && [

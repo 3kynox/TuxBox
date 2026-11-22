@@ -595,6 +595,7 @@ static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, 
         for (UINT entry : {218u,1064u}) for (bool active : {false,true})
             probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,entry,active);
         probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,1064,true,true);
+        probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,218,true,false,true,true);
     }
 #endif
 #ifdef TUXBOX_SCREEN_GATHER_PROBE

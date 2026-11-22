@@ -109,6 +109,10 @@ python tools/check_frosty_nanite_mesh.py /path/to/Mount --adapter 10de:2705 \
 
 ## Virtual shadow maps
 
+The packaged `CompactFeedbackHashTableCS` shader compacts nonzero feedback into a bounded output list. Radeon and GeForce matched a CPU model across six dispatches, including lanes on both sides of the wave64 boundary, a partial input, exhausted capacity and invalid record indices. [GPU readbacks](../evidence/matrix-awakens/compact-feedback.json)
+
+The packaged `CullToVoxelClipmapCS` shader builds a list of objects intersecting a voxel clipmap. Radeon and GeForce matched a CPU model for intersecting, distant and undersized objects across sparse, full and partial waves. [GPU readbacks](../evidence/matrix-awakens/voxel-clipmap-cull.json)
+
 Frosty uses compute shaders to allocate physical shadow pages, choose pages for initialization and merging, and compact the views that need rendering. GeForce and Radeon ran ten packaged shaders and matched every one of the 137,694 output words checked on each GPU. The cases include an exhausted free-page pool, requests in both halves of a 64-lane wave, and selected mip levels from multiple views. Raising the depth texture from zero to one culled all six shadow instances that previously reached the work queue. [Shadow page and view readbacks](../evidence/matrix-awakens/virtual-shadow-pages.json)
 
 ## Nanite instance culling

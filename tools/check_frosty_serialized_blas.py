@@ -109,7 +109,11 @@ def main():
     parser.add_argument("mount", type=Path, help="original Frosty Mount directory")
     parser.add_argument("--mesh", choices=MESHES, default="sphere")
     parser.add_argument("--vertices", type=Path, help="write verified triangles as unindexed little-endian float3 vertices")
+    parser.add_argument("--traversal", action="store_true",
+                        help="also check sphere BVH node traversal against the indexed render mesh")
     args = parser.parse_args()
+    if args.traversal and args.mesh != "sphere":
+        parser.error("--traversal currently supports the sphere mesh")
     try:
         mesh = MESHES[args.mesh]
         asset = read_asset(args.mount, mesh)
@@ -137,6 +141,18 @@ def main():
         if result != expected or len(result) != mesh.primitive_count * 44:
             raise ValueError("Decoded geometry ID, primitive ID, winding or coordinates differ from the render mesh")
         vertices = b"".join(result[i + 8:i + 44] for i in range(0, len(result), 44))
+        if args.traversal:
+            with TemporaryDirectory() as directory:
+                work = Path(directory)
+                control = work / "traverse"
+                serialized = work / "sphere.serialized"
+                render_mesh = work / "sphere.xyz"
+                serialized.write_bytes(encoded)
+                render_mesh.write_bytes(vertices)
+                subprocess.run(["rustc", "--edition=2024", "-A", "dead_code", "-O",
+                                ROOT / "tools/reference/blas/traverse_serialized.rs",
+                                "-o", control], check=True)
+                subprocess.run([control, serialized, render_mesh], check=True)
         if args.vertices:
             args.vertices.write_bytes(vertices)
         print(f"{args.mesh}: {mesh.primitive_count} Xbox BLAS triangles match the indexed render mesh byte for byte")
