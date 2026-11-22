@@ -139,6 +139,27 @@ static int dump_scales(FILE *file, const uint32_t *out) {
   }
   return 1;
 }
+static const int mixed_exponents[10][3] = {
+    {100, -100, 0}, {120, -120, 0}, {110, -100, 0}, {-100, 100, 0},
+    {100, 0, -100}, {0, 100, -100}, {-120, 120, 0}, {60, -60, 0},
+    {0, 0, -120},   {0, 0, 100}};
+static int dump_mixed(FILE *file, const uint32_t *out) {
+  if (fwrite("TXBVM001", 1, 8, file) != 8)
+    return 0;
+  for (unsigned i = 0; i < 10; i++) {
+    const uint32_t *node = out + 8192 + i * 16;
+    float sx, sy, sz;
+    uint32_t z = (uint32_t)(mixed_exponents[i][2] + 127) << 23;
+    memcpy(&sx, node + 3, 4);
+    memcpy(&sy, node + 7, 4);
+    memcpy(&sz, &z, 4);
+    float origin[3] = {sx * .25f, sy * .25f, -sz};
+    float direction[3] = {0, 0, 1};
+    if (!write_edge_record(file, node, origin, direction, out + 2852 + i * 4))
+      return 0;
+  }
+  return 1;
+}
 int main(int argc, char **argv) {
   if (argc != 2 &&
       !(argc == 4 && (strcmp(argv[2], "--dump") == 0 ||
@@ -147,7 +168,8 @@ int main(int argc, char **argv) {
                       strcmp(argv[2], "--dump-fractional") == 0 ||
                       strcmp(argv[2], "--dump-edges") == 0 ||
                       strcmp(argv[2], "--dump-degenerate") == 0 ||
-                      strcmp(argv[2], "--dump-scales") == 0)) &&
+                      strcmp(argv[2], "--dump-scales") == 0 ||
+                      strcmp(argv[2], "--dump-mixed") == 0)) &&
       !(argc == 5 && (strcmp(argv[2], "--retail") == 0 ||
                       strcmp(argv[2], "--retail-triangles") == 0 ||
                       strcmp(argv[2], "--retail-oblique") == 0 ||
@@ -158,7 +180,7 @@ int main(int argc, char **argv) {
     fprintf(stderr,
             "usage: %s probe.hsaco "
             "[--dump|--dump-triangles|--dump-precision|--dump-fractional|--"
-            "dump-edges "
+            "dump-edges|--dump-degenerate|--dump-scales|--dump-mixed "
             "output.bin | "
             "--retail|--retail-triangles|--retail-oblique|--retail-tied|--"
             "retail-miss|--retail-edge|--retail-nearedge "
@@ -222,7 +244,7 @@ int main(int argc, char **argv) {
   CHK(hsa_executable_symbol_get_info(
       sym, HSA_EXECUTABLE_SYMBOL_INFO_KERNEL_KERNARG_SEGMENT_SIZE, &arg_size));
   void *out, *args;
-  CHK(hsa_memory_allocate(region, 32768, &out));
+  CHK(hsa_memory_allocate(region, 49152, &out));
   if ((uintptr_t)out % 256 != 0) {
     fprintf(stderr, "HSA allocation is not 256-byte aligned\n");
     return 1;
@@ -231,7 +253,7 @@ int main(int argc, char **argv) {
   CHK(hsa_memory_allocate(region, arg_size, &args));
   CHK(hsa_amd_agents_allow_access(1, &gpu, NULL, args));
   *(void **)args = out;
-  memset(out, 0, 32768);
+  memset(out, 0, 49152);
   uint32_t *node = (uint32_t *)out + 3072;
   node[0] = 0x9;
   node[1] = 0x12;
@@ -518,6 +540,12 @@ int main(int argc, char **argv) {
     node[7] = scale;
     node[15] = 9;
   }
+  for (unsigned i = 0; i < 10; i++) {
+    uint32_t *node = (uint32_t *)out + 8192 + i * 16;
+    node[3] = ((uint32_t)(mixed_exponents[i][0] + 127) << 23) + 1u;
+    node[7] = ((uint32_t)(mixed_exponents[i][1] + 127) << 23) + 3u;
+    node[15] = 9;
+  }
   hsa_signal_t signal;
   CHK(hsa_signal_create(1, 0, NULL, &signal));
   uint64_t index = hsa_queue_load_write_index_relaxed(queue);
@@ -726,6 +754,8 @@ int main(int argc, char **argv) {
       ok = dump_degenerate(dump, out);
     } else if (strcmp(argv[2], "--dump-scales") == 0) {
       ok = dump_scales(dump, out);
+    } else if (strcmp(argv[2], "--dump-mixed") == 0) {
+      ok = dump_mixed(dump, out);
     } else {
       int fractional_dump = strcmp(argv[2], "--dump-fractional") == 0;
       int precision = strcmp(argv[2], "--dump-precision") == 0;

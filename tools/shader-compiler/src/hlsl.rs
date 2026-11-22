@@ -43,6 +43,7 @@ mod lds_tile;
 mod lds_order;
 mod ps09_classify;
 mod subsurface_setup;
+mod hair_compact;
 mod packed_root;
 mod light_grid;
 mod page_waves;
@@ -859,6 +860,7 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     {
         return persistent::translate(ex);
     }
+    let hair_compact = hair_compact::prepare(ex, &mut insns);
     let subsurface_setup = subsurface_setup::prepare(ex, &mut insns);
     let material_classify = ps09_classify::prepare(ex, &mut insns);
     let classify_tiles = classify_materials::prepare(ex, &mut insns);
@@ -988,6 +990,7 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
         // These two R32_UINT UAVs hold both the atomic head and the XY rows.
         em.tbuf_uint.extend([0, 1]);
     }
+    if let Some(indirect) = hair_compact { hair_compact::resources(&mut em, indirect)?; }
     if material_classify { ps09_classify::resources(&mut em)?; }
     if classify_tiles { classify_materials::resources(&mut em)?; }
     if instance_cull { instance_cull::resources(&mut em)?; }

@@ -106,10 +106,14 @@ dominant axes, `--miss` for offset rays, `--edge` for triangle-edge rays, or
 `--float-rtz`; the default uses positive-Z unit rays.
 
 To replay native edge, degenerate, or extreme-scale cases using runtime-fed
-GPU data, generate a dump with `--dump-edges`, `--dump-degenerate`, or
-`--dump-scales`, then pass it to `tools/check_native_bvh_edges.py` with the
+GPU data, generate a dump with `--dump-edges`, `--dump-degenerate`,
+`--dump-scales`, or `--dump-mixed`, then pass it to `tools/check_native_bvh_edges.py` with the
 same Proton and prefix options as the differential tool above. The scale
 comparison currently returns nonzero because of the documented mismatches.
+The mixed-exponent comparison also returns nonzero: three of ten sampled
+cases differ by 1–2 ULP even though their final values are finite. Saturating
+overflow alone does not fix these cases. See
+`evidence/matrix-awakens/bvh-native-mixed-scale.json` for the baseline result.
 For user-owned leaves, `--retail-edge` and `--retail-nearedge` generate local
 six-case dumps accepted by the same tool; keep those dumps local.
 
@@ -124,6 +128,17 @@ so rounding the final determinant alone cannot reproduce its behavior.
 fractional-direction native result. With dynamic inputs this reproduces an
 AMD-only mismatch in the binary64 reference; the float32 split-product
 candidate matches the native words on the tested Radeon and GeForce.
+
+`tools/check_native_bvh_perf.py` measures a synthetic float32 workload after
+checking all 65,536 outputs against the native instruction. Its GPU timestamps
+include UAV barriers and cover one triangle with 1,024 distinct ray origins;
+they are not a game benchmark, a native-instruction speed comparison, or proof
+of general correctness. The control builds the required HSA and D3D12 guests
+in a temporary directory:
+
+```sh
+python tools/check_native_bvh_perf.py --hsa-root "$HSA_ROOT" --proton /path/to/proton --prefix-amd /path/to/amd-prefix --prefix-nvidia /path/to/nvidia-prefix --amd-vulkan /path/to/radv.json --output /tmp/tuxbox-bvh-perf.json
+```
 
 The descriptor encodes a zero base, full 42-bit range, closest-first sorting
 and barycentric triangle return mode. Except for the dedicated growth cases,

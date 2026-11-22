@@ -33,7 +33,7 @@ def main():
     p.add_argument("--limit", type=int)
     args = p.parse_args()
     raw = args.dump.read_bytes()
-    if raw[:8] not in (b"TXBVE001", b"TXBVD001", b"TXBVS001", b"TXBVT002") or (len(raw) - 8) % (27 * 4):
+    if raw[:8] not in (b"TXBVE001", b"TXBVD001", b"TXBVS001", b"TXBVM001", b"TXBVT002") or (len(raw) - 8) % (27 * 4):
         raise ValueError("invalid native edge dump")
     total = (len(raw) - 8) // (27 * 4)
     stop = min(total, args.offset + args.limit) if args.limit is not None else total
@@ -52,7 +52,8 @@ def main():
     [unroll] for(uint i=0;i<4;i++) data[162+id*4+i]=asuint(result[i]);
 }\n'''
     scope = {b"TXBVT002": "serialized-leaf edges", b"TXBVD001": "parallel and degenerate triangles",
-             b"TXBVS001": "extreme triangle scales", b"TXBVE001": "synthetic triangle edges"}[raw[:8]]
+             b"TXBVS001": "extreme triangle scales", b"TXBVM001": "mixed-exponent triangle scales",
+             b"TXBVE001": "synthetic triangle edges"}[raw[:8]]
     report = {"scope": f"Dynamic seeded-UAV {scope}: native gfx1036 versus float32 RTZ candidate; no general equivalence claim",
               "native_dump_sha256": hashlib.sha256(raw).hexdigest(), "offset": args.offset,
               "cases": len(cases), "hlsl_sha256": hashlib.sha256(source.encode()).hexdigest(), "adapters": {}}

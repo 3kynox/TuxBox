@@ -196,6 +196,15 @@ __kernel void probe(__global unsigned *out) {
         intersect(node, (float4)(scale * .25f, scale * .25f, -scale, 0),
                   (float4)(0, 0, 1, 0), (float4)(1, 1, 1, 0));
   }
+  const int zexp[10] = {0, 0, 0, 0, -100, -100, 0, 0, -120, 100};
+  for (uint i = 0; i < 10; i++) {
+    __global uint *record = out + 8192 + i * 16;
+    float sx = as_float(record[3]), sy = as_float(record[7]);
+    float sz = as_float((uint)(zexp[i] + 127) << 23);
+    *(__global uint4 *)(out + 2852 + i * 4) =
+        intersect(((ulong)record) >> 3, (float4)(sx * .25f, sy * .25f, -sz, 0),
+                  (float4)(0, 0, 1, 0), (float4)(1, 1, 1, 0));
+  }
   if (out[3000] == 1u) {
     const float4 origins[8] = {
         (float4)(.25f, .25f, -4.f, 0.f), (float4)(0, 0, -4, 0),
