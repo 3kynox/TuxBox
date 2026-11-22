@@ -197,6 +197,12 @@ Two indirect-tile versions pass the same provider-level checks on both GPUs, inc
 
 Frosty’s `ClassifyMaterials` shader reads the triangles visible in each 64 × 64 tile and records which materials to draw there. Tests of the packaged shader at global entry 2725 checked its draw arguments and material tile masks on both GPUs. The eight cases cover empty tiles, mixed materials, streamed cluster pages and tiles offset from the origin. [NVIDIA readbacks](../evidence/matrix-awakens/classify-materials-nvidia.json) · [Radeon readbacks](../evidence/matrix-awakens/classify-materials-amd.json)
 
+## Pixel wave elections
+
+The five remaining global raster programs contain pixel-shader EXEC elections: three mesh distance-field object-culling programs and two larger programs with additional lane permutations. [Election survey](../evidence/matrix-awakens/pixel-wave-elections.json) · [Survey tool](../tools/survey_pixel_elections.py)
+
+These programs remain untranslated. Desktop pixel shaders cannot request a fixed 64-lane wave, and replacing a wave reservation with individual atomics can select a different subset when a list overflows. Helper invocations and downstream list ordering also need verification before enabling a translation.
+
 ## Pixel shader stencil export
 
 Frosty’s global pixel shaders 1748 and 1763 read visibility data and write depth and a stencil byte for each surviving pixel. Radeon supports this output directly. On the tested RTX, TuxBox routes the stencil byte to an extra integer render target and copies it back to the depth/stencil texture. This path handles a single-sample texture with full-byte replacement on a passing fragment. In two draws per shader, all 128 depth and stencil pairs matched on each GPU, including pixels discarded by the shader and pixels rejected by the depth test. [NVIDIA readbacks](../evidence/matrix-awakens/stencil-export-nvidia.json) · [Radeon readbacks](../evidence/matrix-awakens/stencil-export-amd.json)
