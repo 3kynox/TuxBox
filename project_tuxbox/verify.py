@@ -212,8 +212,8 @@ def verify(host, output, adapter, selected=None, samples=1):
                   providers={"xcrdapi/xcrdapi.dll": ("DStorageGetFactory",)})
         if "xmem" in selected:
             check("xmem-watch", "xmem-smoke/xmem-smoke.exe", ["--watch", "--report"],
-                  r"xmem-watch PASS initial=2 reset=2 next=1 guards=2 invalid=1",
-                  providers={"xmem-smoke/xmem.dll": ("XMemGetWriteWatch",)})
+                  r"xmem-watch PASS initial=2 reset=2 next=1 guards=2 invalid=1 pause=2 resume=3",
+                  providers={"xmem-smoke/xmem.dll": ("XMemGetWriteWatch", "XMemResumeWriteWatch", "XMemSetOption")})
             check("xmem-hooks", "xmem-smoke/xmem-smoke.exe", ["--hooks", "--report"],
                   r"xmem-hooks PASS calls=2/2 zero-size=1 null-free=1 restore=1 reentrant=1",
                   providers={"xmem-smoke/xmem.dll": ("XMemAlloc", "XMemFree", "XMemSetAllocationHooks")})

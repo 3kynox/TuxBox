@@ -6,6 +6,8 @@
 
 typedef uint32_t (__attribute__((ms_abi)) *query_fn)(
     uint32_t, const void *, size_t, void **, size_t *, uint32_t *);
+typedef void (__attribute__((ms_abi)) *option_fn)(const void *);
+typedef int (__attribute__((ms_abi)) *resume_fn)(void);
 static unsigned calls;
 
 static __attribute__((ms_abi)) uint32_t watched_memory(
@@ -34,6 +36,8 @@ int main(int argc, char **argv)
     /* Substitute the imported GetWriteWatch, keeping the original thunk. */
     *(void **)(image + 0x9208) = (void *)watched_memory;
     query_fn query = (query_fn)(image + 0x4000);
+    option_fn option = (option_fn)(image + 0x3b50);
+    resume_fn resume = (resume_fn)(image + 0x4020);
     void *addresses[2] = {0};
     size_t count = 2;
     uint32_t granularity = 0;
@@ -46,6 +50,17 @@ int main(int argc, char **argv)
     granularity = 0;
     if (query(1, (void *)0x12340000, 0x23000, addresses, &count, &granularity) != 1003 ||
         calls != 1 || count != 2 || granularity != 0 || addresses[0]) return 7;
-    puts("xmem-native-watch PASS forwarded=6 paused=1003 output=untouched");
+    struct { uint32_t id, pad, value, reserved; } setting = {0x10000, 0, 1, 0};
+    *(uint32_t *)(image + 0xe850) = 0;
+    *(uint32_t *)(image + 0xe8b0) = 0;
+    if (resume() != 1) return 8;
+    option(&setting);
+    if (*(uint32_t *)(image + 0xe850) != 1 || *(uint32_t *)(image + 0xe8b0) != 1 || resume() != 0) return 9;
+    setting.value = 0;
+    setting.reserved = 1; /* Only the low 32 bits of the payload are read. */
+    option(&setting);
+    if (*(uint32_t *)(image + 0xe850) != 1 || *(uint32_t *)(image + 0xe8b0) != 0 || resume() != 1 ||
+        *(uint32_t *)(image + 0xe850) != 0) return 10;
+    puts("xmem-native-watch PASS forwarded=6 paused=1003 output=untouched option=2 resume=3");
     return 0;
 }

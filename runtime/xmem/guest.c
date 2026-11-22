@@ -186,6 +186,29 @@ static int write_watch(void)
     DWORD guest_error = XMemGetWriteWatch(0x80000000u, (void *)base, 4 * page,
                                           output.pages, &count, &granularity);
     REQUIRE(host_error != 0 && guest_error == host_error && count == expected_count);
+    REQUIRE(GetProcAddress(module, "XMemSetOption") == GetProcAddress(module, MAKEINTRESOURCEA(27)));
+    REQUIRE(GetProcAddress(module, "XMemResumeWriteWatch") == GetProcAddress(module, MAKEINTRESOURCEA(24)));
+    REQUIRE(XMemResumeWriteWatch());
+    XMEM_OPTION setting = {0x10000, 0, 1};
+    XMemSetOption(&setting);
+    memset(output.pages, 0xa5, sizeof output.pages);
+    void *untouched[4]; memset(untouched, 0xa5, sizeof untouched);
+    count = 4; granularity = 0xa5a5a5a5u;
+    REQUIRE(XMemGetWriteWatch(0, (void *)base, 4 * page, output.pages, &count, &granularity) == 1003);
+    REQUIRE(count == 4 && granularity == 0xa5a5a5a5u && !memcmp(output.pages, untouched, sizeof untouched));
+    REQUIRE(!XMemResumeWriteWatch());
+    setting.value = 0x100000000ULL; // the console uses only the low 32 bits
+    XMemSetOption(&setting);
+    REQUIRE(XMemGetWriteWatch(0, (void *)base, 4 * page, output.pages, &count, &granularity) == 1003);
+    REQUIRE(XMemResumeWriteWatch());
+    REQUIRE(!XMemGetWriteWatch(0, (void *)base, 4 * page, output.pages, &count, &granularity));
+    REQUIRE(count == 1 && output.pages[0] == (void *)(base + page));
+    setting.id = 0xfeed;
+    SetLastError(0);
+    XMemSetOption(&setting);
+    REQUIRE(GetLastError() == ERROR_NOT_SUPPORTED);
+    XMemSetOption(NULL);
+    REQUIRE(GetLastError() == ERROR_INVALID_PARAMETER);
     REQUIRE(VirtualFree((void *)base, 0, MEM_RELEASE));
     return 0;
 }
@@ -392,7 +415,7 @@ int wmain(int argc, wchar_t **argv)
     REQUIRE(app_local_provider());
     if (watch_only) {
         REQUIRE(!write_watch());
-        const char result[] = "xmem-watch PASS initial=2 reset=2 next=1 guards=2 invalid=1\n";
+        const char result[] = "xmem-watch PASS initial=2 reset=2 next=1 guards=2 invalid=1 pause=2 resume=3\n";
         if (report && (fputs(result, report) == EOF || fclose(report))) return 2;
         fputs(result, stdout);
         return 0;

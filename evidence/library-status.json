@@ -208,8 +208,8 @@
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox Rust CPU memory provider.",
-      "scope": "Nine exports cover heap allocation, working-set statistics, virtual memory, and the CPU side of the title\u2019s 64 KiB physical-page profile. The guest preserves 131,072 bytes across unmap and remap in reversed page order. XMemMakeTag matches the supplied routine on 5,120 inputs. XMemVirtualQuery explicitly reports unsupported pending a verified Xbox success path. Allocation and free calls route through installed callbacks; a local reference control checks argument forwarding and restoring defaults. XMemGetWriteWatch forwards the default unpaused desktop query, tested with host write-watch pages.",
-      "remaining": "GPU-visible backing, concurrent aliases, the Xbox partition allocator, additional allocation profiles and retail validation remain open. XMemVirtualQuery console metadata and success-path reference comparison remain open. Memory profiling callbacks and concurrent guest callback lifetime remain unverified. Write-watch pause mode and the Xbox write-watch allocation profile remain unimplemented, so that export is not counted as verified.",
+      "scope": "Nine exports cover heap allocation, working-set statistics, virtual memory, and the CPU side of the title\u2019s 64 KiB physical-page profile. The guest preserves 131,072 bytes across unmap and remap in reversed page order. XMemMakeTag matches the supplied routine on 5,120 inputs. XMemVirtualQuery explicitly reports unsupported pending a verified Xbox success path. Allocation and free calls route through installed callbacks; a local reference control checks argument forwarding and restoring defaults. XMemGetWriteWatch and XMemResumeWriteWatch match the checked suspension transitions and host dirty-page query.",
+      "remaining": "GPU-visible backing, concurrent aliases, the Xbox partition allocator, additional allocation profiles and retail validation remain open. XMemVirtualQuery console metadata and success-path reference comparison remain open. Memory profiling callbacks and concurrent guest callback lifetime remain unverified. Other XMemSetOption IDs and the Xbox write-watch allocation profile remain unimplemented; console concurrency has not been compared.",
       "evidence": [
         "runtime/xmem/xmem.def",
         "runtime/xmem/README.md",
@@ -240,7 +240,9 @@
           "XMemMapPhysicalPages",
           "XMemVirtualAlloc",
           "XMemMakeTag",
-          "XMemSetAllocationHooks"
+          "XMemSetAllocationHooks",
+          "XMemGetWriteWatch",
+          "XMemResumeWriteWatch"
         ],
         "notes": "The physical-page controls validate CPU data and ownership for flags 0x20400000. The packaged DLL could not initialize xbthunk on either Proton build."
       },

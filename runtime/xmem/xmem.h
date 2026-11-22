@@ -16,6 +16,9 @@ typedef void (WINAPI *XMEM_FREE_HOOK)(void *memory, UINT64 attributes);
 __declspec(dllimport) void WINAPI XMemSetAllocationHooks(XMEM_ALLOC_HOOK allocate, XMEM_FREE_HOOK release);
 __declspec(dllimport) UINT WINAPI XMemGetWriteWatch(DWORD flags, const void *base, SIZE_T size,
                                                    void **addresses, ULONG_PTR *count, DWORD *granularity);
+typedef struct XMEM_OPTION { UINT32 id; UINT32 reserved; UINT64 value; } XMEM_OPTION;
+__declspec(dllimport) void WINAPI XMemSetOption(const XMEM_OPTION *option);
+__declspec(dllimport) BOOL WINAPI XMemResumeWriteWatch(void);
 
 // Selector used by the Frosty retail executable. The v2 result spans 120 bytes.
 #define XMEM_TITLE_WORKING_SET_V2 0x20000001u

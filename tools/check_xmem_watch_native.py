@@ -13,7 +13,7 @@ import pefile
 
 ROOT = Path(__file__).resolve().parents[1]
 REFERENCE = "adc182acae5340b0618a3d57a239ed2e8deb305dbefc49439cb8a2d06c7ce812"
-EXPECTED = "xmem-native-watch PASS forwarded=6 paused=1003 output=untouched"
+EXPECTED = "xmem-native-watch PASS forwarded=6 paused=1003 output=untouched option=2 resume=3"
 
 
 def main():

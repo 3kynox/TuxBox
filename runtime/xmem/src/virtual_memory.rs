@@ -1,5 +1,6 @@
 //! CPU virtual memory requests observed in Frosty's binned allocator.
 use core::{ffi::c_void, ptr};
+use std::sync::Mutex;
 use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, HANDLE, SetLastError};
 use windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringA;
 use windows_sys::Win32::System::Memory::{
@@ -17,6 +18,60 @@ pub struct VirtualInfo {
     console_tag: u64,
 }
 
+#[repr(C)]
+pub struct XmemOption {
+    id: u32,
+    reserved: u32,
+    value: u64,
+}
+
+#[derive(Default)]
+struct WatchState {
+    suspension_requested: bool,
+    suspended: bool,
+}
+
+static WATCH_STATE: Mutex<WatchState> = Mutex::new(WatchState {
+    suspension_requested: false,
+    suspended: false,
+});
+
+/// Apply the observed write-watch suspension option. Other options need their
+/// own console behavior and are rejected rather than silently acknowledged.
+///
+/// # Safety
+/// `option` must be null or point to at least 12 readable bytes.
+#[unsafe(export_name = "XMemSetOption")]
+pub unsafe extern "system" fn set_option(option: *const XmemOption) {
+    if option.is_null() {
+        unsafe { SetLastError(ERROR_INVALID_PARAMETER) };
+        return;
+    }
+    let id = unsafe { option.cast::<u32>().read_unaligned() };
+    if id != 0x10000 {
+        unsafe { SetLastError(ERROR_NOT_SUPPORTED) };
+        return;
+    }
+    let value = unsafe { option.cast::<u8>().add(8).cast::<u32>().read_unaligned() };
+    let mut state = WATCH_STATE.lock().unwrap_or_else(|e| e.into_inner());
+    // The console reads the low 32 bits of the option payload.
+    state.suspension_requested = value != 0;
+    if state.suspension_requested {
+        state.suspended = true;
+    }
+}
+
+/// Resume write-watch queries after the suspension option is cleared.
+#[unsafe(export_name = "XMemResumeWriteWatch")]
+pub extern "system" fn resume_write_watch() -> i32 {
+    let mut state = WATCH_STATE.lock().unwrap_or_else(|e| e.into_inner());
+    if state.suspension_requested {
+        return 0;
+    }
+    state.suspended = false;
+    1
+}
+
 /// Query dirty pages for a desktop write-watch allocation.
 ///
 /// # Safety
@@ -31,9 +86,11 @@ pub unsafe extern "system" fn get_write_watch(
     count: *mut usize,
     granularity: *mut u32,
 ) -> u32 {
-    // The console wrapper forwards the six arguments to this host function
-    // when write-watch suspension is disabled. Console suspension controls
-    // are not yet implemented.
+    if WATCH_STATE.lock().unwrap_or_else(|e| e.into_inner()).suspended {
+        // The console returns ERROR_CANTOPEN (1003) without modifying outputs.
+        return 1003;
+    }
+    // The console forwards all six arguments to the host when not suspended.
     unsafe { GetWriteWatch(flags, base, bytes, addresses, count, granularity) }
 }
 

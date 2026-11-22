@@ -10,6 +10,8 @@ EXPORTS
     XMemGetWriteWatch @17
     XMemMakeTag @20
     XMemMapPhysicalPages @21
+    XMemResumeWriteWatch @24
     XMemSetAllocationHooks @25
+    XMemSetOption @27
     XMemVirtualAlloc @31
     XMemVirtualQuery @32
