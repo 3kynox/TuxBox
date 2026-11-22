@@ -1,7 +1,10 @@
-// Tests whether native procedural AABB candidates can expose t=0. This is not
-// an Xbox triangle intersection implementation or a shader 219 translation.
+// Procedural broad phase plus experimentally validated TRI0 arithmetic.
+// This is not a complete Xbox triangle or shader 219 translation.
+#define TUXBOX_RTZ_FLOAT32
+#include "../bvh-node/rtz_triangle.hlsl"
 RaytracingAccelerationStructure scene : register(t0);
 StructuredBuffer<float4> origins : register(t1);
+ByteAddressBuffer nodes : register(t2);
 RWStructuredBuffer<uint4> results : register(u0);
 
 [numthreads(1, 1, 1)]
@@ -13,13 +16,17 @@ void main(uint3 id : SV_DispatchThreadID) {
     while (query.Proceed()) {
         if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE) {
             candidates++;
-            // Only the strictly interior, on-plane point of this fixed test
-            // triangle is accepted. General Xbox edge/math is not modelled.
-            float3 o = ray.Origin;
-            if (o.z == 0 && o.x > 0 && o.y > 0 && o.x + o.y < 1)
-                query.CommitProceduralPrimitiveHit(0);
+            uint node[32];
+            uint primitive = query.CandidatePrimitiveIndex();
+            [unroll] for (uint i = 0; i < 32; ++i) node[i] = nodes.Load(primitive * 128 + 4 * i);
+            float4 hit = tb_bvh_triangle_rtz(node, 0, query.CandidateObjectRayOrigin(),
+                                             query.CandidateObjectRayDirection());
+            float distance = hit.x / hit.y;
+            if (isfinite(distance) && distance >= 0 && distance < 2)
+                query.CommitProceduralPrimitiveHit(distance);
         }
     }
     uint status = query.CommittedStatus();
-    results[id.x] = uint4(candidates, status, status ? asuint(query.CommittedRayT()) : 0, 0);
+    results[id.x] = uint4(candidates, status, status ? asuint(query.CommittedRayT()) : 0,
+                          status ? (query.CommittedInstanceID() << 16) | query.CommittedPrimitiveIndex() : 0);
 }
