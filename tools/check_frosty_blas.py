@@ -35,7 +35,7 @@ MISS = (0xffffffff, 0xffffffff, 0xffffffff, 0)
 HIT = struct.Struct("<3If")
 
 
-def sphere_probes(path, work):
+def sphere_probes(path, work, shadow_tlas=False):
     # The audited stream is the indexed render mesh expanded in primitive-ID order.
     if digest(path) != SPHERE_SHA256:
         raise ValueError("Expected the verified retail sphere triangle stream")
@@ -49,11 +49,28 @@ def sphere_probes(path, work):
             radius = math.hypot(*center)
             normal = [x / radius for x in center]
             distance = 1 + (primitive % 13) * 0.25
+            if shadow_tlas and instance == 1:
+                center = [512 - 2 * center[1] + 0.5 * center[2],
+                          0.5 * center[0] + 0.25 * center[2], 1.5 * center[2]]
+                normal = [-0.5 * normal[1], 2 * normal[0],
+                          -normal[0] / 3 + normal[1] / 6 + 2 * normal[2] / 3]
+                length = math.hypot(*normal)
+                normal = [component / length for component in normal]
             origin = [x + n * distance for x, n in zip(center, normal)]
-            origin[0] += 512 * instance
+            if not shadow_tlas or instance == 0:
+                origin[0] += 512 * instance
             for flags in (0, CULL_OPAQUE, CULL_NON_OPAQUE):
                 rays.extend(RAY.pack(*origin, 0, *(-n for n in normal), distance + 1, flags))
                 expected.append(MISS if flags == CULL_NON_OPAQUE else (7 + instance, 0, primitive, distance))
+    if shadow_tlas:
+        for v in TRIANGLE.iter_unpack(triangles):
+            center = [sum(v[axis::3]) / 3 for axis in range(3)]
+            radius = math.hypot(*center)
+            normal = [x / radius for x in center]
+            origin = [x + n for x, n in zip(center, normal)]
+            origin[0] += 1024
+            rays.extend(RAY.pack(*origin, 0, *(-n for n in normal), 2, 0))
+            expected.append(MISS)
     for x in (0, 256, 512):
         rays.extend(RAY.pack(x, 200, -180, 0, 0, 0, 1, 360, 0))
         expected.append(MISS)
@@ -109,6 +126,8 @@ def main():
                       help="Rebuild the verified serialized retail sphere through Xbox slot 119 and trace it through slot 131")
     parser.add_argument("--sphere-vertices", type=Path, metavar="FILE",
                         help="ray-test retail sphere vertices from check_frosty_serialized_blas.py --vertices FILE")
+    parser.add_argument("--shadow-tlas", type=Path, metavar="MOUNT",
+                        help="compare transformed and masked Xbox TLAS traversal against desktop ray queries")
     rays = parser.add_mutually_exclusive_group()
     rays.add_argument("--ray-states", type=Path, metavar="DIR",
                         help="translate and dispatch retail 1280/1282/1284/1286.sptr against two test instances")
@@ -129,6 +148,10 @@ def main():
     parser.add_argument("--single-build", action="store_true", help="use Xbox List4 slot 117 for both BLAS and TLAS builds")
     parser.add_argument("--gpu-instances", action="store_true", help="populate the TLAS instance array on the GPU before the scene build and update its transforms after Close")
     args = parser.parse_args()
+    if args.shadow_tlas and not args.sphere_vertices:
+        parser.error("--shadow-tlas needs --sphere-vertices")
+    if args.shadow_tlas and args.gpu_instances:
+        parser.error("--shadow-tlas and --gpu-instances use different instance fixtures")
     if args.gpu_instances and (not args.provider or args.copy_only or args.prebuild_only):
         parser.error("--gpu-instances requires a provider and a build run")
     if args.single_build and (not args.provider or args.prebuild_only or args.copy_only):
@@ -162,6 +185,8 @@ def main():
         subprocess.run([find_dxc(None), "-T", "cs_6_5", "-E", "main", "-O3", "-Fh", "query_dxil.h",
                         "-Vn", "query_dxil", str(src / "query.hlsl")], cwd=work, check=True)
         probe_flags, ray_inputs = [], {}
+        if args.shadow_tlas:
+            probe_flags.append("/DTUXBOX_SHADOW_TLAS_PROBE")
         if args.gpu_instances:
             probe_flags.append("/DTUXBOX_GPU_INSTANCE_PROBE")
             subprocess.run([find_dxc(None), "-T", "cs_6_0", "-E", "main", "-O3", "-Fh", work / "instance_bindings_dxil.h",
@@ -274,9 +299,33 @@ def main():
             shutil.copyfile(args.provider, work / "d3d12_xs.dll")
             result["d3d12_xs_sha256"] = digest(work / "d3d12_xs.dll")
             modes.append("xbox-deserialize" if args.deserialize else "xbox-copy" if args.copy_only else "xbox-prebuild" if args.prebuild_only else "xbox")
-        expected_rays = sphere_probes(args.sphere_vertices, work) if args.sphere_vertices else None
+        expected_rays = sphere_probes(args.sphere_vertices, work, bool(args.shadow_tlas)) if args.sphere_vertices else None
+        shadow_hits = None
+        if args.shadow_tlas:
+            from check_frosty_serialized_blas import MESHES, read_asset
+            sphere = MESHES["sphere"]
+            asset = read_asset(args.shadow_tlas, sphere)
+            serialized = work / "shadow-sphere.serialized"
+            serialized.write_bytes(asset[sphere.blas_offset:sphere.blas_offset + sphere.blas_size])
+            control = work / "shadow-tlas-reference"
+            subprocess.run(["rustc", "--edition=2024", "-A", "dead_code", "-O",
+                            ROOT / "tools/reference/blas/traverse_serialized.rs", "-o", control], check=True)
+            shadow_output = work / "shadow-tlas-hits.bin"
+            subprocess.run([control, serialized, work / "sphere.xyz", work / "sphere-rays.bin",
+                            shadow_output, "--shadow-tlas"], check=True)
+            shadow_hits = list(HIT.iter_unpack(shadow_output.read_bytes()))
+            if len(shadow_hits) != len(expected_rays):
+                raise ValueError("Xbox TLAS reference returned an unexpected ray count")
+            result["shadow_tlas_reference"] = {
+                "instances": 3,
+                "disabled_instances": 1,
+                "source_sha256": digest(serialized),
+                "readback_sha256": digest(shadow_output),
+                "scope": "Synthetic Xbox BOX32 TLAS and unmodified serialized sphere BLAS",
+            }
         if expected_rays:
-            result["geometry"] = dict(asset="EngineMeshes/Sphere", triangles=528, instances=2,
+            result["geometry"] = dict(asset="EngineMeshes/Sphere", triangles=528,
+                                      instances=3 if args.shadow_tlas else 2,
                                       xyz_sha256=SPHERE_SHA256, rays_sha256=digest(work / "sphere-rays.bin"),
                                       distance_tolerance=0.0002, guest_blas_bytes=31232,
                                       geometry_flags="NONE", query_flags=["NONE", "CULL_OPAQUE", "CULL_NON_OPAQUE"],
@@ -300,6 +349,20 @@ def main():
                 passed = False
             elif expected_rays:
                 result["runs"][mode]["ray_queries"] = sphere_results(output, expected_rays)
+                if shadow_hits is not None:
+                    desktop_hits = list(HIT.iter_unpack(output.read_bytes()))
+                    if len(desktop_hits) != len(shadow_hits):
+                        raise ValueError("Xbox TLAS and desktop ray counts differ")
+                    errors = [abs(native[3] - guest[3]) for native, guest in zip(desktop_hits, shadow_hits)]
+                    mismatches = sum(
+                        native[:3] != guest[:3] or error > 0.0002
+                        for native, guest, error in zip(desktop_hits, shadow_hits, errors)
+                    )
+                    result["runs"][mode]["shadow_tlas_comparison"] = {
+                        "rays": len(desktop_hits), "mismatches": mismatches,
+                        "max_distance_error": max(errors, default=0),
+                    }
+                    passed = passed and mismatches == 0
             elif observation.get("ray_query_results") != "70010,70120,80010,80120,dead":
                 passed = False
         if (args.material_hits or args.lumen_material) and args.provider and "xbox" in result["runs"]:

@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from frosty_shadow_instances import shadow_instances, shadow_clusters
+from check_frosty_instance_cull import scene_inputs, f32
 from build import Toolchain
 from frosty_vsm_packing import compact_views, free_pages, unordered_wave_ranges
 from check_frosty_shaders import containers, decoder, decompress, global_archive
@@ -167,13 +168,44 @@ def selection(entry, count, extra):
         "pages": count, "selected": len(base), "additional_pages": len(second), "initial_indirect_x": 32}
 
 
+def visibility_instance(visible, occluders, protected=None):
+    # Exercise the packaged shader with an actual depth texture and visibility UAVs.
+    with TemporaryDirectory(dir=ROOT / "build") as tmp:
+        scene = Path(tmp) / "scene"
+        scene_inputs(scene, visible, [3], instances=64, capacity=128, stats=True,
+                     image_words=1, view_centers=(0,), hzb_depth=0, hzb_views=(0,),
+                     occluders=occluders, protected_depth=protected)
+        def read(name):
+            data = (scene / name).read_bytes()
+            return list(struct.unpack(f"<{len(data) // 4}I", data))
+        cb = read("b0")
+        srv = [read(name) for name in ("t0", "t1", "t2", "hzb", "t3", "t4")]
+        srv[3] = srv[3][:64]
+    depth = f32(protected if protected is not None else .25)
+    seed = [[0x77] * (9 * 9 * 4), [depth] * 81,
+            [0xa5c3e749] * 512, [0] * 64, [0xa5c3e749] * 512, [0] * 22]
+    expected = [row.copy() for row in seed]
+    if not occluders:
+        expected[4][8:16] = [9, 0, 249, 0, 257, 0, 505, 0]
+        expected[5][4:6] = [4, 4]
+    elif protected is None:
+        expected[0][160:164] = [0x800000a1 + (occluders[0] << 8), 0, 0, 0]
+        expected[1][40] = f32(.75)
+    # CopyTextureRegion has 256-byte row alignment; padding is unspecified.
+    for i, width in ((0, 36), (1, 9)):
+        expected[i] = [v for y in range(9) for v in
+                       (expected[i][y * width:(y + 1) * width] + [0] * (64 - width))]
+    return cb, srv, seed, [16, 4, 8, 4, 4, 44], 16, 1, 1, expected, {
+        "visible": visible, "occluders": occluders, "protected": protected}
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("mount", type=Path)
     p.add_argument("--prefix", type=Path)
     p.add_argument("--proton", type=Path)
     p.add_argument("--xshader", type=Path)
-    p.add_argument("--entry", type=int, choices=(1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3403, 3477),
+    p.add_argument("--entry", type=int, choices=(1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3403, 3477),
                    help="run the controls for one archive entry")
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
@@ -224,6 +256,14 @@ def main():
         cases["instance_" + mode] = (3403, shadow_instances(mode))
     for mode in ("empty", "visible", "missing", "hierarchy"):
         cases["cluster_" + mode] = (1793, shadow_clusters(mode))
+    for name, visible, occluders, protected in (
+        ("empty", [1, 31, 32, 63], [], None),
+        *((f"lane{lane}", [lane], [lane], None) for lane in (1, 31, 32, 63)),
+        ("pair", [1, 32], [1, 32], None),
+        ("full", [1, 31, 32, 63], [1, 31, 32, 63], None),
+        ("protected", [1, 32], [1, 32], 1.0),
+    ):
+        cases["visibility_" + name] = (3396, visibility_instance(visible, occluders, protected))
     if args.entry is not None:
         cases = {name: case for name, case in cases.items() if case[0] == args.entry}
         if not cases:
@@ -247,7 +287,7 @@ def main():
                     words(work / f"{name}.b{i}", constants)
             else:
                 words(work / (name+".cbv"), cb)
-            if entry in (1016, 1243, 1257, 1793, 3477, 3403):
+            if entry in (1016, 1243, 1257, 1793, 3477, 3396, 3403):
                 for i, records in enumerate(srv):
                     words(work / f"{name}.t{i}", records)
             else:
@@ -272,6 +312,16 @@ def main():
                 if len(array) != len(actual):
                     diffs.append([i, "missing readback"])
                 else:
+                    if entry == 3396 and i < 2:
+                        width = 36 if i == 0 else 9
+                        for y in range(9):
+                            actual[y * 64 + width:(y + 1) * 64] = [0] * (64 - width)
+                        if i == 0 and len(metadata["occluders"]) > 1 and metadata["protected"] is None:
+                            # Equal-depth atomics race: whichever lane wins owns the pixel.
+                            winners = {0x800000a1 + (lane << 8) for lane in metadata["occluders"]}
+                            if actual[272] in winners:
+                                array = array.copy()
+                                array[272] = actual[272]
                     if entry == 1223:
                         actual = unordered_wave_ranges(actual, array, metadata["initial"], metadata["selected_pages"])
                     diffs.extend([i, j, x, y] for j,(x,y) in enumerate(zip(array,actual)) if x != y)

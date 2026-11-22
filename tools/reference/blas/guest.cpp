@@ -374,15 +374,31 @@ static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, 
         copy_structures(owner.Get(), sizes.ResultDataMaxSizeInBytes, structures);
         std::fprintf(receipt, "copy_modes=clone,compact\ninvalid_copies=2\n");
     }
+#ifdef TUXBOX_SHADOW_TLAS_PROBE
+    std::array<D3D12_RAYTRACING_INSTANCE_DESC, 3> instances{};
+#else
     std::array<D3D12_RAYTRACING_INSTANCE_DESC, 2> instances{};
+#endif
     for (UINT i = 0; i < instances.size(); ++i) {
         auto& instance = instances[i];
         for (UINT axis = 0; axis < 3; ++axis) instance.Transform[axis][axis] = 1;
         instance.Transform[0][3] = static_cast<float>(i) * (sphere ? 512.0f : 4.0f);
         instance.InstanceMask = 0xff;
         instance.InstanceID = 7 + i;
-        instance.AccelerationStructure = structures[i]->GetGPUVirtualAddress();
+        instance.AccelerationStructure = structures[i % structures.size()]->GetGPUVirtualAddress();
     }
+#ifdef TUXBOX_SHADOW_TLAS_PROBE
+    // The second instance combines rotation, nonuniform scaling and shear.
+    // The third remains present in the TLAS with an empty visibility mask.
+    instances[1].Transform[0][0] = 0;
+    instances[1].Transform[0][1] = -2;
+    instances[1].Transform[0][2] = .5f;
+    instances[1].Transform[1][0] = .5f;
+    instances[1].Transform[1][1] = 0;
+    instances[1].Transform[1][2] = .25f;
+    instances[1].Transform[2][2] = 1.5f;
+    instances[2].InstanceMask = 0;
+#endif
     ComPtr<ID3D12Resource> instance_buffer;
     UINT instance_count = static_cast<UINT>(instances.size());
 #ifdef TUXBOX_GPU_INSTANCE_PROBE

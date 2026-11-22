@@ -39,6 +39,14 @@ pub(super) fn resources(em: &mut Emitter<'_>) -> Result<(), String> {
         *words = fssm_bindings::structured_words(em.ex, slot, uav)?;
     }
     for (i, op) in em.insns.iter().enumerate().filter(|(_,op)| op.mnemonic == "image_atomic_umax") {
+        // This variant uses a 32-bit visibility depth texture at u1 and
+        // consumes the old value returned by the atomic max.
+        if matches_program(&em.ex.isa, 6164, 0xc9a78b1d5994aff1)
+            && em.res.get(&i).map(Vec::as_slice) == Some(&[Res::Uav(1,1)][..])
+            && matches!(op.raw.as_slice(), [0xf05c3108, _])
+        {
+            continue;
+        }
         if em.res.get(&i).map(Vec::as_slice) != Some(&[Res::Uav(0,1)][..]) {
             return Err("unexpected visibility UAV for instance culling".into());
         }

@@ -1,8 +1,8 @@
 // Dispatch the packaged virtual-shadow-map shaders using their embedded root signatures.
-#include "../independent-shaders/context.h"
+#include "/home/brcly/workspace/Project TuxBox/tools/reference/independent-shaders/context.h"
 
 using namespace shader_control;
-#include "instance_hzb.h"
+#include "/home/brcly/workspace/Project TuxBox/tools/reference/page-list/instance_hzb.h"
 
 static std::vector<char> read_file(const std::string &name) {
     std::ifstream file(name, std::ios::binary);
@@ -39,10 +39,11 @@ static void dispatch(Context &ctx, const std::string &name, UINT entry, UINT gro
     // A cached shadow page also reads the previous frame's tables and
     // metadata. The other page selectors read one table and one CBV.
     const bool cached = entry == 1228, instance = entry == 3403, cluster = entry == 1793;
-    const bool depth_cull = instance || cluster;
+    const bool single_instance = entry == 3396;
+    const bool depth_cull = instance || cluster || single_instance;
     const bool cards = entry == 1243 || entry == 1257;
     InstanceDepth hzb;
-    const std::vector<UINT> srvs = cluster ? std::vector<UINT>{16,16,16,4,4,4,4,16,4,800,4}
+    const std::vector<UINT> srvs = single_instance ? std::vector<UINT>{16,16,16,4,800,4} : cluster ? std::vector<UINT>{16,16,16,4,4,4,4,16,4,800,4}
                                            : instance ? std::vector<UINT>{16,16,16,4,4,4,4,800,8,4}
                                            : cards ? std::vector<UINT>{16, 4, 4, 4}
                                            : entry == 1016 ? std::vector<UINT>{8, 4, 4}
@@ -50,8 +51,8 @@ static void dispatch(Context &ctx, const std::string &name, UINT entry, UINT gro
                                            : cached ? std::vector<UINT>{4, 4, 4, 8, 4, 4}
                                            : entry == 3477 ? std::vector<UINT>{16, 800} : std::vector<UINT>{srv_stride};
     std::vector<ComPtr<ID3D12Resource>> bound;
-    for (UINT i = 0; i < (cached || depth_cull || cards ? 2u : 1u); ++i) {
-        auto bytes = read_file(name + (cached || depth_cull || cards ? ".b" + std::to_string(i) : ".cbv"));
+    for (UINT i = 0; i < (cached || instance || cluster || cards ? 2u : 1u); ++i) {
+        auto bytes = read_file(name + (cached || instance || cluster || cards ? ".b" + std::to_string(i) : ".cbv"));
         bound.push_back(source(bytes));
         D3D12_CONSTANT_BUFFER_VIEW_DESC cb{bound.back()->GetGPUVirtualAddress(), static_cast<UINT>(bytes.size())};
         dev->CreateConstantBufferView(&cb, cpu(64 + i));
@@ -69,7 +70,7 @@ static void dispatch(Context &ctx, const std::string &name, UINT entry, UINT gro
             view.Buffer.StructureByteStride = 0;
             view.Format = DXGI_FORMAT_R32_UINT;
         }
-        if (cluster && (i == 8 || i == 10)) {
+        if ((cluster && (i == 8 || i == 10)) || (single_instance && i == 5)) {
             view.Buffer.StructureByteStride = 0;
             view.Format = DXGI_FORMAT_R32_TYPELESS;
             view.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
@@ -81,6 +82,36 @@ static void dispatch(Context &ctx, const std::string &name, UINT entry, UINT gro
     for (UINT i = 0; i < strides.size(); ++i) {
         auto bytes = read_file(name + ".u" + std::to_string(i));
         sizes[i] = static_cast<UINT>(bytes.size());
+        if (single_instance && i < 2) {
+            const UINT pixel_bytes = i == 0 ? 16 : 4;
+            const UINT row_size = 9 * pixel_bytes, pitch = (row_size + 255u) & ~255u;
+            if (bytes.size() != row_size * 9u) throw std::runtime_error("invalid instance texture input");
+            std::vector<char> padded(pitch * 9u);
+            for (UINT y = 0; y < 9; ++y) std::memcpy(padded.data() + y * pitch, bytes.data() + y * row_size, row_size);
+            inputs[i] = source(padded);
+            sizes[i] = pitch * 9u;
+            readbacks[i] = buffer(dev, sizes[i], D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+            D3D12_HEAP_PROPERTIES prop{};
+            prop.Type = D3D12_HEAP_TYPE_DEFAULT;
+            prop.CreationNodeMask = prop.VisibleNodeMask = 1;
+            D3D12_RESOURCE_DESC desc{};
+            desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+            desc.Width = desc.Height = 9;
+            desc.DepthOrArraySize = desc.MipLevels = desc.SampleDesc.Count = 1;
+            desc.Format = i == 0 ? DXGI_FORMAT_R32G32B32A32_UINT : DXGI_FORMAT_R32_UINT;
+            desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+            check(dev->CreateCommittedResource(&prop, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                              IID_PPV_ARGS(&outputs[i])), "visibility texture");
+            D3D12_TEXTURE_COPY_LOCATION src{}, dst{};
+            src.pResource = inputs[i].Get();
+            src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            src.PlacedFootprint.Footprint = {desc.Format, 9, 9, 1, pitch};
+            dst.pResource = outputs[i].Get();
+            list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+            transition(list.Get(), outputs[i].Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            dev->CreateUnorderedAccessView(outputs[i].Get(), nullptr, nullptr, cpu(80 + i));
+            continue;
+        }
         inputs[i] = source(bytes);
         outputs[i] = buffer(dev, sizes[i], D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
         readbacks[i] = buffer(dev, sizes[i], D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
@@ -89,11 +120,11 @@ static void dispatch(Context &ctx, const std::string &name, UINT entry, UINT gro
         D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
         u.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
         u.Buffer.NumElements = sizes[i] / strides[i];
-        const bool typed = ((entry == 1019 || entry == 2138) && i == 0) || (cluster && i == 5) || ((entry == 1213 || entry == 1215 || entry == 1230) && i == 0)
+        const bool typed = (single_instance && i == 3) || ((entry == 1019 || entry == 2138) && i == 0) || (cluster && i == 5) || ((entry == 1213 || entry == 1215 || entry == 1230) && i == 0)
                         || ((entry == 1219 || entry == 1236) && i == 1);
         u.Buffer.StructureByteStride = typed ? 0 : strides[i];
         if (typed) u.Format = DXGI_FORMAT_R32_UINT;
-        if ((instance && i == 0) || (cluster && i >= 2 && i <= 4)) {
+        if ((single_instance && i == 4) || (instance && i == 0) || (cluster && i >= 2 && i <= 4)) {
             u.Buffer.NumElements = sizes[i] / 4;
             u.Buffer.StructureByteStride = 0;
             u.Format = DXGI_FORMAT_R32_TYPELESS;
@@ -111,7 +142,16 @@ static void dispatch(Context &ctx, const std::string &name, UINT entry, UINT gro
     list->Dispatch(groups_x, groups_y, 1);
     for (UINT i = 0; i < strides.size(); ++i) {
         transition(list.Get(), outputs[i].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
-        list->CopyBufferRegion(readbacks[i].Get(), 0, outputs[i].Get(), 0, sizes[i]);
+        if (single_instance && i < 2) {
+            D3D12_TEXTURE_COPY_LOCATION src{}, dst{};
+            src.pResource = outputs[i].Get();
+            dst.pResource = readbacks[i].Get();
+            dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            dst.PlacedFootprint.Footprint = {i == 0 ? DXGI_FORMAT_R32G32B32A32_UINT : DXGI_FORMAT_R32_UINT, 9, 9, 1, 256};
+            list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        } else {
+            list->CopyBufferRegion(readbacks[i].Get(), 0, outputs[i].Get(), 0, sizes[i]);
+        }
     }
     submit_and_wait(dev, ctx.queue.Get(), list.Get());
     for (UINT i = 0; i < strides.size(); ++i)
