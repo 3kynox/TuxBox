@@ -1,11 +1,11 @@
 // Procedural candidates are only a proposed broad phase for a future shadow
 // scene. This checks API behavior at zero, not triangle correctness.
 static void probe_zero_aabb(ID3D12Device5 *dev, ID3D12CommandQueue *queue, FILE *receipt) {
-    constexpr UINT box_count = 2, box_bytes = box_count * sizeof(D3D12_RAYTRACING_AABB);
+    constexpr UINT box_count = 3, box_bytes = box_count * sizeof(D3D12_RAYTRACING_AABB);
     auto aabb = buffer(dev, box_bytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
     const auto node_words = read_file("sidecar-leaves.bin");
     const auto directory_words = read_file("sidecar-directory.bin");
-    if (node_words.size() != 128 || directory_words.size() != 96)
+    if (node_words.size() != 128 || directory_words.size() != 112)
         throw std::runtime_error("unexpected sidecar fixture layout");
     auto nodes_upload = upload(dev, node_words.data(), node_words.size());
     auto nodes = buffer(dev, node_words.size(), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
@@ -49,14 +49,16 @@ static void probe_zero_aabb(ID3D12Device5 *dev, ID3D12CommandQueue *queue, FILE 
                        D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, true);
     auto tscratch = buffer(dev, ts.ScratchDataSizeInBytes, D3D12_HEAP_TYPE_DEFAULT,
                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
-    D3D12_ROOT_PARAMETER params[4]{};
+    D3D12_ROOT_PARAMETER params[5]{};
     params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
     params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
     params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
     params[2].Descriptor.ShaderRegister = 1;
     params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
     params[3].Descriptor.ShaderRegister = 2;
-    D3D12_ROOT_SIGNATURE_DESC root_desc{4, params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+    params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    params[4].Descriptor.ShaderRegister = 3;
+    D3D12_ROOT_SIGNATURE_DESC root_desc{5, params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
     ComPtr<ID3DBlob> blob;
     check(D3D12SerializeRootSignature(&root_desc, D3D_ROOT_SIGNATURE_VERSION_1, &blob, nullptr), "zero AABB root serialize");
     ComPtr<ID3D12RootSignature> root;
@@ -78,14 +80,16 @@ static void probe_zero_aabb(ID3D12Device5 *dev, ID3D12CommandQueue *queue, FILE 
     list->ResourceBarrier(1, &nodes_ready);
     nodes_ready.Transition.pResource = directory.Get();
     list->ResourceBarrier(1, &nodes_ready);
-    D3D12_ROOT_PARAMETER bounds_params[4]{};
+    D3D12_ROOT_PARAMETER bounds_params[5]{};
     bounds_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
     bounds_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
     bounds_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
     bounds_params[2].Descriptor.ShaderRegister = 1;
     bounds_params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    bounds_params[3].Constants = {0, 0, 3};
-    D3D12_ROOT_SIGNATURE_DESC bounds_root_desc{4, bounds_params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+    bounds_params[3].Constants = {0, 0, 4};
+    bounds_params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    bounds_params[4].Descriptor.ShaderRegister = 1;
+    D3D12_ROOT_SIGNATURE_DESC bounds_root_desc{5, bounds_params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
     ComPtr<ID3DBlob> bounds_blob;
     check(D3D12SerializeRootSignature(&bounds_root_desc, D3D_ROOT_SIGNATURE_VERSION_1, &bounds_blob, nullptr), "bounds root serialize");
     ComPtr<ID3D12RootSignature> bounds_root;
@@ -109,8 +113,9 @@ static void probe_zero_aabb(ID3D12Device5 *dev, ID3D12CommandQueue *queue, FILE 
     list->SetComputeRootShaderResourceView(0, nodes->GetGPUVirtualAddress());
     list->SetComputeRootUnorderedAccessView(1, aabb->GetGPUVirtualAddress());
     list->SetComputeRootUnorderedAccessView(2, bounds_status->GetGPUVirtualAddress());
-    const UINT bounds_sizes[]{static_cast<UINT>(node_words.size()), box_bytes, box_count};
-    list->SetComputeRoot32BitConstants(3, 3, bounds_sizes, 0);
+    const UINT bounds_sizes[]{static_cast<UINT>(node_words.size()), box_bytes, box_count, static_cast<UINT>(directory_words.size())};
+    list->SetComputeRoot32BitConstants(3, 4, bounds_sizes, 0);
+    list->SetComputeRootShaderResourceView(4, directory->GetGPUVirtualAddress());
     list->Dispatch(1, 1, 1);
     // Exercise the converter separately with a malformed selector. Its
     // output is deliberately never used as an AS build input.
@@ -151,12 +156,66 @@ static void probe_zero_aabb(ID3D12Device5 *dev, ID3D12CommandQueue *queue, FILE 
     list->CopyBufferRegion(invalid_status.Get(), 0, bounds_zero_upload.Get(), 0, 4);
     list->ResourceBarrier(2, invalid_ready);
     list->SetComputeRootShaderResourceView(0, nodes->GetGPUVirtualAddress());
-    const UINT short_sizes[]{63, box_bytes, box_count};
-    list->SetComputeRoot32BitConstants(3, 3, short_sizes, 0);
+    const UINT short_sizes[]{63, box_bytes, box_count, static_cast<UINT>(directory_words.size())};
+    list->SetComputeRoot32BitConstants(3, 4, short_sizes, 0);
     list->Dispatch(1, 1, 1);
     list->ResourceBarrier(2, invalid_copy);
     list->CopyBufferRegion(short_readback.Get(), 0, invalid_bounds.Get(), 0, box_bytes);
     list->CopyBufferRegion(short_readback.Get(), box_bytes, invalid_status.Get(), 0, 4);
+    auto type_readback = buffer(dev, box_bytes + 4, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+    auto invalid_directory_words = directory_words;
+    const UINT unsupported_type = 4;
+    std::memcpy(invalid_directory_words.data() + 16 + 3 * 16 + 8, &unsupported_type, 4);
+    auto invalid_directory = upload(dev, invalid_directory_words.data(), invalid_directory_words.size());
+    list->ResourceBarrier(2, short_reset);
+    list->CopyBufferRegion(invalid_bounds.Get(), 0, sentinel_upload.Get(), 0, box_bytes);
+    list->CopyBufferRegion(invalid_status.Get(), 0, bounds_zero_upload.Get(), 0, 4);
+    list->ResourceBarrier(2, invalid_ready);
+    list->SetComputeRoot32BitConstants(3, 4, bounds_sizes, 0);
+    list->SetComputeRootShaderResourceView(4, invalid_directory->GetGPUVirtualAddress());
+    list->Dispatch(1, 1, 1);
+    list->ResourceBarrier(2, invalid_copy);
+    list->CopyBufferRegion(type_readback.Get(), 0, invalid_bounds.Get(), 0, box_bytes);
+    list->CopyBufferRegion(type_readback.Get(), box_bytes, invalid_status.Get(), 0, 4);
+    // Optionally use one original user-local paired sphere leaf. Its bytes
+    // stay in the temporary fixture directory and are never copied to evidence.
+    ComPtr<ID3D12Resource> retail_bounds, retail_status, retail_readback;
+    std::array<ComPtr<ID3D12Resource>, 2> retail_uploads{};
+    std::vector<char> retail_leaf;
+    {
+        std::ifstream available("sidecar-retail-leaf.bin", std::ios::binary);
+        if (available) {
+            retail_leaf = read_file("sidecar-retail-leaf.bin");
+            const auto retail_directory_words = read_file("sidecar-retail-directory.bin");
+            if (retail_leaf.size() != 64 || retail_directory_words.size() != 64)
+                throw std::runtime_error("unexpected retail pair fixture");
+            auto retail_nodes = upload(dev, retail_leaf.data(), retail_leaf.size());
+            auto retail_directory = upload(dev, retail_directory_words.data(), retail_directory_words.size());
+            retail_bounds = buffer(dev, 48, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
+            retail_status = buffer(dev, 4, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST, true);
+            retail_readback = buffer(dev, 52, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+            // Retain upload resources until both recorded executions complete.
+            // They are carried below by explicit local references.
+            retail_uploads = {retail_nodes, retail_directory};
+            list->CopyBufferRegion(retail_status.Get(), 0, bounds_zero_upload.Get(), 0, 4);
+            bounds_status_ready.Transition.pResource = retail_status.Get();
+            list->ResourceBarrier(1, &bounds_status_ready);
+            list->SetComputeRootShaderResourceView(0, retail_nodes->GetGPUVirtualAddress());
+            list->SetComputeRootUnorderedAccessView(1, retail_bounds->GetGPUVirtualAddress());
+            list->SetComputeRootUnorderedAccessView(2, retail_status->GetGPUVirtualAddress());
+            const UINT retail_sizes[]{64, 48, 2, 64};
+            list->SetComputeRoot32BitConstants(3, 4, retail_sizes, 0);
+            list->SetComputeRootShaderResourceView(4, retail_directory->GetGPUVirtualAddress());
+            list->Dispatch(1, 1, 1);
+            D3D12_RESOURCE_BARRIER retail_copy[2]{};
+            for (auto &item : retail_copy) item.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            retail_copy[0].Transition = {retail_bounds.Get(), 0, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE};
+            retail_copy[1].Transition = {retail_status.Get(), 0, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE};
+            list->ResourceBarrier(2, retail_copy);
+            list->CopyBufferRegion(retail_readback.Get(), 0, retail_bounds.Get(), 0, 48);
+            list->CopyBufferRegion(retail_readback.Get(), 48, retail_status.Get(), 0, 4);
+        }
+    }
     D3D12_RESOURCE_BARRIER bounds_ready{};
     bounds_ready.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     bounds_ready.Transition = {aabb.Get(), 0, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE};
@@ -198,6 +257,7 @@ static void probe_zero_aabb(ID3D12Device5 *dev, ID3D12CommandQueue *queue, FILE 
     list->SetComputeRootUnorderedAccessView(1, output->GetGPUVirtualAddress());
     list->SetComputeRootShaderResourceView(2, source->GetGPUVirtualAddress());
     list->SetComputeRootShaderResourceView(3, nodes->GetGPUVirtualAddress());
+    list->SetComputeRootShaderResourceView(4, directory->GetGPUVirtualAddress());
     list->Dispatch(static_cast<UINT>(std::size(origins)), 1, 1);
     D3D12_ROOT_PARAMETER private_params[7]{};
     for (UINT i : {0u,1u,2u,5u}) {
@@ -295,6 +355,13 @@ static void probe_zero_aabb(ID3D12Device5 *dev, ID3D12CommandQueue *queue, FILE 
     replay[9].Transition = {invalid_bounds.Get(), 0, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST};
     replay[10].Transition = {invalid_status.Get(), 0, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST};
     list->ResourceBarrier(static_cast<UINT>(std::size(replay)), replay);
+    if (retail_bounds) {
+        D3D12_RESOURCE_BARRIER retail_reset[2]{};
+        for (auto &item : retail_reset) item.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        retail_reset[0].Transition = {retail_bounds.Get(), 0, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS};
+        retail_reset[1].Transition = {retail_status.Get(), 0, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST};
+        list->ResourceBarrier(2, retail_reset);
+    }
     submit(dev, queue, list.Get());
     D3D12_RANGE read{0,result_bytes}, empty{};
     void *data{};
@@ -305,20 +372,43 @@ static void probe_zero_aabb(ID3D12Device5 *dev, ID3D12CommandQueue *queue, FILE 
     bounds_readback->Unmap(0, &empty);
     std::fprintf(receipt, "sidecar_gpu_bounds_status=%u\n", bounds_result);
     if (bounds_result != 0) throw std::runtime_error("GPU bounds conversion failed");
+    if (retail_readback) {
+        D3D12_RANGE retail_range{0,52};
+        check(retail_readback->Map(0, &retail_range, &data), "retail pair bounds readback");
+        std::array<D3D12_RAYTRACING_AABB, 2> retail_boxes{};
+        std::memcpy(retail_boxes.data(), data, 48);
+        UINT retail_result{};
+        std::memcpy(&retail_result, static_cast<const BYTE *>(data) + 48, 4);
+        retail_readback->Unmap(0, &empty);
+        float vertices[4][3]{};
+        std::memcpy(vertices, retail_leaf.data(), sizeof(vertices));
+        const UINT indices[2][3]{{0,1,2},{1,3,2}};
+        bool enclosed = retail_result == 0;
+        for (UINT side=0; side<2; ++side) {
+            const auto &b = retail_boxes[side];
+            const float lo[]{b.MinX,b.MinY,b.MinZ}, hi[]{b.MaxX,b.MaxY,b.MaxZ};
+            for (UINT axis=0; axis<3; ++axis) for (UINT corner : indices[side])
+                enclosed &= std::isfinite(lo[axis]) && std::isfinite(hi[axis]) &&
+                            lo[axis] < vertices[corner][axis] && hi[axis] > vertices[corner][axis];
+        }
+        std::fprintf(receipt, "sidecar_retail_pair=status %u; enclosed %u\n", retail_result, enclosed);
+        if (!enclosed) throw std::runtime_error("retail paired leaf bounds mismatch");
+    }
     D3D12_RANGE geometry_range{0, box_bytes};
     check(bounds_geometry_readback->Map(0, &geometry_range, &data), "GPU bounds readback");
     std::array<D3D12_RAYTRACING_AABB, box_count> generated{};
     std::memcpy(generated.data(), data, box_bytes);
     bounds_geometry_readback->Unmap(0, &empty);
-    const auto encloses = [](const D3D12_RAYTRACING_AABB &b, float minimum_x, float maximum_x) {
+    const auto encloses = [](const D3D12_RAYTRACING_AABB &b, float minimum_x, float maximum_x, float maximum_y) {
         return std::isfinite(b.MinX) && std::isfinite(b.MinY) && std::isfinite(b.MinZ) &&
                std::isfinite(b.MaxX) && std::isfinite(b.MaxY) && std::isfinite(b.MaxZ) &&
-               b.MinX < minimum_x && b.MaxX > maximum_x && b.MinY < 0 && b.MaxY > 1 &&
+               b.MinX < minimum_x && b.MaxX > maximum_x && b.MinY < 0 && b.MaxY > maximum_y &&
                b.MinZ < 0 && b.MaxZ > 0;
     };
-    if (!encloses(generated[0], 0, 1) || !encloses(generated[1], 2, 3))
+    if (!encloses(generated[0], 0, 1, 1) || generated[0].MaxX >= 1.25f || generated[0].MaxY >= 1.5f ||
+        !encloses(generated[1], 0, 1.25f, 1.5f) || !encloses(generated[2], 2, 3, 1))
         throw std::runtime_error("GPU bounds do not conservatively enclose the triangles");
-    std::fprintf(receipt, "sidecar_gpu_bounds_enclose=2\n");
+    std::fprintf(receipt, "sidecar_gpu_bounds_enclose=3\n");
     D3D12_RANGE invalid_range{0, box_bytes + 4};
     check(invalid_readback->Map(0, &invalid_range, &data), "invalid bounds readback");
     std::array<UINT, box_bytes / sizeof(UINT) + 1> invalid_values{};
@@ -337,6 +427,14 @@ static void probe_zero_aabb(ID3D12Device5 *dev, ID3D12CommandQueue *queue, FILE 
     std::fprintf(receipt, "sidecar_gpu_short=status %u; untouched %u\n", invalid_values.back(), short_untouched);
     if (invalid_values.back() != 1 || !short_untouched)
         throw std::runtime_error("short GPU bounds input was accepted");
+    check(type_readback->Map(0, &invalid_range, &data), "unsupported node type readback");
+    std::memcpy(invalid_values.data(), data, box_bytes + 4);
+    type_readback->Unmap(0, &empty);
+    const bool type_untouched = std::all_of(invalid_values.begin(), invalid_values.begin() + 6,
+                                            [](UINT word) { return word == 0xdeadbeef; });
+    std::fprintf(receipt, "sidecar_gpu_type=status %u; untouched %u\n", invalid_values.back(), type_untouched);
+    if (invalid_values.back() != 1 || !type_untouched)
+        throw std::runtime_error("unsupported GPU sidecar node type was accepted");
     check(readback->Map(0, &read, &data), "zero AABB readback");
     std::array<std::array<UINT,4>,std::size(origins)> values{};
     std::memcpy(values.data(), data, result_bytes);
@@ -353,8 +451,9 @@ static void probe_zero_aabb(ID3D12Device5 *dev, ID3D12CommandQueue *queue, FILE 
         std::fprintf(receipt, "inline219_candidate_%u=%u,%u,%08x,%08x\n", i, inline_values[i][0], inline_values[i][1], inline_values[i][2], inline_values[i][3]);
     bool inline_matches = true;
     for (UINT i=0; i<std::size(origins); ++i) {
-        inline_matches &= inline_values[i][0] == values[i][0] && inline_values[i][1] == values[i][1] &&
-                          inline_values[i][3] == values[i][3];
+        // Candidate enumeration order/count is implementation-dependent; a
+        // committed t=0 hit can stop another overlapping AABB being visited.
+        inline_matches &= inline_values[i][1] == values[i][1] && inline_values[i][3] == values[i][3];
         const UINT a = inline_values[i][2], b = values[i][2];
         inline_matches &= a == b || ((a & 0x7fffffffu) == 0 && (b & 0x7fffffffu) == 0);
         std::fprintf(receipt, "inline219_reference_%u=%u,%u,%08x,%08x\n", i, values[i][0], values[i][1], values[i][2], values[i][3]);
@@ -373,12 +472,16 @@ static void probe_zero_aabb(ID3D12Device5 *dev, ID3D12CommandQueue *queue, FILE 
         throw std::runtime_error("inline 219 invalid directory accepted");
     for (UINT i=0; i<std::size(origins); ++i)
         std::fprintf(receipt, "zero_aabb_%u=%u,%u,%08x,%08x\n", i, values[i][0], values[i][1], values[i][2], values[i][3]);
-    if (values[0] != std::array<UINT,4>{1,2,0,0x70000} || values[1] != std::array<UINT,4>{1,2,0,0x70001} ||
-        values[2] != std::array<UINT,4>{1,2,0,0x80000} || values[3][0] != 1 || values[3][1] != 2 ||
+    if (values[0][0] < 1 || values[0][0] > 2 || values[0][1] != 2 || values[0][2] != 0 || values[0][3] != 0x70000 ||
+        values[1] != std::array<UINT,4>{1,2,0,0x70002} ||
+        values[2][0] < 1 || values[2][0] > 2 || values[2][1] != 2 || values[2][2] != 0 || values[2][3] != 0x80000 ||
+        values[3][0] < 1 || values[3][0] > 2 || values[3][1] != 2 ||
         (values[3][2] & 0x7fffffffu) != 0 || values[3][3] != 0x70000 ||
-        values[4] != std::array<UINT,4>{1,0,0,0} || values[5] != std::array<UINT,4>{1,0,0,0} ||
-        values[6] != std::array<UINT,4>{1,2,0,0x80001} || values[7] != std::array<UINT,4>{0,0,0,0} ||
-        values[8] != std::array<UINT,4>{1,2,0x3f800000,0x70000} ||
+        values[4] != std::array<UINT,4>{2,0,0,0} || values[5][0] < 1 || values[5][0] > 2 ||
+        values[5][1] != 2 || (values[5][2] & 0x7fffffffu) != 0 || values[5][3] != 0x70001 ||
+        values[6] != std::array<UINT,4>{1,2,0,0x80002} || values[7] != std::array<UINT,4>{0,0,0,0} ||
+        values[8][0] < 1 || values[8][0] > 2 || values[8][1] != 2 ||
+        values[8][2] != 0x3f800000 || values[8][3] != 0x70000 ||
         values[9] != std::array<UINT,4>{0,0,0,0})
         throw std::runtime_error("zero AABB candidate mismatch");
     // Change the recorded upload only after completion. The replay must copy
@@ -405,8 +508,8 @@ static void probe_zero_aabb(ID3D12Device5 *dev, ID3D12CommandQueue *queue, FILE 
     std::fprintf(receipt, "sidecar_gpu_replay=status %u; bounds %u; old %u; other %u,%08x; moved %u\n",
                  inline_status, bounds_result, inline_values[0][1], inline_values[1][1],
                  inline_values[1][3], inline_values[2][1]);
-    if (inline_status != 0 || bounds_result != 0 || !encloses(generated[0], 10, 11) ||
-        !encloses(generated[1], 2, 3) || inline_values[0][1] != 0 ||
-        inline_values[1][1] != 2 || inline_values[1][3] != 0x70001 || inline_values[2][1] != 0)
+    if (inline_status != 0 || bounds_result != 0 || !encloses(generated[0], 10, 11, 1) || generated[0].MaxX >= 11.25f ||
+        !encloses(generated[1], 10, 11.25f, 1.5f) || !encloses(generated[2], 2, 3, 1) || inline_values[0][1] != 0 ||
+        inline_values[1][1] != 2 || inline_values[1][3] != 0x70002 || inline_values[2][1] != 0)
         throw std::runtime_error("sidecar GPU replay observed stale geometry");
 }

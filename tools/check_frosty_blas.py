@@ -231,7 +231,24 @@ def main():
                             "-Fh", work / "inline219_dxil.h", "-Vn", "inline219_dxil", candidate_source], check=True)
             generator = work / "sidecar-fixture"
             subprocess.run(["rustc", "--edition=2024", src / "sidecar_fixture.rs", "-o", generator], check=True)
-            subprocess.run([generator, work], check=True)
+            fixture_args = [generator, work]
+            if args.ray_archive:
+                from check_frosty_serialized_blas import MESHES, read_asset
+                sphere = MESHES["sphere"]
+                sphere_data = read_asset(args.ray_archive, sphere)
+                serialized = sphere_data[sphere.blas_offset:sphere.blas_offset + sphere.blas_size]
+                leaf_offset = struct.unpack_from("<I", serialized, 64 + 52)[0]
+                leaf_count = struct.unpack_from("<I", serialized, 64 + 12)[0]
+                for index in range(leaf_count):
+                    leaf = serialized[64 + leaf_offset + 64 * index:64 + leaf_offset + 64 * (index + 1)]
+                    if len(leaf) == 64 and struct.unpack_from("<I", leaf, 48)[0] & 0xff == 0x80:
+                        retail_leaf = work / "sidecar-retail-leaf.bin"
+                        retail_leaf.write_bytes(leaf)
+                        fixture_args.append(retail_leaf)
+                        break
+                else:
+                    raise ValueError("sphere has no paired TRI0/TRI1 leaf")
+            subprocess.run(fixture_args, check=True)
             subprocess.run([find_dxc(None), "-T", "lib_6_3", "-O3", "-Fo", work / "occlusion-observer.dxil",
                             src / "occlusion_observer.hlsl"], check=True)
             subprocess.run([find_dxc(None), "-T", "lib_6_3", "-O3", "-DTRACE_CARD_INPUTS", "-Fo",
@@ -306,6 +323,8 @@ def main():
         exe = work / "blas.exe"
         toolchain.link(exe, obj, "d3d12.lib", "dxgi.lib", "kernel32.lib")
         result = {"guest_sha256": digest(exe), "host": host.version, "runs": {}}
+        if (work / "sidecar-retail-leaf.bin").exists():
+            result["sidecar_retail_leaf_sha256"] = digest(work / "sidecar-retail-leaf.bin")
         if args.single_build:
             result["xbox_build_slot"] = 117
         if ray_inputs:

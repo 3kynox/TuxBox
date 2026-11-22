@@ -5,6 +5,7 @@
 RaytracingAccelerationStructure scene : register(t0);
 StructuredBuffer<float4> origins : register(t1);
 ByteAddressBuffer nodes : register(t2);
+ByteAddressBuffer directory : register(t3);
 RWStructuredBuffer<uint4> results : register(u0);
 
 [numthreads(1, 1, 1)]
@@ -18,9 +19,11 @@ void main(uint3 id : SV_DispatchThreadID) {
             candidates++;
             uint node[32];
             uint primitive = query.CandidatePrimitiveIndex();
-            [unroll] for (uint i = 0; i < 16; ++i) node[i] = nodes.Load(primitive * 64 + 4 * i);
+            uint start = 16 + directory.Load(4) * 16;
+            uint2 entry = directory.Load2(start + primitive * 16);
+            [unroll] for (uint i = 0; i < 16; ++i) node[i] = nodes.Load(entry.x + 4 * i);
             [unroll] for (uint j = 16; j < 32; ++j) node[j] = 0;
-            float4 hit = tb_bvh_triangle_rtz(node, 0, query.CandidateObjectRayOrigin(),
+            float4 hit = tb_bvh_triangle_rtz(node, entry.y, query.CandidateObjectRayOrigin(),
                                              query.CandidateObjectRayDirection());
             float distance = hit.x / hit.y;
             if (isfinite(distance) && distance >= 0 && distance < 2)
