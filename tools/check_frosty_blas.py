@@ -218,6 +218,8 @@ def main():
             probe_flags.append("/DTUXBOX_CARD_TILE_PROBE")
             subprocess.run([find_dxc(None), "-T", "cs_6_5", "-E", "main", "-O3", "-Fh", work / "card_candidate_dxil.h",
                             "-Vn", "card_candidate_dxil", src / "card_candidate.hlsl"], check=True)
+            subprocess.run([find_dxc(None), "-T", "cs_6_5", "-E", "main", "-O3", "-Fh", work / "zero_aabb_dxil.h",
+                            "-Vn", "zero_aabb_dxil", src / "zero_aabb.hlsl"], check=True)
             subprocess.run([find_dxc(None), "-T", "lib_6_3", "-O3", "-Fo", work / "occlusion-observer.dxil",
                             src / "occlusion_observer.hlsl"], check=True)
             subprocess.run([find_dxc(None), "-T", "lib_6_3", "-O3", "-DTRACE_CARD_INPUTS", "-Fo",
