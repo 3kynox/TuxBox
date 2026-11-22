@@ -220,6 +220,16 @@ def main():
                             "-Vn", "card_candidate_dxil", src / "card_candidate.hlsl"], check=True)
             subprocess.run([find_dxc(None), "-T", "cs_6_5", "-E", "main", "-O3", "-Fh", work / "zero_aabb_dxil.h",
                             "-Vn", "zero_aabb_dxil", src / "zero_aabb.hlsl"], check=True)
+            candidate_source = work / "inline219_probe.hlsl"
+            candidate_source.write_text((ROOT / "tools/reference/bvh-node/rtz_triangle.hlsl").read_text() + "\n" +
+                                        (src / "inline219_candidate.hlsl").read_text() + "\n" +
+                                        (src / "inline219_probe.hlsl").read_text())
+            subprocess.run([find_dxc(None), "-T", "cs_6_5", "-E", "main", "-O3", "-Gis",
+                            "-D", "TUXBOX_RTZ_FLOAT32=1", "-D", "TUXBOX_RTZ_WIDE_FALLBACK=1",
+                            "-Fh", work / "inline219_dxil.h", "-Vn", "inline219_dxil", candidate_source], check=True)
+            generator = work / "sidecar-fixture"
+            subprocess.run(["rustc", "--edition=2024", src / "sidecar_fixture.rs", "-o", generator], check=True)
+            subprocess.run([generator, work], check=True)
             subprocess.run([find_dxc(None), "-T", "lib_6_3", "-O3", "-Fo", work / "occlusion-observer.dxil",
                             src / "occlusion_observer.hlsl"], check=True)
             subprocess.run([find_dxc(None), "-T", "lib_6_3", "-O3", "-DTRACE_CARD_INPUTS", "-Fo",

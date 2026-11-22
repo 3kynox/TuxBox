@@ -18,7 +18,8 @@ void main(uint3 id : SV_DispatchThreadID) {
             candidates++;
             uint node[32];
             uint primitive = query.CandidatePrimitiveIndex();
-            [unroll] for (uint i = 0; i < 32; ++i) node[i] = nodes.Load(primitive * 128 + 4 * i);
+            [unroll] for (uint i = 0; i < 16; ++i) node[i] = nodes.Load(primitive * 64 + 4 * i);
+            [unroll] for (uint j = 16; j < 32; ++j) node[j] = 0;
             float4 hit = tb_bvh_triangle_rtz(node, 0, query.CandidateObjectRayOrigin(),
                                              query.CandidateObjectRayDirection());
             float distance = hit.x / hit.y;
