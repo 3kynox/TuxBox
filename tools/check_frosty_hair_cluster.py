@@ -52,7 +52,6 @@ def main():
                       test_inputs="Sparse clusters across both wave halves, forced and automatic LOD, blended vertex counts and FP16 radius values, view plane excluding cluster 60, partial range, hidden group.",
                       initial_cluster_count=2, initial_draw_vertices=17, checked_words_per_case=420,
                       readback=actual, guest_sha256=digest(exe), provider_sha256=digest(args.provider),
-                      patch_sha256=digest(ROOT / "tools/reference/tombox-hair-cluster.patch"),
                       proton=(proton / "version").read_text().strip())
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")

@@ -188,6 +188,14 @@ __kernel void probe(__global unsigned *out) {
   *(__global uint4 *)(out + 2800) =
       intersect(((ulong)(out + 7552)) >> 3, (float4)(.2f, .3f, -1.f, 0.f),
                 (float4)(.1f, .2f, 1.f, 0.f), (float4)(1.f, 1.f, 1.f, 0.f));
+  const int scale_exponents[8] = {-120, -100, -60, -20, 0, 20, 60, 100};
+  for (uint i = 0; i < 8; i++) {
+    float scale = as_float((uint)(scale_exponents[i] + 127) << 23);
+    ulong node = ((ulong)(out + 8000 + i * 16)) >> 3;
+    *(__global uint4 *)(out + 2816 + i * 4) =
+        intersect(node, (float4)(scale * .25f, scale * .25f, -scale, 0),
+                  (float4)(0, 0, 1, 0), (float4)(1, 1, 1, 0));
+  }
   if (out[3000] == 1u) {
     const float4 origins[8] = {
         (float4)(.25f, .25f, -4.f, 0.f), (float4)(0, 0, -4, 0),

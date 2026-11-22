@@ -55,11 +55,16 @@ def main():
     direction.add_argument("--oblique", action="store_true", help="use varied ray directions and magnitudes")
     direction.add_argument("--tied", action="store_true", help="use tied dominant ray axes")
     direction.add_argument("--miss", action="store_true", help="offset rays to exercise misses")
+    direction.add_argument("--edge", action="store_true", help="target triangle edge midpoints")
+    direction.add_argument("--nearedge", action="store_true", help="offset edge rays by one float ULP")
     args = parser.parse_args()
+    if (args.edge or args.nearedge) and not args.float_rtz:
+        raise ValueError("edge sweeps require the float32 candidate")
     random_source = random.Random(219091)
     rays = ("varied ray directions and magnitudes" if args.oblique else
             "tied dominant ray axes" if args.tied else
-            "offset varied directions" if args.miss else "positive-Z unit rays")
+            "offset varied directions" if args.miss else "edge midpoint rays" if args.edge else
+            "one-ULP offset edge rays" if args.nearedge else "positive-Z unit rays")
     result = {"scope": f"48 seeded synthetic paired triangle cases, {rays}, native gfx1036 instruction versus dynamic-input experimental HLSL; not general traversal or opcode equivalence",
               "seed": 219091, "float_rtz": args.float_rtz, "batches": [], "cases": 0, "native_hits": 0,
               "native_misses": 0, "mismatches": 0}
@@ -71,7 +76,8 @@ def main():
             report = root / f"{batch}.json"
             source.write_bytes(make_blas(random_source))
             mode = ("--retail-oblique" if args.oblique else "--retail-tied" if args.tied else
-                    "--retail-miss" if args.miss else "--retail-triangles")
+                    "--retail-miss" if args.miss else "--retail-edge" if args.edge else
+                    "--retail-nearedge" if args.nearedge else "--retail-triangles")
             native = subprocess.run([str(args.probe), str(args.code), mode,
                                      str(source), str(dump)], capture_output=True, text=True)
             if native.returncode:
@@ -85,13 +91,16 @@ def main():
                     result["native_misses"] += 1
                 else:
                     result["native_hits"] += 1
-            command = [sys.executable, str(ROOT / "tools/check_native_bvh_hlsl.py"),
+            checker = "check_native_bvh_edges.py" if args.edge or args.nearedge else "check_native_bvh_hlsl.py"
+            command = [sys.executable, str(ROOT / "tools" / checker),
                        "--dump", str(dump), "--proton", str(args.proton),
                        "--prefix-amd", str(args.prefix_amd), "--prefix-nvidia", str(args.prefix_nvidia),
-                       "--strict", "--projected-rtz", "--dynamic", "--output", str(report)]
+                       "--output", str(report)]
+            if not (args.edge or args.nearedge):
+                command += ["--strict", "--projected-rtz", "--dynamic"]
             if args.amd_vulkan:
                 command += ["--amd-vulkan", str(args.amd_vulkan)]
-            if args.float_rtz:
+            if args.float_rtz and not (args.edge or args.nearedge):
                 command.append("--float-rtz")
             checked = subprocess.run(command, capture_output=True, text=True, cwd=ROOT)
             if not report.exists():

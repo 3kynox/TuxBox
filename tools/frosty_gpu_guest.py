@@ -4,6 +4,8 @@ import shutil
 import subprocess
 
 from build import ROOT, Toolchain
+from project_tuxbox.runtime_shaders import shader_session
+from project_tuxbox.shader_prep import SOURCE_CACHE
 
 
 def run_gpu_guest(source, name, trial, work, proton, prefix_source, provider, compiler_dir, *, vkd3d_dir=None):
@@ -31,11 +33,17 @@ def run_gpu_guest(source, name, trial, work, proton, prefix_source, provider, co
     environment = dict(WINEPREFIX=prefix, WINESERVER=files / "bin/wineserver", WINEDEBUG="-all", VKD3D_DEBUG="warn",
                        WINEDLLOVERRIDES="d3d12,d3d12core,dxgi=n,b", XDG_CACHE_HOME=trial / "cache",
                        XDG_RUNTIME_DIR=trial / "runtime", TMPDIR=trial / "tmp", VKD3D_SHADER_CACHE_PATH=trial)
-    for key, value in environment.items():
-        command.extend(["--setenv", key, str(value)])
-    command.extend(["--", "xvfb-run", "-a", "timeout", "-k", "2s", "45s", str(files / "bin/wine"), str(exe)])
+    # The provider requests translation through the launcher's per-prefix
+    # session. Keep the host worker alive while the sandboxed guest runs.
     with (work / "gpu.log").open("w") as log:
-        result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=55)
+        def report(message):
+            log.write(message + "\n")
+            log.flush()
+        with shader_session(prefix / SOURCE_CACHE.parent, environment, report):
+            for key, value in environment.items():
+                command.extend(["--setenv", key, str(value)])
+            command.extend(["--", "xvfb-run", "-a", "timeout", "-k", "2s", "45s", str(files / "bin/wine"), str(exe)])
+            result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=55)
     raw = trial / "result.txt"
     observed = dict(line.split("=", 1) for line in raw.read_text().splitlines()) if raw.exists() else {}
     return exe, result.returncode, observed

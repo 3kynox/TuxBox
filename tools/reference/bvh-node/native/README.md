@@ -82,12 +82,14 @@ The separate `rtz_triangle.hlsl` experiment uses a ray-relative projected
 edge formulation with round-toward-zero after each operation. The original
 binary64 implementation mismatches native on dynamically evaluated AMD inputs
 even when constant-input controls match. An experimental float32 split-product
-variant is selected with `--strict --projected-rtz --float-rtz`; it matches
-the sampled dynamic-input finite hits and misses in
-`evidence/matrix-awakens/bvh-native-rtz-dynamic.json`. Its split-product
-arithmetic is not validated for overflow or underflow. Edge ownership, extreme
-values, numerical behavior outside the tested inputs, and performance remain
-unverified. Neither variant is connected to the runtime. This experiment is
+variant is selected with `--strict --projected-rtz --float-rtz`. Its sampled
+dynamic-input hits, misses, edges and degenerate cases are in
+`evidence/matrix-awakens/bvh-native-rtz-edges.json`. Three of eight extreme
+scale cases mismatch native: signed zero at 2^-60, saturation versus infinity
+at 2^60, and NaN/saturation differences at 2^100. Its split-product arithmetic
+is not validated for overflow or underflow; numerical behavior outside these
+inputs and performance remain unverified. Neither variant is connected to the
+runtime. This experiment is
 informed by [AMD's public ray-triangle description](https://patents.google.com/patent/US20200193684A1/en);
 the tested results do not establish equivalence for other rays or inputs.
 
@@ -99,8 +101,17 @@ LD_LIBRARY_PATH="$HSA_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" python tool
 ```
 
 Add `--oblique` for varied directions and magnitudes, `--tied` for tied
-dominant axes, or `--miss` for offset rays. Add `--float-rtz` for the
-float32 split-product variant. The default uses positive-Z unit rays.
+dominant axes, `--miss` for offset rays, `--edge` for triangle-edge rays, or
+`--nearedge` for rays offset by one float ULP. Edge modes require
+`--float-rtz`; the default uses positive-Z unit rays.
+
+To replay native edge, degenerate, or extreme-scale cases using runtime-fed
+GPU data, generate a dump with `--dump-edges`, `--dump-degenerate`, or
+`--dump-scales`, then pass it to `tools/check_native_bvh_edges.py` with the
+same Proton and prefix options as the differential tool above. The scale
+comparison currently returns nonzero because of the documented mismatches.
+For user-owned leaves, `--retail-edge` and `--retail-nearedge` generate local
+six-case dumps accepted by the same tool; keep those dumps local.
 
 `--dump-precision /tmp/tuxbox-bvh-precision.bin` provides a game-independent
 reproducer: it varies one triangle coordinate by 0–15 float ULPs and dumps

@@ -626,5 +626,6 @@
       },
       "dxil_sha256": "b91e26a14042c09501c508deef189667bc6da00b43a7cefb3ef265704ec68a56"
     }
-  ]
+  ],
+  "superseded_by": "bvh-native-rtz-edges.json uses a later reference version and includes broader edge and scale controls."
 }
