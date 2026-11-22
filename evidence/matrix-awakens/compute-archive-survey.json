@@ -1,7 +1,7 @@
 {
   "scope": "Packaged global compute archive entries translated to HLSL. Counts do not measure DXIL validation, pipeline creation or rendered output.",
   "archive_sha256": "afab84fa891e491d64f1c2a9bdf26a66afc2054aef2cd9110e358402473b4fb2",
-  "compiler_sha256": "3f4e955851a7f2d716e12955750b71227e20ec1be111df6007254262890fdd82",
+  "compiler_sha256": "fe39cee8940ce79bd3e045f09bda74a8888e872429f19834a025d9543dcbdd26",
   "stage": {
     "entries": 2508,
     "translated": 2286,
@@ -22,5 +22,5 @@
       "wave reduction: unsupported reduction op v_max_u32": 5
     }
   },
-  "full_survey_sha256": "949ff72ec4a50342599a02ca18fdb93b31d960de5780bbb2431e027bf2bc07b3"
+  "full_survey_sha256": "64796b80aa6ff4b7feb01348fe9fb4d387034c17b866fc87725185704858b2fa"
 }

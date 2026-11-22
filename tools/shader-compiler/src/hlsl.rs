@@ -1101,6 +1101,32 @@ pub fn valu_probe_stride(nvgprs: u32) -> u32 {
     nvgprs + 2
 }
 
+/// Emit one LDS exchange inside a synthetic 32-lane control. This diagnostic
+/// is not a translation of the surrounding program or its wave control flow.
+pub fn translate_lds_exchange_probe(ex: &ShaderExtract, offset: usize) -> Result<String, String> {
+    if ex.stage != Stage::Compute {
+        return Err("LDS probe needs a compute shader".into());
+    }
+    let ins = disassemble(&ex.isa).into_iter().find(|i| i.offset == offset)
+        .ok_or("missing LDS probe instruction")?;
+    let (addr, data, dst) = match (ins.mnemonic.as_str(), ins.src.as_slice(), ins.dst.as_slice()) {
+        ("ds_wrxchg_rtn_b32", [Opnd::Vgpr(a), Opnd::Vgpr(v), _], [Opnd::Vgpr(d)]) => (*a, *v, *d),
+        _ => return Err("expected one LDS write-exchange instruction".into()),
+    };
+    let mut em = Emitter::new(ex, vec![ins.clone()]);
+    for op in ins.src.iter().chain(ins.dst.iter()) { em.touch(op); }
+    em.emit_insn(0, &ins, false, None)?;
+    let mut h = String::from("RWBuffer<uint> tb_io : register(u0);\ngroupshared uint tb_lds[8192];\n[numthreads(32,1,1)] void main(uint3 tid : SV_DispatchThreadID) {\n");
+    h.push_str("uint exec_lo=1u, exec_hi=0u, vcc_lo=0u, vcc_hi=0u, scc=0u, m0=0u, nul=0u;\n");
+    h.push_str(&em.reg_decls());
+    let _ = writeln!(h, "\nuint lane=tid.x; tb_lds[lane]=tb_io[lane*4+2]; GroupMemoryBarrierWithGroupSync();");
+    let _ = writeln!(h, "v{addr}=tb_io[lane*4]; v{data}=tb_io[lane*4+1]; exec_lo=tb_io[lane*4+3];");
+    h.push_str(&em.body);
+    h.push_str("GroupMemoryBarrierWithGroupSync();\n");
+    let _ = writeln!(h, "tb_io[lane*4+1]=v{dst}; tb_io[lane*4+2]=tb_lds[lane]; }}");
+    Ok(h)
+}
+
 /// Conformance probe: straight-line vector-ALU code (VOP1/VOP2/VOP3/VOPC/VOP3P words, ending
 /// with or without `s_endpgm`) translated with the same per-instruction emitter as real
 /// shaders, wrapped in a compute shader that loads each thread's `v0..v{nvgprs-1}` and
@@ -3866,20 +3892,28 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             Enc::Ds
                 if self.is_cs
-                    && matches!(
+                    && (m == "ds_wrxchg_rtn_b32" || matches!(
                         m.replace("_rtn", "").as_str(),
                         "ds_add_u32" | "ds_min_u32" | "ds_max_u32" | "ds_and_b32" | "ds_or_b32" | "ds_xor_b32"
-                    ) =>
+                    )) =>
             {
                 // Atomic read-modify-write on group-shared memory (the `_rtn` forms also
                 // return the old value) → the matching HLSL Interlocked* intrinsic.
                 self.uses_lds = true;
+                if m == "ds_wrxchg_rtn_b32" && ins.raw[0] & (1 << 17) != 0 {
+                    return Err("global data store exchange unsupported".into());
+                }
+                if m == "ds_wrxchg_rtn_b32" && self.insns.iter().any(|op|
+                    op.enc == Enc::Sopp && Self::branch_cond(op.op).is_some()) {
+                    return Err("LDS exchange with unverified branch convergence".into());
+                }
                 let func = match m.replace("_rtn", "").as_str() {
                     "ds_add_u32" => "InterlockedAdd",
                     "ds_min_u32" => "InterlockedMin",
                     "ds_max_u32" => "InterlockedMax",
                     "ds_and_b32" => "InterlockedAnd",
                     "ds_or_b32" => "InterlockedOr",
+                    "ds_wrxchg_b32" => "InterlockedExchange",
                     _ => "InterlockedXor",
                 };
                 let off = ins.aux.imm as u32 & 0xffff;
