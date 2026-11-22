@@ -74,6 +74,13 @@ DXC strict IEEE math. For the tested Frosty sphere leaves, both GPU HLSL
 results differ from native by up to three ULP in the finite same-sign output
 words, with or without `--strict`; do not treat the helper as bit exact.
 
+`--dump-precision /tmp/tuxbox-bvh-precision.bin` provides a game-independent
+reproducer: it varies one triangle coordinate by 0–15 float ULPs and dumps
+the resulting native outputs. Eight of these 16 cases differ from the scalar
+helper on the tested GPUs. The native control also tests four ray origins for
+each triangle and shows that the hardware determinant can change with origin,
+so rounding the final determinant alone cannot reproduce its behavior.
+
 The descriptor encodes a zero base, full 42-bit range, closest-first sorting
 and barycentric triangle return mode. Except for the dedicated growth cases,
 box growth is zero. The HSA host

@@ -32,7 +32,7 @@ def main():
     if digest != '38bd71be9dd00e74952a9612f87f7df37a1617ca9f9847bb531b40bc5a4ad6af':
         raise ValueError('unexpected serialized sphere')
     folder = ROOT / 'tools/reference/shadow-tlas'
-    report = {'scope': 'Isolated Rust-owned immutable GPU upload and private-fence retention; not a runtime queue-ordered shadow or shader integration',
+    report = {'scope': 'Isolated Rust-owned immutable upload and default-heap GPU copy with private-fence retention; not runtime queue-ordered source capture or shader integration',
               'serialized_sha256': digest,
               'rust_sha256': hashlib.sha256((folder / 'owned/src/lib.rs').read_bytes()).hexdigest(),
               'validator_sha256': hashlib.sha256((ROOT / 'tools/reference/blas/validate_traversal.rs').read_bytes()).hexdigest(),
@@ -65,12 +65,12 @@ def main():
             adapter = next((line.removeprefix('adapter=') for line in receipt.splitlines() if line.startswith('adapter=')), None)
             if adapter is None or not adapter.lower().startswith('1002:' if name == 'AMD' else '10de:'):
                 raise ValueError(f'{name} unexpected adapter {adapter!r}')
-            required = ('immutable_gpu_snapshot=1', 'malformed_rejected=1', 'blocked_gpu_retained=1', 'two_fence_retirement=1', 'two_gpu_queues=1')
+            required = ('immutable_gpu_snapshot=1', 'malformed_rejected=1', 'blocked_gpu_retained=1', 'two_fence_retirement=1', 'two_gpu_queues=1', 'default_heap_gpu_copy=1', 'completed_list_copy_replay=1', 'closed_list_retention=1', 'inflight_copy_after_list_reset=1', 'validated_source_update=1', 'inflight_update_rejected=1')
             if any(item not in receipt.splitlines() for item in required):
                 raise ValueError(f'{name} missing control receipt: {receipt}')
             report['adapters'][name] = {'adapter': adapter, 'immutable_after_source_mutation': True,
                                          'malformed_rejected': True, 'blocked_gpu_retained': True,
-                                         'two_fence_retirement': True, 'two_gpu_queues': True}
+                                         'two_fence_retirement': True, 'two_gpu_queues': True, 'default_heap_gpu_copy': True, 'completed_list_copy_replay': True, 'closed_list_retention': True, 'inflight_copy_after_list_reset': True, 'validated_source_update': True, 'inflight_update_rejected': True}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

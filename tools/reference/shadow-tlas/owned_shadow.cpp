@@ -3,6 +3,10 @@
 #include "owned_shadow_dxil.h"
 using namespace shader_control;
 extern "C" int tb_shadow_create(ID3D12Device*, const unsigned char*, size_t, void**);
+extern "C" int tb_shadow_update(void*, const unsigned char*, size_t);
+extern "C" int tb_shadow_record_copy(void*, ID3D12GraphicsCommandList*);
+extern "C" int tb_shadow_retain_recording(void*);
+extern "C" int tb_shadow_release_recording(void*);
 extern "C" int tb_shadow_info(const void*, UINT64*, UINT64*);
 extern "C" int tb_shadow_hold(void*, ID3D12Fence*, UINT64);
 extern "C" int tb_shadow_try_release(void*);
@@ -70,6 +74,10 @@ int main() {
         ComPtr<ID3D12CommandAllocator> allocator; ComPtr<ID3D12GraphicsCommandList> list;
         check(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator)), "allocator");
         check(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), pso.Get(), IID_PPV_ARGS(&list)), "list");
+        if (tb_shadow_record_copy(nullptr, list.Get()) != -1 || tb_shadow_record_copy(handle, nullptr) != -1)
+            throw std::runtime_error("invalid copy args accepted");
+        if (tb_shadow_record_copy(handle, list.Get()) != 0) throw std::runtime_error("record shadow copy");
+        if (tb_shadow_try_release(handle) != 0) throw std::runtime_error("released while copy list is recorded");
         list->SetComputeRootSignature(root.Get());
         list->SetComputeRootShaderResourceView(0, address);
         list->SetComputeRootUnorderedAccessView(1, output->GetGPUVirtualAddress());
@@ -80,6 +88,7 @@ int main() {
         ComPtr<ID3D12CommandAllocator> allocator2; ComPtr<ID3D12GraphicsCommandList> list2;
         check(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator2)), "second allocator");
         check(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator2.Get(), pso.Get(), IID_PPV_ARGS(&list2)), "second list");
+        if (tb_shadow_retain_recording(handle) != 0) throw std::runtime_error("retain second recording");
         list2->SetComputeRootSignature(root.Get());
         list2->SetComputeRootShaderResourceView(0, address);
         list2->SetComputeRootUnorderedAccessView(1, output2->GetGPUVirtualAddress());
@@ -101,10 +110,12 @@ int main() {
         ctx.queue->ExecuteCommandLists(1, lists);
         check(ctx.queue->Signal(complete.Get(), 1), "queue signal");
         check(queue2->Wait(gate2.Get(), 1), "second queue wait");
+        check(queue2->Wait(complete.Get(), 1), "wait for default heap copy");
         ID3D12CommandList* lists2[] = {list2.Get()};
         queue2->ExecuteCommandLists(1, lists2);
         check(queue2->Signal(extra.Get(), 1), "second queue signal");
         if (tb_shadow_try_release(handle) != 0) throw std::runtime_error("released while GPU blocked");
+        if (tb_shadow_update(handle, data.data(), data.size()) != -5) throw std::runtime_error("updated upload during GPU work");
         check(gate->Signal(1), "release GPU gate");
         wait(complete.Get(), 1);
         D3D12_RANGE range{0,64}, none{}; void* mapped{};
@@ -119,8 +130,76 @@ int main() {
         identical = std::memcmp(mapped, expected.data(), 64) == 0;
         readback2->Unmap(0, &none);
         if (!identical) throw std::runtime_error("second GPU snapshot differed");
+        // The source visible at the next submission can change. Validate and
+        // stage it only after all prior uses complete; recorded copy size stays fixed.
+        data[64] ^= 0x5a; // restore original user bytes
+        if (tb_shadow_update(handle, invalid.data(), invalid.size()) != -2) throw std::runtime_error("invalid update accepted");
+        if (tb_shadow_update(handle, data.data(), data.size() - 1) != -1) throw std::runtime_error("changed size accepted");
+        auto updated = data;
+        float lower{}; std::memcpy(&lower, updated.data() + 80, sizeof(lower));
+        lower -= 1.0f;
+        std::memcpy(updated.data() + 80, &lower, sizeof(lower));
+        if (tb_shadow_update(handle, updated.data(), updated.size()) != 0) throw std::runtime_error("valid update rejected");
+        std::memcpy(expected.data(), updated.data() + 64, expected.size());
+        updated[64] ^= 0x5a; // staging owns a copy independent of the caller
+        // Replay the same closed copy-and-read list after both queues finish.
+        // Restore the output state and register the new completion before use.
+        ComPtr<ID3D12CommandAllocator> reset_allocator;
+        ComPtr<ID3D12GraphicsCommandList> reset_list;
+        check(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&reset_allocator)), "reset allocator");
+        check(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, reset_allocator.Get(), nullptr, IID_PPV_ARGS(&reset_list)), "reset list");
+        transition(reset_list.Get(), output.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        submit_and_wait(ctx.device.Get(), ctx.queue.Get(), reset_list.Get());
+        if (tb_shadow_hold(handle, complete.Get(), 2) != 0) throw std::runtime_error("replay hold");
+        check(ctx.queue->Wait(gate.Get(), 2), "replay gate");
+        ctx.queue->ExecuteCommandLists(1, lists);
+        check(ctx.queue->Signal(complete.Get(), 2), "replay completion");
+        if (tb_shadow_try_release(handle) != 0) throw std::runtime_error("released during copy replay");
+        check(gate->Signal(2), "release replay gate");
+        wait(complete.Get(), 2);
+        check(readback->Map(0, &range, &mapped), "replay readback");
+        identical = std::memcmp(mapped, expected.data(), 64) == 0;
+        readback->Unmap(0, &none);
+        if (!identical) throw std::runtime_error("replayed GPU copy differed");
+        if (tb_shadow_try_release(handle) != 0) throw std::runtime_error("released while lists can replay");
+        ComPtr<ID3D12Fence> final_fence;
+        check(ctx.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&final_fence)), "final fence");
+        if (tb_shadow_hold(handle, final_fence.Get(), 1) != 0) throw std::runtime_error("final hold");
+        list.Reset(); list2.Reset(); // neither recorded list can be replayed now
+        if (tb_shadow_release_recording(handle) != 0 || tb_shadow_release_recording(handle) != 0 ||
+            tb_shadow_release_recording(handle) != -2) throw std::runtime_error("recording release mismatch");
+        if (tb_shadow_try_release(handle) != 0) throw std::runtime_error("released with private fence pending");
+        check(final_fence->Signal(1), "final fence signal");
         if (tb_shadow_try_release(handle) != 1) throw std::runtime_error("completed resource not retired");
-        std::fprintf(receipt, "immutable_gpu_snapshot=1\nmalformed_rejected=1\nblocked_gpu_retained=1\ntwo_fence_retirement=1\ntwo_gpu_queues=1\nbody_bytes=%llu\n", size);
+        // Separate case: reset the recorded list while its GPU copy is blocked.
+        // The recording reference can go away, but the pending private fence
+        // must still retain both source and destination resources.
+        void* pending_handle{};
+        if (tb_shadow_create(ctx.device.Get(), data.data(), data.size(), &pending_handle) != 0)
+            throw std::runtime_error("pending shadow creation");
+        ComPtr<ID3D12CommandAllocator> pending_allocator, replacement_allocator;
+        ComPtr<ID3D12GraphicsCommandList> pending_list;
+        check(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&pending_allocator)), "pending allocator");
+        check(ctx.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&replacement_allocator)), "replacement allocator");
+        check(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, pending_allocator.Get(), nullptr, IID_PPV_ARGS(&pending_list)), "pending list");
+        if (tb_shadow_record_copy(pending_handle, pending_list.Get()) != 0) throw std::runtime_error("pending copy");
+        check(pending_list->Close(), "close pending list");
+        ComPtr<ID3D12Fence> pending_gate, pending_done;
+        check(ctx.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&pending_gate)), "pending gate");
+        check(ctx.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&pending_done)), "pending done");
+        if (tb_shadow_hold(pending_handle, pending_done.Get(), 1) != 0) throw std::runtime_error("pending hold");
+        check(ctx.queue->Wait(pending_gate.Get(), 1), "pending wait");
+        ID3D12CommandList* pending_lists[] = {pending_list.Get()};
+        ctx.queue->ExecuteCommandLists(1, pending_lists);
+        check(ctx.queue->Signal(pending_done.Get(), 1), "pending signal");
+        check(pending_list->Reset(replacement_allocator.Get(), nullptr), "reset pending list");
+        check(pending_list->Close(), "close reset pending list");
+        if (tb_shadow_release_recording(pending_handle) != 0) throw std::runtime_error("release pending recording");
+        if (tb_shadow_try_release(pending_handle) != 0) throw std::runtime_error("released in-flight GPU copy");
+        check(pending_gate->Signal(1), "unblock pending copy");
+        wait(pending_done.Get(), 1);
+        if (tb_shadow_try_release(pending_handle) != 1) throw std::runtime_error("pending shadow not retired");
+        std::fprintf(receipt, "inflight_copy_after_list_reset=1\nvalidated_source_update=1\ninflight_update_rejected=1\nimmutable_gpu_snapshot=1\nmalformed_rejected=1\nblocked_gpu_retained=1\ntwo_fence_retirement=1\ntwo_gpu_queues=1\ndefault_heap_gpu_copy=1\ncompleted_list_copy_replay=1\nclosed_list_retention=1\nbody_bytes=%llu\n", size);
     } catch (const std::exception& e) { std::fprintf(receipt, "error=%s\n", e.what()); result = 1; }
     return std::fclose(receipt) ? 2 : result;
 }

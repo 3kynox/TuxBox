@@ -1,5 +1,5 @@
 {
-  "scope": "Eight ReflectionCompactTracesCS variants dispatch 128, 256, 512 and 1024 threads across two resource layouts with their packaged root signatures and real depth and ray textures. CPU-modeled packed outputs, atomic counts and guards cover empty, full, mixed, wave32-boundary pixels, one active tile and no active tiles. The shader reserves one additional queue entry when its last lane is inactive.",
+  "scope": "Ten ReflectionCompactTracesCS variants dispatch 64, 128, 256, 512 and 1024 threads across two resource layouts with their packaged root signatures and real depth and ray textures. CPU-modeled packed outputs, atomic counts and guards cover empty, full, mixed, wave32-boundary pixels, one active tile and no active tiles. The shader reserves one additional queue entry when its last lane is inactive.",
   "archive_sha256": "afab84fa891e491d64f1c2a9bdf26a66afc2054aef2cd9110e358402473b4fb2",
   "results": {
     "576": {
@@ -941,6 +941,242 @@
             "selected": 0,
             "counter": 6,
             "checked_words": 592,
+            "mismatches": 0
+          }
+        }
+      }
+    },
+    "580": {
+      "amd": {
+        "gpu": {
+          "adapter": "1002:13c0"
+        },
+        "host": "1793301796 experimental-11.0-20261027b-x86_64",
+        "source_sha256": "dd4c05fd916a5a7a051629815fbcf7740a41a2d101e5d07b94a4247f7aaebf67",
+        "dxil_sha256": "bdc0bbc647cad8a5eeee5efaa6073413985b543c9091afffa05d59bdcad0100b",
+        "cases": {
+          "none": {
+            "selected": 0,
+            "counter": 6,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "full": {
+            "selected": 64,
+            "counter": 69,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "mixed": {
+            "selected": 42,
+            "counter": 48,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "lane31": {
+            "selected": 1,
+            "counter": 7,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "lane32": {
+            "selected": 1,
+            "counter": 7,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "lane63": {
+            "selected": 1,
+            "counter": 6,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "one_tile": {
+            "selected": 64,
+            "counter": 69,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "no_tiles": {
+            "selected": 0,
+            "counter": 6,
+            "checked_words": 208,
+            "mismatches": 0
+          }
+        }
+      },
+      "nvidia": {
+        "gpu": {
+          "adapter": "10de:2705"
+        },
+        "host": "1793301796 experimental-11.0-20261027b-x86_64",
+        "source_sha256": "dd4c05fd916a5a7a051629815fbcf7740a41a2d101e5d07b94a4247f7aaebf67",
+        "dxil_sha256": "bdc0bbc647cad8a5eeee5efaa6073413985b543c9091afffa05d59bdcad0100b",
+        "cases": {
+          "none": {
+            "selected": 0,
+            "counter": 6,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "full": {
+            "selected": 64,
+            "counter": 69,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "mixed": {
+            "selected": 42,
+            "counter": 48,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "lane31": {
+            "selected": 1,
+            "counter": 7,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "lane32": {
+            "selected": 1,
+            "counter": 7,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "lane63": {
+            "selected": 1,
+            "counter": 6,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "one_tile": {
+            "selected": 64,
+            "counter": 69,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "no_tiles": {
+            "selected": 0,
+            "counter": 6,
+            "checked_words": 208,
+            "mismatches": 0
+          }
+        }
+      }
+    },
+    "582": {
+      "amd": {
+        "gpu": {
+          "adapter": "1002:13c0"
+        },
+        "host": "1793301796 experimental-11.0-20261027b-x86_64",
+        "source_sha256": "03a1ac36b0bc15cdb8a7910b66ee0c36a12b96772aeead88b3129463f250bf1d",
+        "dxil_sha256": "f3a87a5cec5f9df11b69d89315dcc2ab2de9b19e27657fcdbc609581c7b53640",
+        "cases": {
+          "none": {
+            "selected": 0,
+            "counter": 6,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "full": {
+            "selected": 64,
+            "counter": 69,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "mixed": {
+            "selected": 42,
+            "counter": 48,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "lane31": {
+            "selected": 1,
+            "counter": 7,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "lane32": {
+            "selected": 1,
+            "counter": 7,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "lane63": {
+            "selected": 1,
+            "counter": 6,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "one_tile": {
+            "selected": 64,
+            "counter": 69,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "no_tiles": {
+            "selected": 0,
+            "counter": 6,
+            "checked_words": 208,
+            "mismatches": 0
+          }
+        }
+      },
+      "nvidia": {
+        "gpu": {
+          "adapter": "10de:2705"
+        },
+        "host": "1793301796 experimental-11.0-20261027b-x86_64",
+        "source_sha256": "03a1ac36b0bc15cdb8a7910b66ee0c36a12b96772aeead88b3129463f250bf1d",
+        "dxil_sha256": "f3a87a5cec5f9df11b69d89315dcc2ab2de9b19e27657fcdbc609581c7b53640",
+        "cases": {
+          "none": {
+            "selected": 0,
+            "counter": 6,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "full": {
+            "selected": 64,
+            "counter": 69,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "mixed": {
+            "selected": 42,
+            "counter": 48,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "lane31": {
+            "selected": 1,
+            "counter": 7,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "lane32": {
+            "selected": 1,
+            "counter": 7,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "lane63": {
+            "selected": 1,
+            "counter": 6,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "one_tile": {
+            "selected": 64,
+            "counter": 69,
+            "checked_words": 208,
+            "mismatches": 0
+          },
+          "no_tiles": {
+            "selected": 0,
+            "counter": 6,
+            "checked_words": 208,
             "mismatches": 0
           }
         }

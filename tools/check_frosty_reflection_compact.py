@@ -17,7 +17,7 @@ from project_tuxbox.inspect import digest
 from project_tuxbox.shader_prep import compiler_tools
 
 GUARD = 0xdeadbeef
-GROUP_SIZES = {576: 128, 579: 256, 589: 1024, 601: 512, 587: 128, 592: 512, 600: 1024, 606: 256}
+GROUP_SIZES = {580: 64, 582: 64, 576: 128, 579: 256, 589: 1024, 601: 512, 587: 128, 592: 512, 600: 1024, 606: 256}
 CASES = ("none", "full", "mixed", "lane31", "lane32", "lane63", "one_tile", "no_tiles")
 
 
@@ -42,7 +42,7 @@ def words(path, values):
 
 def run(mount, compiler, host, work, entry):
     size = GROUP_SIZES[entry]
-    small = entry in (587, 592, 600, 606)
+    small = entry in (582, 587, 592, 600, 606)
     payload, entries = global_archive(mount)
     ((_, native, _),) = containers(decompress(payload, entries[entry], decoder()))
     (work / f"{entry}.dxbc").write_bytes(native)

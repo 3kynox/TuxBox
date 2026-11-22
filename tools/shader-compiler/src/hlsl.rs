@@ -884,7 +884,7 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     em.wave_cull = wave_cull;
     em.indexed_lane = indexed_lane;
     em.single_wave32 = single_wave32;
-    em.reflection_mask32 = reflection && ex.isa.len() == 1028;
+    em.reflection_mask32 = reflection && matches!(ex.isa.len(), 1024 | 1028);
     if matches!(ex.stage, Stage::Vertex | Stage::Geometry) {
         em.out_interp = feeds_ps.cloned().unwrap_or_default();
     }

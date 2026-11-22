@@ -51,11 +51,13 @@ static uint32_t bits(float value) {
 int main(int argc, char **argv) {
   if (argc != 2 &&
       !(argc == 4 && (strcmp(argv[2], "--dump") == 0 ||
-                      strcmp(argv[2], "--dump-triangles") == 0)) &&
+                      strcmp(argv[2], "--dump-triangles") == 0 ||
+                      strcmp(argv[2], "--dump-precision") == 0)) &&
       !(argc == 5 && (strcmp(argv[2], "--retail") == 0 ||
                       strcmp(argv[2], "--retail-triangles") == 0))) {
     fprintf(stderr,
-            "usage: %s probe.hsaco [--dump|--dump-triangles output.bin | "
+            "usage: %s probe.hsaco [--dump|--dump-triangles|--dump-precision "
+            "output.bin | "
             "--retail|--retail-triangles serialized.bin output.bin]\n",
             argv[0]);
     return 2;
@@ -294,7 +296,7 @@ int main(int argc, char **argv) {
       if (!size || offset > (uint64_t)length ||
           size > (uint64_t)length - offset ||
           fseek(source, (long)offset, SEEK_SET) != 0 ||
-          fread((uint32_t *)out + 2688, 1, size, source) != size) {
+          fread((uint32_t *)out + 7680, 1, size, source) != size) {
         fprintf(stderr, "invalid serialized root record\n");
         return 1;
       }
@@ -339,7 +341,7 @@ int main(int argc, char **argv) {
                          (vertices[3 * ic] - vertices[3 * ia]);
         if (!isfinite(area) || fabsf(area) < .0001f)
           continue;
-        uint32_t *record = (uint32_t *)out + 2688 + found * 32;
+        uint32_t *record = (uint32_t *)out + 7680 + found * 32;
         memcpy(record, leaf, 64);
         for (unsigned axis = 0; axis < 3; axis++) {
           float origin = .5f * vertices[3 * ia + axis] +
@@ -361,6 +363,13 @@ int main(int argc, char **argv) {
     }
     if (fclose(source) != 0)
       return 1;
+  }
+  for (unsigned test = 0; test < 16; test++) {
+    uint32_t *precision = (uint32_t *)out + 7296 + test * 16;
+    float vertices[12] = {0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0};
+    memcpy(precision, vertices, sizeof(vertices));
+    precision[3] = 0x3f800000u + test;
+    precision[15] = 9;
   }
   hsa_signal_t signal;
   CHK(hsa_signal_create(1, 0, NULL, &signal));
@@ -528,6 +537,26 @@ int main(int argc, char **argv) {
           failed = 1;
     }
   printf("box_growth_cases=90\n");
+  for (unsigned test = 0; test < 16; test++) {
+    uint32_t expected_det = 0xbf800000u + (test & ~1u);
+    uint32_t *actual = (uint32_t *)out + 2540 + test * 4;
+    if (actual[0] != expected_det || actual[1] != expected_det ||
+        actual[2] != 0xbe800000u || actual[3] != 0xbe800000u + test)
+      failed = 1;
+  }
+  static const int precision_offsets[3][16] = {
+      {0, 0, 1, 2, 4, 4, 5, 6, 8, 8, 9, 10, 12, 12, 13, 14},
+      {0, 0, 1, 2, 4, 4, 5, 6, 8, 8, 9, 10, 12, 12, 13, 14},
+      {-3, -1, 1, 1, 2, 3, 5, 5, 6, 7, 9, 9, 10, 11, 13, 13}};
+  for (unsigned origin = 1; origin < 4; origin++)
+    for (unsigned test = 0; test < 16; test++) {
+      uint32_t got = ((uint32_t *)out)[2540 + 4 * (origin * 16 + test) + 1];
+      uint32_t want =
+          (uint32_t)(0xbf800000ll + precision_offsets[origin - 1][test]);
+      if (got != want)
+        failed = 1;
+    }
+  printf("triangle_precision=64\n");
   if (failed) {
     fprintf(stderr, "instruction probe failed or timed out\n");
     return 1;
@@ -538,22 +567,33 @@ int main(int argc, char **argv) {
       perror("open output");
       return 1;
     }
-    int triangles = strcmp(argv[2], "--dump-triangles") == 0;
-    const char *magic = triangles ? "TXBVT001" : "TXBVH001";
+    int precision = strcmp(argv[2], "--dump-precision") == 0;
+    int triangles = precision || strcmp(argv[2], "--dump-triangles") == 0;
+    const char *magic = precision   ? "TXBVP001"
+                        : triangles ? "TXBVT001"
+                                    : "TXBVH001";
     int ok = fwrite(magic, 1, 8, dump) == 8;
-    for (unsigned test = 0; test < (triangles ? 6u : 48u) && ok; test++) {
+    for (unsigned test = 0; test < (precision   ? 16u
+                                    : triangles ? 6u
+                                                : 48u) &&
+                            ok;
+         test++) {
       if (triangles) {
-        unsigned side = test / 3;
-        uint32_t input = 3424 + test * 16;
-        float origin[3] = {side ? .75f : .25f, side ? .625f : .125f, -1.f};
+        unsigned side = precision ? 0 : test / 3;
+        uint32_t input = precision ? 7296 + test * 16 : 3424 + test * 16;
+        float origin[3] = {side ? .75f : .25f,
+                           precision ? .25f
+                           : side    ? .625f
+                                     : .125f,
+                           -1.f};
+        uint32_t output = precision ? 2540 + test * 4 : 344 + test * 4;
         float direction[3] = {0.f, 0.f, 1.f};
         ok =
             fwrite((uint32_t *)out + input, sizeof(uint32_t), 16, dump) == 16 &&
             fwrite(origin, sizeof(float), 3, dump) == 3 &&
             fwrite(direction, sizeof(float), 3, dump) == 3 &&
             fwrite(&side, sizeof(uint32_t), 1, dump) == 1 &&
-            fwrite((uint32_t *)out + 344 + test * 4, sizeof(uint32_t), 4,
-                   dump) == 4;
+            fwrite((uint32_t *)out + output, sizeof(uint32_t), 4, dump) == 4;
       } else {
         unsigned input = test < 24 ? 4032 + test * 48 : 6144 + (test - 24) * 48;
         unsigned output = test < 24 ? 944 + test * 4 : 2400 + (test - 24) * 4;
@@ -582,7 +622,7 @@ int main(int argc, char **argv) {
     int ok = fwrite("TXBVR001", 1, 8, dump) == 8;
     for (unsigned test = 0; test < 8 && ok; test++) {
       uint32_t record[48] = {0};
-      memcpy(record, (uint32_t *)out + 2688, 128);
+      memcpy(record, (uint32_t *)out + 7680, 128);
       for (unsigned axis = 0; axis < 3; axis++) {
         record[32 + axis] = bits(origins[test][axis]);
         record[35 + axis] = bits(inverses[test][axis]);
@@ -607,7 +647,7 @@ int main(int argc, char **argv) {
     }
     int ok = fwrite("TXBVT002", 1, 8, dump) == 8;
     for (unsigned test = 0; test < 6 && ok; test++) {
-      uint32_t *record = (uint32_t *)out + 2688 + test * 32;
+      uint32_t *record = (uint32_t *)out + 7680 + test * 32;
       ok = fwrite(record, 4, 23, dump) == 23 &&
            fwrite((uint32_t *)out + 2500 + test * 4, 4, 4, dump) == 4;
     }

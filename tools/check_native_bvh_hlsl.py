@@ -32,9 +32,11 @@ def run():
     parser.add_argument("--strict", action="store_true", help="compile with DXC strict IEEE math")
     args = parser.parse_args()
     data = args.dump.read_bytes()
-    is_triangle = data[:8] in (b"TXBVT001", b"TXBVT002")
+    is_triangle = data[:8] in (b"TXBVT001", b"TXBVT002", b"TXBVP001")
     if is_triangle and len(data) == 8 + 6 * 27 * 4:
         cases = [struct.unpack_from("<27I", data, 8 + i * 27 * 4) for i in range(6)]
+    elif data[:8] == b"TXBVP001" and len(data) == 8 + 16 * 27 * 4:
+        cases = [struct.unpack_from("<27I", data, 8 + i * 27 * 4) for i in range(16)]
     elif data[:8] == b"TXBVH001" and len(data) == 8 + 48 * 52 * 4:
         cases = [struct.unpack_from("<52I", data, 8 + i * 52 * 4) for i in range(48)]
     elif data[:8] == b"TXBVR001" and len(data) == 8 + 8 * 52 * 4:
@@ -65,6 +67,7 @@ def run():
             shader += "".join(f" output[{4*i+j}] = r[{j}];" for j in range(4)) + " }\n"
     shader += "}\n"
     scope = ("serialized BLAS paired triangle" if data[:8] == b"TXBVT002" else
+             "synthetic triangle precision" if data[:8] == b"TXBVP001" else
              "synthetic paired triangle") if is_triangle else (
         "serialized BLAS root" if data[:8] == b"TXBVR001" else "synthetic BOX16/BOX32")
     report = {"scope": f"{scope} cases: native gfx1036 instruction output versus HLSL, not a general opcode equivalence proof",

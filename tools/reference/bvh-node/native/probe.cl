@@ -176,6 +176,15 @@ __kernel void probe(__global unsigned *out) {
               node, 10000.f, (float4)(0, 0, 0, 0), (float4)(1, 1, 1, 0),
               (float4)(1, 1, 1, 0), descriptor);
     }
+  const float precision_origins[4] = {.25f, .125f, .375f, .1251f};
+  for (uint origin = 0; origin < 4; origin++)
+    for (uint test = 0; test < 16; test++) {
+      ulong node = ((ulong)(out + 7296 + test * 16)) >> 3;
+      float x = precision_origins[origin];
+      *(__global uint4 *)(out + 2540 + 4 * (origin * 16 + test)) =
+          intersect(node, (float4)(x, x, -1.f, 0), (float4)(0, 0, 1.f, 0),
+                    (float4)(1, 1, 1, 0));
+    }
   if (out[3000] == 1u) {
     const float4 origins[8] = {
         (float4)(.25f, .25f, -4.f, 0.f), (float4)(0, 0, -4, 0),
@@ -188,14 +197,14 @@ __kernel void probe(__global unsigned *out) {
         (float4)(-.25f, -.25f, -1, 0), (float4)(.25f, .25f, 1, 0),
         (float4)(-2, .5f, 1, 0),       (float4)(2, -.5f, -1, 0)};
     for (uint i = 0; i < 8; i++) {
-      ulong node = (((ulong)(out + 2688)) >> 3) | (out[3001] ? 5ul : 4ul);
+      ulong node = (((ulong)(out + 7680)) >> 3) | (out[3001] ? 5ul : 4ul);
       *(__global uint4 *)(out + 2500 + 4 * i) =
           intersect(node, origins[i], (float4)(1, 1, 1, 0), inverses[i]);
     }
   }
   if (out[3000] == 2u)
     for (uint test = 0; test < 6; test++) {
-      __global uint *record = out + 2688 + test * 32;
+      __global uint *record = out + 7680 + test * 32;
       float4 origin = (float4)(as_float(record[16]), as_float(record[17]),
                                as_float(record[18]), 0.f);
       float4 dir = (float4)(as_float(record[19]), as_float(record[20]),

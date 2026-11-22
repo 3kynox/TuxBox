@@ -43,8 +43,8 @@ static void dispatch(Context &ctx, const std::string &name, UINT entry, UINT gro
     const bool post_instance = entry == 3397 || entry == 3398 || entry == 3412 || entry == 3422 || entry == 3432 || entry == 3454 || entry == 3457 || entry == 3470;
     const bool single_instance = no_hzb || entry == 3396 || entry == 3399 || entry == 3438 || entry == 3430 || entry == 3449 || entry == 3451 || entry == 3456 || entry == 3458 || post_instance;
     const bool depth_cull = instance || cluster || (single_instance && !no_hzb);
-    const bool small_reflection = entry == 587 || entry == 592 || entry == 600 || entry == 606;
-    const bool reflection = small_reflection || entry == 576 || entry == 579 || entry == 589 || entry == 601;
+    const bool small_reflection = entry == 582 || entry == 587 || entry == 592 || entry == 600 || entry == 606;
+    const bool reflection = small_reflection || entry == 576 || entry == 580 || entry == 579 || entry == 589 || entry == 601;
     const bool cards = entry == 1243 || entry == 1257;
     InstanceDepth hzb;
     InstanceDepth reflection_textures[3];
