@@ -151,6 +151,45 @@ static int virtual_query(void)
     return 0;
 }
 
+static int write_watch(void)
+{
+    HMODULE module = GetModuleHandleW(L"xmem.dll");
+    REQUIRE(GetProcAddress(module, "XMemGetWriteWatch") == GetProcAddress(module, MAKEINTRESOURCEA(17)));
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    SIZE_T page = info.dwPageSize;
+    volatile BYTE *base = VirtualAlloc(NULL, 4 * page,
+                                       MEM_COMMIT | MEM_RESERVE | MEM_WRITE_WATCH, PAGE_READWRITE);
+    REQUIRE(base);
+    base[7] = 1;
+    base[2 * page + 7] = 2;
+    void *expected[4] = {0}; ULONG_PTR expected_count = 4; DWORD expected_granularity = 0;
+    REQUIRE(!GetWriteWatch(0, (void *)base, 4 * page, expected, &expected_count, &expected_granularity));
+    struct { UINT64 before; void *pages[4]; UINT64 after; } output = {0};
+    output.before = output.after = 0xa5a5a5a5a5a5a5a5ULL;
+    ULONG_PTR count = 4; DWORD granularity = 0;
+    REQUIRE(!XMemGetWriteWatch(0, (void *)base, 4 * page, output.pages, &count, &granularity));
+    REQUIRE(count == expected_count && count == 2 && granularity == expected_granularity);
+    REQUIRE(!memcmp(output.pages, expected, count * sizeof(void *)));
+    REQUIRE(output.before == 0xa5a5a5a5a5a5a5a5ULL && output.after == output.before);
+    count = 4;
+    REQUIRE(!XMemGetWriteWatch(WRITE_WATCH_FLAG_RESET, (void *)base, 4 * page,
+                               output.pages, &count, &granularity) && count == 2);
+    base[page + 3] = 3;
+    count = 4;
+    REQUIRE(!XMemGetWriteWatch(0, (void *)base, 4 * page, output.pages, &count, &granularity));
+    REQUIRE(count == 1 && output.pages[0] == (void *)(base + page));
+    REQUIRE(output.before == 0xa5a5a5a5a5a5a5a5ULL && output.after == output.before);
+    expected_count = count = 4;
+    DWORD host_error = GetWriteWatch(0x80000000u, (void *)base, 4 * page,
+                                     expected, &expected_count, &expected_granularity);
+    DWORD guest_error = XMemGetWriteWatch(0x80000000u, (void *)base, 4 * page,
+                                          output.pages, &count, &granularity);
+    REQUIRE(host_error != 0 && guest_error == host_error && count == expected_count);
+    REQUIRE(VirtualFree((void *)base, 0, MEM_RELEASE));
+    return 0;
+}
+
 static int allocation_tags(void)
 {
     HMODULE module = GetModuleHandleW(L"xmem.dll");
@@ -343,13 +382,21 @@ int wmain(int argc, wchar_t **argv)
     BOOL query_only = argc >= 2 && !wcscmp(argv[1], L"--query");
     BOOL tag_only = argc >= 2 && !wcscmp(argv[1], L"--tags");
     BOOL hooks_only = argc >= 2 && !wcscmp(argv[1], L"--hooks");
-    if (pages_only || query_only || tag_only || hooks_only) { --argc; ++argv; }
+    BOOL watch_only = argc >= 2 && !wcscmp(argv[1], L"--watch");
+    if (pages_only || query_only || tag_only || hooks_only || watch_only) { --argc; ++argv; }
     if (!(argc == 1 || (argc == 3 && wcscmp(argv[1], L"--report") == 0))) {
-        fputs("usage: xmem-smoke.exe [--pages|--query|--tags|--hooks] [--report FILE]\n", stderr);
+        fputs("usage: xmem-smoke.exe [--pages|--query|--tags|--hooks|--watch] [--report FILE]\n", stderr);
         return 2;
     }
     if (argc == 3 && _wfopen_s(&report, argv[2], L"wb") != 0) return 2;
     REQUIRE(app_local_provider());
+    if (watch_only) {
+        REQUIRE(!write_watch());
+        const char result[] = "xmem-watch PASS initial=2 reset=2 next=1 guards=2 invalid=1\n";
+        if (report && (fputs(result, report) == EOF || fclose(report))) return 2;
+        fputs(result, stdout);
+        return 0;
+    }
     if (hooks_only) {
         REQUIRE(!allocation_hooks());
         const char result[] = "xmem-hooks PASS calls=2/2 zero-size=1 null-free=1 restore=1 reentrant=1\n";

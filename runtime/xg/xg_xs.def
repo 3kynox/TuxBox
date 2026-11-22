@@ -1,6 +1,8 @@
 LIBRARY xg_xs
 EXPORTS
     XGComputeBufferLayout @1
+    XGComputeTexture1DLayout @4
     XGComputeTexture2DLayout @5
+    XGCreateTexture1DComputer @8
     XGCreateTexture2DComputer @9
     XGCreateTextureComputer @11

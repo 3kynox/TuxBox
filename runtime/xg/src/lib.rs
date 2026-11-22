@@ -11,6 +11,7 @@ pub struct Computer {
     methods: &'static Methods,
     refs: AtomicU32,
     plane: Plane,
+    dimension: u32,
 }
 
 /// Buffer layout descriptor consumed by the Xbox XG library.
@@ -99,13 +100,13 @@ unsafe extern "system" fn get_layout(this: &Computer, out: *mut Layout) -> i32 {
     }
     // The guest supplies one complete layout. Inactive planes and reserved
     // fields have a defined zero representation, irrespective of prior contents.
-    unsafe { write_texture_layout(out, this.plane) };
+    unsafe { write_texture_layout(out, this.plane, this.dimension) };
     S_OK
 }
 
 /// # Safety
 /// `out` points to a writable `Layout` disjoint from `plane`.
-unsafe fn write_texture_layout(out: *mut Layout, plane: Plane) {
+unsafe fn write_texture_layout(out: *mut Layout, plane: Plane, dimension: u32) {
     unsafe {
         out.write_bytes(0, 1);
         (*out).bytes = plane.size;
@@ -113,7 +114,7 @@ unsafe fn write_texture_layout(out: *mut Layout, plane: Plane) {
         (*out).mips = plane.mip_count();
         (*out).plane_count = 1;
         (*out).planes[0] = plane;
-        (*out).dimension = 3;
+        (*out).dimension = dimension;
     }
 }
 
@@ -179,7 +180,7 @@ unsafe extern "system" fn compute_texture_2d(desc: *const Texture2DDesc, out: *m
         Ok(plane) => plane,
         Err(hr) => return hr,
     };
-    unsafe { write_texture_layout(out, plane) };
+    unsafe { write_texture_layout(out, plane, 3) };
     S_OK
 }
 
@@ -199,12 +200,95 @@ unsafe extern "system" fn create_texture_2d(
         Ok(plane) => plane,
         Err(hr) => return hr,
     };
-    unsafe { allocate_computer(plane, out) }
+    unsafe { allocate_computer(plane, 3, out) }
+}
+
+/// Xbox-specific 1D texture descriptor. It differs from the D3D12 descriptor.
+#[repr(C)]
+pub struct Texture1DDesc {
+    width: u32,
+    mips: u32,
+    slices: u32,
+    format: u32,
+    usage: u32,
+    bind_flags: u32,
+    cpu_access: u32,
+    misc_flags: u32,
+    swizzle: u32,
+    pitch: u32,
+}
+
+fn texture_1d_plane(desc: &Texture1DDesc) -> Result<Plane, i32> {
+    // Native controls establish this linear, shader-resource subset only.
+    // Xbox 1D textures reject block-compressed formats; do not reuse the 2D
+    // implementation for those or for unmeasured usage and swizzle modes.
+    if !matches!(desc.usage, 0 | 1 | 3)
+        || desc.bind_flags != 8
+        || desc.cpu_access != 0
+        || desc.misc_flags != 0
+        || desc.swizzle != 0
+        || desc.pitch != 0
+        || desc.mips == 0
+        || (70..=84).contains(&desc.format)
+        || (94..=99).contains(&desc.format)
+    {
+        return Err(E_NOTIMPL);
+    }
+    let mips = u16::try_from(desc.mips).map_err(|_| E_INVALIDARG)?;
+    let slices = u16::try_from(desc.slices).map_err(|_| E_INVALIDARG)?;
+    Plane::compute(&Desc {
+        dimension: 3,
+        alignment: 0,
+        width: u64::from(desc.width),
+        height: 1,
+        slices,
+        mips,
+        format: desc.format,
+        samples: 1,
+        quality: 0,
+        layout: 256,
+        flags: 0,
+    })
+}
+
+/// # Safety
+/// Non-null pointers must reference a readable descriptor and a disjoint,
+/// writable layout. Unsupported descriptor combinations return an error.
+#[unsafe(export_name = "XGComputeTexture1DLayout")]
+unsafe extern "system" fn compute_texture_1d(desc: *const Texture1DDesc, out: *mut Layout) -> i32 {
+    if desc.is_null() || out.is_null() {
+        return E_INVALIDARG;
+    }
+    let plane = match texture_1d_plane(unsafe { &*desc }) {
+        Ok(plane) => plane,
+        Err(hr) => return hr,
+    };
+    unsafe { write_texture_layout(out, plane, 2) };
+    S_OK
+}
+
+/// # Safety
+/// Non-null pointers must reference a readable descriptor and a disjoint,
+/// writable output pointer. Release a successful object through slot 1.
+#[unsafe(export_name = "XGCreateTexture1DComputer")]
+unsafe extern "system" fn create_texture_1d(
+    desc: *const Texture1DDesc,
+    out: *mut *mut Computer,
+) -> i32 {
+    if desc.is_null() || out.is_null() {
+        return E_INVALIDARG;
+    }
+    unsafe { out.write(ptr::null_mut()) };
+    let plane = match texture_1d_plane(unsafe { &*desc }) {
+        Ok(plane) => plane,
+        Err(hr) => return hr,
+    };
+    unsafe { allocate_computer(plane, 2, out) }
 }
 
 /// # Safety
 /// `out` must be a valid writable pointer, disjoint from the new object.
-unsafe fn allocate_computer(plane: Plane, out: *mut *mut Computer) -> i32 {
+unsafe fn allocate_computer(plane: Plane, dimension: u32, out: *mut *mut Computer) -> i32 {
     let object = unsafe { alloc(Allocation::new::<Computer>()).cast::<Computer>() };
     if object.is_null() {
         return E_OUTOFMEMORY;
@@ -214,6 +298,7 @@ unsafe fn allocate_computer(plane: Plane, out: *mut *mut Computer) -> i32 {
             methods: &METHODS,
             refs: AtomicU32::new(1),
             plane,
+            dimension,
         });
         out.write(object);
     }
@@ -260,5 +345,5 @@ unsafe extern "system" fn create(desc: *const Desc, out: *mut *mut Computer) -> 
         Ok(p) => p,
         Err(hr) => return hr,
     };
-    unsafe { allocate_computer(plane, out) }
+    unsafe { allocate_computer(plane, 3, out) }
 }

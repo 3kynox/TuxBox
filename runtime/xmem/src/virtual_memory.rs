@@ -3,7 +3,8 @@ use core::{ffi::c_void, ptr};
 use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, HANDLE, SetLastError};
 use windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringA;
 use windows_sys::Win32::System::Memory::{
-    MEM_COMMIT, MEM_RESERVE, MEMORY_BASIC_INFORMATION, PAGE_NOACCESS, PAGE_READWRITE, VirtualAlloc,
+    GetWriteWatch, MEM_COMMIT, MEM_RESERVE, MEMORY_BASIC_INFORMATION, PAGE_NOACCESS, PAGE_READWRITE,
+    VirtualAlloc,
 };
 
 use windows_sys::Win32::System::SystemServices::MEM_TOP_DOWN;
@@ -14,6 +15,26 @@ pub struct VirtualInfo {
     memory: MEMORY_BASIC_INFORMATION,
     console_flags: u64,
     console_tag: u64,
+}
+
+/// Query dirty pages for a desktop write-watch allocation.
+///
+/// # Safety
+/// The base must identify a write-watch reservation in this process. Output
+/// pointers and their capacity must satisfy the Windows GetWriteWatch ABI.
+#[unsafe(export_name = "XMemGetWriteWatch")]
+pub unsafe extern "system" fn get_write_watch(
+    flags: u32,
+    base: *const c_void,
+    bytes: usize,
+    addresses: *mut *mut c_void,
+    count: *mut usize,
+    granularity: *mut u32,
+) -> u32 {
+    // The console wrapper forwards the six arguments to this host function
+    // when write-watch suspension is disabled. Console suspension controls
+    // are not yet implemented.
+    unsafe { GetWriteWatch(flags, base, bytes, addresses, count, granularity) }
 }
 
 /// Reject virtual-memory queries until their console metadata is supported.

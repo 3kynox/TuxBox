@@ -211,6 +211,9 @@ def verify(host, output, adapter, selected=None, samples=1):
                   r"raw=16 zlib=16 guards=2 errors=2 cancellation=1 autosubmit=64 PASS",
                   providers={"xcrdapi/xcrdapi.dll": ("DStorageGetFactory",)})
         if "xmem" in selected:
+            check("xmem-watch", "xmem-smoke/xmem-smoke.exe", ["--watch", "--report"],
+                  r"xmem-watch PASS initial=2 reset=2 next=1 guards=2 invalid=1",
+                  providers={"xmem-smoke/xmem.dll": ("XMemGetWriteWatch",)})
             check("xmem-hooks", "xmem-smoke/xmem-smoke.exe", ["--hooks", "--report"],
                   r"xmem-hooks PASS calls=2/2 zero-size=1 null-free=1 restore=1 reentrant=1",
                   providers={"xmem-smoke/xmem.dll": ("XMemAlloc", "XMemFree", "XMemSetAllocationHooks")})
@@ -344,6 +347,7 @@ GATE_LABELS = {
     "xmem-query": "Unsupported virtual query rejection",
     "xmem-tags": "Memory allocation tag encoding",
     "xmem-hooks": "Guest allocator callback routing",
+    "xmem-watch": "Guest write-watch dirty-page query",
     "invalid-route": "Invalid input exit status", "xmem-default": "Xbox memory allocation and working set",
     "d3d12-signatures": "Root signature 1.0 and 1.1 serialization, deserialization and errors",
     "d3d12-exports": "Blob, debug interface, four DXGIX entry points and Series CPU memory clear",

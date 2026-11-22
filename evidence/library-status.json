@@ -208,8 +208,8 @@
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox Rust CPU memory provider.",
-      "scope": "Nine exports cover heap allocation, working-set statistics, virtual memory, and the CPU side of the title\u2019s 64 KiB physical-page profile. The guest preserves 131,072 bytes across unmap and remap in reversed page order. XMemMakeTag matches the supplied routine on 5,120 inputs. XMemVirtualQuery explicitly reports unsupported pending a verified Xbox success path. Allocation and free calls route through installed callbacks; a local reference control checks argument forwarding and restoring defaults.",
-      "remaining": "GPU-visible backing, concurrent aliases, the Xbox partition allocator, additional allocation profiles and retail validation remain open. XMemVirtualQuery console metadata and success-path reference comparison remain open. Memory profiling callbacks and concurrent guest callback lifetime remain unverified.",
+      "scope": "Nine exports cover heap allocation, working-set statistics, virtual memory, and the CPU side of the title\u2019s 64 KiB physical-page profile. The guest preserves 131,072 bytes across unmap and remap in reversed page order. XMemMakeTag matches the supplied routine on 5,120 inputs. XMemVirtualQuery explicitly reports unsupported pending a verified Xbox success path. Allocation and free calls route through installed callbacks; a local reference control checks argument forwarding and restoring defaults. XMemGetWriteWatch forwards the default unpaused desktop query, tested with host write-watch pages.",
+      "remaining": "GPU-visible backing, concurrent aliases, the Xbox partition allocator, additional allocation profiles and retail validation remain open. XMemVirtualQuery console metadata and success-path reference comparison remain open. Memory profiling callbacks and concurrent guest callback lifetime remain unverified. Write-watch pause mode and the Xbox write-watch allocation profile remain unimplemented, so that export is not counted as verified.",
       "evidence": [
         "runtime/xmem/xmem.def",
         "runtime/xmem/README.md",
@@ -219,7 +219,8 @@
         "evidence/matrix-awakens/xmem-physical-pages.json",
         "evidence/providers/xmem-pages.json",
         "evidence/providers/xmem-query.json",
-        "evidence/providers/xmem-hooks.json"
+        "evidence/providers/xmem-hooks.json",
+        "evidence/providers/xmem-watch.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/xmem.dll",
@@ -271,8 +272,8 @@
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox texture address computer.",
-      "scope": "Computes linear and 4 KiB tiled 2D textures, array slices and packed mip chains. TuxBox and the supplied DLL matched on 9,231,018 texel or block addresses across 78 formats and 156 layouts. A separate check includes eight descriptors from Frosty. XGComputeBufferLayout matches the supplied DLL on 967 buffer descriptors, including invalid arguments and full output guards. The 2D-specific layout and computer exports match the supplied DLL on 7,020 sampled layouts and 81,432 sampled addresses for the checked usage and swizzle profiles.",
-      "remaining": "Further formats and tiling modes, 3D textures, multisampling and subresource copies. Calling an unimplemented texture computer method terminates the guest. Other 2D-specific descriptor profiles return unsupported.",
+      "scope": "Computes linear and 4 KiB tiled 2D textures, array slices and packed mip chains. TuxBox and the supplied DLL matched on 9,231,018 texel or block addresses across 78 formats and 156 layouts. A separate check includes eight descriptors from Frosty. XGComputeBufferLayout matches the supplied DLL on 967 buffer descriptors, including invalid arguments and full output guards. The 2D-specific layout and computer exports match the supplied DLL on 7,020 sampled layouts and 81,432 sampled addresses for the checked usage and swizzle profiles. The 1D-specific layout and computer exports match 4,104 sampled linear layouts and 45,144 addresses for 57 uncompressed formats.",
+      "remaining": "Further formats and tiling modes, 3D textures, multisampling and subresource copies. Calling an unimplemented texture computer method terminates the guest. Other 2D-specific descriptor profiles return unsupported. Block-compressed and other untested 1D descriptor profiles return unsupported.",
       "evidence": [
         "runtime/xg-layout/src/lib.rs",
         "evidence/providers/xg-control.json",
@@ -282,7 +283,8 @@
         "evidence/providers/xg-formats.json",
         "evidence/providers/xg-placement-layouts.json",
         "evidence/providers/xg-buffer-layout.json",
-        "evidence/providers/xg-texture2d-layout.json"
+        "evidence/providers/xg-texture2d-layout.json",
+        "evidence/providers/xg-texture1d-layout.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/xg_xs.dll",
@@ -293,7 +295,9 @@
           "XGCreateTextureComputer",
           "XGComputeBufferLayout",
           "XGComputeTexture2DLayout",
-          "XGCreateTexture2DComputer"
+          "XGCreateTexture2DComputer",
+          "XGComputeTexture1DLayout",
+          "XGCreateTexture1DComputer"
         ]
       },
       "inventory": {
