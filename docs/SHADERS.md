@@ -181,6 +181,8 @@ Frosty’s 24 hair raster compute shaders use a 32-bit hit counter and up to fou
 
 Two single-sample visibility compaction shaders also pass full-output readbacks on both GPUs, including rejected depths and untouched pixels outside their workgroup. [GPU readbacks](../evidence/matrix-awakens/hair-visibility-single-gpus.json)
 
+Two indirect-tile versions pass the same provider-level checks on both GPUs, including empty tile lists and nonzero tile coordinates. [GPU readbacks](../evidence/matrix-awakens/hair-visibility-indirect-gpus.json)
+
 ## Nanite material classification
 
 Frosty’s `ClassifyMaterials` shader reads the triangles visible in each 64 × 64 tile and records which materials to draw there. Tests of the packaged shader at global entry 2725 checked its draw arguments and material tile masks on both GPUs. The eight cases cover empty tiles, mixed materials, streamed cluster pages and tiles offset from the origin. [NVIDIA readbacks](../evidence/matrix-awakens/classify-materials-nvidia.json) · [Radeon readbacks](../evidence/matrix-awakens/classify-materials-amd.json)
