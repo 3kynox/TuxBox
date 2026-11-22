@@ -48,6 +48,7 @@ mod light_grid;
 mod page_waves;
 mod wave_cull;
 mod wave_sum;
+mod reflection_compact;
 mod wave_scan;
 use packed_root::{PackedRoot, RootAbi};
 
@@ -446,7 +447,7 @@ fn is_quad_add(i: &Insn) -> bool {
 /// SOP1 0x29 as nand-saveexec are taken from the public GFX10 encoding and are consistent
 /// with this shader's instruction stream.
 /// Anything in the region that does not fit this shape is refused.
-fn lower_wave_reductions(insns: &mut [Insn]) -> Result<Option<u32>, String> {
+fn lower_wave_reductions(insns: &mut [Insn], reflection: bool) -> Result<Option<u32>, String> {
     let mut width = None;
     let is_dpp = |i: &Insn| i.enc == Enc::Vop2 && matches!(i.src.first(), Some(Opnd::Raw(233 | 234 | 250)));
     let mut at = 0;
@@ -468,7 +469,7 @@ fn lower_wave_reductions(insns: &mut [Insn]) -> Result<Option<u32>, String> {
         }
         let wave32_extrema = matches!(red.as_str(), "v_min_f32" | "v_max_f32")
             && first.checked_sub(3).is_some_and(|p| insns[p].mnemonic == "s_or_saveexec_b32");
-        if red == "v_add_nc_u32" || wave32_extrema {
+        if red == "v_add_nc_u32" || (reflection && red == "v_add_f32" && insns[first].src.first() == Some(&Opnd::Raw(233))) || wave32_extrema {
             let (required, next) = wave_sum::lower(insns, first).map_err(bad)?;
             if width.replace(required).is_some_and(|w| w != required) {
                 return Err(bad("conflicting integer sum wave widths"));
@@ -863,7 +864,8 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     let wave_cull = wave_cull::recognize(ex);
     let page_waves = page_waves::recognize(ex);
     let allocation_wave64 = !wave_cull && !page_waves && mark_wave_allocations(&mut insns)?;
-    let required_wave_size = if wave_cull { None } else { lower_wave_reductions(&mut insns)? };
+    let reflection = reflection_compact::prepare(ex, &mut insns);
+    let required_wave_size = if wave_cull { None } else { lower_wave_reductions(&mut insns, reflection)? };
     let uses_bpermute = insns.iter().any(|ins| ins.mnemonic == "ds_bpermute_b32");
     if uses_bpermute && insns.iter().any(|ins| ins.enc == Enc::Sopp && Emitter::branch_cond(ins.op).is_some()) {
         return Err("backward permute with scalar branches needs verified convergent control flow".into());
@@ -4003,6 +4005,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         if self.required_wave_size == Some(64) && self.packed.as_ref().is_some_and(|p| p.lane_masks.contains(&self.cur_idx)) {
             self.touch(&hi(&s[2]));
         }
+        if m == "tb_reflection_prefix32" {
+            return self.wv(&d, &format!("WavePrefixSum({})", r(&s[0])?));
+        }
         if m == "v_nop" {
             return Ok(());
         }
@@ -4021,6 +4026,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             let partner = format!("WaveReadLaneAt({acc}, {lane})");
             let combined = match m.as_str() {
                 "v_add_nc_u32" => format!("{partner} + {acc}"),
+                "v_add_f32" => format!("asuint(asfloat({partner}) + asfloat({acc}))"),
                 "v_min_f32" => format!("asuint(min(asfloat({partner}), asfloat({acc})))"),
                 "v_max_f32" => format!("asuint(max(asfloat({partner}), asfloat({acc})))"),
                 _ => return Err("invalid DPP reduction operation".into()),

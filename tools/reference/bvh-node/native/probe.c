@@ -48,8 +48,14 @@ static uint32_t bits(float value) {
   return result;
 }
 int main(int argc, char **argv) {
-  if (argc != 2) {
-    fprintf(stderr, "usage: %s probe.hsaco\n", argv[0]);
+  if (argc != 2 &&
+      !(argc == 4 && (strcmp(argv[2], "--dump") == 0 ||
+                      strcmp(argv[2], "--dump-triangles") == 0)) &&
+      !(argc == 5 && strcmp(argv[2], "--retail") == 0)) {
+    fprintf(stderr,
+            "usage: %s probe.hsaco [--dump|--dump-triangles output.bin | "
+            "--retail serialized.bin output.bin]\n",
+            argv[0]);
     return 2;
   }
   CHK(hsa_init());
@@ -264,6 +270,33 @@ int main(int argc, char **argv) {
     memcpy(box + 4, values, sizeof(values));
     box[4] += test % 3;
   }
+  if (argc == 5) {
+    FILE *source = fopen(argv[3], "rb");
+    if (!source) {
+      perror("open serialized BLAS");
+      return 1;
+    }
+    uint32_t root;
+    if (fseek(source, 0, SEEK_END) != 0)
+      return 1;
+    long length = ftell(source);
+    if (length < 116 || fseek(source, 112, SEEK_SET) != 0 ||
+        fread(&root, sizeof(root), 1, source) != 1)
+      return 1;
+    uint32_t kind = root & 7u;
+    uint64_t offset = 64u + (uint64_t)(root >> 3) * 64u;
+    uint64_t size = kind == 4 ? 64u : kind == 5 ? 128u : 0u;
+    if (!size || offset > (uint64_t)length ||
+        size > (uint64_t)length - offset ||
+        fseek(source, (long)offset, SEEK_SET) != 0 ||
+        fread((uint32_t *)out + 2688, 1, size, source) != size ||
+        fclose(source) != 0) {
+      fprintf(stderr, "invalid serialized root record\n");
+      return 1;
+    }
+    ((uint32_t *)out)[3000] = 1;
+    ((uint32_t *)out)[3001] = kind == 5;
+  }
   hsa_signal_t signal;
   CHK(hsa_signal_create(1, 0, NULL, &signal));
   uint64_t index = hsa_queue_load_write_index_relaxed(queue);
@@ -433,6 +466,73 @@ int main(int argc, char **argv) {
   if (failed) {
     fprintf(stderr, "instruction probe failed or timed out\n");
     return 1;
+  }
+  if (argc == 4) {
+    FILE *dump = fopen(argv[3], "wb");
+    if (!dump) {
+      perror("open output");
+      return 1;
+    }
+    int triangles = strcmp(argv[2], "--dump-triangles") == 0;
+    const char *magic = triangles ? "TXBVT001" : "TXBVH001";
+    int ok = fwrite(magic, 1, 8, dump) == 8;
+    for (unsigned test = 0; test < (triangles ? 6u : 48u) && ok; test++) {
+      if (triangles) {
+        unsigned side = test / 3;
+        uint32_t input = 3424 + test * 16;
+        float origin[3] = {side ? .75f : .25f, side ? .625f : .125f, -1.f};
+        float direction[3] = {0.f, 0.f, 1.f};
+        ok =
+            fwrite((uint32_t *)out + input, sizeof(uint32_t), 16, dump) == 16 &&
+            fwrite(origin, sizeof(float), 3, dump) == 3 &&
+            fwrite(direction, sizeof(float), 3, dump) == 3 &&
+            fwrite(&side, sizeof(uint32_t), 1, dump) == 1 &&
+            fwrite((uint32_t *)out + 344 + test * 4, sizeof(uint32_t), 4,
+                   dump) == 4;
+      } else {
+        unsigned input = test < 24 ? 4032 + test * 48 : 6144 + (test - 24) * 48;
+        unsigned output = test < 24 ? 944 + test * 4 : 2400 + (test - 24) * 4;
+        ok =
+            fwrite((uint32_t *)out + input, sizeof(uint32_t), 48, dump) == 48 &&
+            fwrite((uint32_t *)out + output, sizeof(uint32_t), 4, dump) == 4;
+      }
+    }
+    if (fclose(dump) != 0 || !ok) {
+      fprintf(stderr, "failed to write output\n");
+      return 1;
+    }
+  }
+  if (argc == 5) {
+    static const float origins[8][3] = {
+        {.25f, .25f, -4}, {0, 0, -4}, {100, 100, -4}, {0, 0, -4},
+        {0, 0, 12},       {0, 0, 3},  {-10, 5, -40},  {5, -10, 40}};
+    static const float inverses[8][3] = {
+        {1, 1, 1},          {.25f, .25f, 1}, {1, 1, 1},    {.25f, .25f, 1},
+        {-.25f, -.25f, -1}, {.25f, .25f, 1}, {-2, .5f, 1}, {2, -.5f, -1}};
+    FILE *dump = fopen(argv[4], "wb");
+    if (!dump) {
+      perror("open output");
+      return 1;
+    }
+    int ok = fwrite("TXBVR001", 1, 8, dump) == 8;
+    for (unsigned test = 0; test < 8 && ok; test++) {
+      uint32_t record[48] = {0};
+      memcpy(record, (uint32_t *)out + 2688, 128);
+      for (unsigned axis = 0; axis < 3; axis++) {
+        record[32 + axis] = bits(origins[test][axis]);
+        record[35 + axis] = bits(inverses[test][axis]);
+      }
+      record[38] = bits(100.f);
+      record[39] = 1;
+      record[40] = ((uint32_t *)out)[3001];
+      ok = fwrite(record, sizeof(uint32_t), 48, dump) == 48 &&
+           fwrite((uint32_t *)out + 2500 + test * 4, sizeof(uint32_t), 4,
+                  dump) == 4;
+    }
+    if (fclose(dump) != 0 || !ok) {
+      fprintf(stderr, "failed to write output\n");
+      return 1;
+    }
   }
   CHK(hsa_signal_destroy(signal));
   CHK(hsa_memory_free(args));

@@ -74,7 +74,7 @@ def main():
             if (work / 'reversed.bin').read_bytes() != modified:
                 raise ValueError(f'{name} reversed submission order differs')
             report['adapters'][name] = {'adapter': adapter, 'source_offset': 320, 'copies': 3,
-                                       'two_queues_with_fence': True, 'blocked_fence_verified': True, 'upload_written_after_close': True, 'gpu_header_reads': 3, 'replayed_after_completion': True, 'reversed_list_submission': True, 'gpu_directory_publication': True, 'directory_entries': 5, 'directory_queries': 40, 'directory_unaligned_backing': True, 'directory_cross_queue': True, 'directory_zero_query_guard': True, 'directory_replay_updated_entry': True}
+                                       'two_queues_with_fence': True, 'blocked_fence_verified': True, 'upload_written_after_close': True, 'gpu_header_reads': 3, 'replayed_after_completion': True, 'reversed_list_submission': True, 'gpu_directory_publication': True, 'directory_descriptor_bounded_views': True, 'directory_entries': 5, 'directory_queries': 44, 'directory_short_output_guard': True, 'directory_unaligned_backing': True, 'directory_cross_queue': True, 'directory_zero_query_guard': True, 'directory_replay_updated_entry': True}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

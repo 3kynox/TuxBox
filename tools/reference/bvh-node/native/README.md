@@ -39,6 +39,32 @@ clang -I"$HSA_ROOT/include" tools/reference/bvh-node/native/probe.c -L"$HSA_ROOT
 LD_LIBRARY_PATH="$HSA_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" /tmp/tuxbox-bvh-probe /tmp/tuxbox-bvh-probe.hsaco
 ```
 
+To compare those same 48 seeded node inputs and native instruction outputs
+directly with the standalone HLSL helper, generate a local synthetic dump and
+pass it to the differential tool. The tool requires the project's normal
+DXC and Windows guest build dependencies plus test Proton prefixes for each
+adapter; no game files are needed.
+
+```sh
+LD_LIBRARY_PATH="$HSA_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" /tmp/tuxbox-bvh-probe /tmp/tuxbox-bvh-probe.hsaco --dump /tmp/tuxbox-bvh-cases.bin
+python tools/check_native_bvh_hlsl.py --dump /tmp/tuxbox-bvh-cases.bin --proton /path/to/proton --prefix-amd /path/to/amd-prefix --prefix-nvidia /path/to/nvidia-prefix --amd-vulkan /path/to/radv.json --output /tmp/tuxbox-bvh-diff.json
+```
+
+`--amd-vulkan` is optional when the default Vulkan driver exposes Radeon.
+The result checks these cases only and does not establish full traversal or
+instruction equivalence.
+
+For six paired-triangle cases with unequal barycentrics, generate the dump
+with `--dump-triangles /tmp/tuxbox-bvh-triangles.bin` instead. Pass that file
+to the same differential tool with `--dump`.
+
+To test the root node of a user-owned serialized Xbox BLAS, run the probe with
+`--retail /path/to/serialized.bin /tmp/tuxbox-bvh-root.bin` and pass the output
+to the same differential tool. This checks eight rays against one BOX16 or
+BOX32 root; it validates the root's range in the file, not the full graph or
+its safety for traversal. The generated dump contains game-owned node bytes;
+keep it local.
+
 The descriptor encodes a zero base, full 42-bit range, closest-first sorting
 and barycentric triangle return mode. Except for the dedicated growth cases,
 box growth is zero. The HSA host

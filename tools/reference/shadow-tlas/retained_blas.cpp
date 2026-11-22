@@ -173,24 +173,52 @@ int main() {
         auto entry_bad_upload = buffer(ctx.device.Get(), sizeof(entry_bad), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
         auto query_upload = buffer(ctx.device.Get(), sizeof(query_values), D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
         auto directory = buffer(ctx.device.Get(), sizeof(entry_a), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST);
-        auto directory_result = buffer(ctx.device.Get(), 768, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-        auto directory_readback = buffer(ctx.device.Get(), 768, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
-        auto directory_seed = buffer(ctx.device.Get(), 768, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
-        UINT seed_words[192]{};
-        for (UINT i = 0; i < 192; ++i) seed_words[i] = 0x76540000u + i;
+        auto directory_result = buffer(ctx.device.Get(), 896, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        auto directory_readback = buffer(ctx.device.Get(), 896, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+        auto directory_seed = buffer(ctx.device.Get(), 896, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
+        UINT seed_words[224]{};
+        for (UINT i = 0; i < 224; ++i) seed_words[i] = 0x76540000u + i;
         upload(directory_seed.Get(), seed_words, sizeof(seed_words));
         upload(entry_a_upload.Get(), entry_a, sizeof(entry_a));
         upload(entry_b_upload.Get(), entry_b, sizeof(entry_b));
         upload(entry_bad_upload.Get(), entry_bad, sizeof(entry_bad));
         upload(query_upload.Get(), query_values, sizeof(query_values));
-        D3D12_ROOT_PARAMETER dir_params[4]{};
-        dir_params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
-        dir_params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
-        dir_params[1].Descriptor.ShaderRegister = 1;
-        dir_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
-        dir_params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-        dir_params[3].Constants.Num32BitValues = 2;
-        D3D12_ROOT_SIGNATURE_DESC dir_desc{4, dir_params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+        D3D12_DESCRIPTOR_HEAP_DESC dir_heap_desc{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 9, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0};
+        ComPtr<ID3D12DescriptorHeap> dir_heap;
+        check(ctx.device->CreateDescriptorHeap(&dir_heap_desc, IID_PPV_ARGS(&dir_heap)), "directory descriptor heap");
+        const UINT dir_stride = ctx.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        auto cpu = dir_heap->GetCPUDescriptorHandleForHeapStart();
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+        srv.Format = DXGI_FORMAT_R32_TYPELESS;
+        srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+        srv.Buffer.NumElements = sizeof(entry_a) / 4;
+        ctx.device->CreateShaderResourceView(directory.Get(), &srv, cpu);
+        cpu.ptr += dir_stride;
+        srv.Buffer.NumElements = sizeof(query_values) / 4;
+        ctx.device->CreateShaderResourceView(query_upload.Get(), &srv, cpu);
+        for (UINT n = 0; n < 7; ++n) {
+            cpu.ptr += dir_stride;
+            D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+            uav.Format = DXGI_FORMAT_R32_TYPELESS;
+            uav.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+            uav.Buffer.FirstElement = n * 32;
+            uav.Buffer.NumElements = n == 6 ? 16 : 32;
+            uav.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+            ctx.device->CreateUnorderedAccessView(directory_result.Get(), nullptr, &uav, cpu);
+        }
+        D3D12_DESCRIPTOR_RANGE ranges[2]{};
+        ranges[0] = {D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0, 0, 0};
+        ranges[1] = {D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0, 0, 0};
+        D3D12_ROOT_PARAMETER dir_params[3]{};
+        for (UINT n = 0; n < 2; ++n) {
+            dir_params[n].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+            dir_params[n].DescriptorTable = {1, &ranges[n]};
+        }
+        dir_params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        dir_params[2].Constants.Num32BitValues = 2;
+        D3D12_ROOT_SIGNATURE_DESC dir_desc{3, dir_params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
         ComPtr<ID3DBlob> dir_blob;
         check(D3D12SerializeRootSignature(&dir_desc, D3D_ROOT_SIGNATURE_VERSION_1, &dir_blob, nullptr), "directory root serialization");
         ComPtr<ID3D12RootSignature> dir_root;
@@ -208,16 +236,19 @@ int main() {
         transition(dir_a.Get(), directory.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
         dir_a->CopyBufferRegion(directory.Get(), 0, entry_a_upload.Get(), 0, sizeof(entry_a));
         transition(dir_a.Get(), directory.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        dir_a->CopyBufferRegion(directory_result.Get(), 0, directory_seed.Get(), 0, 768);
+        dir_a->CopyBufferRegion(directory_result.Get(), 0, directory_seed.Get(), 0, 896);
         transition(dir_a.Get(), directory_result.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         dir_a->SetComputeRootSignature(dir_root.Get());
         dir_a->SetPipelineState(dir_pipeline.Get());
-        dir_a->SetComputeRootShaderResourceView(0, directory->GetGPUVirtualAddress());
-        dir_a->SetComputeRootShaderResourceView(1, query_upload->GetGPUVirtualAddress());
+        ID3D12DescriptorHeap* dir_heaps[] = {dir_heap.Get()};
+        dir_a->SetDescriptorHeaps(1, dir_heaps);
+        auto gpu = dir_heap->GetGPUDescriptorHandleForHeapStart();
+        dir_a->SetComputeRootDescriptorTable(0, gpu);
         const UINT cases[][2] = {{5, 8}, {6, 8}, {0, 8}, {5, 9}, {5, 0}};
         for (UINT n = 0; n < 5; ++n) {
-            dir_a->SetComputeRootUnorderedAccessView(2, directory_result->GetGPUVirtualAddress() + 128 * n);
-            dir_a->SetComputeRoot32BitConstants(3, 2, cases[n], 0);
+            auto view = gpu; view.ptr += UINT64(dir_stride) * (2 + n);
+            dir_a->SetComputeRootDescriptorTable(1, view);
+            dir_a->SetComputeRoot32BitConstants(2, 2, cases[n], 0);
             dir_a->Dispatch(1, 1, 1);
             D3D12_RESOURCE_BARRIER uav{};
             uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -227,11 +258,19 @@ int main() {
         transition(dir_a.Get(), directory.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
         dir_a->CopyBufferRegion(directory.Get(), 0, entry_bad_upload.Get(), 0, sizeof(entry_bad));
         transition(dir_a.Get(), directory.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        dir_a->SetComputeRootUnorderedAccessView(2, directory_result->GetGPUVirtualAddress() + 640);
-        dir_a->SetComputeRoot32BitConstants(3, 2, cases[0], 0);
+        auto last_view = gpu; last_view.ptr += UINT64(dir_stride) * 7;
+        dir_a->SetComputeRootDescriptorTable(1, last_view);
+        dir_a->SetComputeRoot32BitConstants(2, 2, cases[0], 0);
+        dir_a->Dispatch(1, 1, 1);
+        D3D12_RESOURCE_BARRIER final_uav{};
+        final_uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        final_uav.UAV.pResource = directory_result.Get();
+        dir_a->ResourceBarrier(1, &final_uav);
+        auto short_view = gpu; short_view.ptr += UINT64(dir_stride) * 8;
+        dir_a->SetComputeRootDescriptorTable(1, short_view);
         dir_a->Dispatch(1, 1, 1);
         transition(dir_a.Get(), directory_result.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
-        dir_a->CopyBufferRegion(directory_readback.Get(), 0, directory_result.Get(), 0, 768);
+        dir_a->CopyBufferRegion(directory_readback.Get(), 0, directory_result.Get(), 0, 896);
         check(dir_a->Close(), "close directory a");
         check(ctx.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, dir_allocator_b.Get(), nullptr, IID_PPV_ARGS(&dir_b)), "directory list b");
         dir_b->CopyBufferRegion(directory.Get(), 0, entry_b_upload.Get(), 0, sizeof(entry_b));
@@ -249,7 +288,7 @@ int main() {
         check(ctx.queue->Signal(ready.Get(), 3), "directory producer signal");
         wait(complete.Get(), 4);
         auto check_directory = [&](UINT64 published) {
-            D3D12_RANGE dir_range{0, 768}, empty{};
+            D3D12_RANGE dir_range{0, 896}, empty{};
             void* dir_data{};
             check(directory_readback->Map(0, &dir_range, &dir_data), "directory readback");
             struct DirectoryResult { UINT64 backing; UINT status, reserved; };
@@ -264,8 +303,13 @@ int main() {
                 const UINT64 backing = normal && i == 0 ? (batch == 0 ? published : entry_a[0][1]) : normal && i == 1 ? entry_a[1][1] : 0;
                 if (r.status != status || r.backing != backing || r.reserved != 0) directory_matches = false;
             }
+            for (UINT i = 0; i < 4; ++i) {
+                const auto& r = actual[48 + i];
+                if (r.status != 3 || r.backing != 0 || r.reserved != 0) directory_matches = false;
+            }
             const auto* guard = static_cast<const UINT*>(dir_data);
             for (UINT i = 128; i < 160; ++i) if (guard[i] != seed_words[i]) directory_matches = false;
+            for (UINT i = 208; i < 224; ++i) if (guard[i] != seed_words[i]) directory_matches = false;
             directory_readback->Unmap(0, &empty);
             if (!directory_matches) throw std::runtime_error("GPU directory publication or validation mismatch");
         };
@@ -288,7 +332,7 @@ int main() {
         check(ctx.queue->Signal(ready.Get(), 4), "directory replay producer signal");
         wait(complete.Get(), 5);
         check_directory(entry_b[0][1]);
-        std::fprintf(receipt, "body_bytes=%u\nsource_offset=%u\nsource_after_close=1\ncross_queue_wait=1\nblocked_fence_verified=1\ncompleted_list_replay=1\nreverse_submission=1\ngpu_directory_publication=1\ndirectory_entries=5\ndirectory_queries=40\ndirectory_unaligned_backing=1\ndirectory_zero_query_guard=1\ndirectory_cross_queue=1\ndirectory_replay=1\n", body, offset + 64);
+        std::fprintf(receipt, "body_bytes=%u\nsource_offset=%u\nsource_after_close=1\ncross_queue_wait=1\nblocked_fence_verified=1\ncompleted_list_replay=1\nreverse_submission=1\ngpu_directory_publication=1\ndirectory_entries=5\ndirectory_queries=44\ndirectory_short_output_guard=1\ndirectory_unaligned_backing=1\ndirectory_zero_query_guard=1\ndirectory_cross_queue=1\ndirectory_replay=1\n", body, offset + 64);
     } catch (const std::exception& e) {
         std::fprintf(receipt, "error=%s\n", e.what()); result = 1;
     }

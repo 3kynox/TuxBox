@@ -1,14 +1,20 @@
-// Bounded GPU directory control. This is not a runtime lookup implementation.
+// GPU directory bounds/lookup control. This is not a runtime implementation.
 ByteAddressBuffer directory : register(t0);
 ByteAddressBuffer queries : register(t1);
 RWByteAddressBuffer result : register(u0);
 cbuffer Counts : register(b0) { uint entryCount; uint queryCount; }
 
 // Status 0 = absent, 1 = unique match, 2 = invalid or ambiguous,
-// 3 = count outside this control's allocated capacities.
+// 3 = count outside the descriptor-bounded views or supported work limit.
 [numthreads(8,1,1)] void main(uint3 id : SV_DispatchThreadID) {
-    if (id.x >= min(queryCount, 8u)) return;
-    if (entryCount > 5 || queryCount > 8) {
+    uint directoryBytes, queryBytes, resultBytes;
+    directory.GetDimensions(directoryBytes);
+    queries.GetDimensions(queryBytes);
+    result.GetDimensions(resultBytes);
+    uint safeCount = min(queryCount, min(queryBytes / 8, resultBytes / 16));
+    if (id.x >= safeCount) return;
+    if (entryCount > 4096 || entryCount > directoryBytes / 16 ||
+        queryCount > queryBytes / 8 || queryCount > resultBytes / 16) {
         result.Store4(id.x * 16, uint4(0, 0, 3, 0));
         return;
     }

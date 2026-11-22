@@ -1,0 +1,16 @@
+{
+  "scope": "Offline conservative raw BOX16/BOX32 path containment, rejecting shared leaves and clipped/spatially split trees; not a complete runtime safety proof",
+  "serialized_sha256": "38bd71be9dd00e74952a9612f87f7df37a1617ca9f9847bb531b40bc5a4ad6af",
+  "validator_sha256": "7ce54ec4a96d56dc79d54e1a663a85016006e674cc99d16412a46a8262c64a52",
+  "decoder_sha256": "c43b326ab3646c2fc97c2686a5b229c840986095c39eaeeb683bf22041cec8ca",
+  "mutations": {
+    "nan_bound": "Bounds",
+    "infinite_bound": "Bounds",
+    "inverted_bound": "Bounds",
+    "clipped_bound": "Bounds",
+    "root_cycle": "Decode",
+    "pointer_outside": "Decode",
+    "truncated": "Decode"
+  },
+  "summary": "box16=150 box32=0 leaves=307 triangles=528"
+}

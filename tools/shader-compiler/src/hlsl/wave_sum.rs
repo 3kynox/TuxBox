@@ -20,7 +20,7 @@ pub(super) fn lower(insns: &mut [Insn], first: usize) -> Result<(u32, usize), &'
         "s_or_saveexec_b64" => 64,
         _ => return Err("unrecognized DPP reduction prologue"),
     };
-    if floating && width != 32 { return Err("unsupported floating reduction width"); }
+    if (floating || operation == "v_add_f32") && width != 32 { return Err("unsupported floating reduction width"); }
     let last_read = if width == 32 { 8 } else { 10 };
     let block = tail.get(..last_read + 2).ok_or("truncated wave reduction")?;
     let [Opnd::Sgpr(saved)] = save.dst[..] else {
@@ -127,7 +127,7 @@ pub(super) fn check_control_flow(insns: &[Insn], width: u32) -> Result<(), Strin
         if ins.op != DPP_REDUCE || ins.aux.imm != 0 {
             continue;
         }
-        let prologue_len = if ins.mnemonic == "v_add_nc_u32" { 2 } else { 3 };
+        let prologue_len = if matches!(ins.mnemonic.as_str(), "v_add_nc_u32" | "v_add_f32") { 2 } else { 3 };
         let start = insns[first - prologue_len].offset as i64;
         let end = insns[first + if width == 32 { 7 } else { 9 }].offset as i64;
         for branch in insns.iter().filter(|i| i.enc == Enc::Sopp) {

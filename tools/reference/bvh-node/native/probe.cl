@@ -176,6 +176,23 @@ __kernel void probe(__global unsigned *out) {
               node, 10000.f, (float4)(0, 0, 0, 0), (float4)(1, 1, 1, 0),
               (float4)(1, 1, 1, 0), descriptor);
     }
+  if (out[3000] == 1u) {
+    const float4 origins[8] = {
+        (float4)(.25f, .25f, -4.f, 0.f), (float4)(0, 0, -4, 0),
+        (float4)(100, 100, -4, 0),       (float4)(0, 0, -4, 0),
+        (float4)(0, 0, 12, 0),           (float4)(0, 0, 3, 0),
+        (float4)(-10, 5, -40, 0),        (float4)(5, -10, 40, 0)};
+    const float4 inverses[8] = {
+        (float4)(1, 1, 1, 0),          (float4)(.25f, .25f, 1, 0),
+        (float4)(1, 1, 1, 0),          (float4)(.25f, .25f, 1, 0),
+        (float4)(-.25f, -.25f, -1, 0), (float4)(.25f, .25f, 1, 0),
+        (float4)(-2, .5f, 1, 0),       (float4)(2, -.5f, -1, 0)};
+    for (uint i = 0; i < 8; i++) {
+      ulong node = (((ulong)(out + 2688)) >> 3) | (out[3001] ? 5ul : 4ul);
+      *(__global uint4 *)(out + 2500 + 4 * i) =
+          intersect(node, origins[i], (float4)(1, 1, 1, 0), inverses[i]);
+    }
+  }
   for (uint test = 0; test < 48; test++) {
     uint base = test < 24 ? 4032 + test * 48 : 6144 + (test - 24) * 48;
     __global uint *record = out + base;
