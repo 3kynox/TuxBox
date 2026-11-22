@@ -1,0 +1,27 @@
+{
+  "scope": "Packaged global compute archive entries translated to HLSL. Counts do not measure DXIL validation, pipeline creation or rendered output.",
+  "archive_sha256": "afab84fa891e491d64f1c2a9bdf26a66afc2054aef2cd9110e358402473b4fb2",
+  "compiler_sha256": "1e4fc8d2e4bbd855a4e07896c9ba4d7ff8c042c6a3a53a2228489b5e5aab2bf9",
+  "stage": {
+    "entries": 2508,
+    "translated": 2254,
+    "failed": 254,
+    "observed": 0,
+    "observed_failed": 0,
+    "failure_reasons": {
+      "raw BVH node intersection requires traversal translation": 96,
+      "unverified EXEC election": 121,
+      "wave reduction: unsupported reduction op v_add_f32": 21,
+      "gather4 with explicit LOD/bias unsupported [image_gather4_l]": 2,
+      "unresolved image [image_atomic_umin]": 1,
+      "typed-buffer MUBUF with offset addressing unsupported [buffer_store_format_x]": 1,
+      "unresolved image [image_atomic_or]": 1,
+      "constant-buffer MUBUF form unsupported [buffer_load_dwordx2]": 2,
+      "wave reduction: prologue does not start with s_nand_saveexec_b64 sX, 0": 2,
+      "constant-buffer MUBUF form unsupported [buffer_load_dword]": 1,
+      "incomplete wave allocation sequence": 1,
+      "wave reduction: unsupported reduction op v_max_u32": 5
+    }
+  },
+  "full_survey_sha256": "6c317e4ce11cca4e43785d8e0b50cdb4ed99fdb79d7e40d79786400d4f148c6e"
+}

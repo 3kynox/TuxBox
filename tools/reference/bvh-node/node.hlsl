@@ -51,7 +51,15 @@ uint4 tb_bvh_boxes(uint node[32], bool box16, float3 origin,
 // Returns unremapped t numerator, determinant, and two barycentric
 // numerators. For non-degenerate ordinary misses, gfx1036 preserves the
 // determinant and uses an infinity with the same sign for the numerator.
-// Exact shared-edge inclusion and degenerate inputs remain unverified here.
+// Edge ownership below is verified only for rays parallel to Z; other ray
+// projections and degenerate inputs remain unverified.
+bool tb_bvh_z_edge_owned(float3 a, float3 b, float3 inside, float rayZ) {
+    float2 edge = b.xy - a.xy;
+    float2 inward = float2(-edge.y, edge.x);
+    if (dot(inward, inside.xy - a.xy) < 0.0)
+        inward = -inward;
+    return inward.x > 0.0 || (inward.x == 0.0 && inward.y * rayZ < 0.0);
+}
 float4 tb_bvh_triangle(float3 origin, float3 direction,
                        float3 a, float3 b, float3 c) {
     float3 edge1 = b - a;
@@ -68,7 +76,13 @@ float4 tb_bvh_triangle(float3 origin, float3 direction,
     float t = tNumerator / determinant;
     float i = iNumerator / determinant;
     float j = jNumerator / determinant;
-    if (t < 0.0 || i < 0.0 || j < 0.0 || i + j > 1.0)
+    bool missed = t < 0.0 || i < 0.0 || j < 0.0 || i + j > 1.0;
+    if (direction.x == 0.0 && direction.y == 0.0 && direction.z != 0.0) {
+        if (i == 0.0 && !tb_bvh_z_edge_owned(a, c, b, direction.z)) missed = true;
+        if (j == 0.0 && !tb_bvh_z_edge_owned(a, b, c, direction.z)) missed = true;
+        if (i + j == 1.0 && !tb_bvh_z_edge_owned(b, c, a, direction.z)) missed = true;
+    }
+    if (missed)
         return float4(asfloat(0x7f800000u | (asuint(determinant) & 0x80000000u)),
                       determinant, iNumerator, jNumerator);
     return float4(tNumerator, determinant, iNumerator, jNumerator);

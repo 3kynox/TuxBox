@@ -75,7 +75,18 @@ def triangle_reference(origin, direction, a, b, c):
     t, i, j = dot(e2, q), dot(v, p), dot(direction, q)
     if not determinant:
         return [math.inf, 1.0, i, j]
-    if t / determinant < 0 or i / determinant < 0 or j / determinant < 0 or (i + j) / determinant > 1:
+    u, v = i / determinant, j / determinant
+    missed = t / determinant < 0 or u < 0 or v < 0 or u + v > 1
+    if direction[0] == direction[1] == 0 and direction[2] != 0:
+        def owns_edge(start, end, inside):
+            nx, ny = start[1] - end[1], end[0] - start[0]
+            if nx * (inside[0] - start[0]) + ny * (inside[1] - start[1]) < 0:
+                nx, ny = -nx, -ny
+            return nx > 0 or (nx == 0 and ny * direction[2] < 0)
+        missed |= u == 0 and not owns_edge(a, c, b)
+        missed |= v == 0 and not owns_edge(a, b, c)
+        missed |= u + v == 1 and not owns_edge(b, c, a)
+    if missed:
         return [math.copysign(math.inf, determinant), determinant, i, j]
     return [t, determinant, i, j]
 
@@ -171,6 +182,12 @@ def main():
         ((0.25, 0.25, -1), (0, 0, 1), (0, 0, 0), (1, 0, 0), (2, 0, 0)),
         ((2, 2, -1), (0, 0, 1), (0, 0, 0), (2, 0, 0), (0, 2, 0)),
         ((2, 2, 1), (0, 0, -1), (0, 0, 0), (2, 0, 0), (0, 2, 0)),
+        ((0, 0.5, -1), (0, 0, 1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
+        ((0.5, 0, -1), (0, 0, 1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
+        ((0.5, 0, 1), (0, 0, -1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
+        ((0.5, 0.5, 1), (0, 0, -1), (0, 0, 0), (1, 0, 0), (0, 1, 0)),
+        ((-0.5, 0.5, -1), (0, 0, 1), (0, 0, 0), (1, 1, 0), (-1, 1, 0)),
+        ((0, 1, -1), (0, 0, 1), (0, 0, 0), (1, 1, 0), (-1, 1, 0)),
     ]
     if retail_triangle:
         center = tuple(sum(vertex[axis] for vertex in retail_triangle) / 3 for axis in range(3))
@@ -210,7 +227,9 @@ def main():
         rotation = {9: 0, 2: 1, 4: 2}[selector]
         ordered = raw_corners[rotation:] + raw_corners[:rotation]
         vertices = [corners[i] for i in ordered]
-        center = tuple(sum(v[axis] for v in vertices) / 3 for axis in range(3))
+        # Distinct weights catch incorrect barycentric selector permutations.
+        center = tuple(sum(weight * vertex[axis] for weight, vertex in
+                           zip((0.5, 0.375, 0.125), vertices)) for axis in range(3))
         origin = (center[0], center[1], center[2] - 16)
         direction = (0, 0, 1)
         values = ", ".join(f"0x{word:08x}u" for word in node)

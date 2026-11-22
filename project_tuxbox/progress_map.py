@@ -535,6 +535,15 @@ def shader_checks(evidence, data):
         if total:
             notes.append(f"{name.capitalize()} raster archive · {translated:,}/{total:,} entries emitted HLSL "
                          f"({translated/total:.1%}) · compiler {archive['compiler_sha256'][:8]}")
+    compute = read_json(evidence / "matrix-awakens/compute-archive-survey.json")
+    stage = compute.get("stage", {})
+    total = stage.get("entries")
+    translated = stage.get("translated")
+    if (compute.get("archive_sha256") == data.get("archives", {}).get("global", {}).get("member_sha256")
+            and compute.get("compiler_sha256")
+            and type(total) is int and type(translated) is int and 0 <= translated <= total and total > 0):
+        notes.append(f"Global compute archive · {translated:,}/{total:,} entries emitted HLSL "
+                     f"({translated/total:.1%}) · compiler {compute['compiler_sha256'][:8]}")
     census = read_json(evidence / "matrix-awakens/ray-state-census.json")
     ray_archives = census.get("archives", {})
     if ray_archives and all(

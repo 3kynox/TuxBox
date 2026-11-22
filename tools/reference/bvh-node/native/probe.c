@@ -96,7 +96,7 @@ int main(int argc, char **argv) {
   CHK(hsa_executable_symbol_get_info(
       sym, HSA_EXECUTABLE_SYMBOL_INFO_KERNEL_KERNARG_SEGMENT_SIZE, &arg_size));
   void *out, *args;
-  CHK(hsa_memory_allocate(region, 4096, &out));
+  CHK(hsa_memory_allocate(region, 8192, &out));
   if ((uintptr_t)out % 256 != 0) {
     fprintf(stderr, "HSA allocation is not 256-byte aligned\n");
     return 1;
@@ -105,8 +105,8 @@ int main(int argc, char **argv) {
   CHK(hsa_memory_allocate(region, arg_size, &args));
   CHK(hsa_amd_agents_allow_access(1, &gpu, NULL, args));
   *(void **)args = out;
-  memset(out, 0, 4096);
-  uint32_t *node = (uint32_t *)out + 64;
+  memset(out, 0, 8192);
+  uint32_t *node = (uint32_t *)out + 1024;
   node[0] = 0x9;
   node[1] = 0x12;
   node[2] = 0x1b;
@@ -114,25 +114,49 @@ int main(int argc, char **argv) {
   float bounds[24] = {10, 10, 2, 12, 12, 4, -1, -1, 2, 1, 1, 4,
                       -1, -1, 2, 1,  1,  4, -1, -1, 2, 1, 1, 4};
   memcpy(node + 4, bounds, sizeof(bounds));
-  uint32_t *halfnode = (uint32_t *)out + 128;
+  uint32_t *halfnode = (uint32_t *)out + 1088;
   memcpy(halfnode, node, 16);
   _Float16 *halfbounds = (_Float16 *)(halfnode + 4);
   for (int i = 0; i < 24; i++)
     halfbounds[i] = bounds[i];
-  uint32_t *tri = (uint32_t *)out + 192;
+  uint32_t *tri = (uint32_t *)out + 1152;
   float verts[12] = {0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0};
   memcpy(tri, verts, sizeof(verts));
   tri[12] = 0x80;
   tri[13] = 1;
   tri[14] = 2;
   tri[15] = 0x0909;
-  uint32_t *scaled = (uint32_t *)out + 256;
+  uint32_t *scaled = (uint32_t *)out + 1216;
   float scaled_verts[12] = {0, 0, 0, 2, 0, 0, 0, 2, 0, 2, 2, 0};
   memcpy(scaled, scaled_verts, sizeof(scaled_verts));
   scaled[12] = 0x80;
   scaled[13] = 1;
   scaled[14] = 2;
   scaled[15] = 0x0909;
+  static const unsigned permutations[6][3] = {{0, 1, 2}, {0, 2, 1}, {1, 0, 2},
+                                              {1, 2, 0}, {2, 0, 1}, {2, 1, 0}};
+  static const float vertices[3][3][3] = {{{0, 0, 0}, {1, 0, 0}, {0, 1, 0}},
+                                          {{0, 0, 0}, {1, 0, 0}, {0, -1, 0}},
+                                          {{0, 0, 0}, {1, 1, 0}, {-1, 1, 0}}};
+  for (unsigned shape = 0; shape < 3; shape++) {
+    for (unsigned p = 0; p < 6; p++) {
+      unsigned base = shape == 0 ? 1280 : 1472 + (shape - 1) * 96;
+      uint32_t *dst = (uint32_t *)out + base + p * 16;
+      for (unsigned v = 0; v < 3; v++)
+        memcpy(dst + v * 3, vertices[shape][permutations[p][v]],
+               3 * sizeof(float));
+      dst[15] = 9;
+    }
+  }
+  const unsigned selectors[3] = {9, 2, 4};
+  for (unsigned side = 0; side < 2; side++) {
+    for (unsigned r = 0; r < 3; r++) {
+      uint32_t *dst = (uint32_t *)out + 1376 + (side * 3 + r) * 16;
+      memcpy(dst, tri, 64);
+      unsigned shift = side * 8;
+      dst[15] = (0x0909u & ~(0xffu << shift)) | (selectors[r] << shift);
+    }
+  }
   hsa_signal_t signal;
   CHK(hsa_signal_create(1, 0, NULL, &signal));
   uint64_t index = hsa_queue_load_write_index_relaxed(queue);
@@ -180,6 +204,33 @@ int main(int argc, char **argv) {
     if (((uint32_t *)out)[i] != expected[i])
       failed = 1;
   }
+  // Check hit status separately: these cases map the hardware's edge
+  // ownership, without assuming the returned unnormalized barycentrics.
+  for (unsigned shape = 0; shape < 3; shape++) {
+    for (unsigned p = 0; p < 6; p++) {
+      for (unsigned facing = 0; facing < 2; facing++) {
+        static const unsigned hit_masks[3][2] = {
+            {0x01, 0x0b}, {0x0b, 0x01}, {0x25, 0x01}};
+        for (unsigned point = 0; point < 6; point++) {
+          unsigned base = shape == 0 ? 56 : 368 + (shape - 1) * 288;
+          uint32_t t =
+              ((uint32_t *)out)[base + 4 * (p * 12 + facing * 6 + point)];
+          int hit = (t & 0x7fffffffu) != 0x7f800000u;
+          if (hit != ((hit_masks[shape][facing] >> point) & 1))
+            failed = 1;
+        }
+      }
+    }
+  }
+  static const uint32_t remap[24] = {
+      0xbf800000, 0xbf800000, 0xbe800000, 0xbe000000, 0xbf800000, 0xbf800000,
+      0xbe000000, 0xbf200000, 0xbf800000, 0xbf800000, 0xbf200000, 0xbe800000,
+      0xbf800000, 0xbf800000, 0xbec00000, 0xbe800000, 0xbf800000, 0xbf800000,
+      0xbe800000, 0xbec00000, 0xbf800000, 0xbf800000, 0xbec00000, 0xbec00000};
+  for (unsigned i = 0; i < 24; i++)
+    if (((uint32_t *)out)[344 + i] != remap[i])
+      failed = 1;
+  printf("permuted_edges=216 paired_remaps=6\n");
   if (failed) {
     fprintf(stderr, "instruction probe failed or timed out\n");
     return 1;

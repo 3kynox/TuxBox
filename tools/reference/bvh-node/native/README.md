@@ -9,10 +9,13 @@ words are checked in the host program. These are synthetic inputs; passing this 
 establish general opcode equivalence or game compatibility.
 
 On gfx1036 the ordinary misses in this fixture preserve the signed determinant
-and return infinity with the same sign. For this particular triangle, the
-hardware accepts one shared edge and rejects the other two. The standalone
-scalar shader does not yet reproduce that edge ownership, and these cases
-must not be used as evidence that its triangle test is hardware-exact.
+and return infinity with the same sign. The control checks all six permutations
+of three triangles against both Z-axis ray directions at their three edge
+midpoints and three vertices (216 cases). The scalar shader matches the tested
+Z-axis edge ownership; other ray directions and special values remain
+unverified. The control also checks all three observed barycentric selectors
+on each paired triangle type using unequal barycentrics. These cases do not
+establish general instruction equivalence.
 
 Requirements are an accessible `/dev/kfd`, an HSA runtime and its headers,
 a clang with the AMDGPU target, and `ld.lld`. Compile and run from the project

@@ -4,10 +4,31 @@ from tempfile import TemporaryDirectory
 import unittest
 from xml.etree import ElementTree as ET
 
-from project_tuxbox.progress_map import export_progress, culling_readbacks, library_table, render_map, write_map
+from project_tuxbox.progress_map import export_progress, culling_readbacks, library_table, render_map, shader_checks, write_map
 
 
 class ProgressMapTests(unittest.TestCase):
+    def test_compute_survey_requires_matching_archive_and_valid_counts(self):
+        inventory = json.loads((Path(__file__).resolve().parents[1] /
+                                "evidence/matrix-awakens/shader-inventory.json").read_text())
+        archive = inventory["archives"]["global"]["member_sha256"]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            dest = root / "matrix-awakens"
+            dest.mkdir()
+            path = dest / "compute-archive-survey.json"
+            receipt = {"archive_sha256": archive, "compiler_sha256": "12345678",
+                       "stage": {"entries": 2508, "translated": 2254}}
+            path.write_text(json.dumps(receipt))
+            self.assertTrue(any("2,254/2,508" in note for note in shader_checks(root, inventory)))
+            receipt["archive_sha256"] = "different"
+            path.write_text(json.dumps(receipt))
+            self.assertFalse(any("Global compute archive" in note for note in shader_checks(root, inventory)))
+            receipt["archive_sha256"] = archive
+            receipt["stage"]["translated"] = 2509
+            path.write_text(json.dumps(receipt))
+            self.assertFalse(any("Global compute archive" in note for note in shader_checks(root, inventory)))
+
     def test_culling_readbacks_require_matching_source_and_current_gpu_bytecode(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

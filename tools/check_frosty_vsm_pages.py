@@ -168,7 +168,7 @@ def selection(entry, count, extra):
         "pages": count, "selected": len(base), "additional_pages": len(second), "initial_indirect_x": 32}
 
 
-def visibility_instance(visible, occluders, protected=None, post=False, stats_variant=False):
+def visibility_instance(visible, occluders, protected=None, post=False, stats_variant=False, no_hzb=False):
     # Exercise the packaged shader with an actual depth texture and visibility UAVs.
     with TemporaryDirectory(dir=ROOT / "build") as tmp:
         scene = Path(tmp) / "scene"
@@ -184,6 +184,9 @@ def visibility_instance(visible, occluders, protected=None, post=False, stats_va
     depth = f32(protected if protected is not None else .25)
     seed = [[0x77] * (9 * 9 * 4), [depth] * 81,
             [0xa5c3e749] * 512, [0] * 64, [0xa5c3e749] * 512, [0] * 22]
+    if no_hzb:
+        srv = [srv[i] for i in (0, 1, 2, 4, 5)]
+        seed = seed[:2] + [[0xa5c3e749] * 512, [0] * 11]
     if post:
         srv += [[word for lane in visible for word in (lane, 0)] or [0, 0],
                 [1, 1, 1, len(visible)] + [0xa5c3e749] * 4]
@@ -193,6 +196,8 @@ def visibility_instance(visible, occluders, protected=None, post=False, stats_va
         seed += [[0xa5c3e749] * 14]
         seed[-1][8] = 43
     expected = [row.copy() for row in seed]
+    if stats_variant and no_hzb and not occluders:
+        expected[-1][4] = 0xa5c3e749 + len(visible)
     if stats_variant and post:
         expected[-1][7] = len(visible)
         expected[-1][8] = 43 + (0 if occluders else len(visible))
@@ -203,6 +208,9 @@ def visibility_instance(visible, occluders, protected=None, post=False, stats_va
         for i, lane in enumerate(visible):
             expected[2][start + i * 3:start + i * 3 + 3] = [(lane << 3) | 5, 0, 255]
         expected[3][9:11] = [3 + len(visible), 29 + len(visible)]
+    elif no_hzb and not occluders:
+        expected[2][8:16] = [9, 0, 249, 0, 257, 0, 505, 0]
+        expected[3][4:6] = [4, 4]
     elif not post and not occluders:
         expected[4][8:16] = [9, 0, 249, 0, 257, 0, 505, 0]
         expected[5][4:6] = [4, 4]
@@ -213,7 +221,7 @@ def visibility_instance(visible, occluders, protected=None, post=False, stats_va
     for i, width in ((0, 36), (1, 9)):
         expected[i] = [v for y in range(9) for v in
                        (expected[i][y * width:(y + 1) * width] + [0] * (64 - width))]
-    return cb, srv, seed, (([16, 4, 4, 44] if post else [16, 4, 8, 4, 4, 44]) + ([56] if stats_variant else [])), 16, 1, 1, expected, {
+    return cb, srv, seed, (([16, 4, 4, 44] if post or no_hzb else [16, 4, 8, 4, 4, 44]) + ([56] if stats_variant else [])), 16, 1, 1, expected, {
         "visible": visible, "occluders": occluders, "protected": protected}
 
 
@@ -223,7 +231,7 @@ def main():
     p.add_argument("--prefix", type=Path)
     p.add_argument("--proton", type=Path)
     p.add_argument("--xshader", type=Path)
-    p.add_argument("--entry", type=int, choices=(1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3397, 3398, 3399, 3403, 3412, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470, 3477),
+    p.add_argument("--entry", type=int, choices=(1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470, 3477),
                    help="run the controls for one archive entry")
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
@@ -286,6 +294,17 @@ def main():
         for entry in (3398, 3399, 3412, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470):
             cases[f"visibility_{entry}_" + name] = (entry, visibility_instance(
                 visible, occluders, protected, post=entry not in (3399, 3438, 3430, 3449, 3451, 3456, 3458), stats_variant=entry in (3398, 3399, 3412, 3422, 3430, 3456, 3458, 3470)))
+    if args.entry in (3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474):
+        for name, visible, occluders, protected in (
+            ("empty", [1, 31, 32, 63], [], None),
+            *((f"lane{lane}", [lane], [lane], None) for lane in (1, 31, 32, 63)),
+            ("pair", [1, 32], [1, 32], None),
+            ("full", [1, 31, 32, 63], [1, 31, 32, 63], None),
+            ("protected", [1, 32], [1, 32], 1.0),
+        ):
+            cases["visibility_no_hzb_" + name] = (args.entry, visibility_instance(
+                visible, occluders, protected, no_hzb=True,
+                stats_variant=args.entry in (3413, 3437, 3440, 3474)))
     if args.entry is not None:
         cases = {name: case for name, case in cases.items() if case[0] == args.entry}
         if not cases:
@@ -309,7 +328,7 @@ def main():
                     words(work / f"{name}.b{i}", constants)
             else:
                 words(work / (name+".cbv"), cb)
-            if entry in (1016, 1243, 1257, 1793, 3477, 3396, 3397, 3398, 3399, 3403, 3412, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470):
+            if entry in (1016, 1243, 1257, 1793, 3477, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470):
                 for i, records in enumerate(srv):
                     words(work / f"{name}.t{i}", records)
             else:
@@ -334,7 +353,7 @@ def main():
                 if len(array) != len(actual):
                     diffs.append([i, "missing readback"])
                 else:
-                    if entry in (3396, 3397, 3398, 3399, 3412, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470) and i < 2:
+                    if entry in (3396, 3397, 3398, 3399, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470) and i < 2:
                         width = 36 if i == 0 else 9
                         for y in range(9):
                             actual[y * 64 + width:(y + 1) * 64] = [0] * (64 - width)
