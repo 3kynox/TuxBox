@@ -168,17 +168,22 @@ int main(int argc, char **argv) {
       dst[15] = (0x0909u & ~(0xffu << shift)) | (selectors[r] << shift);
     }
   }
-  // Seeded finite, exactly representable inputs. Each child is placed around
+  // Seeded finite inputs. Each child is placed around
   // the ray, with some deliberately missed, invalid, or clipped by extent.
-  uint32_t random_expected[24][4];
+  uint32_t random_expected[48][4];
   uint32_t seed = 0x74757862u;
   static const float inverses[6] = {-4.f, -2.f, -1.f, 1.f, 2.f, 4.f};
-  for (unsigned test = 0; test < 24; test++) {
-    uint32_t *record = (uint32_t *)out + 4032 + test * 48;
+  static const float fractional[6] = {-2.3f, -1.3f, -.7f, .3f, 1.3f, 2.3f};
+  for (unsigned test = 0; test < 48; test++) {
+    unsigned base = test < 24 ? 4032 + test * 48 : 6144 + (test - 24) * 48;
+    uint32_t *record = (uint32_t *)out + base;
     float origin[3], inverse[3], keys[4];
     for (unsigned axis = 0; axis < 3; axis++) {
       origin[axis] = (float)((int)(next_random(&seed) % 9) - 4);
-      inverse[axis] = inverses[next_random(&seed) % 6];
+      if (test >= 24)
+        origin[axis] += .1f;
+      unsigned choice = next_random(&seed) % 6;
+      inverse[axis] = test < 24 ? inverses[choice] : fractional[choice];
       record[32 + axis] = bits(origin[axis]);
       record[35 + axis] = bits(inverse[axis]);
     }
@@ -206,6 +211,8 @@ int main(int argc, char **argv) {
           ((_Float16 *)(record + 4 + child * 3))[axis] = (_Float16)lower[axis];
           ((_Float16 *)(record + 4 + child * 3))[axis + 3] =
               (_Float16)upper[axis];
+          lower[axis] = (float)((_Float16)lower[axis]);
+          upper[axis] = (float)((_Float16)upper[axis]);
         }
       }
       float near = 0.f, far = extent;
@@ -332,16 +339,17 @@ int main(int argc, char **argv) {
       failed = 1;
   printf("permuted_edges=216 paired_remaps=6\n");
   unsigned random_hits = 0;
-  for (unsigned test = 0; test < 24; test++) {
+  for (unsigned test = 0; test < 48; test++) {
     for (unsigned lane = 0; lane < 4; lane++) {
-      uint32_t got = ((uint32_t *)out)[944 + test * 4 + lane];
+      unsigned base = test < 24 ? 944 + test * 4 : 2400 + (test - 24) * 4;
+      uint32_t got = ((uint32_t *)out)[base + lane];
       if (got != random_expected[test][lane])
         failed = 1;
       if (got != 0xffffffffu)
         random_hits++;
     }
   }
-  printf("random_box_cases=24 hit_lanes=%u\n", random_hits);
+  printf("random_box_cases=48 hit_lanes=%u\n", random_hits);
   if (random_hits == 0)
     failed = 1;
   static const unsigned oblique_masks[3][6][2] = {

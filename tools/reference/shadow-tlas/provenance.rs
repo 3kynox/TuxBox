@@ -499,4 +499,23 @@ mod tests {
         assert!(s.graph.addresses.is_empty());
         assert_eq!(s.pending[&1].len(), 3);
     }
+    #[test]
+    fn independent_queue_readers_both_gate_retirement() {
+        let mut g = graph();
+        g.add_queue(3);
+        g.submit(1, &[Op::Deserialize(0x1000, 10)]).unwrap();
+        g.signal(1, 7, 1).unwrap();
+        for queue in [2, 3] {
+            g.wait(queue, 7, 1).unwrap();
+            assert_eq!(g.submit(queue, &[Op::Read(0x1000)]).unwrap(), [10]);
+            g.signal(queue, queue + 10, 1).unwrap();
+        }
+        g.wait(1, 12, 1).unwrap();
+        g.wait(1, 13, 1).unwrap();
+        g.submit(1, &[Op::Deserialize(0x1000, 11)]).unwrap();
+        g.complete(12, 1).unwrap();
+        assert!(g.collect().is_empty());
+        g.complete(13, 1).unwrap();
+        assert_eq!(g.collect(), [1]);
+    }
 }

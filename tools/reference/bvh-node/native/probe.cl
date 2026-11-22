@@ -176,15 +176,17 @@ __kernel void probe(__global unsigned *out) {
               node, 10000.f, (float4)(0, 0, 0, 0), (float4)(1, 1, 1, 0),
               (float4)(1, 1, 1, 0), descriptor);
     }
-  for (uint test = 0; test < 24; test++) {
-    __global uint *record = out + 4032 + test * 48;
+  for (uint test = 0; test < 48; test++) {
+    uint base = test < 24 ? 4032 + test * 48 : 6144 + (test - 24) * 48;
+    __global uint *record = out + base;
     float4 origin = (float4)(as_float(record[32]), as_float(record[33]),
                              as_float(record[34]), 0.f);
     float4 inverse = (float4)(as_float(record[35]), as_float(record[36]),
                               as_float(record[37]), 0.f);
     uint4 descriptor = (uint4)(0u, record[39] << 31, 0xffffffffu, 0x810003ffu);
     ulong node = (((ulong)record) >> 3) | (record[40] ? 5ul : 4ul);
-    *(__global uint4 *)(out + 944 + test * 4) =
+    uint result_base = test < 24 ? 944 + test * 4 : 2400 + (test - 24) * 4;
+    *(__global uint4 *)(out + result_base) =
         __builtin_amdgcn_image_bvh_intersect_ray_l(
             node, as_float(record[38]), origin, (float4)(1.f, 1.f, 1.f, 0.f),
             inverse, descriptor);

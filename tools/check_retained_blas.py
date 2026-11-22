@@ -36,7 +36,8 @@ def main():
         raise ValueError('unexpected serialized sphere')
     body = source[64:]
     modified = body[:-1] + bytes([body[-1] ^ 0x5a])
-    report = {'scope': 'Standalone GPU buffer retention and byte copy control; not runtime BLAS provenance or a compact-AS implementation',
+    report = {'scope': 'Standalone retained-body and five-entry GPU directory controls; not runtime BLAS provenance or compact-AS implementation',
+              'directory_checks': ['unique matches', 'missing key', 'duplicate key', 'invalid guest addresses', 'invalid backing addresses', 'zero and oversized counts', 'cross-queue ordering', 'ordered rewrite'],
               'serialized_sha256': digest(source), 'body_sha256': digest(body),
               'modified_body_sha256': digest(modified), 'body_bytes': len(body),
               'shader_sha256': digest((ROOT / 'tools/reference/shadow-tlas/retained_blas.hlsl').read_bytes()),
@@ -73,7 +74,7 @@ def main():
             if (work / 'reversed.bin').read_bytes() != modified:
                 raise ValueError(f'{name} reversed submission order differs')
             report['adapters'][name] = {'adapter': adapter, 'source_offset': 320, 'copies': 3,
-                                       'two_queues_with_fence': True, 'blocked_fence_verified': True, 'upload_written_after_close': True, 'gpu_header_reads': 3, 'replayed_after_completion': True, 'reversed_list_submission': True, 'gpu_directory_publication': True}
+                                       'two_queues_with_fence': True, 'blocked_fence_verified': True, 'upload_written_after_close': True, 'gpu_header_reads': 3, 'replayed_after_completion': True, 'reversed_list_submission': True, 'gpu_directory_publication': True, 'directory_entries': 5, 'directory_queries': 40, 'directory_unaligned_backing': True, 'directory_cross_queue': True, 'directory_zero_query_guard': True, 'directory_replay_updated_entry': True}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))

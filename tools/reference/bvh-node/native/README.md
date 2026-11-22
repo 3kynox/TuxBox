@@ -12,8 +12,9 @@ On gfx1036 the ordinary misses in this fixture preserve the signed determinant
 and return infinity with the same sign. The control checks all six permutations
 of three triangles against both Z-axis ray directions at their three edge
 midpoints and three vertices (216 cases), 108 oblique-ray edge cases and 108
-edge cases with tied dominant ray directions. A seeded set of 24 finite
-BOX16/BOX32 inputs is compared with CPU box calculations. The control also
+edge cases with tied dominant ray directions. A seeded set of 48 finite
+BOX16/BOX32 inputs, including fractional origins and inverse directions, is
+compared with CPU box calculations. The control also
 records nine parallel or degenerate triangle cases and five zero, subnormal,
 or infinite ray cases. Twenty additional box tests cover both signs of an
 infinite inverse direction at slab interiors, boundaries and exterior points.
@@ -45,3 +46,18 @@ checks that its GPU is gfx1036 and that the allocation meets the node alignment
 before dispatch. The result is specific to the chosen inputs and GPU. Compare
 with `tools/check_frosty_bvh_nodes.py`, whose corresponding synthetic cases
 also run through D3D12 on Radeon and GeForce.
+
+To inspect immediate BVH descriptor setup from a user-supplied cooked shader,
+run the standalone Rust inspector from the project root. It recognises the
+verified SGPR 68–71 setup and rejects an unsupported write or branch between
+setup and use; it does not inspect dynamically generated descriptors:
+
+```sh
+cargo build --manifest-path tools/shader-compiler/Cargo.toml --target-dir /tmp/tuxbox-inspect-build --target x86_64-unknown-linux-gnu --lib --no-default-features
+rustc --edition=2021 tools/reference/bvh-node/inspect_shader.rs --extern tuxbox_xshader="$(find /tmp/tuxbox-inspect-build/x86_64-unknown-linux-gnu/debug/deps -maxdepth 1 -name 'libtuxbox_xshader-*.rlib' -print -quit)" -L dependency=/tmp/tuxbox-inspect-build/x86_64-unknown-linux-gnu/debug/deps -o /tmp/tuxbox-inspect-shader
+/tmp/tuxbox-inspect-shader /path/to/shader.dxbc
+```
+
+For the examined Frosty shader 219, both native intersection instructions
+construct descriptors with zero box growth and sorting enabled. See
+`evidence/matrix-awakens/bvh-descriptor.json` for the input fingerprint.
