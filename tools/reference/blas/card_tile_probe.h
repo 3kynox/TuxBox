@@ -1,7 +1,8 @@
 // The title dispatches one tile queue for direct-light visibility and another
 // for radiosity. Sample the packed mask and the atlas pixels on the host.
 static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D12Resource *scene, FILE *receipt,
-                            UINT entry, bool active, bool lit = false, bool trace = false, bool occluded = false) {
+                            UINT entry, bool active, bool lit = false, bool trace = false, bool occluded = false,
+                            float near_bound = 8.f, float far_bound = 8.f, UINT scenario = 0, float origin_x = -1.f) {
     const bool radiosity = entry == 1064;
     const UINT count = radiosity ? 16 : 7, width = trace ? 8 : 4, side = 8;
     D3D12_DESCRIPTOR_RANGE ranges[]{{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, count, 0, 1, 0},
@@ -93,7 +94,7 @@ static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D1
             d.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
             if ((lit || trace) && i == 0) {
                 // The three float4 card basis rows also carry their world-space origin in W.
-                const float basis[12]{1, 0, 0, trace ? -1.f : 20.f, 0, 1, 0, trace ? 0.f : 20.f,
+                const float basis[12]{1, 0, 0, trace ? origin_x : 20.f, 0, 1, 0, trace ? 0.f : 20.f,
                                       0, 0, 1, trace ? -1.f : 20.f};
                 std::memcpy(words.data(), basis, sizeof(basis));
             }
@@ -161,7 +162,7 @@ static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D1
         transition(uavs[i].Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         dev->CreateUnorderedAccessView(uavs[i].Get(), nullptr, &d, cpu);
     }
-    std::array<UINT, 160> callbacks{};
+    std::array<UINT, 320> callbacks{};
     auto calls = buffer(dev, sizeof(callbacks), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COPY_DEST, true);
     auto zero = upload(dev, callbacks.data(), sizeof(callbacks));
     list->CopyBufferRegion(calls.Get(), 0, zero.Get(), 0, sizeof(callbacks));
@@ -181,8 +182,8 @@ static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D1
         f(0, 39 * 4, 10.f);
     } else {
         cb[0][31 * 4] = 1;
-        f(0, 31 * 4 + 1, 8.f);
-        f(0, 31 * 4 + 2, 8.f);
+        f(0, 31 * 4 + 1, near_bound);
+        f(0, 31 * 4 + 2, far_bound);
         f(2, 5 * 4 + 2, 1.f);
     }
     std::array<ComPtr<ID3D12Resource>, 4> constants;
@@ -207,7 +208,7 @@ static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D1
     dispatch.Width = width;
     dispatch.Height = dispatch.Depth = 1;
     list->DispatchRays(&dispatch);
-    constexpr UINT atlas_offset = 1024;
+    constexpr UINT atlas_offset = 2048;
     auto rb = buffer(dev, atlas_offset + sizeof(pixels), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
     transition(uavs[0].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
     transition(uavs[3].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -227,6 +228,8 @@ static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D1
     UINT mask = words[0], changed = 0, misses = 0, hits = 0;
     bool clean = words[4] == 0xdeadbeef;
     bool raysMatch = true;
+    std::array<std::array<UINT, 2>, 7> events_seen{};
+    std::array<std::array<UINT, 16>, 7> rays_seen{};
     std::array<UINT, 4> pixel{};
     for (UINT i = 0; i < width; ++i) {
         hits += words[initial.size() + i * 4];
@@ -238,6 +241,26 @@ static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D1
             const std::array<UINT, 4> expectedDirection{0, 0, 0x3f800000, 0x3f800000};
             raysMatch &= std::memcmp(origin, expectedOrigin.data(), 16) == 0
                          && std::memcmp(direction, expectedDirection.data(), 16) == 0;
+        }
+    }
+    if (trace && !radiosity) {
+        const UINT base = static_cast<UINT>(initial.size());
+        const UINT *events = words + base + width * 9 * 4;
+        const UINT *first = words + base + width * 5 * 4;
+        const UINT *first_dir = words + base + width * 6 * 4;
+        const UINT *second = words + base + width * 7 * 4;
+        const UINT *second_dir = words + base + width * 8 * 4;
+        for (UINT i = 1; i < width; ++i) {
+            const UINT *a = first + 4 * i, *b = first_dir + 4 * i;
+            const UINT *c = second + 4 * i, *d = second_dir + 4 * i;
+            events_seen[i - 1] = {events[4 * i], events[4 * i + 1]};
+            std::memcpy(rays_seen[i - 1].data(), a, 4 * sizeof(UINT));
+            std::memcpy(rays_seen[i - 1].data() + 4, b, 4 * sizeof(UINT));
+            std::memcpy(rays_seen[i - 1].data() + 8, c, 4 * sizeof(UINT));
+            std::memcpy(rays_seen[i - 1].data() + 12, d, 4 * sizeof(UINT));
+            std::fprintf(receipt, "card_event_%u_%u=%u,%u;%08x,%08x,%08x,%08x;%08x,%08x,%08x,%08x;%08x,%08x,%08x,%08x;%08x,%08x,%08x,%08x\n",
+                         scenario, i, events[4 * i], events[4 * i + 1], a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3],
+                         c[0], c[1], c[2], c[3], d[0], d[1], d[2], d[3]);
         }
     }
     for (UINT y = 0; y < side; ++y)
@@ -253,10 +276,71 @@ static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D1
             }
         }
     rb->Unmap(0, &none);
+    if (scenario) {
+        const auto candidate_root = root_signature(dev);
+        D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
+        desc.pRootSignature = candidate_root.Get();
+        desc.CS = {card_candidate_dxil, sizeof(card_candidate_dxil)};
+        ComPtr<ID3D12PipelineState> pipeline;
+        check(dev->CreateComputePipelineState(&desc, IID_PPV_ARGS(&pipeline)), "card candidate pipeline");
+        ComPtr<ID3D12CommandAllocator> candidate_allocator;
+        ComPtr<ID3D12GraphicsCommandList> candidate_list;
+        check(dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&candidate_allocator)), "card candidate allocator");
+        check(dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, candidate_allocator.Get(), pipeline.Get(), IID_PPV_ARGS(&candidate_list)), "card candidate list");
+        const float bounds[]{near_bound, far_bound, origin_x};
+        auto bound_buffer = upload(dev, bounds, sizeof(bounds));
+        auto candidate = buffer(dev, 16, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
+        auto candidate_readback = buffer(dev, 16, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+        candidate_list->SetComputeRootSignature(candidate_root.Get());
+        candidate_list->SetComputeRootShaderResourceView(0, scene->GetGPUVirtualAddress());
+        candidate_list->SetComputeRootUnorderedAccessView(1, candidate->GetGPUVirtualAddress());
+        candidate_list->SetComputeRootShaderResourceView(2, bound_buffer->GetGPUVirtualAddress());
+        candidate_list->Dispatch(1, 1, 1);
+        D3D12_RESOURCE_BARRIER barrier{};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition = {candidate.Get(), 0, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE};
+        candidate_list->ResourceBarrier(1, &barrier);
+        candidate_list->CopyBufferRegion(candidate_readback.Get(), 0, candidate.Get(), 0, 16);
+        submit(dev, queue, candidate_list.Get());
+        D3D12_RANGE candidate_range{0, 16};
+        void *candidate_data{};
+        check(candidate_readback->Map(0, &candidate_range, &candidate_data), "card candidate readback");
+        std::array<UINT, 4> candidate_words{};
+        std::memcpy(candidate_words.data(), candidate_data, 16);
+        candidate_readback->Unmap(0, &none);
+        const UINT expected_mask = 2u | (candidate_words[2] * 0x5554u);
+        const UINT expected_first[]{1, 0, 0, 0, 0, 0, 1, 0, 0};
+        const UINT expected_second[]{0, 0, 1, 1, 0, 0, 0, 0, 0};
+        const UINT expected_hits = candidate_words[1] * 7u;
+        const UINT expected_misses = candidate_words[0] ? 0u : (candidate_words[1] ? 7u : 14u);
+        const std::array<UINT, 2> expected_events = candidate_words[0] ? std::array<UINT, 2>{0, 0}
+            : std::array<UINT, 2>{2, candidate_words[1] ? 1u : 2u};
+        const bool event_matches = std::all_of(events_seen.begin(), events_seen.end(),
+            [&](const auto &event) { return event == expected_events; });
+        UINT x_bits{}, near_bits{}, far_bits{};
+        std::memcpy(&x_bits, &origin_x, 4);
+        std::memcpy(&near_bits, &near_bound, 4);
+        std::memcpy(&far_bits, &far_bound, 4);
+        const UINT second_end = candidate_words[1] ? 0x3f800000u : near_bits;
+        const std::array<UINT, 16> expected_rays{x_bits, 0, 0xbf800000u, near_bits, 0, 0, 0x3f800000u, far_bits,
+                                                 x_bits, 0, 0xbf800000u, 0, 0, 0, 0x3f800000u, second_end};
+        const bool argument_matches = candidate_words[0] || std::all_of(rays_seen.begin(), rays_seen.end(),
+            [&](const auto &ray) { return ray == expected_rays; });
+        const bool matches = scenario <= std::size(expected_first) && event_matches && argument_matches &&
+            candidate_words[0] == expected_first[scenario - 1] && candidate_words[1] == expected_second[scenario - 1] &&
+            candidate_words[2] >= 2 && candidate_words[2] <= 3 && mask == expected_mask &&
+            hits == expected_hits && misses == expected_misses;
+        std::fprintf(receipt, "card_candidate_%u=first %u; second %u; candidate %u; original mask %08x; match %u\n", scenario,
+                     candidate_words[0], candidate_words[1], candidate_words[2], mask, matches);
+        if (!matches) throw std::runtime_error("direct-light candidate differs from translated 218");
+    }
     const char *name = trace ? (occluded ? "occluded" : "unoccluded") : lit ? "lit" : active ? "active" : "empty";
-    std::fprintf(receipt, "card_%u_%s=mask %08x; atlas %u; hits %u; misses %u; guard %u; color %08x,%08x,%08x,%08x\n",
-                 entry, name, mask, changed, hits, misses, clean, pixel[0], pixel[1], pixel[2], pixel[3]);
-    const bool traceOk = !trace || (raysMatch && !changed &&
+    if (scenario)
+        std::fprintf(receipt, "card_scenario_%u=mask %08x; hits %u; misses %u; guard %u\n", scenario, mask, hits, misses, clean);
+    if (!scenario)
+        std::fprintf(receipt, "card_%u_%s=mask %08x; atlas %u; hits %u; misses %u; guard %u; color %08x,%08x,%08x,%08x\n",
+                     entry, name, mask, changed, hits, misses, clean, pixel[0], pixel[1], pixel[2], pixel[3]);
+    const bool traceOk = scenario || !trace || (raysMatch && !changed &&
                          (occluded ? (mask == 0xfffeu && hits == 7u && misses == 7u)
                                    : (mask == 0xaaaau && !hits && misses == 14u)));
     const bool directOk = trace || !active || radiosity || (mask == 0xaau && !changed && !hits && misses == 6u);

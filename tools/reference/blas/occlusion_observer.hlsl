@@ -10,12 +10,27 @@ void observe_input(uint index, float end) {
 }
 #endif
 
+#ifdef TRACE_CARD_INPUTS
+// One invocation owns each dispatch coordinate. Record both callback inputs
+// in execution order, independently of whether they hit or miss.
+void observe_card_event(uint index, uint ordinal, float end, bool hit) {
+    if (ordinal >= 2) return;
+    uint count = DispatchRaysDimensions().x * DispatchRaysDimensions().y;
+    callbacks[(5 + 2 * ordinal) * count + index] = asuint(float4(WorldRayOrigin(), RayTMin()));
+    callbacks[(6 + 2 * ordinal) * count + index] = asuint(float4(WorldRayDirection(), end));
+    callbacks[9 * count + index][ordinal] = hit ? 1 : 2;
+}
+#endif
+
 [shader("miss")]
 void ProbeMiss(inout Payload p) {
     uint2 xy = DispatchRaysIndex().xy;
     uint index = xy.y * DispatchRaysDimensions().x + xy.x;
     uint previous;
     InterlockedAdd(callbacks[index].y, 1, previous);
+#ifdef TRACE_CARD_INPUTS
+    observe_card_event(index, previous + callbacks[index].x, RayTCurrent(), false);
+#endif
 #if defined(TRACE_PROBE_INPUTS) || defined(TRACE_CARD_INPUTS)
     if (previous == 0) observe_input(index, RayTCurrent());
 #endif
@@ -36,6 +51,7 @@ void ProbeHit(inout Payload p, BuiltInTriangleIntersectionAttributes attributes)
     uint previous;
     InterlockedAdd(callbacks[index].x, 1, previous);
 #ifdef TRACE_CARD_INPUTS
+    observe_card_event(index, previous + callbacks[index].y, RayTCurrent(), true);
     if (previous == 0) {
         uint count = DispatchRaysDimensions().x * DispatchRaysDimensions().y;
         callbacks[3 * count + index] = asuint(float4(WorldRayOrigin(), RayTMin()));

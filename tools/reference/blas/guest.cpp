@@ -188,6 +188,7 @@ static ComPtr<ID3D12GraphicsCommandList> guest_list(ID3D12Device* guest, ID3D12C
 #include "observed_ray_pipeline.h"
 #endif
 #ifdef TUXBOX_CARD_TILE_PROBE
+#include "card_candidate_dxil.h"
 #include "card_tile_probe.h"
 #endif
 #ifdef TUXBOX_SCREEN_GATHER_PROBE
@@ -673,6 +674,10 @@ static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, 
             probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,entry,active);
         probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,1064,true,true);
         probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,218,true,false,true,true);
+        const float bounds[][3]{{.5f,2.f,-1.f}, {1.f,2.f,-1.f}, {1.25f,2.f,-1.f}, {2.f,3.f,-1.f},
+                                {0.f,.5f,-1.f}, {0.f,1.f,-1.f}, {0.f,2.f,-1.f}, {0.f,2.f,20.f}, {1.25f,2.f,20.f}};
+        for (UINT i = 0; i < std::size(bounds); ++i)
+            probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,218,true,false,true,true,bounds[i][0],bounds[i][1],i+1,bounds[i][2]);
     }
 #endif
 #ifdef TUXBOX_SCREEN_GATHER_PROBE
