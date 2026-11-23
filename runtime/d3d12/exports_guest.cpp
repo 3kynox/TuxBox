@@ -103,14 +103,25 @@ static bool check_extra_exports(HMODULE module) {
     if (pix(header) != S_OK || header[0] != 8 || header[1] != 0) return false;
     // Three distinct, inert buffers for the desktop driver-unavailable control.
     const BYTE first[3]{}, second[5]{}, third[7]{};
-    return upload(0, 3, first, 5, second, 7, third) == E_INVALIDARG &&
-           upload(1, 0, first, 5, second, 7, third) == E_INVALIDARG &&
-           upload(1, 3, nullptr, 5, second, 7, third) == E_INVALIDARG &&
-           upload(1, 3, first, 0, second, 7, third) == E_INVALIDARG &&
-           upload(1, 3, first, 5, nullptr, 7, third) == E_INVALIDARG &&
-           upload(1, 3, first, 5, second, 0, third) == E_INVALIDARG &&
-           upload(1, 3, first, 5, second, 7, nullptr) == E_INVALIDARG &&
-           upload(1, 3, first, 5, second, 7, third) == E_FAIL;
+    constexpr DWORD sentinel = 0xa14c;
+    auto rejects = [&](UINT selector, SIZE_T n1, const void* p1, SIZE_T n2, const void* p2,
+                       SIZE_T n3, const void* p3) {
+        SetLastError(sentinel);
+        return upload(selector, n1, p1, n2, p2, n3, p3) == E_INVALIDARG && GetLastError() == sentinel;
+    };
+    if (!rejects(0, 3, first, 5, second, 7, third) ||
+        !rejects(1, 0, first, 5, second, 7, third) ||
+        !rejects(1, 3, nullptr, 5, second, 7, third) ||
+        !rejects(1, 3, first, 0, second, 7, third) ||
+        !rejects(1, 3, first, 5, nullptr, 7, third) ||
+        !rejects(1, 3, first, 5, second, 0, third) ||
+        !rejects(1, 3, first, 5, second, 7, nullptr)) return false;
+    for (UINT selector : {1u, 2u, 0xffffffffu, 1u}) {
+        SetLastError(sentinel);
+        if (upload(selector, 3, first, 5, second, 7, third) != E_FAIL ||
+            GetLastError() != ERROR_INVALID_HANDLE) return false;
+    }
+    return true;
 }
 #endif
 

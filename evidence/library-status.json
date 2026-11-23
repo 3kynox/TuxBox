@@ -151,7 +151,7 @@
           "D3DFlushEntireCpuCache",
           "InternalDriverCallX"
         ],
-        "notes": "Twenty-one of 22 functions and all 32 data exports have verified behavior. The original DLL returns DXGI_ERROR_UNSUPPORTED for four legacy DXGIX exports. Rendering coverage is tracked through separate device and command-list tests. D3D12ZeroMemoryX was checked in CPU mode."
+        "notes": "Twenty-one of 22 functions and all 32 data exports have verified behavior. The original DLL returns DXGI_ERROR_UNSUPPORTED for four legacy DXGIX exports. Rendering coverage is tracked through separate device and command-list tests. D3D12ZeroMemoryX was checked in CPU mode. All 54 names match the reference ordinals. The upload wrapper constructs the driver request, but a successful firmware installation is still unverified."
       },
       "inventory": {
         "source_path": "EmbeddedXvd/Windows/System32/d3d12_xs.dll",

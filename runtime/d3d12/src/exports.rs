@@ -123,44 +123,8 @@ pub extern "system" fn framebuffer_preserve_memory_size_bytes() -> u32 {
 #[path = "pix_driver.rs"]
 mod pix_driver;
 
-/// The Series driver copies three microcode images into a device window and
-/// requests installation through XVIO. Desktop D3D12 exposes no such window.
-/// The Xbox wrapper maps this driver failure to E_FAIL.
-#[unsafe(export_name = "D3D12UploadCustomMicrocodeX")]
-pub extern "system" fn upload_custom_microcode(
-    selector: u32,
-    first_bytes: usize,
-    first: *const u8,
-    second_bytes: usize,
-    second: *const u8,
-    third_bytes: usize,
-    third: *const u8,
-) -> HRESULT {
-    if selector == 0
-        || first_bytes == 0 || first.is_null()
-        || second_bytes == 0 || second.is_null()
-        || third_bytes == 0 || third.is_null()
-    {
-        return E_INVALIDARG;
-    }
-
-    // The Scarlett KMD's type-10 staging range has a 32-bit byte size
-    // rounded to whole 4 KiB pages. Its actual capacity comes from HostOS.
-    const MAX_WINDOW_BYTES: usize = 0xffff_f000;
-    let total = first_bytes.checked_add(second_bytes).and_then(|n| n.checked_add(third_bytes));
-    static OVERSIZED: std::sync::Once = std::sync::Once::new();
-    static UNAVAILABLE: std::sync::Once = std::sync::Once::new();
-    let (site, reason) = match total {
-        Some(n) if n <= MAX_WINDOW_BYTES => (&UNAVAILABLE, "no firmware receiver"),
-        _ => (&OVERSIZED, "exceeds the Scarlett staging window limit"),
-    };
-    crate::diagnostics::log_once(site, || {
-        format!(
-            "D3D12UploadCustomMicrocodeX selector={selector:#010x} image_bytes=[{first_bytes}, {second_bytes}, {third_bytes}] returned E_FAIL ({reason})"
-        )
-    });
-    E_FAIL
-}
+#[path = "microcode.rs"]
+mod microcode;
 
 #[path = "profiling.rs"]
 pub(crate) mod profiling;
