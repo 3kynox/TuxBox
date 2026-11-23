@@ -46,6 +46,8 @@ struct Recording {
     stencil_slot: Option<u32>,
     stencil_targets: Option<stencil::Targets>,
     dsv_bound: bool,
+    display_bound: bool,
+    null_pipeline: bool,
     media: Option<media::Recording>,
     placed_reads: Vec<Arc<Texture>>,
     placed_writes: Vec<Arc<Texture>>,
@@ -136,6 +138,9 @@ impl Recording {
     }
 
     fn draw(&mut self, list: &List, rasterizes: bool, draw: impl FnOnce()) {
+        if rasterizes {
+            crate::diagnostics::display::draw(self.display_bound, self.null_pipeline);
+        }
         if rasterizes {
             for target in &self.bound_placed_targets {
                 if let Err(error) = Self::track_texture(&mut self.placed_writes, target) {
@@ -767,6 +772,7 @@ unsafe extern "system" fn clear_rtv(
         state.error = E_INVALIDARG;
         return;
     }
+    crate::diagnostics::display::clear(handle.ptr);
     if let Some(target) = unsafe { placement::render_target(parent(&list.parent), handle.ptr) }
         && let Err(error) = Recording::track_texture(&mut state.placed_writes, &target)
     {
@@ -890,6 +896,7 @@ unsafe extern "system" fn copy_texture(
         state.error = error;
         return;
     }
+    crate::diagnostics::display::copy(dst.resource);
     unsafe {
         (list.native.vtable().CopyTextureRegion)(
             list.native.as_raw(),
@@ -931,6 +938,7 @@ unsafe extern "system" fn copy_resource(
         state.error = E_INVALIDARG;
         return;
     };
+    crate::diagnostics::display::copy(dst.native.as_raw());
     let (d, s) = unsafe { (dst.native.GetDesc(), src.native.GetDesc()) };
     if dst.state.buffer_window().is_some() || src.state.buffer_window().is_some() {
         let (to, size) = dst.state.buffer_window().unwrap_or((0, d.Width));
@@ -1533,6 +1541,8 @@ pub(crate) unsafe fn wrap_command_list(
             stencil_slot: initial.and_then(|p| p.state.stencil_slot),
             stencil_targets: None,
             dsv_bound: false,
+            display_bound: false,
+            null_pipeline: false,
             placed_reads: Vec::new(),
             placed_writes: Vec::new(),
             bound_placed_targets: Vec::new(),

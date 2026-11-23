@@ -207,3 +207,71 @@ pub(crate) fn watch(kind: &str, start: u64, len: u64, detail: impl FnOnce() -> S
     let line = format!("watch {address:#x}: {kind} {start:#x}+{len:#x} {} from title RVA {rva:#x}", detail());
     log_once(&Once::new(), || line);
 }
+
+/// With `TUXBOX_TRACE_PRESENT`, count GPU writes aimed at display resources
+/// (created with ALLOW_DISPLAY) so a black presented image can be attributed.
+pub(crate) mod display {
+    use std::collections::{HashMap, HashSet};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{LazyLock, Mutex};
+
+    pub(crate) fn enabled() -> bool {
+        static ON: LazyLock<bool> = LazyLock::new(|| {
+            std::env::var("TUXBOX_TRACE_PRESENT").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0) != 0
+        });
+        *ON
+    }
+
+    static RESOURCES: LazyLock<Mutex<HashSet<usize>>> = LazyLock::new(Default::default);
+    static RTVS: LazyLock<Mutex<HashMap<usize, bool>>> = LazyLock::new(Default::default);
+    static NULL_PIPELINES: LazyLock<Mutex<HashSet<usize>>> = LazyLock::new(Default::default);
+    // draws, null-pipeline draws, clears, copies, all draws, RTV binds
+    static COUNTS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
+
+    pub(crate) fn mark_resource(native: *mut core::ffi::c_void) {
+        if enabled() { RESOURCES.lock().unwrap_or_else(|e| e.into_inner()).insert(native as usize); }
+    }
+    pub(crate) fn is_display(native: *mut core::ffi::c_void) -> bool {
+        enabled() && RESOURCES.lock().unwrap_or_else(|e| e.into_inner()).contains(&(native as usize))
+    }
+    pub(crate) fn rtv(handle: usize, native: Option<*mut core::ffi::c_void>) {
+        if !enabled() { return; }
+        let display = native.is_some_and(is_display);
+        RTVS.lock().unwrap_or_else(|e| e.into_inner()).insert(handle, display);
+    }
+    pub(crate) fn bound(handles: &[usize]) -> bool {
+        if !enabled() { return false; }
+        let rtvs = RTVS.lock().unwrap_or_else(|e| e.into_inner());
+        let any = handles.iter().any(|h| rtvs.get(h).copied().unwrap_or(false));
+        if any { COUNTS[5].fetch_add(1, Ordering::Relaxed); }
+        any
+    }
+    pub(crate) fn mark_null_pipeline(native: *mut core::ffi::c_void) {
+        if enabled() { NULL_PIPELINES.lock().unwrap_or_else(|e| e.into_inner()).insert(native as usize); }
+    }
+    pub(crate) fn is_null_pipeline(native: *mut core::ffi::c_void) -> bool {
+        enabled() && NULL_PIPELINES.lock().unwrap_or_else(|e| e.into_inner()).contains(&(native as usize))
+    }
+    pub(crate) fn draw(display_bound: bool, null_pipeline: bool) {
+        if !enabled() { return; }
+        COUNTS[4].fetch_add(1, Ordering::Relaxed);
+        if display_bound {
+            COUNTS[0].fetch_add(1, Ordering::Relaxed);
+            if null_pipeline { COUNTS[1].fetch_add(1, Ordering::Relaxed); }
+        }
+    }
+    pub(crate) fn clear(handle: usize) {
+        if enabled() && RTVS.lock().unwrap_or_else(|e| e.into_inner()).get(&handle).copied().unwrap_or(false) {
+            COUNTS[2].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    pub(crate) fn copy(dst: *mut core::ffi::c_void) {
+        if is_display(dst) { COUNTS[3].fetch_add(1, Ordering::Relaxed); }
+    }
+    /// Counters since the previous summary (recorded, not necessarily executed).
+    pub(crate) fn summary() -> String {
+        let c: Vec<u64> = COUNTS.iter().map(|c| c.swap(0, Ordering::Relaxed)).collect();
+        format!("display writes recorded: draws={} (null pipeline {}) clears={} copies={} rtv-binds={} | all draws={} | display resources={}",
+            c[0], c[1], c[2], c[3], c[5], c[4], RESOURCES.lock().unwrap_or_else(|e| e.into_inner()).len())
+    }
+}

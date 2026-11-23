@@ -452,8 +452,9 @@ unsafe fn null_pipeline(
     if !geometry.is_null() {
         unsafe { geometry.write(D3D12_SHADER_BYTECODE::default()) };
     }
-    let result = unsafe { host.CreatePipelineState(desc) };
-    if result.is_ok() {
+    let result = unsafe { host.CreatePipelineState::<ID3D12PipelineState>(desc) };
+    if let Ok(pipeline) = &result {
+        crate::diagnostics::display::mark_null_pipeline(pipeline.as_raw());
         substituted(if compute { "compute stream" } else { "raster stream" });
     }
     Some(result)

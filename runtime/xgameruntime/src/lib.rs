@@ -1,6 +1,8 @@
 //! Xbox Game Runtime entry points used by the statically linked GDK wrappers.
 //! The queue vtable is mapped in evidence/matrix-awakens/runtime-wrappers.csv.
+mod probe;
 mod queue;
+mod services;
 mod title_temp;
 
 use std::ffi::{c_char, c_void};
@@ -78,6 +80,16 @@ unsafe extern "system" fn QueryApiImpl(
     }
     if !same(class, &THREADING) {
         report(format_args!("unsupported API class {} (interface {})", guid_text(class), guid_text(iid)));
+        let by_interface = probe::CLASSES.iter().position(|(c, _)| same(c, iid))
+            .filter(|&i| i == probe::GAMERTAG);
+        if let Some(index) = by_interface.or_else(|| probe::CLASSES.iter().position(|(c, _)| same(c, class)))
+            && probe::available(index)
+        {
+            let object = &probe::OBJECTS[index];
+            add_ref(unsafe { &*ptr::from_ref(object).cast::<Object>() });
+            unsafe { out.write(ptr::from_ref(object).cast_mut().cast()) };
+            return OK;
+        }
         return NO_INTERFACE;
     }
     unsafe { query(&THREAD_OBJECT, iid, out) }
@@ -92,6 +104,22 @@ macro_rules! slot {
     ($func:path) => {
         Slot($func as *const ())
     };
+}
+
+/// Same layout as `Object` with a wider table (see `probe`).
+#[repr(C)]
+struct ProbeObject {
+    vtable: &'static [Slot; 64],
+    references: AtomicU32,
+}
+
+unsafe extern "system" fn query_probe(this: &Object, _iid: *const GUID, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return POINTER;
+    }
+    add_ref(this);
+    unsafe { out.write(ptr::from_ref(this).cast_mut().cast()) };
+    OK
 }
 
 #[repr(C)]
@@ -161,7 +189,7 @@ fn report(text: std::fmt::Arguments<'_>) {
     static SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
     let line = format!("TuxBox xgameruntime: {text}");
     let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
-    if seen.len() >= 128 || seen.contains(&line) {
+    if seen.len() >= 600 || seen.contains(&line) {
         return;
     }
     seen.push(line.clone());
@@ -175,7 +203,13 @@ static THREAD_TABLE: [Slot; 32] = {
     t[0] = slot!(query);
     t[1] = slot!(add_ref);
     t[2] = slot!(release);
+    t[3] = slot!(services::async_status);
+    t[4] = slot!(services::async_result_size);
+    t[5] = slot!(services::async_cancel);
+    t[6] = slot!(services::async_run);
     t[12] = slot!(queue::create);
+    t[13] = slot!(queue::create_composite);
+    t[14] = slot!(queue::get_port);
     t[15] = slot!(queue::duplicate);
     t[16] = slot!(queue::dispatch);
     t[17] = slot!(queue::close);
@@ -222,6 +256,7 @@ static SYSTEM_TABLE: [Slot; 32] = {
     slots[0] = slot!(query);
     slots[1] = slot!(add_ref);
     slots[2] = slot!(release);
+    slots[3] = slot!(services::system_console_id);
     slots[4] = slot!(sandbox_id);
     slots
 };

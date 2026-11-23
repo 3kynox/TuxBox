@@ -682,6 +682,9 @@ pub(super) unsafe extern "system" fn committed_layout(
         return error.code();
     }
     let Some(native) = native else { return E_POINTER; };
+    if flags.contains(D3D12_HEAP_FLAG_ALLOW_DISPLAY) {
+        crate::diagnostics::display::mark_resource(native.as_raw());
+    }
     let backing = if flags.contains(D3D12_HEAP_FLAG_ALLOW_DISPLAY) {
         // Scanout allocations go through the title's D3D large-page allocator.
         // Keep the tiled guest extent and its native render target paired.

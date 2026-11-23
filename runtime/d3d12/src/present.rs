@@ -185,6 +185,7 @@ impl SwapChain {
             frame.allocator.Reset()?;
             frame.list.Reset(&frame.allocator, None)?;
             record_copy(&frame.list, source, &buffer);
+            let sample = sampler::due().then(|| sampler::record(&frame.list, source)).flatten();
             frame.list.Close()?;
             frame.source = Some(source.clone());
             queue.ExecuteCommandLists(&[Some(ID3D12CommandList::clone(&frame.list))]);
@@ -193,6 +194,10 @@ impl SwapChain {
                 return Err(error);
             }
             frame.retire = self.next;
+            if let Some(sample) = sample {
+                wait_for(&self.fence, self.next)?;
+                sample.report();
+            }
             self.next = next_value;
             // Return DXGI status codes such as DXGI_STATUS_OCCLUDED to the guest.
             Ok(self.chain.Present(1, DXGI_PRESENT(0)))
@@ -288,6 +293,122 @@ fn record_copy(list: &ID3D12GraphicsCommandList, source: &ID3D12Resource, buffer
         for barrier in &mut barriers {
             let transition = &mut *barrier.Anonymous.Transition;
             ManuallyDrop::drop(&mut transition.pResource);
+        }
+    }
+}
+
+/// `TUXBOX_TRACE_PRESENT=<n>`: every n-th presented source is read back and
+/// summarized (share of non-black pixels, mean, coarse 4x4 brightness grid).
+mod sampler {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use windows::Win32::Graphics::Direct3D12::*;
+    use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
+
+    pub(super) fn due() -> bool {
+        static EVERY: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| {
+            std::env::var("TUXBOX_TRACE_PRESENT").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
+        });
+        static COUNT: AtomicU64 = AtomicU64::new(0);
+        let n = COUNT.fetch_add(1, Ordering::Relaxed);
+        *EVERY != 0 && n % *EVERY == 0
+    }
+
+    pub(super) struct Sample {
+        buffer: ID3D12Resource,
+        layout: D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
+        index: u64,
+    }
+
+    /// Record a copy of subresource 0 into a readback buffer, after
+    /// record_copy has returned `source` to COMMON.
+    pub(super) fn record(list: &ID3D12GraphicsCommandList, source: &ID3D12Resource) -> Option<Sample> {
+        static INDEX: AtomicU64 = AtomicU64::new(0);
+        let device: ID3D12Device = unsafe {
+            let mut device = None;
+            list.GetDevice(&mut device).ok()?;
+            device?
+        };
+        let desc = unsafe { source.GetDesc() };
+        let mut layout = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
+        let mut total = 0;
+        unsafe { device.GetCopyableFootprints(&desc, 0, 1, 0, Some(&mut layout), None, None, Some(&mut total)) };
+        let heap = D3D12_HEAP_PROPERTIES { Type: D3D12_HEAP_TYPE_READBACK, ..Default::default() };
+        let buffer_desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER, Width: total, Height: 1, DepthOrArraySize: 1,
+            MipLevels: 1, Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 }, ..Default::default()
+        };
+        let mut buffer: Option<ID3D12Resource> = None;
+        unsafe {
+            device.CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &buffer_desc,
+                D3D12_RESOURCE_STATE_COPY_DEST, None, &mut buffer).ok()?;
+        }
+        let buffer = buffer?;
+        let barrier = |before, after| D3D12_RESOURCE_BARRIER {
+            Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+            Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+            Anonymous: D3D12_RESOURCE_BARRIER_0 {
+                Transition: std::mem::ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
+                    pResource: std::mem::ManuallyDrop::new(Some(source.clone())),
+                    Subresource: 0, StateBefore: before, StateAfter: after,
+                }),
+            },
+        };
+        unsafe {
+            let mut to = [barrier(D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_SOURCE)];
+            list.ResourceBarrier(&to);
+            let dst = D3D12_TEXTURE_COPY_LOCATION {
+                pResource: std::mem::ManuallyDrop::new(Some(buffer.clone())),
+                Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
+                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { PlacedFootprint: layout },
+            };
+            let src = D3D12_TEXTURE_COPY_LOCATION {
+                pResource: std::mem::ManuallyDrop::new(Some(source.clone())),
+                Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
+                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
+            };
+            list.CopyTextureRegion(&dst, 0, 0, 0, &src, None);
+            let mut back = [barrier(D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON)];
+            list.ResourceBarrier(&back);
+            for b in to.iter_mut().chain(back.iter_mut()) {
+                std::mem::ManuallyDrop::drop(&mut (*b.Anonymous.Transition).pResource);
+            }
+            let (mut dst, mut src) = (dst, src);
+            std::mem::ManuallyDrop::drop(&mut dst.pResource);
+            std::mem::ManuallyDrop::drop(&mut src.pResource);
+        }
+        Some(Sample { buffer, layout, index: INDEX.fetch_add(1, Ordering::Relaxed) })
+    }
+
+    impl Sample {
+        /// Called after the GPU has finished this frame's commands.
+        pub(super) fn report(&self) {
+            let f = self.layout.Footprint;
+            let mut mapped = std::ptr::null_mut();
+            if unsafe { self.buffer.Map(0, None, Some(&mut mapped)) }.is_err() || mapped.is_null() {
+                return;
+            }
+            let (w, h, pitch) = (f.Width as usize, f.Height as usize, f.RowPitch as usize);
+            let data = unsafe { std::slice::from_raw_parts(mapped.cast::<u8>(), pitch * h) };
+            let (mut lit, mut sum, mut grid) = (0u64, [0u64; 3], [[0u64; 4]; 4]);
+            for y in (0..h).step_by(4) {
+                for x in (0..w).step_by(4) {
+                    let p = &data[y * pitch + x * 4..y * pitch + x * 4 + 4];
+                    let luma = u64::from(p[0]) + u64::from(p[1]) + u64::from(p[2]);
+                    if luma > 6 { lit += 1; }
+                    for c in 0..3 { sum[c] += u64::from(p[c]); }
+                    grid[y * 4 / h][x * 4 / w] += luma;
+                }
+            }
+            let n = ((w / 4) * (h / 4)).max(1) as u64;
+            let cells: Vec<String> = grid.iter().map(|row| row.iter()
+                .map(|&v| format!("{:3}", v / (n / 16).max(1) / 3)).collect::<Vec<_>>().join(" ")).collect();
+            unsafe { self.buffer.Unmap(0, None) };
+            let line = format!("present sample #{} {}x{} format={} lit={:.3} mean=({},{},{}) grid=[{}]",
+                self.index, w, h, f.Format.0, lit as f64 / n as f64, sum[0] / n, sum[1] / n, sum[2] / n, cells.join(" | "));
+            crate::diagnostics::log_once(&std::sync::Once::new(), || line);
+            let summary = crate::diagnostics::display::summary();
+            crate::diagnostics::log_once(&std::sync::Once::new(), || summary);
         }
     }
 }
