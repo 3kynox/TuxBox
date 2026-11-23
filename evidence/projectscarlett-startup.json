@@ -76,5 +76,39 @@
       },
       "desktop_image": "black after presentation began"
     }
+  },
+  "player_selection": {
+    "utc": "22:20:05",
+    "window": "Americas",
+    "desktop_capture_utc": "22:21:16.700",
+    "desktop_capture_sha256": "7bb8fde45033cc778cfe9ef61d52f3fddc155481c49de4239508189949640b8d",
+    "present_dimensions": [
+      3840,
+      2160
+    ],
+    "backend": "stock Proton Experimental",
+    "visible_controls": [
+      "Account Picker (Y)",
+      "Screen Narration (Off) (X)",
+      "TuxBox (A)"
+    ],
+    "mangohud_visible": true,
+    "sample": {
+      "index": 29,
+      "stride": 90,
+      "lit_fraction": 0.998,
+      "mean_rgb": [
+        32,
+        32,
+        44
+      ],
+      "log_line_sha256": "be5bdac16ff3280b42aee9f0304f93b8f16d84ba14f922dee996621f3afa0fd0"
+    },
+    "input_sent_by_test": false,
+    "run_exit": {
+      "seconds": 97.0,
+      "code": 3,
+      "title_breakpoint_rva": "0x44ffd879"
+    }
   }
 }

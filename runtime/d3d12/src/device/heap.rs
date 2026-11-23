@@ -585,6 +585,19 @@ unsafe fn place_gpu_target(
                 .unwrap_or_else(|| unsafe { api.GetResourceAllocationInfo2(0, 1, desc, None) })
         };
         let mut allocation = requirements(&host);
+        if desc.SampleDesc.Count == 1 && desc.Alignment == 0
+            && address.is_multiple_of(u64::from(D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT))
+            && allocation.Alignment > u64::from(D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT)
+            && !address.is_multiple_of(allocation.Alignment)
+        {
+            let mut small = host;
+            small.Alignment = u64::from(D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT);
+            let small_allocation = requirements(&small);
+            if small_allocation.SizeInBytes != u64::MAX && small_allocation.Alignment == small.Alignment {
+                host = small;
+                allocation = small_allocation;
+            }
+        }
         let small = u64::from(D3D12_SMALL_MSAA_RESOURCE_PLACEMENT_ALIGNMENT);
         if desc.SampleDesc.Count > 1 && desc.Alignment == 0 && address.is_multiple_of(small)
             && allocation.Alignment > small && !address.is_multiple_of(allocation.Alignment) {

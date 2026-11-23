@@ -210,6 +210,16 @@ unsafe fn create(
 
     let guest_pixel = original[1].map(|(pixel, _)| pixel);
     pipeline.draw_trace = crate::diagnostics::RasterDraw::trace(original[0].map(|(vertex, _)| vertex), guest_pixel, shader_cache::source_digest);
+    if let Some(pixel) = guest_pixel
+        && let Some(vertex) = original[0].map(|(code, _)| code)
+        && let Some(root) = guest_root
+        && let Some(filter) = std::env::var_os("TUXBOX_CAPTURE_RASTER_PAIR")
+        && let Some(filter) = filter.to_str()
+        && shader_cache::source_digest(pixel).is_some_and(|digest| filter.split(',').any(|prefix| !prefix.is_empty() && digest.starts_with(prefix)))
+    {
+        super::compute_table::capture_stage_root(vertex, root);
+        super::compute_table::capture_stage_root(pixel, root);
+    }
     let mut rooted = [None, None];
     if let (Some(root), Some((vertex, _)), Some((pixel, _)), Some(field)) =
         (guest_root, original[0], original[1], root_record)
