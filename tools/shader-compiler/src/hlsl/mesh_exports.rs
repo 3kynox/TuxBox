@@ -1,7 +1,7 @@
 //! Recognize the NGG allocation and export sequence before lowering it to
 //! SetMeshOutputCounts, triangle indices and vertex/primitive attributes.
 use crate::rdna2::{Enc, Insn, Opnd};
-use Opnd::{ConstInt as I, ExecLo, Literal, Scc, Sgpr as S, VccLo, Vgpr as V, M0};
+use Opnd::{ConstInt as I, ExecLo, Literal, M0, Scc, Sgpr as S, VccLo, Vgpr as V};
 
 pub(super) struct MeshExports {
     pub start: usize,
@@ -185,20 +185,27 @@ fn allocation_128(seq: &mut Sequence<'_>) -> Result<(Opnd, Opnd, Opnd, [Opnd; 3]
     seq.write(S(0), "s_and_b32", &[I(1), S(0)])?;
     seq.write(Scc, "s_cmp_eq_u32", &[S(0), I(1)])?;
     seq.write(S(0), "s_mov_b64", &[ExecLo])?;
-    seq.write(S(2), "s_cselect_b64", &[ExecLo, I(0)])?;
-    let vert = seq.assign("v_cndmask_b32", &[vertices, I(1), S(2)])?;
-    let prim = seq.assign("v_cndmask_b32", &[primitives, I(1), S(2)])?;
+    let invalid = seq.assign("s_cselect_b64", &[ExecLo, I(0)])?;
+    if !matches!(invalid, S(2) | S(14))
+        || [vertices, primitives]
+            .iter()
+            .any(|reg| matches!(invalid, S(14)) && matches!(reg, S(14 | 15)))
+    {
+        return Err("unsupported mesh allocation mask register".into());
+    }
+    let vert = seq.assign("v_cndmask_b32", &[vertices, I(1), invalid])?;
+    let prim = seq.assign("v_cndmask_b32", &[primitives, I(1), invalid])?;
     let temps = [bad, vert, prim];
     if vert == prim || !temps.iter().all(|op| matches!(op, V(1..))) {
         return Err("unsupported temporary registers in mesh allocation".into());
     }
-    seq.write(S(4), "s_xor_b64", &[S(2), I(-1)])?;
+    seq.write(S(4), "s_xor_b64", &[invalid, I(-1)])?;
     seq.write(S(6), "v_readfirstlane_b32", &[vert])?;
     seq.write(S(7), "v_readfirstlane_b32", &[prim])?;
     seq.write(VccLo, "v_cmpx_eq_u32", &[I(0), V(0)])?;
     let restore = seq.branch("s_cbranch_execz")?;
     seq.write(S(7), "s_lshl_b32", &[S(7), I(12)])?;
-    seq.write(VccLo, "s_andn2_b64", &[ExecLo, S(2)])?;
+    seq.write(VccLo, "s_andn2_b64", &[ExecLo, invalid])?;
     seq.write(S(6), "s_or_b32", &[S(7), S(6)])?;
     seq.write(M0, "s_mov_b32", &[S(6)])?;
     seq.imm("s_sendmsg", 9)?;
@@ -217,8 +224,15 @@ fn allocation_128(seq: &mut Sequence<'_>) -> Result<(Opnd, Opnd, Opnd, [Opnd; 3]
     seq.arrive(restore)?;
     seq.imm("s_waitcnt", -241)?;
     seq.write(ExecLo, "s_mov_b64", &[S(0)])?;
+    if seq
+        .code
+        .get(seq.at)
+        .is_some_and(|op| op.mnemonic == "s_waitcnt")
+    {
+        seq.imm("s_waitcnt", 0x3f70)?;
+    }
     seq.imm("s_barrier", 0)?;
-    Ok((vertices, primitives, S(2), temps))
+    Ok((vertices, primitives, invalid, temps))
 }
 
 pub(super) fn recognize(insns: &[Insn], max_vertices: u16) -> Result<MeshExports, String> {
@@ -276,12 +290,14 @@ pub(super) fn recognize(insns: &[Insn], max_vertices: u16) -> Result<MeshExports
     seq.write(S(0), "v_cmp_le_u32", &[vertices, x, S(0)])?;
     seq.write(S(2), "s_or_b64", &[VccLo, S(2)])?;
     seq.write(S(0), "s_or_b64", &[S(0), S(2)])?;
-    let guarded = if compact { packed } else { V(0) };
-    seq.write(
-        guarded,
-        "v_cndmask_b32",
-        &[packed, Literal(0x80000000), S(0)],
-    )?;
+    let guarded = seq.assign("v_cndmask_b32", &[packed, Literal(0x80000000), S(0)])?;
+    if !(if compact {
+        matches!(guarded, V(1..))
+    } else {
+        guarded == V(0)
+    }) {
+        return Err("unsupported guarded triangle register".into());
+    }
     if seq.export(20, 1, 2)?.src.first() != Some(&guarded) {
         return Err("missing guarded triangle export".into());
     }
@@ -362,16 +378,14 @@ pub(super) fn recognize(insns: &[Insn], max_vertices: u16) -> Result<MeshExports
     if seq.at != insns.len() || targets & (1 << 12) == 0 {
         return Err("missing mesh position export or unexpected trailing code".into());
     }
-    let connectivity_without_primitive = if compact {
-        packed
-    } else if temps[2] == V(0) {
+    let connectivity_without_primitive = if temps[2] == guarded {
         primitives
-    } else if temps[1] == V(0) {
+    } else if temps[1] == guarded {
         vertices
-    } else if temps[0] == V(0) {
+    } else if temps[0] == guarded {
         I(0)
     } else {
-        V(0)
+        guarded
     };
     Ok(MeshExports {
         start,

@@ -24,13 +24,18 @@ class PrepPhase:
         self.last_report = 0
         self.update(0, 0)
 
-    def update(self, ready, compiled):
+    def update(self, completed, compiled, *, unsupported=0, failed=0):
         now = monotonic()
-        if ready not in (0, self.total) and now - self.last_report < 1:
+        if completed not in (0, self.total) and now - self.last_report < 1:
             return
         self.last_report = now
-        message = f"{self.label} · {ready}/{self.total} ready · {compiled} compiled · {ready - compiled} reused"
-        report_progress(self.progress, message, ready, self.total)
+        skipped = unsupported + failed
+        reused = completed - compiled - skipped
+        status = "checked" if skipped else "ready"
+        message = f"{self.label} · {completed}/{self.total} {status} · {compiled} compiled · {reused} reused"
+        if skipped:
+            message += f" · {unsupported} unsupported · {failed} failed"
+        report_progress(self.progress, message, completed, self.total)
 
 
 @contextmanager

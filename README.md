@@ -1,6 +1,9 @@
 # TuxBox
 
-TuxBox is an experimental project for running Xbox Series X|S games on PC. On Linux it runs with Valve’s stock Proton Experimental. Windows support is also in development.
+TuxBox is an experimental Xbox Series X|S compatibility layer for x86-64 Windows and Linux.
+
+- **Linux** uses Valve’s stock Proton Experimental. NVIDIA support is verified on a GeForce RTX 4070 Ti SUPER, including ProjectScarlett’s player selection screen and Frosty’s mesh shader tests. [GPU and host test results](docs/RESULTS.md)
+- **Windows** has a native Direct3D 12 backend. Windows game compatibility is still in development. [Windows build instructions](examples/lanes/README.md#build-requirements)
 
 ## Why so few Xbox libraries?
 
@@ -12,6 +15,12 @@ Many calls an Xbox Series game makes already work through standard Windows APIs.
 - **The Matrix Awakens (Frosty)** reaches the Wake Up chase cinematic on Linux with TuxBox XG and reduced graphics settings. Earlier reduced-settings runs reached the highway chase and open city. With the original Xbox settings it loads the Construct map and presents a black frame before stopping while creating a compute shader during scene setup. You supply the game, its matching Xbox system files and Proton. [Setup and test results](docs/MATRIX_AWAKENS.md)
 
 **GTA VI (ProjectScarlett)** shows the player selection prompt at 3840×2160 on stock Proton Experimental. [Title progress](docs/PROGRESS.md)
+
+## Shader preparation
+
+On Linux, the launcher prepares shaders before opening Frosty and ProjectScarlett. Frosty uses a profile of its game files. ProjectScarlett records the shaders the game requests and prepares them before subsequent launches. New shaders can still compile as the game encounters them.
+
+The launcher shows compilation progress and reuses the cache on later runs. Pass `--prepare-only` to prepare the cache without opening the game, or `--no-shader-prep` to skip preparation for one launch. Place either option before the game path.
 
 ## Try Lanes
 

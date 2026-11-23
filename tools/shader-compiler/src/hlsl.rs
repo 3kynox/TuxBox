@@ -53,6 +53,7 @@ mod hair_multisample;
 mod hair_visibility_single;
 mod hair_visibility_indirect;
 mod packed_root;
+mod mesh_bindings;
 mod light_grid;
 mod page_waves;
 mod wave_cull;
@@ -72,7 +73,7 @@ use packed_root::{PackedRoot, RootAbi};
 pub struct Translated {
     pub hlsl: String,
     pub entry: &'static str,
-    /// FXC/D3DCompile target profile.
+    /// Target profile for the generated HLSL.
     pub profile: &'static str,
     /// Per-vertex parameter reads require a shader-model 6.1 pixel shader.
     pub needs_barycentrics: bool,
@@ -112,6 +113,8 @@ impl InputInterp {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Sym {
     DirectRaw(u32),
+    /// Root SRV address words 0 and 1, or word 1 after setting the byte stride.
+    MeshRawAddress { register: u8, word: u8 },
     SamplerOffset(DirectSampler),
     HeapSampler(DirectSampler),
     HeapOffset,
@@ -392,6 +395,8 @@ struct Emitter<'a> {
     resource_heap_base: Option<u8>,
     private_samplers: BTreeMap<usize, u32>,
     binding_spaces: BTreeMap<(u32, u32), u32>,
+    mesh_bindings: Option<mesh_bindings::MeshBindings>,
+    compute_derivatives: bool,
     /// Pixel-shader colour-export epilogues (see `find_export_epilogs`): pack instruction
     /// index -> capture id, and export instruction index -> the capture ids feeding its
     /// two packed operands (usize::MAX = operand not written).
@@ -524,7 +529,7 @@ fn lower_wave_reductions(insns: &mut [Insn]) -> Result<Option<u32>, String> {
         }
         let saved_extrema = matches!(red.as_str(), "v_min_f32" | "v_max_f32")
             && first.checked_sub(3).is_some_and(|p| matches!(insns[p].mnemonic.as_str(), "s_or_saveexec_b32" | "s_or_saveexec_b64"));
-        if matches!(red.as_str(), "v_add_nc_u32" | "v_max_u32" | "v_add_f32" | "v_or_b32") || saved_extrema {
+        if matches!(red.as_str(), "v_add_nc_u32" | "v_min_u32" | "v_max_u32" | "v_add_f32" | "v_and_b32" | "v_or_b32") || saved_extrema {
             let (required, next) = wave_sum::lower(insns, first).map_err(bad)?;
             if width.replace(required).is_some_and(|w| w != required) {
                 return Err(bad("conflicting integer sum wave widths"));
@@ -911,9 +916,6 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
         return Err("backward permute with scalar branches needs verified convergent control flow".into());
     }
     let uses_quad_add = insns.iter().any(is_quad_exchange);
-    if uses_quad_add && insns.iter().any(|i| i.enc == Enc::Sopp && Emitter::branch_cond(i.op).is_some() && i.aux.imm < 0) {
-        return Err("DPP quad add inside a shader with backward control flow".into());
-    }
     let scan = if wave_cull { None } else { wave_scan::prepare(ex, &mut insns)? };
     let scan_width = scan.as_ref().map(|s| s.width);
     let indexed_lane = group_extrema || ex.stage == Stage::Compute && (indexed_lane::constant_reads(compute_group(ex), &mut insns)
@@ -1155,7 +1157,17 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
 ", live_in.join(" ")));
     // ps_5_0 forces UAV slots to start after the render-target outputs (FXC X4509);
     // SM5.1 has no such rule, and D3D12 accepts SM5.1 bytecode.
-    let profile = if em.uses_heap_sampler || em.resource_heap_base.is_some() { "ps_6_6" } else if probe_trace { "cs_6_5" } else if is_ps && !em.uav.is_empty() { "ps_5_1" } else { profile };
+    let profile = if em.compute_derivatives {
+        "cs_6_6"
+    } else if em.uses_heap_sampler || em.resource_heap_base.is_some() {
+        "ps_6_6"
+    } else if probe_trace {
+        "cs_6_5"
+    } else if is_ps && !em.uav.is_empty() {
+        "ps_5_1"
+    } else {
+        profile
+    };
     Ok(Translated {
         hlsl,
         entry: "main",
@@ -1456,6 +1468,8 @@ impl<'a> Emitter<'a> {
                     (recovered.descriptors == r.static_samplers).then_some(recovered.sites)
                 }).unwrap_or_default(),
             binding_spaces: BTreeMap::new(),
+            mesh_bindings: None,
+            compute_derivatives: false,
             epilog_pack: HashMap::new(),
             epilog_exp: HashMap::new(),
             cur_idx: 0,
@@ -1573,6 +1587,11 @@ impl<'a> Emitter<'a> {
     }
 
     fn table_binding_space(&self, sgpr: u8, offset: u32, stride: u32) -> Result<(Option<u32>, u32, u32), String> {
+        if let Some(mesh) = &self.mesh_bindings {
+            let binding = mesh.tables.get(&(sgpr, offset)).filter(|_| stride == 32)
+                .ok_or_else(|| format!("unverified mesh descriptor at s{sgpr} + {offset:#x}"))?;
+            return Ok((Some(binding.kind), binding.register, binding.space));
+        }
         let index = offset / stride;
         let Some(ranges) = self.root_table(sgpr) else { return Ok((None, index, 0)); };
         // Existing FSSM single-range layouts may address beyond the declared range.
@@ -1725,7 +1744,14 @@ impl<'a> Emitter<'a> {
         );
         let mut first_err: Option<String> = None;
         let mut states: Vec<Option<State>> = vec![None; ranges.len()];
-        states[0] = Some((HashMap::new(), BTreeSet::new()));
+        let mut entry = HashMap::new();
+        if let Some(mesh) = &self.mesh_bindings {
+            for &register in mesh.raw.keys() {
+                entry.insert(register.into(), Sym::MeshRawAddress { register, word: 0 });
+                entry.insert(u16::from(register) + 1, Sym::MeshRawAddress { register, word: 1 });
+            }
+        }
+        states[0] = Some((entry, BTreeSet::new()));
         let mut work = vec![0usize];
         let mut budget = 20_000usize;
         while let Some(b) = work.pop() {
@@ -2126,6 +2152,9 @@ impl<'a> Emitter<'a> {
     /// The physical table slot can differ from the resource register in a mixed
     /// root. Require the FSSM offset, root range, and structured PSV binding to agree.
     fn table_structured_stride(&self, slot: u32, space: u32, uav: bool) -> Option<u32> {
+        if let Some(mesh) = &self.mesh_bindings {
+            return mesh.tables.values().find(|b| (b.kind, b.register, b.space) == (u32::from(uav), slot, space))?.stride_words;
+        }
         let locations: &[(u8, u32)] = match self.ex.stage {
             Stage::Compute => &[(4, 0x404), (5, 0x10504)],
             Stage::Vertex | Stage::Pixel => &[(8, 0x804)],
@@ -2301,6 +2330,25 @@ impl<'a> Emitter<'a> {
         Some((u16::from(base),slot))
     }
 
+    fn mesh_raw_descriptor(&mut self, sym: &HashMap<u16, Sym>, base: u16) -> Result<Option<Res>, String> {
+        let Some(Sym::MeshRawAddress { register, word: 0 }) = sym.get(&base).copied() else {
+            return Ok(None);
+        };
+        if sym.get(&(base + 1)) != Some(&Sym::MeshRawAddress { register, word: 2 })
+            || sym.get(&(base + 2)) != Some(&Sym::InlineWord(u32::MAX))
+            || sym.get(&(base + 3)) != Some(&Sym::InlineWord(0x11014fac))
+        {
+            return Err(format!("unverified mesh root SRV descriptor at s{base}"));
+        }
+        let (slot, space) = self.mesh_bindings.as_ref().and_then(|mesh| mesh.raw.get(&register)).copied()
+            .ok_or("mesh root SRV missing from signature")?;
+        if self.binding_spaces.insert((0, slot), space).is_some_and(|previous| previous != space) {
+            return Err(format!("mesh SRV t{slot} is used in multiple spaces"));
+        }
+        self.raw.insert((false, slot));
+        Ok(Some(Res::Raw(slot, false)))
+    }
+
     /// Transfer function for one basic block (also records resources / reports errors).
     fn res_block(
         &mut self,
@@ -2330,6 +2378,22 @@ impl<'a> Emitter<'a> {
                 Opnd::Temp(n) if *n >= LANE_TEMP_BASE => Some(1000 + (*n - LANE_TEMP_BASE)),
                 _ => None,
             };
+            if self.mesh_bindings.is_some() && ins.mnemonic != "v_nop" {
+                for (i, source) in ins.src.iter().enumerate() {
+                    let Some(Sym::MeshRawAddress { word, .. }) = sg(source).and_then(|s| sym.get(&s)) else {
+                        continue;
+                    };
+                    let allowed = ins.mnemonic == "s_mov_b32"
+                        || (i == 2 && matches!(ins.mnemonic.as_str(), "v_mbcnt_lo_u32_b32" | "v_mbcnt_hi_u32_b32"))
+                        || (ins.mnemonic == "s_or_b32" && i == 0 && *word == 1
+                            && ins.src.get(1) == Some(&Opnd::Literal(65536)))
+                        || (ins.enc == Enc::Smem && ins.op >= 8 && i == 0 && *word == 0)
+                        || (ins.enc == Enc::Mubuf && i == 1 && *word == 0);
+                    if !allowed {
+                        return Err(format!("mesh root address used as shader data at {:#x}", ins.offset));
+                    }
+                }
+            }
             if idx >= block_start + 3 && ins.mnemonic == "s_or_b32" {
               if let Some((base, slot)) = self.direct_raw_descriptor(&insns[idx-3..=idx], written) {
                 sym.insert(base, Sym::DirectRaw(slot));
@@ -2339,6 +2403,22 @@ impl<'a> Emitter<'a> {
               }
             }
             match ins.enc {
+                Enc::Sop1 | Enc::Sop2
+                    if self.mesh_bindings.is_some()
+                        && matches!(ins.mnemonic.as_str(), "s_bitset1_b32" | "s_or_b32")
+                        && ins.src.get(if ins.mnemonic == "s_or_b32" { 1 } else { 0 })
+                            == Some(&if ins.mnemonic == "s_or_b32" { Opnd::Literal(65536) } else { Opnd::ConstInt(16) }) =>
+                {
+                    if let Some(d) = ins.dst.first().and_then(sg) {
+                        let source = if ins.mnemonic == "s_or_b32" { ins.src.first().and_then(sg) } else { Some(d) };
+                        let high = source.and_then(|s| sym.get(&s)).copied();
+                        sym.remove(&d);
+                        if let Some(Sym::MeshRawAddress { register, word: 1 }) = high {
+                            sym.insert(d, Sym::MeshRawAddress { register, word: 2 });
+                        }
+                        written.insert(d);
+                    }
+                }
                 Enc::Sop2 if self.resource_heap_base.is_some() && ins.mnemonic == "s_lshl_b32" && ins.src.get(1) == Some(&Opnd::ConstInt(5)) => {
                     if let Some(d) = ins.dst.first().and_then(sg) {
                         sym.insert(d, Sym::HeapOffset);
@@ -2373,7 +2453,7 @@ impl<'a> Emitter<'a> {
                 }
                 Enc::Sop1 if ins.mnemonic == "s_mov_b32" => {
                     if let Some(d) = ins.dst.first().and_then(sg) {
-                        if inline_samplers {
+                        if inline_samplers || self.mesh_bindings.is_some() {
                             let literal = match ins.src.first() {
                                 Some(Opnd::ConstInt(i)) => Some(*i as u32),
                                 Some(Opnd::Literal(v)) => Some(*v),
@@ -2537,6 +2617,11 @@ impl<'a> Emitter<'a> {
                         }
                         return Err(format!("s_load at {:#x}: dynamic soffset unsupported", ins.offset));
                     }
+                    if self.mesh_bindings.as_ref().is_some_and(|mesh| {
+                        n != 4 || !mesh.tables.contains_key(&(table, ins.aux.imm as u32))
+                    }) {
+                        return Err(format!("unverified mesh descriptor load at {:#x}", ins.offset));
+                    }
                     for k in 0..n {
                         sym.insert(d + k as u16, Sym::Desc { table, off: ins.aux.imm as u32, k });
                         self.dsel_loads.insert(idx, (d, ((table as u32) << 24) | ins.aux.imm as u32));
@@ -2547,6 +2632,11 @@ impl<'a> Emitter<'a> {
                     let n = 1u32 << (ins.op - 8);
                     let b = ins.src.first().and_then(sg).ok_or("s_buffer_load: bad base")?;
                     let d = ins.dst.first().and_then(sreg_num).map(u16::from).ok_or("s_buffer_load: bad dst")?;
+                    if let Some(raw) = self.mesh_raw_descriptor(sym, b)? {
+                        self.res.insert(idx, vec![raw]);
+                        for k in d..d+n as u16 { sym.remove(&k); written.insert(k); }
+                        continue;
+                    }
                     if sym.get(&b) == Some(&Sym::HeapDescriptor(4)) {
                         self.res.insert(idx, vec![Res::HeapBuffer(b)]);
                         for k in d..d+n as u16 { sym.remove(&k); written.insert(k); }
@@ -2605,6 +2695,10 @@ impl<'a> Emitter<'a> {
                 Enc::Mubuf if ins.op == 0x71 || ins.op == 0x72 => {}
                 Enc::Mubuf => {
                     let rs = ins.src.get(1).and_then(sg).ok_or("mubuf: bad srsrc")?;
+                    if let Some(raw) = self.mesh_raw_descriptor(sym, rs)? {
+                        self.res.insert(idx, vec![raw]);
+                        continue;
+                    }
                     if let Some(Sym::DirectRaw(slot)) = sym.get(&rs) {
                         self.res.insert(idx, vec![Res::Raw(*slot, false)]);
                         continue;
@@ -2997,6 +3091,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 if !(disjoint || nested) {
                     // Interleaved loops cannot be expressed as nested do/while: fall back
                     // to the general block dispatcher.
+                    if self.insns.iter().any(is_quad_exchange) {
+                        return Err("DPP quad exchange with interleaved loops".into());
+                    }
                     return self.emit_body_dispatch(is_ps, 0);
                 }
             }
@@ -3121,6 +3218,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 return Ok(());
             }
             if is_quad_exchange(ins) {
+                if self.loop_depth != 0 {
+                    return Err("DPP quad exchange inside backward control flow".into());
+                }
                 // FI=1 fetches the saved VGPR even from an EXEC-disabled lane. All
                 // host lanes must reach the exchange, including those skipping this
                 // block. Reapply the branch and EXEC guards to the destination write.
@@ -4519,7 +4619,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             let partner = format!("WaveReadLaneAt({acc}, {lane})");
             let combined = match m.as_str() {
                 "v_add_nc_u32" => format!("{partner} + {acc}"),
+                "v_and_b32" => format!("{partner} & {acc}"),
                 "v_or_b32" => format!("{partner} | {acc}"),
+                "v_min_u32" => format!("min({partner}, {acc})"),
                 "v_max_u32" => format!("max({partner}, {acc})"),
                 "v_add_f32" => format!("asuint(asfloat({partner}) + asfloat({acc}))"),
                 "v_min_f32" => format!("asuint(min(asfloat({partner}), asfloat({acc})))"),
@@ -5900,6 +6002,20 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         }
     }
 
+    fn require_compute_derivatives(&mut self) -> Result<(), String> {
+        if self.is_cs && !self.compute_derivatives {
+            // SM 6.6 groups derivatives into runs of four X lanes or 2x2 XY quads.
+            let [x, y, z] = self.ex.psv_threads.ok_or("missing compute derivative thread group")?;
+            let linear = x % 4 == 0 && y == 1 && z == 1;
+            let planar = x % 2 == 0 && y % 2 == 0;
+            if x == 0 || y == 0 || z == 0 || !(linear || planar) {
+                return Err(format!("compute derivatives need a quad-compatible thread group, got {x}x{y}x{z}"));
+            }
+            self.compute_derivatives = true;
+        }
+        Ok(())
+    }
+
     fn emit_mimg(&mut self, idx: usize, ins: &Insn) -> Result<(), String> {
         if self.packed.as_ref().is_some_and(|p| p.wide_images.contains(&idx)) {
             return packed_root::ps09_raster::emit_wide_image(self, ins, "wide_u10");
@@ -6315,6 +6431,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             if ins.aux.mask & !3 != 0 || d16 {
                 return Err("image_get_lod requires 32-bit X/Y results".into());
             }
+            self.require_compute_derivatives()?;
             self.line(&format!("float2 t{t} = float2({tex}.CalculateLevelOfDetail({smp}, {cvec}), {tex}.CalculateLevelOfDetailUnclamped({smp}, {cvec}));"));
             let mut dst = vd;
             for (bit, component) in [(1, "x"), (2,"y")] {
@@ -6430,6 +6547,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 _ => format!("{tex}.SampleLevel({smp}, {cvec}, 0.0{})", tail(&offset, &None)?),
             }
         };
+        if !in_loop && matches!(modi, 0 | 1 | 5 | 6) {
+            self.require_compute_derivatives()?;
+        }
         if zref.is_some() {
             self.line(&format!("float t{t} = {call};"));
             // The compare result is replicated to every requested channel.
@@ -6799,12 +6919,16 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 None => "float4",
             };
             let ty = match (dim, self.uav_uint.contains(slot)) {
+                (0, false) => format!("RWTexture1D<{e}>"),
                 (1, false) => format!("RWTexture2D<{e}>"),
                 (2, false) => format!("RWTexture3D<{e}>"),
+                (4, false) => format!("RWTexture1DArray<{e}>"),
                 (5, false) => format!("RWTexture2DArray<{e}>"),
+                (0, true) => "RWTexture1D<uint>".to_string(),
                 (1, true) if self.wide_visibility_uavs.contains(slot) => "RWTexture2D<uint64_t>".to_string(),
                 (1, true) => "RWTexture2D<uint>".to_string(),
                 (2, true) => "RWTexture3D<uint>".to_string(),
+                (4, true) => "RWTexture1DArray<uint>".to_string(),
                 (5, true) => "RWTexture2DArray<uint>".to_string(),
                 _ => return Err(format!("UAV dim {dim} unsupported")),
             };

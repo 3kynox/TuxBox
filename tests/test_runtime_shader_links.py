@@ -5,11 +5,13 @@ import struct
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from project_tuxbox.runtime_shaders import ShaderRefused, compile_request, serve, snapshot_compiler_cache
-from project_tuxbox.shader_prep import ToolFailure
+from project_tuxbox.runtime_shaders import ShaderRefused, archive_request, compile_request, serve, snapshot_compiler_cache
+from project_tuxbox.scarlett_prep import scarlett_requests
+from project_tuxbox.shader_prep import SOURCE_CACHE, ToolFailure, prepare_for_launch
 
 
 def portable_program(stage, body):
@@ -135,6 +137,55 @@ class RuntimeShaderLinks(unittest.TestCase):
                 with self.assertRaises(type(error)):
                     compile_request(source, key, self.tools, self.cache, self.session)
                 self.assertFalse((self.cache / (key + ".unsupported")).exists())
+
+    def test_scarlett_replays_exact_recorded_requests_before_launch(self):
+        directory = self.session.parent
+        title = directory / "game_scarlett_master.exe"
+        title.write_bytes(b"one title build")
+        title.with_name("shaders.rpf").touch()
+        title.with_name("d3d12_xs.dll").touch()
+        host = SimpleNamespace(backend="proton", env={"WINEPREFIX": str(directory), "TUXBOX_SHADER_PREP_UI": "0"})
+        archive = scarlett_requests(title, directory / SOURCE_CACHE.parent)
+        archive.mkdir(parents=True)
+        key, source = self.request(portable_program(0, b"r0.z"))
+        unsupported = self.requests / (hashlib.sha256(b"unsupported Xbox shader").hexdigest() + ".dxbc")
+        unsupported.write_bytes(b"unsupported Xbox shader")
+
+        def run(args, *, timeout):
+            if args[0] == "xshader":
+                program = args[1].read_bytes()
+                if program == b"unsupported Xbox shader":
+                    raise ToolFailure("xshader", 65, "unsupported")
+                self.assertEqual(program, b"Xbox geometry shader")
+                self.assertEqual(args[args.index("--pixel-order") + 1].read_bytes(), portable_program(0, b"r0.z"))
+                args[args.index("--profile-out") + 1].write_text("gs_6_0")
+            if args[0] == "dxc":
+                args[args.index("-Fo") + 1].write_bytes(portable_program(2, b"gs"))
+
+        old_cache = self.cache / "old"
+        old_cache.mkdir()
+
+        def remember(request, inputs):
+            archive_request(archive, request, inputs)
+
+        with (
+            patch("project_tuxbox.runtime_shaders.run_tool", side_effect=run) as compiler,
+            patch("project_tuxbox.scarlett_prep.snapshot_compiler_cache", return_value=(self.tools, self.cache)),
+        ):
+            self.assertTrue(compile_request(source, key, self.tools, old_cache, self.session, remember=remember))
+            with self.assertRaises(ShaderRefused):
+                compile_request(unsupported, unsupported.stem, self.tools, old_cache, self.session, remember=remember)
+            compiler.reset_mock()
+
+            self.assertTrue(prepare_for_launch(title, host))
+            self.assertEqual(compiler.call_count, 5)
+            self.assertEqual((self.cache / f"{key}.cso").read_bytes(), portable_program(2, b"gs"))
+            self.assertTrue((self.cache / f"{unsupported.stem}.unsupported").is_file())
+            self.assertTrue(prepare_for_launch(title, host))
+            self.assertEqual(compiler.call_count, 5)
+            title.write_bytes(b"a different title build")
+            self.assertTrue(prepare_for_launch(title, host))
+            self.assertEqual(compiler.call_count, 5)
 
     def test_worker_removes_failed_link_and_leaves_unpublished_directories_alone(self):
         from threading import Event

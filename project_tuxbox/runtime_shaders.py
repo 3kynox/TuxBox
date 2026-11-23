@@ -1,5 +1,6 @@
 """Compile Xbox shaders and link raster stages requested by a running Proton game."""
 from contextlib import contextmanager
+import errno
 import hashlib
 import os
 from pathlib import Path
@@ -20,6 +21,7 @@ XSHADER_UNSUPPORTED_HLSL = 65
 SOURCE_KEY = r"[a-f0-9]{64}"
 STENCIL_KEY = SOURCE_KEY + r"_rt[0-7]"
 LINK_KEY = "_".join([SOURCE_KEY] * 3)
+REQUEST_PATTERNS = {".link": LINK_KEY, ".stencil": STENCIL_KEY, ".dxbc": SOURCE_KEY}
 
 
 class ShaderRefused(ValueError):
@@ -55,7 +57,26 @@ def portable_pixel(data):
     return portable_stage(data) == 0  # D3D12_SHVER_PIXEL_SHADER
 
 
-def compile_request(source, key, tools, cache, session):
+def archive_request(archive, source, inputs):
+    """Publish the exact verified inputs for a later launch's compiler."""
+    dest = archive / source.name
+    if dest.exists():
+        return
+    try:
+        if source.suffix == ".link":
+            staged = inputs[0].parent / "record"
+            staged.mkdir()
+            for path, name in zip(inputs, ("producer.dxbc", "pixel.dxbc", "pixel.cso")):
+                os.link(path, staged / name)
+            staged.rename(dest)
+        else:
+            os.link(inputs[0], dest)
+    except OSError as exc:
+        if exc.errno not in (errno.EEXIST, errno.ENOTEMPTY):
+            raise
+
+
+def compile_request(source, key, tools, cache, session, *, remember=None):
     linked = source.suffix == ".link"
     xshader, dxc, dxv = tools
     with TemporaryDirectory(dir=cache) as tmp:
@@ -75,6 +96,7 @@ def compile_request(source, key, tools, cache, session):
             order = work / "pixel.cso"
             order.write_bytes(pixel_code)
             flags = ["--link-pixel", pixel, "--pixel-order", order]
+            inputs = (cooked, pixel, order)
         else:
             cooked = work / "input.dxbc"
             if source.suffix == ".stencil":
@@ -83,6 +105,10 @@ def compile_request(source, key, tools, cache, session):
             else:
                 source_hash = key
             cooked.write_bytes(verified_input(source, source_hash))
+            inputs = (cooked,)
+
+        if remember:
+            remember(source, inputs)
 
         dest = cache / (key + ".cso")
         checksum = dest.with_suffix(".sha256")
@@ -94,7 +120,8 @@ def compile_request(source, key, tools, cache, session):
             # launch replaces the persistent entry while this worker is reading.
             shutil.copyfile(dest, reply)
             if checksum.read_bytes() == digest(reply).encode("ascii"):
-                os.replace(reply, session / dest.name)
+                if session is not None:
+                    os.replace(reply, session / dest.name)
                 return False
 
         if refusal.is_file() and refusal.stat().st_size == len(key) and refusal.read_bytes() == key.encode("ascii"):
@@ -127,10 +154,12 @@ def compile_request(source, key, tools, cache, session):
             raise ValueError("compiler returned an invalid DXIL container")
         stamp = work / "sha256"
         stamp.write_text(digest(output))
-        shutil.copyfile(output, reply)
+        if session is not None:
+            shutil.copyfile(output, reply)
         os.replace(output, dest)
         os.replace(stamp, checksum)
-        os.replace(reply, session / dest.name)
+        if session is not None:
+            os.replace(reply, session / dest.name)
     return True
 
 
@@ -141,11 +170,11 @@ def remove_request(path):
         path.unlink(missing_ok=True)
 
 
-def serve(session, stop, report):
+def serve(session, stop, report, archive=None):
     # Cargo can replace the release executable while another title is running.
     # Keep the executable we fingerprint private to this host worker.
     with TemporaryDirectory(prefix="tuxbox-xshader-") as tmp, request_notifications(session / "requests", stop) as wait:
-        _serve_requests(session, stop, report, Path(tmp) / "xshader", wait)
+        _serve_requests(session, stop, report, Path(tmp) / "xshader", wait, archive)
 
 
 @contextmanager
@@ -194,7 +223,7 @@ def snapshot_compiler_cache(xshader, cache_root):
     return tools, cache
 
 
-def _serve_requests(session, stop, report, xshader, wait):
+def _serve_requests(session, stop, report, xshader, wait, archive):
     def bind_cache():
         tools, cache = snapshot_compiler_cache(xshader, session.parent)
         # Publish only after the exact compiler used by this worker is pinned.
@@ -211,6 +240,16 @@ def _serve_requests(session, stop, report, xshader, wait):
         except (OSError, ValueError, subprocess.SubprocessError):
             pass  # Retry and report the error if this game needs a shader.
     refused = cached_refusals = 0
+
+    def remember(source, inputs):
+        nonlocal archive
+        if archive is not None:
+            try:
+                archive_request(archive, source, inputs)
+            except OSError as exc:
+                report(f"Could not save ProjectScarlett shader requests for the next launch: {exc}")
+                archive = None
+
     while not stop.is_set():
         directory = session / "requests"
         requests = [*directory.glob("*.dxbc"), *directory.glob("*.link"), *directory.glob("*.stencil")]
@@ -221,15 +260,17 @@ def _serve_requests(session, stop, report, xshader, wait):
             if stop.is_set():
                 break
             key = source.stem
-            pattern = {".link": LINK_KEY, ".stencil": STENCIL_KEY, ".dxbc": SOURCE_KEY}[source.suffix]
-            if not re.fullmatch(pattern, key):
+            if not re.fullmatch(REQUEST_PATTERNS[source.suffix], key):
                 remove_request(source)
                 continue
             failed = False
             try:
                 if tools is None:
                     tools, cache = bind_cache()
-                compiled = compile_request(source, key, tools, cache, session)
+                if archive is None:
+                    compiled = compile_request(source, key, tools, cache, session)
+                else:
+                    compiled = compile_request(source, key, tools, cache, session, remember=remember)
                 if compiled:
                     report(f"Compiled Xbox shader {key}")
             except ShaderRefused as exc:
@@ -256,19 +297,29 @@ def runtime_shader_compiler(backend, env, executable, report):
         yield
         return
     cache = Path(env["WINEPREFIX"]) / SOURCE_CACHE.parent
-    with shader_session(cache, env, report):
+    from .scarlett_prep import scarlett_requests
+
+    archive = None
+    try:
+        archive = scarlett_requests(executable, cache)
+        if archive is not None:
+            archive.mkdir(parents=True, mode=0o700, exist_ok=True)
+    except OSError as exc:
+        report(f"Could not open ProjectScarlett's shader inputs: {exc}")
+        archive = None
+    with shader_session(cache, env, report, archive=archive):
         yield
 
 
 @contextmanager
-def shader_session(cache, env, report):
+def shader_session(cache, env, report, *, archive=None):
     cache.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix="run-", dir=cache) as tmp:
         session = Path(tmp)
         (session / "requests").mkdir()
         env["TUXBOX_SHADER_SESSION"] = session.name
         stop = Event()
-        worker = Thread(target=serve, args=(session, stop, report), name="shader-compiler", daemon=True)
+        worker = Thread(target=serve, args=(session, stop, report, archive), name="shader-compiler", daemon=True)
         worker.start()
         try:
             yield

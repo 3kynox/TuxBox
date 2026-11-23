@@ -289,8 +289,14 @@ def tuxbox_plan(profile_path, raw_plan, include_menu):
 
 def prepare_for_launch(executable, host):
     """Return False when the selected target has no matching preparation profile."""
+    if host.backend != "proton":
+        return False
+    if executable.name.casefold() == "game_scarlett_master.exe":
+        from .scarlett_prep import prepare_scarlett
+
+        return prepare_scarlett(executable, host)
     profile = PROFILES.get(executable.name.lower())
-    if host.backend != "proton" or profile is None:
+    if profile is None:
         return False
     plan = json.loads(profile.read_text())
     provider = executable.with_name(plan["provider"])

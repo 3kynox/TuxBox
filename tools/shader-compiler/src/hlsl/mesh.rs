@@ -2,8 +2,8 @@
 //! invocation per vertex/primitive, then asks the geometry engine to allocate
 //! export space. A desktop workgroup can service several such logical lanes.
 use super::{
-    disassemble, distinct_regs, mesh_exports, r, semantic, sig_type, Emitter, InputInterp,
-    Translated,
+    disassemble, distinct_regs, mesh_bindings, mesh_exports, r, semantic, sig_type, Emitter,
+    InputInterp, Translated,
 };
 use crate::{
     meta::SigElement,
@@ -49,27 +49,38 @@ pub(super) fn translate(
     let group_shift = if info.vertices == 128 { 7 } else { 8 };
     validate_launch(&body, group_shift, exports.lane_index)?;
     let root = ex.root_sig.as_ref().ok_or("mesh root signature missing")?;
-    for (parameter, range_type) in [(9, 0), (10, 2)] {
-        if !root.params.get(parameter).is_some_and(|p| {
-            p.visibility == 7
-                && matches!(&p.kind, crate::meta::RootParamKind::Table(ranges)
-                if ranges.len() == 1 && ranges[0].range_type == range_type && ranges[0].space == 0)
-        }) {
-            return Err("unrecognized mesh SRV/CBV root-table layout".into());
+    let bindings = if info.vertices == 128 {
+        Some(mesh_bindings::MeshBindings::read(ex).ok_or("unverified mesh shader bindings")?)
+    } else {
+        for (parameter, range_type) in [(9, 0), (10, 2)] {
+            if !root.params.get(parameter).is_some_and(|p| {
+                p.visibility == 7
+                    && matches!(&p.kind, crate::meta::RootParamKind::Table(ranges)
+                    if ranges.len() == 1 && ranges[0].range_type == range_type && ranges[0].space == 0)
+            }) {
+                return Err("unrecognized mesh SRV/CBV root-table layout".into());
+            }
         }
-    }
+        None
+    };
     validate_lane_ops(&body)?;
     let mut em = Emitter::new(ex, body);
-    // These NGG programs receive the wave number in s3, two mesh-visible root
-    // tables in s25/s26, and the packed dispatch identifier in v5. The decoder
-    // also exposes an unused third operand (s0) on two-input VOP3 instructions.
-    if let Some(reg) = em
-        .live_in()
-        .into_iter()
-        .find(|reg| !matches!(reg.as_str(), "s0" | "s3" | "s25" | "s26" | "v5"))
-    {
+    // The decoder exposes an unused third operand (s0) on two-input VOP3 instructions.
+    if let Some(reg) = em.live_in().into_iter().find(|reg| {
+        if matches!(reg.as_str(), "s0" | "s3" | "v5") {
+            return false;
+        }
+        match &bindings {
+            Some(mesh) => !reg
+                .strip_prefix('s')
+                .and_then(|n| n.parse().ok())
+                .is_some_and(|sgpr| mesh.takes_sgpr(sgpr)),
+            None => !matches!(reg.as_str(), "s25" | "s26"),
+        }
+    }) {
         return Err(format!("unsupported mesh launch register {reg}"));
     }
+    em.mesh_bindings = bindings;
     em.resolve_resources()?;
     em.resolve_structured_strides();
     em.emit_body(false)?;
@@ -292,10 +303,17 @@ fn validate_lane_ops(body: &[Insn]) -> Result<(), String> {
             || (ins.enc == Enc::Sopp
                 && !matches!(
                     m,
-                    "s_waitcnt" | "s_inst_prefetch" | "s_cbranch_scc1" | "s_cbranch_execz"
+                    "s_nop"
+                        | "s_waitcnt"
+                        | "s_inst_prefetch"
+                        | "s_cbranch_scc1"
+                        | "s_cbranch_execz"
                 ))
             || (matches!(ins.enc, Enc::Vop2 | Enc::Vop3) && m.contains("lane"))
-            || ins.aux.sdwa.is_some()
+            || ins.aux.sdwa.is_some_and(|mode| {
+                // An unsigned high-word conversion only reads the current lane.
+                m != "v_cvt_f32_u32" || mode & !0xff != 0x0005_0600
+            })
             || ins.src.iter().any(|op| matches!(op, Opnd::Raw(_)))
         {
             return Err(format!(
