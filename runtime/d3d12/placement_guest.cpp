@@ -47,7 +47,23 @@ constexpr Sample r8{3 * page_bytes, 131072, 512, 256, 1, 1, DXGI_FORMAT_R8_UNORM
                     {7, 8}, {0xae2105e023ca1ab9ull, 0xdf15c9311484ecf6ull}};
 
 struct Backing {
-    BYTE* base = static_cast<BYTE*>(VirtualAlloc(nullptr, backing_bytes, MEM_RESERVE, PAGE_READWRITE));
+    BYTE* base = nullptr;
+    explicit Backing(UINT64 start = 0, UINT64 limit = 0) {
+        if (!start) {
+            base = static_cast<BYTE*>(VirtualAlloc(nullptr, backing_bytes, MEM_RESERVE, PAGE_READWRITE));
+            return;
+        }
+        MEMORY_BASIC_INFORMATION region{};
+        while (start < limit && VirtualQuery(reinterpret_cast<void*>(start), &region, sizeof(region))) {
+            const UINT64 next = reinterpret_cast<UINT64>(region.BaseAddress) + region.RegionSize;
+            if (next <= start) break;
+            if (region.State == MEM_FREE && backing_bytes <= limit - start && backing_bytes <= next - start) {
+                base = static_cast<BYTE*>(VirtualAlloc(reinterpret_cast<void*>(start), backing_bytes, MEM_RESERVE, PAGE_READWRITE));
+                if (base) break;
+            }
+            start = (next + 65535) & ~65535ull;
+        }
+    }
     ~Backing() { if (base) VirtualFree(base, 0, MEM_RELEASE); }
 
     void fill(UINT pass) {
@@ -136,9 +152,17 @@ struct Texture {
 
 std::string run(const wchar_t* requested, bool) {
     DXGI_ADAPTER_DESC1 selected{};
+    struct Config { UINT flags, count, preserve, padding; UINT64 start, end; } config{};
+    if (GetEnvironmentVariableW(L"TUXBOX_TEST_CONFIGURED_VM", nullptr, 0)) {
+        config.count = 1;
+        using Configure = HRESULT (WINAPI*)(Config*);
+        auto configure = reinterpret_cast<Configure>(GetProcAddress(GetModuleHandleW(L"d3d12_xs.dll"), "D3D12ConfigureVirtualMemoryX"));
+        if (!configure || configure(&config) != 0x10000000 || config.start != 0x80000000ull || config.end != 0x7f8000000ull)
+            throw std::runtime_error("configure guest GPU address range");
+    }
     auto device = create_device(requested, selected, release_profile.data());
     const auto place = method<Place>(device.Get(), 44);
-    Backing memory;
+    Backing memory(config.start, config.end);
     if (!memory.base) throw std::runtime_error("reserve guest VA");
     const auto base = reinterpret_cast<UINT64>(memory.base);
     auto desc = first.describe();
@@ -147,10 +171,24 @@ std::string run(const wchar_t* requested, bool) {
         if (SUCCEEDED(place(device.Get(), va, &desc, initial, nullptr, __uuidof(ID3D12Resource), &out)) || out)
             throw std::runtime_error("invalid guest VA placement accepted");
     };
+    if (config.end) reject(config.end);
     reject(0);
     reject(base + 1);
     desc.Layout = static_cast<D3D12_TEXTURE_LAYOUT>(0xffffffffu);
     reject(base);
+
+    using Enable = HRESULT (WINAPI*)(UINT64*, SIZE_T, UINT64*);
+    auto profile = reinterpret_cast<Enable>(GetProcAddress(GetModuleHandleW(L"d3d12_xs.dll"),
+                                                           "D3D12XboxEnableMemoryProfiling"));
+    UINT64 cursor = 1, samples[]{7, 8, 9};
+    if (!profile) throw std::runtime_error("resolve memory profiler");
+    check(profile(&cursor, 2, samples), "register profiling buffer");
+    { Texture one(first, base, device.Get()), alias(first, base, device.Get()); }
+    { Texture two(adjacent, base, device.Get()); }
+    check(profile(nullptr, 0, nullptr), "unregister profiling buffer");
+    { Texture three(first, base, device.Get()); }
+    if (cursor != 3 || samples[0] != 7 || samples[1] == 8 || samples[2] != 9)
+        throw std::runtime_error("profiling cursor, sample or guard");
 
     std::vector<Texture> textures;
     for (const Sample* test : {&first, &adjacent, &first, &cube, &r8})
@@ -172,6 +210,17 @@ std::string run(const wchar_t* requested, bool) {
         check(list->Close(), "close texture copies");
         // Both initial commitment and recommit/write occur after the lists were recorded.
         memory.fill(pass);
+        if (pass == 1) {
+            using Flush = void (WINAPI*)();
+            auto flush = reinterpret_cast<Flush>(GetProcAddress(GetModuleHandleW(L"d3d12_xs.dll"),
+                                                                 "D3DFlushEntireCpuCache"));
+            if (!flush) throw std::runtime_error("resolve CPU cache flush");
+            flush();
+            // The GPU must still see the second pattern after the guest
+            // withdraws its CPU backing. Submit cannot upload those pages.
+            if (!VirtualFree(memory.base, backing_bytes, MEM_DECOMMIT))
+                throw std::runtime_error("decommit flushed guest pages");
+        }
         ID3D12CommandList* batch[] = {list.Get()};
         queue->ExecuteCommandLists(1, batch);
         check(queue->Signal(fence.Get(), pass + 1), "signal texture readback");
@@ -180,7 +229,8 @@ std::string run(const wchar_t* requested, bool) {
     }
     char receipt[180];
     std::snprintf(receipt, sizeof(receipt), "d3d12-placement PASS pci=%04x:%04x slot=44 VA-offsets=0,4096,0 "
-                  "passes=2 BC1-blocks=522 cube-blocks=16404 R8-texels=262144 rejected=3", selected.VendorId, selected.DeviceId);
+                  "passes=2 BC1-blocks=522 cube-blocks=16404 R8-texels=262144 rejected=%d configured_vm=%d",
+                  selected.VendorId, selected.DeviceId, config.end ? 4 : 3, config.end ? 1 : 0);
     return receipt;
 }
 }

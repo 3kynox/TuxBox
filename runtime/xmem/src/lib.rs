@@ -1,5 +1,12 @@
 //! CPU-backed Xbox default allocations. Callers retain ownership until the matching free.
+mod diagnostics;
+mod heap;
+mod history;
+mod options;
+mod partitions;
 mod physical_pages;
+mod pools;
+mod shared_pages;
 mod virtual_memory;
 
 use core::{ffi::c_void, mem::size_of, ptr};
@@ -7,8 +14,7 @@ use std::sync::RwLock;
 
 use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, SetLastError};
 use windows_sys::Win32::System::Memory::{
-    GetProcessHeap, HeapAlloc, HeapCreate, HeapFree, HEAP_NO_SERIALIZE, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
-    VirtualAlloc, VirtualFree,
+    GetProcessHeap, HeapCreate, HEAP_NO_SERIALIZE,
 };
 use windows_sys::Win32::System::ProcessStatus::{
     K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX,
@@ -81,11 +87,13 @@ pub unsafe extern "system" fn set_allocation_hooks(
 #[unsafe(export_name = "XMemAlloc")]
 pub extern "system" fn alloc(bytes: usize, attributes: u64) -> *mut c_void {
     let hooks = *ALLOCATION_HOOKS.read().unwrap_or_else(|e| e.into_inner());
-    match hooks {
+    let result = match hooks {
         // SAFETY: Installing the callback requires the caller to keep it valid.
         Some(hooks) => unsafe { (hooks.allocate)(bytes, attributes) },
         None => alloc_default(bytes, attributes),
-    }
+    };
+    if options::VERIFY.load(std::sync::atomic::Ordering::Acquire) { options::validate(result, bytes, attributes); }
+    result
 }
 
 /// Release through the installed callback or the default provider.
@@ -139,11 +147,10 @@ pub extern "system" fn alloc_default(bytes: usize, attributes: u64) -> *mut c_vo
     }
     match attributes {
         // SAFETY: The process heap is valid for this process; HeapAlloc checks the requested size.
-        attr if process_heap_attributes(attr) => unsafe { HeapAlloc(GetProcessHeap(), 0, bytes) },
-        // SAFETY: A null base lets Windows choose a fresh allocation-granularity-aligned region.
-        PLACEMENT => unsafe {
-            VirtualAlloc(ptr::null(), bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)
-        },
+        attr if process_heap_attributes(attr) => heap::allocate(unsafe { GetProcessHeap() }, bytes),
+        PLACEMENT => virtual_memory::allocate_placement(bytes),
+        attr if pools::cpu_attributes(attr) && bytes <= 0x20000 => pools::allocate(bytes, attr),
+        attr if pools::cpu_attributes(attr) && attr & 0xc000 == 0 => virtual_memory::allocate_direct(bytes),
         _ => {
             // SAFETY: SetLastError accepts this Windows error code and only updates thread-local state.
             unsafe { SetLastError(ERROR_NOT_SUPPORTED) };
@@ -166,12 +173,13 @@ pub unsafe extern "system" fn free_default(memory: *mut c_void, attributes: u64)
     match attributes {
         attr if process_heap_attributes(attr) => {
             // SAFETY: The caller supplies a live allocation from this process heap.
-            unsafe { HeapFree(GetProcessHeap(), 0, memory) };
+            unsafe { heap::free(GetProcessHeap(), memory) };
         }
         PLACEMENT => {
             // SAFETY: The caller supplies the reservation base; MEM_RELEASE requires size zero.
-            unsafe { VirtualFree(memory, 0, MEM_RELEASE) };
+            unsafe { virtual_memory::free_placement(memory) };
         }
+        attr if pools::cpu_attributes(attr) && (virtual_memory::release_direct(memory) || pools::release(memory.addr())) => {}
         // SAFETY: Recording an unsupported attribute does not access the caller's allocation.
         _ => unsafe { SetLastError(ERROR_NOT_SUPPORTED) },
     }
@@ -225,7 +233,7 @@ pub unsafe extern "system" fn working_set_statistics(selector: u32, out: *mut [u
     };
     let used = (committed as u64).min(memory.ullTotalPhys);
     let headroom = memory.ullAvailPhys.min(memory.ullAvailPageFile);
-    let budget = used.saturating_add(headroom).min(memory.ullTotalPhys);
+    let budget = used.saturating_add(headroom.saturating_sub(physical_pages::relinquished())).min(memory.ullTotalPhys);
     let mut result = [0; 15];
     result[0] = budget;
     result[1] = used;

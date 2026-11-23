@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare XGComputeTileShape with the supplied Xbox library.
 
-The same guest calls the Xbox DLL and TuxBox provider with 11,990 cases,
+The same guest calls the Xbox DLL and TuxBox provider with 18,290 cases,
 including supported color formats, buffer and texture dimensions, sample
 counts, invalid input, null outputs and aliased outputs. Results contain only
 HRESULTs and generated shape/guard bytes, not game data.
@@ -58,10 +58,10 @@ def main():
             run = subprocess.run([str(wine), str(guest)], cwd=trial, env=env, timeout=60,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
             out = run.stdout.decode('utf-8', errors='replace').strip()
-            if run.returncode or 'xg-tile PASS 11990 cases' not in out:
+            if run.returncode or 'xg-tile PASS 18290 cases' not in out:
                 raise RuntimeError(f'{name} control failed ({run.returncode}): {out}')
             data = (trial / 'tile-results.bin').read_bytes()
-            if len(data) != 11990 * 92:
+            if len(data) != 18290 * 92:
                 raise ValueError(f'{name} emitted an unexpected result size')
             outputs.append(data)
             results[name] = {'dll_sha256': digest(dll), 'guest_receipt': out.splitlines()[-1],
@@ -70,20 +70,20 @@ def main():
             offset = next(i for i, (a, b) in enumerate(zip(*outputs)) if a != b)
             raise ValueError(f'XG tile results differ at byte {offset}, case {offset // 92}')
         receipt = {
-            'scope': 'XGComputeTileShape ordinal 7 for buffers and a bounded set of 2D color formats; HRESULT, output and guards compared against supplied Xbox XG DLL. 1D/3D texture tile shapes remain unsupported.',
+            'scope': 'XGComputeTileShape ordinal 7 for buffers and 120 Xbox formats in 2D. HRESULT, output and guards compared against supplied Xbox XG DLL. 1D/3D texture tile shapes remain unsupported.',
             'host': (proton / 'version').read_text().strip(),
             'guest_sha256': digest(exe), 'guest_source_sha256': digest(source),
             'xmem_sha256': digest(args.xmem),
-            'cases': 11990,
-            'checks': ['78 color and block-compressed formats', 'unknown-format explicit element sizes',
+            'cases': 18290,
+            'checks': ['120 color, depth, video, packed and block-compressed formats', 'unknown-format explicit element sizes',
                        '1, 2, 4 and 8 samples plus invalid sample counts',
-                       'buffer, 1D, 2D and 3D dimensions, including all 78 formats for 1D/3D', 'null and aliased output pointers',
+                       'buffer, 1D, 2D and 3D dimensions, including all 120 formats for 1D/3D', 'null and aliased output pointers',
                        'output guards and no writes on invalid arguments'],
             'runs': results,
         }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(receipt, indent=2) + '\n')
-    print('xg-tile differential PASS: 11990 cases match')
+    print('xg-tile differential PASS: 18290 cases match')
 
 
 if __name__ == '__main__':

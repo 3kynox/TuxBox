@@ -143,6 +143,10 @@ def verify(host, output, adapter, selected=None, samples=1):
                 check(f"{family}-compile", binary, ["--compile", "--report"],
                       r"dxc-compiler PASS profile=cs_6_0 dxil=1 invalid-entry=1 diagnostics=1",
                       providers={provider: ("DxcCreateInstance",)}, dependencies=dependencies)
+            check("xdxr-link", "dxc-utils/xdxr-link.exe", ["--report"],
+                  r"xdxr-link PASS factories=2 flat=1 grouped=1 retained-shader-body=1 shader-tables=single,multiple",
+                  providers={"dxc-utils/dxcompiler_xs.dll": ("CreateXdxrCompiler", "CreateXdxrCompiler2", "DxcCreateInstance")},
+                  dependencies=("dxc-utils/dxcompiler.dll",))
         xg_addresses = r"xg-texture PASS layouts=18 traced-descriptors=8 element-addresses=872759"
         if "d3d12-signatures" in selected:
             check("d3d12-signatures", "d3d12-smoke/d3d12-signatures.exe", ["--report"],
@@ -153,6 +157,16 @@ def verify(host, output, adapter, selected=None, samples=1):
             check("d3d12-guids", "d3d12-smoke/d3d12-guids.exe", ["--report"],
                   guid_receipt,
                   providers={"d3d12-smoke/d3d12_xs.dll": ("IID_ID3D12Device",)})
+        if "xg-provider" in selected:
+            check("xg-dcc", "xg-provider/xg-dcc.exe", ["--report"],
+                  r"xg-dcc PASS xbox-blocks=2 encode-bytes=32 atomic-batch=1",
+                  providers={"xg-provider/xg_xs.dll": ("XGEncodeDCC", "XGDecodeDCC")})
+            check("xg-library", "xg-provider/xg-library.exe", ["--report"],
+                  r"xg-library PASS depth=516 descriptors=375 lock=recursive\+factory copies=bidirectional depth_surfaces=16 typed_images=880 map_targets=1382",
+                  providers={"xg-provider/xg_xs.dll": ("XGCreateTextureComputerFromDescriptor",
+                             "XGInitializeLibrary", "XGTerminateLibrary", "XGSetHardwareVersion",
+                             "XGEnableExclusiveLocking", "XGEnterExclusiveLock", "XGLeaveExclusiveLock",
+                             "XGComputeOptimalDepthStencilSwizzleMode")})
         if "xg" in selected:
             check("xg-native-layout", "xg/xg-texture.exe", ["--report"],
                   r"xg-texture PASS descriptors=4 layout-queries=8 plane-records=4 releases=4",
@@ -212,7 +226,7 @@ def verify(host, output, adapter, selected=None, samples=1):
                   providers={"xcrdapi/xcrdapi.dll": ("DStorageGetFactory",)})
         if "xmem" in selected:
             check("xmem-heaps", "xmem-smoke/xmem-smoke.exe", ["--heaps", "--report"],
-                  r"xmem-heaps PASS title=1 private=4 invalid=2",
+                  r"xmem-heaps PASS title=1 private=4 invalid=2 pool-commits=2 pool-decommits=2 heap-callbacks=2 stats=1 dump=1 history=2 page-classes=3",
                   providers={"xmem-smoke/xmem.dll": ("XMemGetTitleHeap", "XMemCreateWin32Heap", "XMemAllocDefault", "XMemFreeDefault")})
             check("xmem-heap-profiles", "xmem-smoke/xmem-smoke.exe", ["--heap-profiles", "--report"],
                   r"xmem-heap-profiles PASS attributes=40 alloc=80 free=80 null-free=2",
@@ -224,7 +238,7 @@ def verify(host, output, adapter, selected=None, samples=1):
                   r"xmem-scatter PASS pages=3 remapped-bytes=196608 duplicates=2 guards=2 rollback=1",
                   providers={"xmem-smoke/xmem.dll": ("XMemMapPhysicalPagesScatter", "XMemAllocatePhysicalPages", "XMemFreePhysicalPages")})
             check("xmem-watch", "xmem-smoke/xmem-smoke.exe", ["--watch", "--report"],
-                  r"xmem-watch PASS initial=2 reset=2 next=1 guards=2 invalid=1 pause=2 resume=3 allocations=2",
+                  r"xmem-watch PASS initial=2 reset=2 next=1 guards=2 invalid=1 pause=2 resume=3 allocations=2 direct-tags=2 retail-apertures=2",
                   providers={"xmem-smoke/xmem.dll": ("XMemVirtualAlloc", "XMemGetWriteWatch", "XMemResumeWriteWatch", "XMemSetOption")})
             check("xmem-hooks", "xmem-smoke/xmem-smoke.exe", ["--hooks", "--report"],
                   r"xmem-hooks PASS calls=2/2 zero-size=1 null-free=1 restore=1 reentrant=1",
@@ -232,16 +246,27 @@ def verify(host, output, adapter, selected=None, samples=1):
             check("xmem-tags", "xmem-smoke/xmem-smoke.exe", ["--tags", "--report"],
                   r"xmem-tags PASS count=5120 hash=d4bf30c57509b176",
                   providers={"xmem-smoke/xmem.dll": ("XMemMakeTag",)})
+            check("xmem-http", "xmem-smoke/xmem-http.exe", ["--report"],
+                  r"xmem-http PASS callbacks=7 host-session=1",
+                  providers={"xmem-smoke/xmem.dll": ("XMemSetWinHttpHooks",),
+                             "xmem-smoke/tuxbox_xhttp.dll": (
+                                 "WinHttpOpen", "WinHttpConnect", "WinHttpOpenRequest",
+                                 "WinHttpWebSocketCompleteUpgrade", "WinHttpCloseHandle",
+                                 "WinHttpReceiveResponse", "WinHttpSetOption")})
             check("xmem-query", "xmem-smoke/xmem-smoke.exe", ["--query", "--report"],
-                  r"xmem-query PASS unsupported=3 guards=2 null=1",
+                  r"xmem-query PASS cpu=5 released=1 unsupported=3 guards=2 null=1",
                   providers={"xmem-smoke/xmem.dll": ("XMemVirtualQuery",)})
             check("xmem-default", "xmem-smoke/xmem-smoke.exe", ["--report"],
                   re.escape("xmem-default: PASS (allocator pairs 1/6 and 2/7, ordinary and 64 KiB allocations, "
                             "host working set v2, virtual reserve/commit)"),
                   providers={"xmem-smoke/xmem.dll": (*memory_symbols, "XMemAlloc", "XMemFree",
                                                      "XMemGetWorkingSetStatistics", "XMemVirtualAlloc")})
+            check("xmem-partitions", "xmem-smoke/xmem-partitions.exe", ["--report"],
+                  r"xmem-partitions PASS stable_cpu_pfns=2 budget_reduced=1 ids=2 native_handles=[0-2]",
+                  providers={"xmem-smoke/xmem.dll": ("XMemGetPartitionHandleAndId",
+                             "XMemGetPhysicalMemoryLayout", "XMemTransferMemory")})
             check("xmem-pages", "xmem-smoke/xmem-smoke.exe", ["--pages", "--report"],
-                  r"xmem-pages PASS cpu-pages=2 remapped-bytes=131072 stale-and-foreign-rejected=1",
+                  r"xmem-pages PASS cpu-pages=2 remapped-bytes=131072 stale-and-foreign-rejected=1 shared-aliases=3 scatter-aliases=2 rollback=1 free-unmaps=2",
                   providers={"xmem-smoke/xmem.dll": ("XMemAllocatePhysicalPages", "XMemMapPhysicalPages",
                                                      "XMemFreePhysicalPages")})
         if "graphics" in selected:
@@ -270,7 +295,8 @@ def verify(host, output, adapter, selected=None, samples=1):
         for suite, expected in (
             ("features", r"queries=7 binding=[1-3] heap=[12] root=1 dxr=0 allocations=4 footprints=4"),
             ("heaps", r"heap=32MiB offsets=0,65536 words=256/256 invalid=4 display=3840x2160/RGB10A2 pixel=c00ffc00 volume=45/45 priorities=4/4 invalid_priority_calls=4"),
-            ("placement", r"slot=44 VA-offsets=0,4096,0 passes=2 BC1-blocks=522 cube-blocks=16404 R8-texels=262144 rejected=3"),
+            ("placement", r"slot=44 VA-offsets=0,4096,0 passes=2 BC1-blocks=522 cube-blocks=16404 R8-texels=262144 " +
+             ("rejected=4 configured_vm=1" if host.env.get("TUXBOX_TEST_CONFIGURED_VM") else "rejected=3 configured_vm=0")),
             ("copy-resource", r"slot=84 buffer_bytes=1028 texture_subresources=8 nonzero_option=E_NOTIMPL "
                               r"self_copy=E_INVALIDARG source_and_destination=verified placed_uploads=2 placed_dst=verified "
                               r"same_va_alias=verified cpu_writeback=verified partial_copy_texels=2 overlap_mips=4 pending_reader=verified"),
@@ -356,7 +382,7 @@ GATE_LABELS = {
     "guest-factories": "Xbox 0x20004 and default factories, compute queues and process debug flags",
     "route-RRRRDD": "Upper route and guest output", "route-LDDRRRR": "Lower route and collision",
     "xmem-pages": "CPU page allocation, remapping and release",
-    "xmem-query": "Unsupported virtual query rejection",
+    "xmem-query": "CPU virtual memory and image queries",
     "xmem-tags": "Memory allocation tag encoding",
     "xmem-hooks": "Guest allocator callback routing",
     "xmem-watch": "Guest write-watch dirty-page query",

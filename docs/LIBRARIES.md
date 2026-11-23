@@ -41,6 +41,8 @@ Frosty imports **60 symbols across 11 tracked DLLs**. The executable also import
 
 The static graph reaches one more tracked library, `xbthunk.dll`, through `xmem.dll`. The other 49 have no static path from this executable. Runtime traces can still identify requirements among them. Frosty loads `xgameruntime.dll` dynamically. The independent menu run used TuxBox’s Game Runtime, GameInput and storage libraries. [Independent loader evidence](../evidence/matrix-awakens/independent-menu.json) [Runtime evidence](../evidence/matrix-awakens/reference-runtime.json) · [Import and dependency inventory](../evidence/frosty-xbox-library-inventory.json)
 
+The remaining D3D12 export, `D3D12UploadCustomMicrocodeX`, asks Xbox HostOS to install three firmware images. TuxBox matches both packaged DLLs on invalid arguments and a missing receiver. A successful install still needs a reference profile. Frosty, Fortnite and Minecraft have no static import for this function. [Microcode controls and driver findings](../evidence/providers/d3d12-custom-microcode.json)
+
 ### Newly catalogued system-image modules
 
 These 45 libraries were added from the on-disk scan. Export counts are occupied ordinals, including ordinal-only exports. The title-path column describes static imports. The progress map also tracks the verified exports in each library.
@@ -99,7 +101,7 @@ Static import edges also show shared dependencies: the `xgs12_10*` drivers impor
 
 ## Current Frosty gates
 
-In an earlier reduced-settings run, Frosty displayed its menu and video preview in a fresh Proton prefix. TuxBox supplied D3D12, GameInput, storage, memory and media adapters; the title’s system image supplied XG and the HEVC, H.264 and AAC decoders. Keyboard input opened Settings and started the Wake Up sequence. With the original graphics settings, the latest recorded run presented a black frame and stopped during Lumen shader creation. [Earlier run](../evidence/matrix-awakens/independent-menu.json) · [Original-settings run](../evidence/matrix-awakens/packaged-renderer.json)
+In an earlier reduced-settings run, Frosty displayed its menu and video preview in a fresh Proton prefix. TuxBox supplied D3D12, GameInput, storage, memory and media adapters; the title’s system image supplied XG and the HEVC, H.264 and AAC decoders. Keyboard input opened Settings and started the Wake Up sequence. With the original graphics settings, TuxBox XG, XMem and DXC loaded the Construct map and presented a 4K frame. Both that run and the packaged-XG control stopped on Lumen compute shader 219. [Earlier run](../evidence/matrix-awakens/independent-menu.json) · [Retail comparison](../evidence/matrix-awakens/three-library-comparison.json)
 
 The new Rust AcpHal builds the seven functions Frosty imports. The earlier launch reported an unresolved `AcpHalReleaseShapeContexts`, and three static callers check its result. AcpHal behavior and GPU-visible XMem pages remain open. [AcpHal call sites](../evidence/matrix-awakens/acphal-call-sites.json) · [XMem call sites](../evidence/matrix-awakens/xmem-physical-pages.json)
 
@@ -107,11 +109,11 @@ The new Rust AcpHal builds the seven functions Frosty imports. The earlier launc
 
 | Library | Status | Provider and observed behavior |
 | --- | --- | --- |
-| `d3d12_xs.dll` | 🟡 Partial | **48/54 exports** (16/22 functions and 32/32 identifiers). The CPU mode of `D3D12ZeroMemoryX` and the initial framebuffer-preservation size match the packaged DLL. Valid Xbox virtual-memory configurations remain unsupported. GPU readbacks cover selected draw, depth, video, compute and placed-texture paths. [CPU clear](../evidence/providers/d3d12-cpu-clear.json) · [Memory configuration](../evidence/providers/d3d12-memory-config.json) · [GPU checks](../runtime/d3d12/README.md#what-runs-on-the-gpu) |
-| `dxcompiler_xs.dll` | 🟡 Partial | Two of four Scarlett factories are verified for owned blobs, caller allocation, portable shader compilation and compiler diagnostics. The two ray-tracing factories remain open. [Compiler checks](../evidence/providers/dxc-factories.json) |
+| `d3d12_xs.dll` | 🟡 Partial | **53/54 exports** have checked behavior (21/22 functions and 32/32 identifiers). The GPU placement check covers configured address bounds, cache flush and memory profiling. The private driver handles record updates and device disposal. PIX supports table prefixes through 32 bytes. Firmware installation, framebuffer backing, private descriptor heaps and active capture remain open. [GPU placement](../evidence/providers/d3d12-configured-placement.json) · [Driver operations](../evidence/providers/d3d12-private-driver.json) |
+| `dxcompiler_xs.dll` | 🟡 Partial | All **4/4 factories** have checked behavior. The Xbox linker accepted five TuxBox-compiled Frosty miss shaders. General ray traversal and scheduling remain open. [Ray compiler controls](../runtime/dxc/README.md) |
 | `dxcompiler_x.dll` | 🟡 Partial | Both Xbox One factories work for the same tests at ordinals 1 and 2. Xbox-specific GPU code generation and compiler intrinsics remain open. [Original and TuxBox comparisons](../evidence/providers/dxc-factories.json) |
-| `xmem.dll` | 🟡 Partial | All nine Frosty imports have CPU-side checks. Additional controls cover allocation hooks, write-watch, scatter remapping and host-backed heaps. GPU-visible backing and Xbox partition semantics remain open. [Memory tests](../runtime/xmem/README.md) · [Scatter mapping](../evidence/providers/xmem-scatter.json) |
-| `xg_xs.dll` | 🟡 Partial | Texture computers and layout exports cover tested 1D, 2D and 3D profiles, including selected tiled volumes and mip chains. Other swizzles, packed volume tails and copies remain open. [2D layouts](../evidence/providers/xg-texture2d-layout.json) · [3D mip chains](../evidence/providers/xg-texture3d-mips.json) |
+| `xmem.dll` | 🟡 Partial | All **32/32 exports** have checked behavior. Frosty’s memory profile passed 512 simultaneous CPU mappings. Pools, partition accounting and the live history page are also tested. GPU-visible pages remain open. [Memory controls](../runtime/xmem/README.md) · [Partitions](../evidence/providers/xmem-partitions.json) |
+| `xg_xs.dll` | 🟡 Partial | All **21/21 exports** have checked behavior. All 1,760 distinct texture layouts captured through Frosty’s second frame matched the Xbox DLL. DCC checks cover 45 formats, including per-pixel compression in the eight-bit profiles. [Layout replay](../evidence/providers/xg-frosty-trace-replay.json) · [DCC results](../evidence/providers/xg-dcc.json) |
 
 ## Platform and storage
 

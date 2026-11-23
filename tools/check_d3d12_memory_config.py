@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Compare the verified Xbox D3D12 virtual-memory validation and initial getter.
 
-Valid Xbox requests need the console GPU driver and are intentionally rejected
-by the TuxBox provider. The original DLL is used only for this local control.
+The provider also exercises first and repeated VM configuration on the host. The original DLL is used only for this local control.
 """
 import argparse
 import json
@@ -51,7 +50,8 @@ def main():
     shared = ("initial", "null", "invalid_flags", "invalid_count", "after_invalid", "outputs_unchanged")
     if any(runs["reference"][key] != runs["provider"][key] for key in shared):
         raise ValueError("Reference and provider validation results differ")
-    result = {"scope": "Initial framebuffer-preservation size and invalid virtual-memory configuration. Valid console requests require a driver and remain unsupported by TuxBox.",
+    result = {"scope": "Initial framebuffer-preservation size and invalid virtual-memory configuration. TuxBox additionally checks first configuration with zero preservation, repeat configuration and the unavailable framebuffer allocation path.",
+              "layout_basis": "Series xgskmd10 ConfigureVirtualMemory and MmConfigureGraphicsPtes from Frosty era.vbi. The default uses 5120 pages. Each input unit requests 1024 pages. The kernel fits 2056-byte directory/leaf groups, rounds down to 8 groups and caps the VA range at 1 TiB.",
               "reference_sha256": digest(args.reference), "provider_sha256": digest(args.provider),
               "xmem_sha256": digest(args.xmem), "guest_sha256": guest_hash, "host": host.version, "runs": runs}
     args.output.parent.mkdir(parents=True, exist_ok=True)

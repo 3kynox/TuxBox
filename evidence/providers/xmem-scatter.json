@@ -1,15 +1,16 @@
 {
-  "scope": "XMemMapPhysicalPagesScatter ordinal 22 CPU fallback for provider-owned 64 KiB pages, tested on a Linux Proton guest. No real console NT scatter mapping or GPU-visible mapping is claimed.",
+  "scope": "XMemMapPhysicalPagesScatter ordinal 22, CPU scatter mapping in ordinary reservations and section-backed profile 0x23 apertures.",
   "reference_dll_sha256": "adc182acae5340b0618a3d57a239ed2e8deb305dbefc49439cb8a2d06c7ce812",
   "native_control": "python tools/check_xmem_scatter_native.py /path/to/xmem.dll",
   "native_method": "Calls the hash-pinned console wrapper in a temporary mapped PE with a controlled NtMapUserPhysicalPagesScatter, NT status translation, last-error and diagnostic stubs. Confirms three-argument forwarding, null PFN unmap, zero-count behavior and error return. It does not execute the console NT mapping implementation.",
   "native_result": "xmem-native-scatter PASS args=3 unmap=1 zero=1 null=1 error=1",
   "guest_checks": [
     "Allocate three tracked 64 KiB pages and map them to discontiguous reserved addresses, write different patterns, scatter-unmap and remap at different addresses in reverse token order; check all 196,608 bytes.",
-    "Reject duplicate targets, duplicate page tokens, and a late invalid mapping while restoring earlier ranges and preserving a foreign committed page. Check ordinal 22 by name."
+    "In ordinary Win32 reservations, reject duplicate targets, duplicate page tokens, and a late invalid mapping while restoring earlier ranges and preserving a foreign committed page. Check ordinal 22 by name.",
+    "The profile 0x23 control verified scatter mappings of the same token across distinct apertures, bidirectional alias visibility and rollback on a conflict. See evidence/providers/xmem-pages.json for the additional guest and current run."
   ],
   "limits": [
-    "CPU-only emulation copies pages at unmap and restore, with one active mapping per page. Console physical-page aliases, GPU-visible backing, page-table semantics and performance remain unsupported.",
+    "Ordinary caller-owned reservations retain bytes by copying and accept one live mapping per token. The section-backed Xbox profile supports multiple real CPU aliases. GPU-visible memory and GPU queue page-table updates remain unverified.",
     "Invalid-input details and allocation failure rollback are provider policy; no direct console NT success or error behavior is asserted.",
     "Callers must own and serialize each reservation and keep input arrays outside mapped ranges."
   ],

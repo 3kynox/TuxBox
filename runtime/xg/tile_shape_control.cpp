@@ -31,8 +31,7 @@ int main() {
         if (std::fwrite(&r,sizeof(r),1,out)!=1) return false;
         ++cases;return true;
     };
-    const uint32_t formats[]={1,2,3,4,9,10,11,12,13,14,15,16,17,18,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,41,42,43,48,49,50,51,52,53,54,56,57,58,59,60,61,62,63,64,65,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,87,88,90,91,92,93,94,95,96,97,98,99};
-    for(uint32_t fmt:formats)for(uint32_t bpe:{0u,3u,16u})for(uint32_t samples:{0u,1u,2u,4u,8u,16u})for(unsigned mode=0;mode<5;++mode)
+    for(uint32_t fmt=1;fmt<=120;++fmt)for(uint32_t bpe:{0u,3u,16u})for(uint32_t samples:{0u,1u,2u,4u,8u,16u})for(unsigned mode=0;mode<5;++mode)
         if(!test(3,fmt,bpe,samples,mode))return 4;
     for(uint32_t bpe:{0u,1u,2u,3u,4u,8u,16u})for(uint32_t samples:{0u,1u,2u,4u,8u,16u})for(unsigned mode=0;mode<5;++mode)
         if(!test(3,0,bpe,samples,mode))return 5;
@@ -40,7 +39,7 @@ int main() {
         if(!test(1,fmt,bpe,samples,mode))return 6;
     for(uint32_t dim:{2u,4u})for(uint32_t samples:{1u,2u})for(unsigned mode=0;mode<5;++mode)
         if(!test(dim,0,1,samples,mode))return 7;
-    for(uint32_t dim:{2u,4u})for(uint32_t fmt:formats)for(uint32_t bpe:{0u,3u,16u})
+    for(uint32_t dim:{2u,4u})for(uint32_t fmt=1;fmt<=120;++fmt)for(uint32_t bpe:{0u,3u,16u})
         for(uint32_t samples:{1u,2u})for(unsigned mode=0;mode<5;++mode)
             if(!test(dim,fmt,bpe,samples,mode))return 9;
     if(std::fclose(out))return 8;

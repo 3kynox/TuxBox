@@ -35,15 +35,19 @@ int wmain(int argc, wchar_t** argv) {
         bad_count.out0 != 0x123456789abcdef0ull || bad_count.out1 != 0xfedcba9876543210ull) return 5;
     if (provider) {
         Config valid{0, 0, 123, 0, 0x123456789abcdef0ull, 0xfedcba9876543210ull};
-        if (configure(&valid) != E_NOTIMPL || get() != 0 || valid.out0 != 0x123456789abcdef0ull ||
-            valid.out1 != 0xfedcba9876543210ull) return 6;
+        if (configure(&valid) != E_FAIL || get() != 123 || valid.out0 != 0 || valid.out1 != 0) return 6;
         valid.flags = 1;
         valid.entries = 33;
-        if (configure(&valid) != E_NOTIMPL || get() != 0 || valid.out0 != 0x123456789abcdef0ull ||
-            valid.out1 != 0xfedcba9876543210ull) return 6;
+        valid.preserve_bytes = 456;
+        if (configure(&valid) != E_FAIL || get() != 456 || valid.out0 != 0 || valid.out1 != 0) return 6;
+        Config request{0, 1, 0, 0, 0, 0};
+        if (configure(&request) != 0x10000000 || get() != 0 ||
+            request.out0 != 0x80000000ull || request.out1 != 0x7f8000000ull) return 8;
+        Config retry{1, 33, 0, 0, 0, 0};
+        if (configure(&retry) != E_FAIL || retry.out0 != request.out0 || retry.out1 != request.out1) return 9;
     }
     FILE* file = nullptr;
     if (_wfopen_s(&file, argv[2], L"wb")) return 7;
-    const int n = std::fprintf(file, "initial=0\nnull=E_INVALIDARG\ninvalid_flags=E_INVALIDARG\ninvalid_count=E_INVALIDARG\nafter_invalid=0\noutputs_unchanged=1\n%s", provider ? "valid=E_NOTIMPL\n" : "");
+    const int n = std::fprintf(file, "initial=0\nnull=E_INVALIDARG\ninvalid_flags=E_INVALIDARG\ninvalid_count=E_INVALIDARG\nafter_invalid=0\noutputs_unchanged=1\n%s", provider ? "preserve_allocation=E_FAIL\nzero_preserve_config=0x10000000\nrepeat=E_FAIL\n" : "");
     return std::fclose(file) || n < 0;
 }

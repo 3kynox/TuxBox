@@ -1,6 +1,7 @@
 //! CPU virtual memory requests observed in Frosty's binned allocator.
 use core::{ffi::c_void, ptr};
-use std::sync::Mutex;
+use std::collections::{HashMap, HashSet};
+use std::sync::{LazyLock, Mutex};
 use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, HANDLE, SetLastError};
 use windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringA;
 use windows_sys::Win32::System::Memory::{
@@ -10,10 +11,66 @@ use windows_sys::Win32::System::Memory::{
 
 use windows_sys::Win32::System::SystemServices::{MEM_TOP_DOWN, MEM_WRITE_WATCH};
 
-/// Console query result layout; its partition metadata is not yet supported.
+// Guest graphics placements have the same host protection as ordinary heaps.
+static PLACEMENTS: LazyLock<Mutex<HashSet<usize>>> = LazyLock::new(Default::default);
+
+pub(super) fn allocate_placement(bytes: usize) -> *mut c_void {
+    let mut bases = PLACEMENTS.lock().unwrap_or_else(|e| e.into_inner());
+    if bases.try_reserve(1).is_err() {
+        unsafe { SetLastError(windows_sys::Win32::Foundation::ERROR_NOT_ENOUGH_MEMORY) };
+        return ptr::null_mut();
+    }
+    let base = unsafe { VirtualAlloc(ptr::null(), bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };
+    if !base.is_null() { bases.insert(base.addr()); }
+    base
+}
+
+pub(super) unsafe fn free_placement(base: *mut c_void) {
+    use windows_sys::Win32::System::Memory::{VirtualFree, MEM_RELEASE};
+    let mut bases = PLACEMENTS.lock().unwrap_or_else(|e| e.into_inner());
+    if unsafe { VirtualFree(base, 0, MEM_RELEASE) } != 0 { bases.remove(&base.addr()); }
+}
+
+// Direct CPU allocations own their tag until XMemFreeDefault releases them.
+#[derive(Clone, Copy)]
+struct DirectAllocation { extent: usize, tag: u64 }
+static DIRECT: LazyLock<Mutex<HashMap<usize, DirectAllocation>>> = LazyLock::new(Default::default);
+
+pub(super) fn allocate_direct(bytes: usize) -> *mut c_void {
+    let Some(extent) = bytes.checked_next_multiple_of(4096) else {
+        unsafe { SetLastError(windows_sys::Win32::Foundation::ERROR_NOT_ENOUGH_MEMORY) };
+        return ptr::null_mut();
+    };
+    let mut allocations = DIRECT.lock().unwrap_or_else(|e| e.into_inner());
+    if allocations.try_reserve(1).is_err() {
+        unsafe { SetLastError(windows_sys::Win32::Foundation::ERROR_NOT_ENOUGH_MEMORY) };
+        return ptr::null_mut();
+    }
+    let base = unsafe { VirtualAlloc(ptr::null(), extent, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE) };
+    if !base.is_null() {
+        let tag = if super::options::TAG_DIRECT.load(std::sync::atomic::Ordering::Acquire) {
+            // The query record contains the packed six-bit character values
+            // followed by the decoded four bytes in display order.
+            let fourcc = 0x586d5641;
+            (super::make_tag(fourcc) >> 40) | (u64::from(fourcc.swap_bytes()) << 32)
+        } else { 0 };
+        allocations.insert(base.addr(), DirectAllocation { extent, tag });
+    }
+    base
+}
+
+pub(super) fn release_direct(base: *mut c_void) -> bool {
+    use windows_sys::Win32::System::Memory::{VirtualFree, MEM_RELEASE};
+    let mut allocations = DIRECT.lock().unwrap_or_else(|e| e.into_inner());
+    if !allocations.contains_key(&base.addr()) { return false; }
+    if unsafe { VirtualFree(base, 0, MEM_RELEASE) } != 0 { allocations.remove(&base.addr()); }
+    true
+}
+
+/// Scarlett returns the desktop address fields followed by partition flags and an allocation tag.
 #[repr(C)]
 pub struct VirtualInfo {
-    memory: MEMORY_BASIC_INFORMATION,
+    pub(super) memory: MEMORY_BASIC_INFORMATION,
     console_flags: u64,
     console_tag: u64,
 }
@@ -36,28 +93,32 @@ static WATCH_STATE: Mutex<WatchState> = Mutex::new(WatchState {
     suspended: false,
 });
 
-/// Apply the observed write-watch suspension option. Other options need their
-/// own console behavior and are rejected rather than silently acknowledged.
+/// Set the process-wide allocation policy selected by the low DWORD payload.
 ///
 /// # Safety
-/// `option` must be null or point to at least 12 readable bytes.
+/// A recognized option must point to 12 readable bytes.
 #[unsafe(export_name = "XMemSetOption")]
 pub unsafe extern "system" fn set_option(option: *const XmemOption) {
+    use std::sync::atomic::Ordering::Release;
     if option.is_null() {
         unsafe { SetLastError(ERROR_INVALID_PARAMETER) };
         return;
     }
     let id = unsafe { option.cast::<u32>().read_unaligned() };
-    if id != 0x10000 {
-        unsafe { SetLastError(ERROR_NOT_SUPPORTED) };
-        return;
-    }
+    if !matches!(id, 1..=4 | 0x10000 | 0x10001) { return; }
     let value = unsafe { option.cast::<u8>().add(8).cast::<u32>().read_unaligned() };
-    let mut state = WATCH_STATE.lock().unwrap_or_else(|e| e.into_inner());
-    // The console reads the low 32 bits of the option payload.
-    state.suspension_requested = value != 0;
-    if state.suspension_requested {
-        state.suspended = true;
+    match id {
+        1 => super::options::VERIFY.store(value != 0, Release),
+        2 => super::options::TAG_DIRECT.store(value != 0, Release),
+        3 => super::options::realloc_notifications(value),
+        4 => super::options::set_page_policy(value != 0),
+        0x10000 => {
+            let mut state = WATCH_STATE.lock().unwrap_or_else(|e| e.into_inner());
+            state.suspension_requested = value != 0;
+            if state.suspension_requested { state.suspended = true; }
+        }
+        0x10001 => super::options::AUTO_WATCH.store(value != 0, Release),
+        _ => unreachable!(),
     }
 }
 
@@ -94,26 +155,75 @@ pub unsafe extern "system" fn get_write_watch(
     unsafe { GetWriteWatch(flags, base, bytes, addresses, count, granularity) }
 }
 
-/// Reject virtual-memory queries until their console metadata is supported.
+/// Query ordinary CPU image and private mappings whose backing is distinguishable
+/// from a translated graphics reservation.
 ///
 /// # Safety
 /// `information` must be null or point to 64 writable bytes.
 #[unsafe(export_name = "XMemVirtualQuery")]
 pub unsafe extern "system" fn virtual_query(
-    _process: HANDLE,
-    _address: *const c_void,
+    process: HANDLE,
+    address: *const c_void,
     information: *mut VirtualInfo,
 ) -> i32 {
+    use windows_sys::Win32::System::Memory::{MEM_FREE, MEM_IMAGE, MEM_PRIVATE, VirtualQueryEx};
     if information.is_null() {
         unsafe { SetLastError(ERROR_INVALID_PARAMETER) };
         return 0;
     }
-    // The console augments State, RegionSize and the last 16 bytes with
-    // partition, access and allocation-tag information. Reporting host-only
-    // information as a successful query can mislead callers about a mapping.
-    // Leave the complete output untouched until that metadata is available.
-    unsafe { SetLastError(ERROR_NOT_SUPPORTED) };
-    0
+    let mut area = MEMORY_BASIC_INFORMATION::default();
+    if unsafe { VirtualQueryEx(process, address, &mut area, size_of::<MEMORY_BASIC_INFORMATION>()) } == 0 {
+        return 0;
+    }
+    // Both graphics placement and physical-page apertures are represented as
+    // private allocations on this host. Their Xbox flags cannot be inferred
+    // from the CPU protection of the individual queried page.
+    use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetProcessId};
+    let current = unsafe { GetProcessId(process) == GetCurrentProcessId() };
+    let ordinary_protect = matches!(area.AllocationProtect & !PAGE_GUARD,
+        PAGE_READONLY | PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE);
+    let writable_private = current && area.Type == MEM_PRIVATE && area.AllocationProtect == PAGE_READWRITE
+        && !PLACEMENTS.lock().unwrap_or_else(|e| e.into_inner()).contains(&area.AllocationBase.addr())
+        && !super::pools::is_arena(area.AllocationBase.addr());
+    let cpu_private = area.Type == MEM_PRIVATE && (ordinary_protect || writable_private);
+    let free = area.State == MEM_FREE && area.Protect == PAGE_NOACCESS;
+    if !(free || area.Type == MEM_IMAGE || cpu_private) {
+        unsafe { SetLastError(ERROR_NOT_SUPPORTED) };
+        return 0;
+    }
+    let Some(title_id) = super::partitions::title_partition_id() else { return 0 };
+    let direct = if current && area.Type == MEM_PRIVATE {
+        DIRECT.lock().unwrap_or_else(|e| e.into_inner()).get(&area.AllocationBase.addr()).copied()
+    } else { None };
+    let mut state = area.State;
+    if writable_private {
+        // A read-only query of the host watch list distinguishes MEM_WRITE_WATCH
+        // from an ordinary PAGE_READWRITE allocation. Do not reset the list.
+        let mut address = ptr::null_mut();
+        let mut count = 1;
+        let mut granularity = 0;
+        let previous = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+        if unsafe { GetWriteWatch(0, area.BaseAddress, 4096, &mut address, &mut count, &mut granularity) } == 0 {
+            state |= 1 << 21;
+        }
+        unsafe { SetLastError(previous) };
+    }
+    // The guest ABI clears the partition-id slot and all padding. Build the
+    // record in place so a Rust struct copy cannot leave padding unspecified.
+    unsafe {
+        information.cast::<u8>().write_bytes(0, size_of::<VirtualInfo>());
+        let out = &mut (*information).memory;
+        out.BaseAddress = area.BaseAddress;
+        out.AllocationBase = area.AllocationBase;
+        out.AllocationProtect = area.AllocationProtect;
+        out.RegionSize = direct.filter(|a| a.tag != 0).map_or(area.RegionSize, |a| a.extent);
+        out.State = state;
+        out.Protect = area.Protect;
+        out.Type = area.Type;
+        (*information).console_flags = u64::from(area.PartitionId == title_id);
+        (*information).console_tag = direct.map_or(0, |a| a.tag);
+    }
+    1
 }
 
 /// Reserve or commit CPU memory for the binned allocator and physical-page apertures.
@@ -134,6 +244,11 @@ pub unsafe extern "system" fn virtual_alloc(
     // Large allocations in that routine also request top-down placement.
     // Frosty's physical-page pool reserves an aperture, then backs individual
     // 64 KiB pages as needed. The D3D12 placement uploader reads these CPU pages.
+    if profile == 0x23 && allocation_type == 0x2040_2000 && matches!(protect, 0x2404 | 0x10404) {
+        // Frosty's two XMem physical-page allocators explicitly request an
+        // AWE section aperture (profile bit 0x20) for later page mappings.
+        return super::shared_pages::reserve(address, bytes);
+    }
     if profile == 3 {
         let host = match (allocation_type, protect) {
             (0x2040_2000, 0x2404 | 0x10404) => Some((MEM_RESERVE, PAGE_NOACCESS)),
@@ -143,7 +258,8 @@ pub unsafe extern "system" fn virtual_alloc(
             _ => None,
         };
         if let Some((kind, protection)) = host {
-            return unsafe { VirtualAlloc(address, bytes, kind, protection) };
+            let watch = kind == MEM_RESERVE && super::options::auto_watch_available();
+            return unsafe { VirtualAlloc(address, bytes, if watch { kind | MEM_WRITE_WATCH } else { kind }, protection) };
         }
     }
     let operation = allocation_type & !MEM_TOP_DOWN;

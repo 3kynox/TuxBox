@@ -24,6 +24,7 @@ pub(super) struct DxgiDevice {
     pub(super) placements: super::placement::Placements,
     pub(super) emulate_stencil: OnceLock<bool>,
     pub(super) depth_views: std::sync::Arc<super::placement::Views<super::stencil::Surface>>,
+    pub(super) disposal: std::sync::Mutex<Option<(super::DisposeCallback, usize)>>,
     pub(super) frames: super::frame_events::FrameEvents,
 }
 
@@ -48,6 +49,7 @@ impl DxgiDevice {
             emulate_stencil: Default::default(),
             depth_views: Default::default(),
             frames: Default::default(),
+            disposal: Default::default(),
             blas: Default::default(),
             media: Default::default(),
             placements: Default::default(),
@@ -91,7 +93,7 @@ unsafe extern "system" fn add_ref(this: *mut c_void) -> u32 {
 }
 
 unsafe extern "system" fn release(this: *mut c_void) -> u32 {
-    unsafe { proxy::release(device(this)) }
+    unsafe { super::release_device(device(this)) }
 }
 
 fn adapter(device: &Device) -> Result<&IDXGIAdapter> {

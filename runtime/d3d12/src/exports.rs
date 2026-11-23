@@ -1,5 +1,6 @@
 use core::ffi::c_void;
-use windows::Win32::Foundation::{E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER, S_OK};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use windows::Win32::Foundation::{E_FAIL, E_INVALIDARG, E_NOINTERFACE, E_NOTIMPL, E_POINTER, S_OK};
 use windows::Win32::Graphics::Direct3D12::ID3D12Debug;
 use windows::Win32::Graphics::Dxgi::DXGI_ERROR_UNSUPPORTED;
 use windows::core::{GUID, HRESULT, Interface};
@@ -86,19 +87,98 @@ pub extern "system" fn tuxbox_dxgix_unsupported() -> HRESULT {
     DXGI_ERROR_UNSUPPORTED
 }
 
-/// TuxBox does not yet enable the Xbox framebuffer-preservation allocation.
-/// Its size remains zero while valid virtual-memory configurations are rejected.
-#[unsafe(export_name = "GetFrameBufferPreserveMemorySizeBytes")]
-pub extern "system" fn framebuffer_preserve_memory_size_bytes() -> u32 {
-    0
+static FRAMEBUFFER_PRESERVE_BYTES: AtomicU32 = AtomicU32::new(0);
+
+// 0 = unused, 1 = implicit configuration created by the Xbox device factory.
+// An explicit configuration stores the exclusive upper guest address.
+static VM_LIMIT: AtomicU64 = AtomicU64::new(0);
+const VM_START: u64 = 1 << 31;
+
+fn address_limit(entries: u32) -> u64 {
+    // One directory entry (8 bytes) describes a 2 KiB leaf table covering
+    // 16 MiB of guest VA. The kernel rounds down to eight directories.
+    let pages = if entries == 0 { 5120 } else { u64::from(entries) * 1024 };
+    let directories = (pages * 4096 / 2056) & !7;
+    (directories << 24).min(1 << 40)
 }
 
-/// Check the known Xbox virtual-memory configuration header.
+pub(crate) fn device_vm_created() {
+    let _ = VM_LIMIT.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire);
+}
+
+pub(crate) fn placement_fits(address: u64, size: u64) -> bool {
+    let limit = VM_LIMIT.load(Ordering::Acquire);
+    address.checked_add(size).is_some_and(|end| {
+        limit <= 1 || (address >= VM_START && end <= limit)
+    })
+}
+
+/// The requested preservation size is recorded before the driver call, even
+/// when that call fails.
+#[unsafe(export_name = "GetFrameBufferPreserveMemorySizeBytes")]
+pub extern "system" fn framebuffer_preserve_memory_size_bytes() -> u32 {
+    FRAMEBUFFER_PRESERVE_BYTES.load(Ordering::Relaxed)
+}
+
+#[path = "pix_driver.rs"]
+mod pix_driver;
+
+/// The Series driver copies three microcode images into a device window and
+/// requests installation through XVIO. Desktop D3D12 exposes no such window.
+/// The Xbox wrapper maps this driver failure to E_FAIL.
+#[unsafe(export_name = "D3D12UploadCustomMicrocodeX")]
+pub extern "system" fn upload_custom_microcode(
+    selector: u32,
+    first_bytes: usize,
+    first: *const u8,
+    second_bytes: usize,
+    second: *const u8,
+    third_bytes: usize,
+    third: *const u8,
+) -> HRESULT {
+    if selector == 0
+        || first_bytes == 0 || first.is_null()
+        || second_bytes == 0 || second.is_null()
+        || third_bytes == 0 || third.is_null()
+    {
+        return E_INVALIDARG;
+    }
+
+    // The Scarlett KMD's type-10 staging range has a 32-bit byte size
+    // rounded to whole 4 KiB pages. Its actual capacity comes from HostOS.
+    const MAX_WINDOW_BYTES: usize = 0xffff_f000;
+    let total = first_bytes.checked_add(second_bytes).and_then(|n| n.checked_add(third_bytes));
+    static OVERSIZED: std::sync::Once = std::sync::Once::new();
+    static UNAVAILABLE: std::sync::Once = std::sync::Once::new();
+    let (site, reason) = match total {
+        Some(n) if n <= MAX_WINDOW_BYTES => (&UNAVAILABLE, "no firmware receiver"),
+        _ => (&OVERSIZED, "exceeds the Scarlett staging window limit"),
+    };
+    crate::diagnostics::log_once(site, || {
+        format!(
+            "D3D12UploadCustomMicrocodeX selector={selector:#010x} image_bytes=[{first_bytes}, {second_bytes}, {third_bytes}] returned E_FAIL ({reason})"
+        )
+    });
+    E_FAIL
+}
+
+#[path = "profiling.rs"]
+pub(crate) mod profiling;
+
+/// Publish CPU writes to live guest-backed textures on their device copy queues.
+#[unsafe(export_name = "D3DFlushEntireCpuCache")]
+pub extern "system" fn flush_entire_cpu_cache() {
+    crate::device::placement::flush_cpu_writes();
+}
+
+/// Configure the process guest GPU address range before the first device.
 ///
 /// # Safety
-/// A non-null record must be readable for at least two 32-bit fields.
+/// A non-null record must be readable for its 32-byte header and writable at
+/// its output fields. Invalid flags and counts are rejected before those fields
+/// are read or modified.
 #[unsafe(export_name = "D3D12ConfigureVirtualMemoryX")]
-pub unsafe extern "system" fn configure_virtual_memory(record: *const u32) -> HRESULT {
+pub unsafe extern "system" fn configure_virtual_memory(record: *mut u32) -> HRESULT {
     if record.is_null() {
         return E_INVALIDARG;
     }
@@ -113,9 +193,25 @@ pub unsafe extern "system" fn configure_virtual_memory(record: *const u32) -> HR
     if entries > 33 {
         return E_INVALIDARG;
     }
-    // A valid request requires the Xbox graphics driver's virtual-memory
-    // operation. Do not claim success or change guest outputs without it.
-    E_NOTIMPL
+    let preserve = unsafe { record.add(2).read_unaligned() };
+    FRAMEBUFFER_PRESERVE_BYTES.store(preserve, Ordering::Relaxed);
+    // A nonzero first request also needs a dedicated framebuffer allocation.
+    let (status, limit) = if preserve != 0 && VM_LIMIT.load(Ordering::Acquire) == 0 {
+        (E_FAIL, 0)
+    } else {
+        let requested = address_limit(entries);
+        match VM_LIMIT.compare_exchange(0, requested, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => (HRESULT(0x1000_0000), requested),
+            Err(1) => (E_FAIL, address_limit(0)),
+            Err(existing) => (E_FAIL, existing),
+        }
+    };
+    let bytes = record.cast::<u8>();
+    unsafe {
+        bytes.add(16).cast::<u64>().write_unaligned(if limit == 0 { 0 } else { VM_START });
+        bytes.add(24).cast::<u64>().write_unaligned(limit);
+    }
+    status
 }
 
 #[repr(C)]

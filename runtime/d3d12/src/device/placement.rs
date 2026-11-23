@@ -10,7 +10,7 @@ use super::Device;
 use core::{ffi::c_void, ops::Range};
 use std::collections::{BTreeMap, btree_map::Entry};
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use tuxbox_xg_layout::{Desc, Plane};
 use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL, E_OUTOFMEMORY, E_POINTER};
 use windows::Win32::Graphics::Direct3D12::*;
@@ -93,6 +93,7 @@ pub(crate) struct Texture {
 
 impl Drop for Texture {
     fn drop(&mut self) {
+        crate::exports::profiling::mapping_released();
         let Some(images) = self.images.upgrade() else {
             return;
         };
@@ -130,7 +131,7 @@ impl Texture {
         .map_err(HRESULT)?;
         if address == 0
             || !address.is_multiple_of(plane.alignment)
-            || address.checked_add(plane.size).is_none()
+            || !crate::exports::placement_fits(address, plane.size)
         {
             return Err(E_INVALIDARG.into());
         }
@@ -252,11 +253,69 @@ impl Texture {
 #[derive(Default)]
 pub(super) struct Placements {
     pub(super) views: Arc<Views<Texture>>,
+    memory: Arc<PlacementMemory>,
+}
+
+#[derive(Default)]
+struct PlacementMemory {
+    device: OnceLock<ID3D12Device>,
     // Equal descriptors at the same VA name the same image, including writes
     // made before the title creates a second resource proxy for it.
     images: Arc<Images>,
     submissions: Mutex<Option<Submissions>>,
     failed: Arc<AtomicI32>,
+}
+
+// The Xbox export is process-wide. Keep only weak references so that a cache
+// flush can visit each live device without extending its lifetime.
+static FLUSH_DEVICES: Mutex<Vec<Weak<PlacementMemory>>> = Mutex::new(Vec::new());
+
+pub(crate) fn flush_cpu_writes() {
+    unsafe { windows::Win32::System::Threading::FlushProcessWriteBuffers() };
+    let live: Vec<_> = {
+        let mut registry = lock(&FLUSH_DEVICES);
+        registry.retain(|device| device.strong_count() != 0);
+        registry.iter().filter_map(Weak::upgrade).collect()
+    };
+    for memory in live {
+        if let Err(error) = memory.flush() {
+            crate::diagnostics::recording_error(format_args!(
+                "placed texture cache flush: {error}"
+            ));
+        }
+    }
+}
+
+impl PlacementMemory {
+    fn flush(&self) -> Result<()> {
+        let Some(device) = self.device.get() else {
+            return Ok(());
+        };
+        let mut textures: Vec<_> = lock(&self.images.0)
+            .values()
+            .flatten()
+            .filter_map(|alias| alias.texture.upgrade())
+            .collect();
+        let mut slot = lock(&self.submissions);
+        HRESULT(self.failed.load(Ordering::Acquire)).ok()?;
+        let submissions = match slot.as_mut() {
+            Some(submissions) => submissions,
+            None if textures.is_empty() => return Ok(()),
+            None => slot.insert(Submissions {
+                transfer: upload::Transfer::new(device)?,
+                writes: Vec::new(),
+            }),
+        };
+        // The CPU shadow of any pending GPU write is stale until publication.
+        // This includes other layouts that alias the same guest pages.
+        textures.retain(|texture| {
+            !submissions.writes.iter().any(|write| {
+                overlaps(&texture.range(), &write.range)
+                    && unsafe { write.published.GetCompletedValue() } < write.tick
+            })
+        });
+        submissions.transfer.refresh(device, &textures)
+    }
 }
 
 impl Placements {
@@ -271,7 +330,7 @@ impl Placements {
         if !supported_state(initial) || !clear.is_null() {
             return Err(E_NOTIMPL.into());
         }
-        let mut images = lock(&self.images.0);
+        let mut images = lock(&self.memory.images.0);
         if let Some(texture) = images.get(&address).and_then(|aliases| {
             aliases
                 .iter()
@@ -280,7 +339,13 @@ impl Placements {
         }) {
             return Ok(texture);
         }
-        let texture = Texture::new(device, &self.images, address, desc)?;
+        let texture = Texture::new(device, &self.memory.images, address, desc)?;
+        self.memory.device.get_or_init(|| {
+            let mut registry = lock(&FLUSH_DEVICES);
+            registry.retain(|device| device.strong_count() != 0);
+            registry.push(Arc::downgrade(&self.memory));
+            device.clone()
+        });
         images.entry(address).or_default().push(Alias {
             desc: *desc,
             texture: Arc::downgrade(&texture),
@@ -355,8 +420,8 @@ pub(crate) unsafe fn submit(
         }
     }
 
-    let mut slot = lock(&placements.submissions);
-    HRESULT(placements.failed.load(Ordering::Acquire)).ok()?;
+    let mut slot = lock(&placements.memory.submissions);
+    HRESULT(placements.memory.failed.load(Ordering::Acquire)).ok()?;
     let submission = match slot.as_mut() {
         Some(s) => s,
         None => slot.insert(Submissions {
@@ -420,7 +485,7 @@ pub(crate) unsafe fn submit(
             .writes
             .try_reserve(writes.len())
             .map_err(|_| E_OUTOFMEMORY)?;
-        let worker = access.worker(&device.native, &placements.failed)?;
+        let worker = access.worker(&device.native, &placements.memory.failed)?;
         let readback =
             writeback::Readback::record(&device.native, unsafe { queue.GetDesc() }.Type, writes)?;
         Some((worker, readback))

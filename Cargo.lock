@@ -75,6 +75,13 @@ name = "tuxbox-dxbc"
 version = "0.1.0"
 
 [[package]]
+name = "tuxbox-dxc"
+version = "0.1.0"
+dependencies = [
+ "windows",
+]
+
+[[package]]
 name = "tuxbox-frontpanel"
 version = "0.1.0"
 dependencies = [
@@ -168,6 +175,13 @@ dependencies = [
 
 [[package]]
 name = "tuxbox-xmem"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
+name = "tuxbox-xmem-http"
 version = "0.1.0"
 dependencies = [
  "windows-sys",

@@ -1,61 +1,17 @@
 {
   "scope": "Original and TuxBox XG replay of successful descriptors captured by the research proxy; compares complete layouts and first/last mip-slice origin addresses for each supported case. Numeric descriptor values and file hashes only; the game and its binaries are not included.",
-  "trace_sha256": "af0af8466d869b6d1123c984933218656ded630468d1b24bd8b66b8f1171d87c",
+  "trace_sha256": "aa1ecc1e4300b0eb41872ab2452d441187d0fda12fb3f7a7c42dc0ac977c8582",
   "original_xg_sha256": "fee85ef80b6fe47edaa083270933c08a37f9e27e7541f86f731daecf7ead1493",
-  "provider_sha256": "2580a6f1cf84d55f8ea61f153ce3ebf8d55311f5aa190a3e1e5686d3166eb3bf",
-  "xmem_sha256": "9b3a3c2435f8f90e1dc30067cb72de6e7b2a516c38fc6fe42f13d7eeaef6babd",
+  "provider_sha256": "07576cb2724600e833171ddce6d15fe3a6e392f7eaed2b9acae94b432f12884a",
+  "xmem_sha256": "504f7ec8e974e2effe8a7f5ca767acac6a644b62227f50dcf5e706b85214f324",
   "guest_source_sha256": "1f3200b4b159b33c1f2b6cde35028964d228f7518b68663f56dee2371d92bb72",
   "guest_sha256": "6f88e4d2ad4ffc1b1b837052592626da308597854de5e179b6dc607a97e0fd91",
-  "captured_calls": 7688,
-  "successful_unique_descriptors": 1639,
+  "captured_calls": 8271,
+  "successful_unique_descriptors": 1760,
   "original_replay_failures": 0,
-  "matched_layouts_and_samples": 1637,
-  "unsupported_unique_descriptors": 2,
-  "unsupported_descriptors": [
-    {
-      "dimension": 3,
-      "alignment": 0,
-      "width": 1024,
-      "height": 1024,
-      "slices": 1,
-      "mips": 1,
-      "format": 19,
-      "samples": 1,
-      "quality": 0,
-      "layout": 0,
-      "flags": "0x1000006",
-      "provider_hresult": "0x80004001"
-    },
-    {
-      "dimension": 3,
-      "alignment": 0,
-      "width": 1024,
-      "height": 1024,
-      "slices": 1,
-      "mips": 1,
-      "format": 19,
-      "samples": 1,
-      "quality": 0,
-      "layout": 0,
-      "flags": "0x81300002",
-      "provider_hresult": "0x80004001"
-    }
-  ],
-  "unsupported_families": [
-    {
-      "dimension": 3,
-      "flags": "0x1000006",
-      "mips": 1,
-      "slices": 1,
-      "unique_descriptors": 1
-    },
-    {
-      "dimension": 3,
-      "flags": "0x81300002",
-      "mips": 1,
-      "slices": 1,
-      "unique_descriptors": 1
-    }
-  ],
+  "matched_layouts_and_samples": 1760,
+  "unsupported_unique_descriptors": 0,
+  "unsupported_descriptors": [],
+  "unsupported_families": [],
   "mismatched_supported": []
 }

@@ -92,6 +92,28 @@ static bool check_blob(HMODULE module) {
     return bytes[0] == 0x49 && bytes[256] == 0x49 && blob->Release() == 0;
 }
 
+#if defined(ORD_PixGetPixieEntryPoints) && defined(ORD_D3D12UploadCustomMicrocodeX)
+static bool check_extra_exports(HMODULE module) {
+    using Pix = HRESULT (WINAPI*)(void*);
+    using Upload = HRESULT (WINAPI*)(UINT, SIZE_T, const void*, SIZE_T, const void*, SIZE_T, const void*);
+    auto pix = reinterpret_cast<Pix>(lookup(module, "PixGetPixieEntryPoints", ORD_PixGetPixieEntryPoints));
+    auto upload = reinterpret_cast<Upload>(lookup(module, "D3D12UploadCustomMicrocodeX", ORD_D3D12UploadCustomMicrocodeX));
+    if (!pix || !upload || pix(nullptr) != E_POINTER) return false;
+    UINT header[] = {8, 0xffffffff};
+    if (pix(header) != S_OK || header[0] != 8 || header[1] != 0) return false;
+    // Three distinct, inert buffers for the desktop driver-unavailable control.
+    const BYTE first[3]{}, second[5]{}, third[7]{};
+    return upload(0, 3, first, 5, second, 7, third) == E_INVALIDARG &&
+           upload(1, 0, first, 5, second, 7, third) == E_INVALIDARG &&
+           upload(1, 3, nullptr, 5, second, 7, third) == E_INVALIDARG &&
+           upload(1, 3, first, 0, second, 7, third) == E_INVALIDARG &&
+           upload(1, 3, first, 5, nullptr, 7, third) == E_INVALIDARG &&
+           upload(1, 3, first, 5, second, 0, third) == E_INVALIDARG &&
+           upload(1, 3, first, 5, second, 7, nullptr) == E_INVALIDARG &&
+           upload(1, 3, first, 5, second, 7, third) == E_FAIL;
+}
+#endif
+
 #if defined(ORD_GetFrameBufferPreserveMemorySizeBytes) && defined(ORD_D3D12ConfigureVirtualMemoryX)
 static bool check_memory_config_invalid(HMODULE module) {
     using GetSize = UINT (WINAPI*)();
@@ -142,6 +164,14 @@ static bool check_zero_memory(HMODULE module) {
 #endif
 
 int wmain(int argc, wchar_t** argv) {
+#if defined(ORD_PixGetPixieEntryPoints) && defined(ORD_D3D12UploadCustomMicrocodeX)
+    if (argc == 2 && !std::wcscmp(argv[1], L"--extra-only")) {
+        const HMODULE module = GetModuleHandleW(L"d3d12_xs.dll");
+        if (!module || !check_extra_exports(module)) return 1;
+        std::puts("Additional export checks passed");
+        return 0;
+    }
+#endif
     int arg = 1;
     // Pin the packaged driver during a control run, as a live device would.
     if (argc > 2 && !std::wcscmp(argv[arg], L"--reference-umd")) {
@@ -156,6 +186,9 @@ int wmain(int argc, wchar_t** argv) {
     if (!module || !check_debug(module)) { std::fputs("Debug interface failed\n", stderr); return 1; }
     if (!check_dxgix(module)) { std::fputs("Legacy DXGIX calls failed\n", stderr); return 1; }
     if (!check_blob(module)) { std::fputs("Blob checks failed\n", stderr); return 1; }
+#if defined(ORD_PixGetPixieEntryPoints) && defined(ORD_D3D12UploadCustomMicrocodeX)
+    if (!check_extra_exports(module)) { std::fputs("Additional export checks failed\n", stderr); return 1; }
+#endif
 #if defined(ORD_GetFrameBufferPreserveMemorySizeBytes) && defined(ORD_D3D12ConfigureVirtualMemoryX)
     if (!check_memory_config_invalid(module)) { std::fputs("Memory configuration checks failed\n", stderr); return 1; }
 #endif

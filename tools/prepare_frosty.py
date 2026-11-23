@@ -172,6 +172,9 @@ def prepare(source, packaged_os, work, proton, windows_dxc, *, select=True, use_
                 if not dest.exists() or digest(dest) != digest(original):
                     shutil.copyfile(original, dest)
                 record(dest, "Original retail package")
+        http = guest_bin / "tuxbox_xhttp.dll"
+        shutil.copyfile(OUTPUT / "xmem-smoke" / http.name, http)
+        record(http, "TuxBox xmem")
         for target, relative in PROVIDERS.items():
             folder = system if target in {"xgameruntime", "gameconfig"} else guest_bin
             name = Path(relative).name

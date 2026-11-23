@@ -1,9 +1,15 @@
 //! The x64 texture address computer used by XGCreateTextureComputer.
 
+mod copies;
+mod dcc;
+mod descriptor;
+mod library;
+mod tiling;
+
 use core::ptr;
 use core::sync::atomic::{AtomicU32, Ordering};
 use std::alloc::{Layout as Allocation, alloc};
-use tuxbox_xg_layout::{Desc, Layout, Plane};
+use tuxbox_xg_layout::{DepthStencil, Desc, Layout, Plane};
 use windows_sys::Win32::Foundation::{
     E_FAIL, E_INVALIDARG, E_NOTIMPL, E_OUTOFMEMORY, E_POINTER, S_OK,
 };
@@ -12,9 +18,12 @@ use windows_sys::Win32::Foundation::{
 pub struct Computer {
     methods: &'static Methods,
     refs: AtomicU32,
+    version_four: bool,
     plane: Plane,
     dimension: u32,
     color_metadata: u8,
+    depth_stencil: Option<DepthStencil>,
+    image: descriptor::Image,
 }
 
 /// Buffer layout descriptor consumed by the Xbox XG library.
@@ -53,7 +62,7 @@ extern "system" fn optimal_swizzle_mode(
         return 0;
     }
     if bind_flags & 0x40 != 0 {
-        let incompatible = matches!(format, 19 | 20 | 22 | 44 | 45 | 47 | 62 | 118 | 119 | 120);
+        let incompatible = has_stencil(format);
         return if resource_flags & 0x0800_8000 != 0 && incompatible {
             u32::MAX
         } else {
@@ -66,6 +75,34 @@ extern "system" fn optimal_swizzle_mode(
         3 | 4 => 5,
         _ => 0,
     }
+}
+
+fn has_stencil(format: u32) -> bool {
+    matches!(format, 19 | 20 | 22 | 44 | 45 | 47 | 62 | 118 | 119 | 120)
+}
+
+/// A non-null output receives the same selection returned in EAX.
+#[unsafe(export_name = "XGComputeOptimalDepthStencilSwizzleMode")]
+unsafe extern "system" fn optimal_depth_swizzle(
+    format: u32,
+    _width: u32,
+    _height: u32,
+    _depth: u32,
+    _mips: u32,
+    _samples: u32,
+    flag_a: u32,
+    flag_b: u32,
+    output: *mut u32,
+) -> u32 {
+    let mode = if (flag_a != 0 || flag_b != 0) && has_stencil(format) {
+        u32::MAX
+    } else {
+        24
+    };
+    if !output.is_null() {
+        unsafe { output.write(mode) };
+    }
+    mode
 }
 
 /// Validate a depth/stencil swizzle mode. This Xbox DLL's supported modes are
@@ -83,17 +120,20 @@ extern "system" fn validate_depth_stencil_swizzle(
     }
 }
 
-/// Format storage in bytes per element and pixels per element, for the
-/// color formats already supported by TuxBox's texture-layout provider.
-fn tile_format(format: u32) -> Option<(u32, u32)> {
+/// Element size and the pixel extent reported by XG for a storage element.
+fn tile_format(format: u32) -> Option<(u32, u32, u32)> {
     Some(match format {
-        1..=4 => (16, 1),
-        9..=18 => (8, 1),
-        23..=39 | 41..=43 | 87 | 88 | 90..=93 => (4, 1),
-        48..=54 | 56..=59 => (2, 1),
-        60..=65 => (1, 1),
-        70..=72 | 79..=81 => (8, 4),
-        73..=78 | 82..=84 | 94..=99 => (16, 4),
+        1..=4 => (16, 1, 1),
+        // RGB32 uses three 32-bit storage elements per pixel. Native XG
+        // applies an integer pixel multiplier, yielding zero pixel width.
+        5..=8 => (4, 0, 1),
+        9..=22 | 102 => (8, 1, 1),
+        23..=47 | 67 | 87..=93 | 100 | 101 | 117 => (4, 1, 1),
+        48..=59 | 85 | 86 | 104 | 114 | 115 | 118 | 119 => (2, 1, 1),
+        60..=66 | 103 | 105 | 106 | 108..=113 | 116 | 120 => (1, 1, 1),
+        68 | 69 | 107 => (4, 2, 1),
+        70..=72 | 79..=81 => (8, 4, 4),
+        73..=78 | 82..=84 | 94..=99 => (16, 4, 4),
         _ => return None,
     })
 }
@@ -114,11 +154,11 @@ unsafe extern "system" fn compute_tile_shape(
     if dimension != 3 && samples != 1 {
         return E_INVALIDARG;
     }
-    let (element_bytes, block) = match (dimension, format) {
-        (1, 0) if bytes_per_element <= 1 => (1, 0),
+    let (element_bytes, pixel_width, pixel_height) = match (dimension, format) {
+        (1, 0) if bytes_per_element <= 1 => (1, 0, 0),
         (1, _) => return E_INVALIDARG,
         (2 | 4, _) => return E_NOTIMPL,
-        (3, 0) => (bytes_per_element, 0),
+        (3, 0) => (bytes_per_element, 0, 0),
         (3, _) => match tile_format(format) {
             Some(format) => format,
             None => return E_NOTIMPL,
@@ -163,7 +203,7 @@ unsafe extern "system" fn compute_tile_shape(
             });
         }
         if !pixels.is_null() {
-            pixels.write(if block == 0 {
+            pixels.write(if format == 0 {
                 TileShape {
                     width: 0,
                     height: 0,
@@ -171,8 +211,8 @@ unsafe extern "system" fn compute_tile_shape(
                 }
             } else {
                 TileShape {
-                    width: width * block,
-                    height: height * block,
+                    width: width * pixel_width,
+                    height: height * pixel_height,
                     depth: 1,
                 }
             });
@@ -213,29 +253,55 @@ unsafe extern "system" fn compute_buffer_layout(desc: *const BufferDesc, out: *m
     S_OK
 }
 
-type Unsupported = unsafe extern "system" fn() -> !;
-
 #[repr(C)]
 struct Methods {
     add_ref: unsafe extern "system" fn(*mut Computer) -> u32,
     release: unsafe extern "system" fn(*mut Computer) -> u32,
     layout: unsafe extern "system" fn(&Computer, *mut Layout) -> i32,
-    unused: [Unsupported; 3],
+    bytes: extern "system" fn(&Computer) -> u64,
+    alignment: extern "system" fn(&Computer) -> u64,
+    mip_offset: extern "system" fn(&Computer, u32, u32) -> u64,
     offset: unsafe extern "system" fn(&Computer, u32, u32, u64, u32, u32, u32, *mut u32) -> u64,
-    other: [Unsupported; 9],
-}
-
-unsafe extern "system" fn unsupported() -> ! {
-    std::process::abort()
+    coordinate: unsafe extern "system" fn(
+        &Computer,
+        u64,
+        *mut u32,
+        *mut u32,
+        *mut u64,
+        *mut u32,
+        *mut u32,
+        *mut u32,
+    ) -> i32,
+    copy_into: unsafe extern "system" fn(&Computer, *mut u8, u32, u32, *const u8, u32, u32) -> i32,
+    copy_from:
+        unsafe extern "system" fn(&Computer, *mut u8, u32, u32, u32, *const u8, u32, u32) -> i32,
+    resource_tiling: unsafe extern "system" fn(
+        &Computer,
+        *mut u32,
+        *mut tiling::PackedMips,
+        *mut TileShape,
+        *mut u32,
+        u32,
+        *mut tiling::SubresourceTiling,
+    ) -> i32,
+    image_descriptor: unsafe extern "system" fn(&Computer, u32, *mut [u32; 8]) -> i32,
+    is_sparse: extern "system" fn(&Computer) -> u8,
 }
 
 static METHODS: Methods = Methods {
     add_ref,
     release,
     layout: get_layout,
-    unused: [unsupported; 3],
+    bytes: resource_bytes,
+    alignment: resource_alignment,
+    mip_offset,
     offset: element_offset,
-    other: [unsupported; 9],
+    coordinate: coordinates,
+    copy_into: copies::into,
+    copy_from: copies::from,
+    resource_tiling: tiling::resource_tiling,
+    image_descriptor: descriptor::get,
+    is_sparse: tiling::is_sparse,
 };
 
 unsafe extern "system" fn add_ref(this: *mut Computer) -> u32 {
@@ -251,6 +317,32 @@ unsafe extern "system" fn release(this: *mut Computer) -> u32 {
     left
 }
 
+extern "system" fn resource_bytes(this: &Computer) -> u64 {
+    this.depth_stencil.map_or_else(
+        || this.plane.size + this.plane.color_metadata_size(this.color_metadata),
+        DepthStencil::size,
+    )
+}
+
+extern "system" fn resource_alignment(this: &Computer) -> u64 {
+    this.plane.alignment
+}
+
+extern "system" fn mip_offset(this: &Computer, plane: u32, level: u32) -> u64 {
+    if let Some(depth) = this.depth_stencil {
+        return if level == 0 {
+            depth.base(plane).unwrap_or(u64::MAX)
+        } else {
+            u64::MAX
+        };
+    }
+    match plane {
+        0 => this.plane.mip_offset(level).unwrap_or(u64::MAX),
+        1 if this.color_metadata != 0 && level == 0 => this.plane.size,
+        _ => u64::MAX,
+    }
+}
+
 unsafe extern "system" fn get_layout(this: &Computer, out: *mut Layout) -> i32 {
     if out.is_null() {
         return E_POINTER;
@@ -258,7 +350,9 @@ unsafe extern "system" fn get_layout(this: &Computer, out: *mut Layout) -> i32 {
     // The guest supplies one complete layout. Inactive planes and reserved
     // fields have a defined zero representation, irrespective of prior contents.
     unsafe { write_texture_layout(out, this.plane, this.dimension) };
-    if this.color_metadata != 0 {
+    if let Some(depth) = this.depth_stencil {
+        depth.write_planes(unsafe { &mut *out });
+    } else if this.color_metadata != 0 {
         unsafe { (*out).append_color_metadata(this.color_metadata) };
     }
     S_OK
@@ -333,9 +427,11 @@ fn texture_2d_plane(desc: &Texture2DDesc) -> Result<Plane, i32> {
 /// writable layout. Unsupported descriptor combinations return an error.
 #[unsafe(export_name = "XGComputeTexture2DLayout")]
 unsafe extern "system" fn compute_texture_2d(desc: *const Texture2DDesc, out: *mut Layout) -> i32 {
+    let _guard = library::Guard::acquire();
     if desc.is_null() || out.is_null() {
         return E_INVALIDARG;
     }
+    library::initialize();
     let plane = match texture_2d_plane(unsafe { &*desc }) {
         Ok(plane) => plane,
         Err(hr) => return hr,
@@ -352,15 +448,17 @@ unsafe extern "system" fn create_texture_2d(
     desc: *const Texture2DDesc,
     out: *mut *mut Computer,
 ) -> i32 {
+    let _guard = library::Guard::acquire();
     if desc.is_null() || out.is_null() {
         return E_INVALIDARG;
     }
     unsafe { out.write(ptr::null_mut()) };
+    library::initialize();
     let plane = match texture_2d_plane(unsafe { &*desc }) {
         Ok(plane) => plane,
         Err(hr) => return hr,
     };
-    unsafe { allocate_computer(plane, 3, 0, out) }
+    unsafe { allocate_computer(plane, 3, 0, descriptor::Image::Typed((*desc).format), out) }
 }
 
 /// Xbox-specific 1D texture descriptor. It differs from the D3D12 descriptor.
@@ -416,9 +514,11 @@ fn texture_1d_plane(desc: &Texture1DDesc) -> Result<Plane, i32> {
 /// writable layout. Unsupported descriptor combinations return an error.
 #[unsafe(export_name = "XGComputeTexture1DLayout")]
 unsafe extern "system" fn compute_texture_1d(desc: *const Texture1DDesc, out: *mut Layout) -> i32 {
+    let _guard = library::Guard::acquire();
     if desc.is_null() || out.is_null() {
         return E_INVALIDARG;
     }
+    library::initialize();
     let plane = match texture_1d_plane(unsafe { &*desc }) {
         Ok(plane) => plane,
         Err(hr) => return hr,
@@ -435,15 +535,17 @@ unsafe extern "system" fn create_texture_1d(
     desc: *const Texture1DDesc,
     out: *mut *mut Computer,
 ) -> i32 {
+    let _guard = library::Guard::acquire();
     if desc.is_null() || out.is_null() {
         return E_INVALIDARG;
     }
     unsafe { out.write(ptr::null_mut()) };
+    library::initialize();
     let plane = match texture_1d_plane(unsafe { &*desc }) {
         Ok(plane) => plane,
         Err(hr) => return hr,
     };
-    unsafe { allocate_computer(plane, 2, 0, out) }
+    unsafe { allocate_computer(plane, 2, 0, descriptor::Image::Typed((*desc).format), out) }
 }
 
 /// Xbox-specific 3D texture descriptor.
@@ -510,9 +612,11 @@ fn texture_3d_plane(desc: &Texture3DDesc) -> Result<Plane, i32> {
 /// writable layout. Unsupported descriptor combinations return an error.
 #[unsafe(export_name = "XGComputeTexture3DLayout")]
 unsafe extern "system" fn compute_texture_3d(desc: *const Texture3DDesc, out: *mut Layout) -> i32 {
+    let _guard = library::Guard::acquire();
     if desc.is_null() || out.is_null() {
         return E_INVALIDARG;
     }
+    library::initialize();
     let plane = match texture_3d_plane(unsafe { &*desc }) {
         Ok(plane) => plane,
         Err(hr) => return hr,
@@ -529,25 +633,32 @@ unsafe extern "system" fn create_texture_3d(
     desc: *const Texture3DDesc,
     out: *mut *mut Computer,
 ) -> i32 {
+    let _guard = library::Guard::acquire();
     if desc.is_null() || out.is_null() {
         return E_INVALIDARG;
     }
     unsafe { out.write(ptr::null_mut()) };
+    library::initialize();
     let plane = match texture_3d_plane(unsafe { &*desc }) {
         Ok(plane) => plane,
         Err(hr) => return hr,
     };
-    unsafe { allocate_computer(plane, 4, 0, out) }
+    unsafe { allocate_computer(plane, 4, 0, descriptor::Image::Typed((*desc).format), out) }
 }
 
 /// # Safety
 /// `out` must be a valid writable pointer, disjoint from the new object.
 unsafe fn allocate_computer(
-    plane: Plane,
+    mut plane: Plane,
     dimension: u32,
     color_metadata: u8,
+    image: descriptor::Image,
     out: *mut *mut Computer,
 ) -> i32 {
+    let version_four = library::version_four();
+    if version_four {
+        plane.select_version_four();
+    }
     let object = unsafe { alloc(Allocation::new::<Computer>()).cast::<Computer>() };
     if object.is_null() {
         return E_OUTOFMEMORY;
@@ -556,11 +667,57 @@ unsafe fn allocate_computer(
         object.write(Computer {
             methods: &METHODS,
             refs: AtomicU32::new(1),
+            version_four,
             plane,
             dimension,
             color_metadata,
+            depth_stencil: None,
+            image,
         });
         out.write(object);
+    }
+    S_OK
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "system" fn coordinates(
+    this: &Computer,
+    offset: u64,
+    plane: *mut u32,
+    mip: *mut u32,
+    x: *mut u64,
+    y: *mut u32,
+    slice: *mut u32,
+    sample: *mut u32,
+) -> i32 {
+    // HTILE is resolved as a single metadata subresource by the driver.
+    let result = if this.depth_stencil.is_some_and(|d| offset < d.htile_bytes()) {
+        Some((0, 0, 0, 0))
+    } else {
+        this.plane.linear_coordinate(offset)
+    };
+    let Some((level, column, row, layer)) = result else {
+        return E_INVALIDARG;
+    };
+    unsafe {
+        if !plane.is_null() {
+            plane.write(0);
+        }
+        if !mip.is_null() {
+            mip.write(level);
+        }
+        if !x.is_null() {
+            x.write(column);
+        }
+        if !y.is_null() {
+            y.write(row);
+        }
+        if !slice.is_null() {
+            slice.write(layer);
+        }
+        if !sample.is_null() {
+            sample.write(0);
+        }
     }
     S_OK
 }
@@ -579,17 +736,51 @@ unsafe extern "system" fn element_offset(
         // Color elements address whole bytes; metadata may use individual bits.
         unsafe { bit.write(0) };
     }
+    if let Some(depth) = this.depth_stencil {
+        return if mip == 0 && slice == 0 && sample == 0 {
+            depth.offset(plane, x, y).unwrap_or(u64::MAX)
+        } else {
+            u64::MAX
+        };
+    }
     if plane == 1
         && this.color_metadata != 0
         && sample == 0
         && mip == 0
         && slice < this.plane.array_size()
     {
-        let limit = if this.color_metadata == 2 { 1024 } else { 512 };
-        if x >= limit || u64::from(y) >= limit {
+        if x >= 16384 || y >= 16384 {
             return u64::MAX;
         }
-        let (xb, yb): (&[u64], &[u64]) = if this.color_metadata == 2 {
+        let (xb, yb): (&[u64], &[u64]) = if this.version_four {
+            match (this.color_metadata, this.plane.element_bytes()) {
+                (1, _) => (
+                    &[0, 0, 0, 4, 0x1000, 0x2010, 0x820, 0x80, 0x200, 0x4000],
+                    &[0, 0, 0, 8, 0x1800, 0x2000, 0x840, 0x100, 0x400, 0],
+                ),
+                (_, 1) => (
+                    &[0, 0, 0, 0, 0x1000, 0x2008, 0x810, 0x40, 0x100, 0x400],
+                    &[0, 0, 0, 0, 0x1800, 0x2000, 0x820, 0x80, 0x200, 0x4000],
+                ),
+                (_, 2) => (
+                    &[0, 0, 0, 0, 0x1000, 0x2010, 0x820, 0x80, 0x200, 0x4000],
+                    &[0, 0, 0, 8, 0x1800, 0x2000, 0x840, 0x100, 0x400, 0],
+                ),
+                (_, 4) => (
+                    &[0, 0, 0, 8, 0x1000, 0x2020, 0x840, 0x100, 0x400],
+                    &[0, 0, 0, 0x10, 0x1800, 0x2000, 0x880, 0x200, 0x4000],
+                ),
+                (_, 8) => (
+                    &[0, 0, 0, 0x10, 0x1000, 0x2040, 0x880, 0x200, 0x4000],
+                    &[0, 0, 8, 0x20, 0x1800, 0x2000, 0x900, 0x400, 0],
+                ),
+                (_, 16) => (
+                    &[0, 0, 8, 0x20, 0x1000, 0x2080, 0x900, 0x400],
+                    &[0, 0, 0x10, 0x40, 0x1800, 0x2000, 0xa00, 0x4000],
+                ),
+                _ => return u64::MAX,
+            }
+        } else if this.color_metadata == 2 {
             match this.plane.element_bytes() {
                 16 => (
                     &[0, 0, 8, 0x8000, 0x1000, 0x4000, 0x2040, 0x900, 0x8400, 0],
@@ -608,15 +799,15 @@ unsafe extern "system" fn element_offset(
                     &[0, 0, 0, 8, 0x1800, 0x2000, 0x4010, 0x840, 0x8100, 0x400],
                 ),
                 1 => (
-                    &[0, 0, 0, 0, 0x1000, 0x4000, 0xa000, 0x810, 0x8040, 0x100],
-                    &[0, 0, 0, 0, 0x1800, 0x2000, 0x4008, 0x820, 0x8080, 0x200],
+                    &[0, 0, 0, 0, 0x1000, 0x4000, 0xa000, 0x810, 0x8040, 0x100, 0x400],
+                    &[0, 0, 0, 0, 0x1800, 0x2000, 0x4008, 0x820, 0x8080, 0x200, 0],
                 ),
                 _ => return u64::MAX,
             }
         } else {
             (
-                &[0, 0, 0, 4, 0x1000, 0x4000, 0xa000, 0x820, 0x80],
-                &[0, 0, 0, 8, 0x1800, 0x2000, 0xc010, 0x840, 0x100],
+                &[0, 0, 0, 4, 0x1000, 0x4000, 0xa000, 0x820, 0x80, 0x200],
+                &[0, 0, 0, 8, 0x1800, 0x2000, 0xc010, 0x840, 0x100, 0x400],
             )
         };
         let mut bits = 0u64;
@@ -628,34 +819,22 @@ unsafe extern "system" fn element_offset(
                 bits ^= yb[i];
             }
         }
-        let slice_stride_bits = if this.color_metadata == 2 {
-            let (tw, th) = this.plane.metadata_tile_shape();
-            bits += (u64::from(y / th) * u64::from(this.plane.metadata_tile_stride())
-                + x / u64::from(tw))
-                * 65536;
-            let metadata_rows = u64::from(this.plane.metadata_tile_rows());
-            u64::from(this.plane.metadata_tile_stride()) * metadata_rows * 65536
-        } else {
-            65536
-        };
+        let (tw, th, block_bytes) = this.plane.metadata_block(this.color_metadata);
+        let (width, height, _) = this.plane.image_extent();
+        let stride = u64::from(width.div_ceil(tw));
+        let block_bits = block_bytes * 8;
+        bits += (u64::from(y / th) * stride + x / u64::from(tw)) * block_bits;
+        let wide = this.color_metadata == 2 && !this.version_four;
         if slice & 1 != 0 {
-            bits ^= if this.color_metadata == 2 {
-                0x4000
-            } else {
-                0x2000
-            };
+            bits ^= if wide { 0x4000 } else { 0x2000 };
         }
         if slice & 2 != 0 {
-            bits ^= if this.color_metadata == 2 {
-                0x2000
-            } else {
-                0x1000
-            };
+            bits ^= if wide { 0x2000 } else { 0x1000 };
         }
-        if slice & 4 != 0 && this.color_metadata == 2 {
+        if slice & 4 != 0 && wide {
             bits ^= 0x1000;
         }
-        bits += u64::from(slice) * slice_stride_bits;
+        bits += u64::from(slice) * stride * u64::from(height.div_ceil(th)) * block_bits;
         if !bit.is_null() {
             unsafe { bit.write((bits % 8) as u32) };
         }
@@ -667,7 +846,8 @@ unsafe extern "system" fn element_offset(
     let offset = if this.dimension == 4 {
         this.plane.element_offset_in_volume(slice, mip, x, y)
     } else {
-        this.plane.element_offset_in_slice(slice, mip, x, y)
+        this.plane
+            .element_offset_for_hardware(slice, mip, x, y, this.version_four)
     };
     offset.unwrap_or(u64::MAX)
 }
@@ -679,31 +859,31 @@ unsafe extern "system" fn element_offset(
 /// disjoint writable output pointer. Release the returned object through slot 1.
 #[unsafe(export_name = "XGCreateTextureComputer")]
 unsafe extern "system" fn create(desc: *const Desc, out: *mut *mut Computer) -> i32 {
+    let _guard = library::Guard::acquire();
     let result = unsafe { create_inner(desc, out) };
     static FAILURES_LOGGED: AtomicU32 = AtomicU32::new(0);
     if result < 0
         && std::env::var_os("TUXBOX_XG_TRACE").is_some()
         && FAILURES_LOGGED.fetch_add(1, Ordering::Relaxed) < 128
+        && let Some(desc) = unsafe { desc.as_ref() }
     {
-        if let Some(desc) = unsafe { desc.as_ref() } {
-            let message = format!(
-                "TuxBox XGCreateTextureComputer: hr={result:#010x} dimension={} alignment={} width={} height={} depth_or_array={} mips={} format={} samples={} quality={} layout={} flags={:#x}\n\0",
-                desc.dimension,
-                desc.alignment,
-                desc.width,
-                desc.height,
-                desc.slices,
-                desc.mips,
-                desc.format,
-                desc.samples,
-                desc.quality,
-                desc.layout,
-                desc.flags,
-            );
-            unsafe {
-                windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringA(message.as_ptr())
-            };
-        }
+        let message = format!(
+            "TuxBox XGCreateTextureComputer: hr={result:#010x} dimension={} alignment={} width={} height={} depth_or_array={} mips={} format={} samples={} quality={} layout={} flags={:#x}\n\0",
+            desc.dimension,
+            desc.alignment,
+            desc.width,
+            desc.height,
+            desc.slices,
+            desc.mips,
+            desc.format,
+            desc.samples,
+            desc.quality,
+            desc.layout,
+            desc.flags,
+        );
+        unsafe {
+            windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringA(message.as_ptr())
+        };
     }
     result
 }
@@ -716,7 +896,48 @@ unsafe fn create_inner(desc: *const Desc, out: *mut *mut Computer) -> i32 {
     let Some(desc) = (unsafe { desc.as_ref() }) else {
         return E_INVALIDARG;
     };
+    library::initialize();
+    if matches!(desc.flags, 0x0100_0006 | 0x0100_000a | 0x8130_0002) {
+        if library::version_four() {
+            return E_NOTIMPL;
+        }
+        let depth = match DepthStencil::compute(desc) {
+            Ok(depth) => depth,
+            Err(hr) => return hr,
+        };
+        let result = unsafe {
+            allocate_computer(
+                depth.data_plane(false),
+                3,
+                0,
+                descriptor::Image::Typed(desc.format),
+                out,
+            )
+        };
+        if result == S_OK {
+            unsafe { (**out).depth_stencil = Some(depth) };
+        }
+        return result;
+    }
     let (plane, dimension) = match desc.dimension {
+        2 if desc.alignment == 0
+            && desc.flags == 0
+            && desc.samples == 1
+            && desc.quality == 0
+            && desc.height == 1
+            && matches!(desc.layout, 0 | 256) =>
+        {
+            let mut linear = *desc;
+            linear.dimension = 3;
+            linear.layout = 256;
+            if (70..=84).contains(&desc.format) || (94..=99).contains(&desc.format) {
+                return E_INVALIDARG;
+            }
+            match Plane::compute(&linear) {
+                Ok(plane) => (plane, 2),
+                Err(hr) => return hr,
+            }
+        }
         4 => {
             if desc.alignment != 0 || desc.flags != 0 || desc.samples != 1 || desc.quality != 0 {
                 return E_NOTIMPL;
@@ -748,6 +969,10 @@ unsafe fn create_inner(desc: *const Desc, out: *mut *mut Computer) -> i32 {
                 Err(hr) => return hr,
             }
         }
+        3 if matches!(desc.layout, 266 | 273 | 274) => match Plane::compute_sparse_64k(desc) {
+            Ok(plane) => (plane, 3),
+            Err(hr) => return hr,
+        },
         3 if desc.layout == 0
             && desc.mips > 1
             && matches!(
@@ -783,9 +1008,9 @@ unsafe fn create_inner(desc: *const Desc, out: *mut *mut Computer) -> i32 {
             // Xbox's default 2D color layout is the supported 4 KiB swizzle.
             let mut tiled = *desc;
             tiled.layout = 261;
-            if tiled.flags == 4 {
-                tiled.flags = 0;
-            }
+            // Neither UAV access nor disabled color metadata alters the 4 KiB
+            // shader-resource layout, including block-compressed textures.
+            tiled.flags &= !0x0030_0004;
             match Plane::compute(&tiled) {
                 Ok(plane) => (plane, 3),
                 Err(hr) => return hr,
@@ -805,5 +1030,13 @@ unsafe fn create_inner(desc: *const Desc, out: *mut *mut Computer) -> i32 {
     } else {
         0
     };
-    unsafe { allocate_computer(plane, dimension, color_metadata, out) }
+    unsafe {
+        allocate_computer(
+            plane,
+            dimension,
+            color_metadata,
+            descriptor::Image::Typed(desc.format),
+            out,
+        )
+    }
 }

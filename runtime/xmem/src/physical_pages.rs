@@ -1,7 +1,9 @@
 //! CPU page tokens for Frosty's 64 KiB allocation mode.
+use super::shared_pages::{self, Section};
 use core::{ffi::c_void, mem::size_of, ptr, slice};
-use std::collections::{HashMap, HashSet};
-use std::sync::{LazyLock, Mutex};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use windows_sys::Win32::Foundation::{
     ERROR_BUSY, ERROR_INVALID_ADDRESS, ERROR_INVALID_PARAMETER, ERROR_NOT_ENOUGH_MEMORY,
@@ -14,11 +16,14 @@ use windows_sys::Win32::System::Memory::{
 };
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
-const PAGE: usize = 65536;
+const PAGE: usize = shared_pages::PAGE;
 const FLAGS: u64 = 0x2040_0000;
 
-#[derive(Default)]
 struct Page {
+    section: Arc<Section>,
+    offset: u64,
+    aliases: usize,
+    has_section_data: bool,
     mapped: bool,
     saved: Vec<u8>,
 }
@@ -28,9 +33,63 @@ struct Pool {
     next: u64,
     pages: HashMap<u64, Page>,
     mappings: HashMap<usize, u64>,
+    // Only split apertures with live views are retained. An empty original
+    // reservation is coalesced and may be released directly by the guest.
+    apertures: BTreeMap<usize, (usize, usize)>,
 }
 
 static POOL: LazyLock<Mutex<Pool>> = LazyLock::new(|| Mutex::new(Pool::default()));
+
+static RETURNED_TO_SYSTEM: AtomicU64 = AtomicU64::new(0);
+
+fn available_memory() -> Result<u64, u32> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    let mut info = MEMORYSTATUSEX {
+        dwLength: size_of::<MEMORYSTATUSEX>() as u32,
+        ..Default::default()
+    };
+    if unsafe { GlobalMemoryStatusEx(&mut info) } == 0 {
+        return Err(unsafe { GetLastError() });
+    }
+    Ok(info.ullAvailPhys.min(info.ullAvailPageFile))
+}
+
+pub(super) fn relinquished() -> u64 {
+    RETURNED_TO_SYSTEM.load(Ordering::Acquire)
+}
+
+/// 64 KiB guest page tokens draw on sixteen ordinary host pages each.
+#[unsafe(export_name = "XMemGetFreePageStatistics")]
+unsafe extern "system" fn free_page_statistics(output: *mut [u64; 7]) -> i32 {
+    if output.is_null() {
+        return failure(ERROR_INVALID_PARAMETER);
+    }
+    let pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
+    let available = match available_memory() {
+        Ok(bytes) => bytes.saturating_sub(relinquished()),
+        Err(error) => return failure(error),
+    };
+    let host_pages =
+        (available >> 12).saturating_sub(pool.pages.len() as u64 * (PAGE >> 12) as u64);
+    // One title memory node, regular pages only. The console repeats the node
+    // counters in the second set on a single-pool system. TuxBox owns no
+    // standby page list or physically contiguous large-page pool.
+    unsafe { output.write_unaligned([0, host_pages, 0, 0, host_pages, 0, 0]) };
+    1
+}
+
+pub(super) fn relinquish(bytes: u64) -> Result<(), u32> {
+    let pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
+    let returned = relinquished()
+        .checked_add(bytes)
+        .ok_or(ERROR_NOT_ENOUGH_MEMORY)?;
+    let available = available_memory()?;
+    if returned > available.saturating_sub(pool.pages.len() as u64 * PAGE as u64) {
+        return Err(ERROR_NOT_ENOUGH_MEMORY);
+    }
+    RETURNED_TO_SYSTEM.store(returned, Ordering::Release);
+    Ok(())
+}
 
 fn failure(code: u32) -> i32 {
     // SAFETY: this sets the calling thread's last-error code.
@@ -40,16 +99,33 @@ fn failure(code: u32) -> i32 {
 
 impl Pool {
     fn allocate(&mut self, count: usize) -> Result<u64, u32> {
+        let available = available_memory()?.saturating_sub(relinquished());
+        let max_pages = (available / PAGE as u64).saturating_sub(self.pages.len() as u64);
+        if count as u64 > max_pages {
+            return Err(ERROR_NOT_ENOUGH_MEMORY);
+        }
         let last = self
             .next
             .checked_add(count as u64)
+            .filter(|&n| n <= u64::MAX / super::partitions::TITLE_PAGE_STRIDE)
             .ok_or(ERROR_NOT_ENOUGH_MEMORY)?;
         self.pages
             .try_reserve(count)
             .map_err(|_| ERROR_NOT_ENOUGH_MEMORY)?;
         let first = self.next + 1;
+        let section = Arc::new(Section::new(count));
         for token in first..=last {
-            self.pages.insert(token, Page::default());
+            self.pages.insert(
+                token * super::partitions::TITLE_PAGE_STRIDE,
+                Page {
+                    mapped: false,
+                    aliases: 0,
+                    saved: Vec::new(),
+                    offset: (token - first) * PAGE as u64,
+                    section: Arc::clone(&section),
+                    has_section_data: false,
+                },
+            );
         }
         self.next = last;
         Ok(first)
@@ -61,7 +137,7 @@ impl Pool {
             .map_err(|_| ERROR_NOT_ENOUGH_MEMORY)?;
         for token in tokens {
             let page = self.pages.get(token).ok_or(ERROR_INVALID_PARAMETER)?;
-            if page.mapped {
+            if page.mapped || page.aliases != 0 {
                 return Err(ERROR_BUSY);
             }
             if !seen.insert(*token) {
@@ -71,7 +147,111 @@ impl Pool {
         Ok(())
     }
 
+    fn aperture(&self, address: usize) -> Option<(usize, usize)> {
+        let (&base, &(bytes, _)) = self.apertures.range(..=address).next_back()?;
+        (address - base < bytes).then_some((base, bytes))
+    }
+
+    // Try the placeholder operations themselves. This avoids keeping records
+    // for empty apertures which games can release with plain VirtualFree.
+    fn map_shared_page(&mut self, at: usize, token: u64) -> Result<bool, u32> {
+        let existing = self.aperture(at);
+        let info = shared_pages::region(at)?;
+        if info.State != MEM_RESERVE
+            || info.AllocationProtect != windows_sys::Win32::System::Memory::PAGE_NOACCESS
+        {
+            return if existing.is_some() {
+                Err(ERROR_INVALID_ADDRESS)
+            } else {
+                Ok(false)
+            };
+        }
+        let (base, extent) = existing.unwrap_or((
+            info.AllocationBase.addr(),
+            info.BaseAddress.addr() + info.RegionSize - info.AllocationBase.addr(),
+        ));
+        let page = self.pages.get_mut(&token).ok_or(ERROR_INVALID_PARAMETER)?;
+        if page.mapped {
+            return Err(ERROR_BUSY);
+        }
+        if let Err(e) = shared_pages::isolate_page(at, &info) {
+            return if existing.is_some() {
+                Err(e)
+            } else {
+                Ok(false)
+            };
+        }
+        if let Err(e) = page.section.map(page.offset, at) {
+            if existing.is_some() {
+                return Err(e);
+            }
+            // With a full 64 KiB ordinary reservation there is no split to
+            // distinguish its type; replacement reports failure without writes.
+            if extent == PAGE {
+                return Ok(false);
+            }
+            shared_pages::coalesce(base, extent)?;
+            return Err(e);
+        }
+        if !page.saved.is_empty() {
+            unsafe {
+                ptr::copy_nonoverlapping(page.saved.as_ptr(), at as *mut u8, PAGE);
+            }
+            page.saved = Vec::new();
+        }
+        page.has_section_data = true;
+        page.aliases += 1;
+        self.mappings.insert(at, token);
+        self.apertures.entry(base).or_insert((extent, 0)).1 += 1;
+        Ok(true)
+    }
+
+    fn unmap_shared_page(&mut self, at: usize) -> Result<(), u32> {
+        let (base, extent) = self.aperture(at).ok_or(ERROR_INVALID_ADDRESS)?;
+        let token = *self.mappings.get(&at).ok_or(ERROR_INVALID_ADDRESS)?;
+        shared_pages::unmap(at)?;
+        if self.apertures[&base].1 == 1 {
+            if let Err(error) = shared_pages::coalesce(base, extent) {
+                // The failed coalesce left the original placeholder intact.
+                // Restore the caller's view before reporting the failure.
+                let page = &self.pages[&token];
+                page.section.map(page.offset, at)?;
+                return Err(error);
+            }
+            self.apertures.remove(&base);
+        } else {
+            self.apertures.get_mut(&base).unwrap().1 -= 1;
+        }
+        self.pages.get_mut(&token).unwrap().aliases -= 1;
+        self.mappings.remove(&at);
+        Ok(())
+    }
+
     fn map(&mut self, address: usize, bytes: usize, tokens: &[u64]) -> Result<(), u32> {
+        if tokens.iter().any(|t| !self.pages.contains_key(t)) {
+            return Err(ERROR_INVALID_PARAMETER);
+        }
+        self.mappings
+            .try_reserve(tokens.len())
+            .map_err(|_| ERROR_NOT_ENOUGH_MEMORY)?;
+        if self.map_shared_page(address, tokens[0])? {
+            let (base, extent) = self.aperture(address).unwrap();
+            for (i, &token) in tokens.iter().enumerate().skip(1) {
+                let at = address + i * PAGE;
+                let result = if at - base < extent {
+                    self.map_shared_page(at, token)
+                } else {
+                    Err(ERROR_INVALID_ADDRESS)
+                };
+                if !matches!(result, Ok(true)) {
+                    for prior in (0..i).rev() {
+                        self.unmap_shared_page(address + prior * PAGE)?;
+                    }
+                    return Err(result.err().unwrap_or(ERROR_INVALID_ADDRESS));
+                }
+            }
+            return Ok(());
+        }
         self.validate_unmapped(tokens)?;
         let mut info = MEMORY_BASIC_INFORMATION::default();
         let mut cursor = address;
@@ -101,12 +281,18 @@ impl Pool {
         if (0..tokens.len()).any(|i| self.mappings.contains_key(&(address + i * PAGE))) {
             return Err(ERROR_BUSY);
         }
-        self.mappings
-            .try_reserve(tokens.len())
-            .map_err(|_| ERROR_NOT_ENOUGH_MEMORY)?;
         // SAFETY: caller owns the reserved range exclusively during this operation.
         if unsafe { VirtualAlloc(address as _, bytes, MEM_COMMIT, PAGE_READWRITE) }.is_null() {
             return Err(unsafe { GetLastError() });
+        }
+        for (i, &token) in tokens.iter().enumerate() {
+            let p = &self.pages[&token];
+            if p.has_section_data && p.saved.is_empty()
+                && let Err(e) = p.section.read_into(p.offset, (address + i * PAGE) as *mut u8)
+            {
+                unsafe { VirtualFree(address as _, bytes, MEM_DECOMMIT); }
+                return Err(e);
+            }
         }
         for (i, token) in tokens.iter().enumerate() {
             let at = address + i * PAGE;
@@ -126,11 +312,36 @@ impl Pool {
     }
 
     fn unmap(&mut self, address: usize, bytes: usize) -> Result<(), u32> {
+        if let Some((base, extent)) = self.aperture(address) {
+            if address + bytes > base + extent {
+                return Err(ERROR_INVALID_ADDRESS);
+            }
+            let mut entries = Vec::new();
+            entries
+                .try_reserve_exact(bytes / PAGE)
+                .map_err(|_| ERROR_NOT_ENOUGH_MEMORY)?;
+            for at in (address..address + bytes).step_by(PAGE) {
+                entries.push((at, *self.mappings.get(&at).ok_or(ERROR_INVALID_ADDRESS)?));
+            }
+            for (i, &(at, _)) in entries.iter().enumerate() {
+                if let Err(e) = self.unmap_shared_page(at) {
+                    for &(prior, token) in entries[..i].iter().rev() {
+                        self.map_shared_page(prior, token)?;
+                    }
+                    return Err(e);
+                }
+            }
+            return Ok(());
+        }
         // Take a snapshot of every mapped page before changing the reservation.
         // Allocation or read failure leaves every mapping in place for a retry.
         for at in (address..address + bytes).step_by(PAGE) {
             let token = self.mappings.get(&at).ok_or(ERROR_INVALID_ADDRESS)?;
             let page = self.pages.get_mut(token).expect("mapping owns a live page");
+            if !page.mapped {
+                // A legacy range cannot span into another reservation's section views.
+                return Err(ERROR_INVALID_ADDRESS);
+            }
             if page.saved.is_empty() {
                 page.saved
                     .try_reserve_exact(PAGE)
@@ -196,7 +407,11 @@ pub unsafe extern "system" fn allocate(flags: u64, count: *mut usize, tokens: *m
     };
     for i in 0..requested {
         // SAFETY: caller provided requested entries.
-        unsafe { tokens.add(i).write_unaligned(first + i as u64) };
+        unsafe {
+            tokens
+                .add(i)
+                .write_unaligned((first + i as u64) * super::partitions::TITLE_PAGE_STRIDE)
+        };
     }
     unsafe { count.write_unaligned(requested) };
     1
@@ -215,8 +430,46 @@ pub unsafe extern "system" fn free(count: usize, tokens: *const u64) -> i32 {
     // SAFETY: the caller supplies the initialized array.
     let tokens = unsafe { slice::from_raw_parts(tokens, count) };
     let mut pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
-    if let Err(e) = pool.validate_unmapped(tokens) {
-        return failure(e);
+    let mut owners = HashSet::new();
+    if owners.try_reserve(count).is_err() {
+        return failure(ERROR_NOT_ENOUGH_MEMORY);
+    }
+    let mut live = 0;
+    for &token in tokens {
+        let Some(page) = pool.pages.get(&token) else {
+            return failure(ERROR_INVALID_PARAMETER);
+        };
+        if !owners.insert(token) {
+            return failure(ERROR_INVALID_PARAMETER);
+        }
+        // A plain VirtualAlloc reservation is caller-managed. An actual
+        // XMem AWE aperture can be automatically unmapped on physical free.
+        if page.mapped {
+            return failure(ERROR_BUSY);
+        }
+        live += page.aliases;
+    }
+    if live > 0 {
+        let mut mapped = Vec::new();
+        if mapped.try_reserve_exact(live).is_err() {
+            return failure(ERROR_NOT_ENOUGH_MEMORY);
+        }
+        mapped.extend(
+            pool.mappings
+                .iter()
+                .filter(|(_, token)| owners.contains(token))
+                .map(|(&at, &token)| (at, token)),
+        );
+        for (i, &(at, _)) in mapped.iter().enumerate() {
+            if let Err(error) = pool.unmap_shared_page(at) {
+                for &(prior, token) in mapped[..i].iter().rev() {
+                    if !matches!(pool.map_shared_page(prior, token), Ok(true)) {
+                        return failure(ERROR_INVALID_ADDRESS);
+                    }
+                }
+                return failure(error);
+            }
+        }
     }
     for token in tokens {
         pool.pages.remove(token);
@@ -303,7 +556,11 @@ pub unsafe extern "system" fn map_scatter(
     }
     for &address in input {
         let at = address as usize;
-        if at == 0 || !at.is_multiple_of(PAGE) || at.checked_add(PAGE).is_none() || !unique.insert(at) {
+        if at == 0
+            || !at.is_multiple_of(PAGE)
+            || at.checked_add(PAGE).is_none()
+            || !unique.insert(at)
+        {
             return failure(ERROR_INVALID_PARAMETER);
         }
         pages.push(at);
@@ -315,13 +572,18 @@ pub unsafe extern "system" fn map_scatter(
     }
     if tokens.is_null() {
         for &at in &pages {
-            let Some(&token) = pool.mappings.get(&at) else { return failure(ERROR_INVALID_ADDRESS); };
+            let Some(&token) = pool.mappings.get(&at) else {
+                return failure(ERROR_INVALID_ADDRESS);
+            };
             associated.push(token);
         }
         for (index, &at) in pages.iter().enumerate() {
             if let Err(error) = pool.unmap(at, PAGE) {
                 for prior in (0..index).rev() {
-                    if pool.map(pages[prior], PAGE, &associated[prior..prior + 1]).is_err() {
+                    if pool
+                        .map(pages[prior], PAGE, &associated[prior..prior + 1])
+                        .is_err()
+                    {
                         return failure(ERROR_INVALID_ADDRESS);
                     }
                 }
@@ -331,7 +593,9 @@ pub unsafe extern "system" fn map_scatter(
     } else {
         // SAFETY: The caller supplies count readable tokens, checked above.
         let values = unsafe { slice::from_raw_parts(tokens, count) };
-        if let Err(error) = pool.validate_unmapped(values) { return failure(error); }
+        if values.iter().any(|token| !pool.pages.contains_key(token)) {
+            return failure(ERROR_INVALID_PARAMETER);
+        }
         for (index, (&at, &token)) in pages.iter().zip(values).enumerate() {
             if let Err(error) = pool.map(at, PAGE, core::slice::from_ref(&token)) {
                 for prior in (0..index).rev() {

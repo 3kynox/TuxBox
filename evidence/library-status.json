@@ -11,8 +11,8 @@
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox Rust device and command providers with desktop D3D12 root-signature serialization.",
-      "scope": "Two Xbox device profiles, eight feature queries, GPU heaps, guest-backed textures, queues, indirect compute, direct and indirect mesh dispatch, descriptor and query operations, and 32 identifiers. Frosty creates 680-byte mesh pipelines and 712-byte graphics pipelines through ID3D12Device2 and presents 3840 \u00d7 2160 frames. A fresh Proton prefix running the checkout-built providers displays the menu and video preview, opens Settings and enters the Wake Up sequence. GPU tests cover indexed draws, depth/stencil writes, NV12 plane copies, and whole and regional copies into a tiled RGBA8 texture with guest-memory writeback and alias readback. The framebuffer-preservation size getter matches the supplied DLL in its initial state.",
-      "remaining": "Six PE functions, additional Xbox interface methods and pipeline subobjects, and more retail shaders remain open. Guest-backed color textures still need render-target and UAV writes. Using distinct overlapping layouts in the same GPU write batch remains unsupported. Virtual-memory configuration accepts no valid requests yet; the initial framebuffer-size check does not cover a configured state.",
+      "scope": "Two Xbox device profiles, eight feature queries, GPU heaps, guest-backed textures, queues, indirect compute, direct and indirect mesh dispatch, descriptor and query operations, and 32 identifiers. Frosty creates 680-byte mesh pipelines and 712-byte graphics pipelines through ID3D12Device2 and presents 3840 \u00d7 2160 frames. A fresh Proton prefix running the checkout-built providers displays the menu and video preview, opens Settings and enters the Wake Up sequence. GPU tests cover indexed draws, depth/stencil writes, NV12 plane copies, and whole and regional copies into a tiled RGBA8 texture with guest-memory writeback and alias readback. The framebuffer-preservation size getter matches the supplied DLL in its initial state. The Series VM configuration computes a process GPU address range for zero-preservation requests. Placed-texture GPU readbacks exercise that range, explicit CPU cache flush and memory profiling. Two private UMD operations implement record updates and final-release callbacks. The first three PIX callbacks support capture-device setup.",
+      "remaining": "Custom firmware installation through XVIO remains unsupported. PIX requests above 32 bytes and active capture, private descriptor heaps (selector 2), nonzero framebuffer backing and profiling and cache visibility for other graphics mappings remain open. Further work includes Xbox interface methods, retail shaders, render-target and UAV writes to guest-backed textures, and overlapping writes through distinct layouts.",
       "evidence": [
         "runtime/d3d12/README.md",
         "evidence/matrix-awakens/retail-chase-cinematic.json",
@@ -27,6 +27,7 @@
         "evidence/providers/lanes-xbox-valve.json",
         "evidence/lanes-xbox-input.json",
         "evidence/providers/d3d12-exports.json",
+        "evidence/providers/d3d12-custom-microcode.json",
         "evidence/providers/d3d12-bringup-valve.json",
         "evidence/providers/d3d12-bringup-radeon.json",
         "evidence/providers/d3d12-bringup-ge.json",
@@ -52,7 +53,10 @@
         "evidence/matrix-awakens/mesh-command-list-nvidia.json",
         "evidence/matrix-awakens/mesh-command-list-radeon.json",
         "evidence/matrix-awakens/nanite-mesh-retail.json",
-        "evidence/providers/d3d12-memory-config.json"
+        "evidence/providers/d3d12-memory-config.json",
+        "evidence/providers/d3d12-private-driver.json",
+        "evidence/providers/d3d12-configured-placement.json",
+        "runtime/d3d12/src/pix_driver.rs"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/d3d12_xs.dll",
@@ -140,9 +144,14 @@
           "IID_IDXGISwapChain1",
           "IID_IGraphicsUnknown",
           "WKPDID_D3DDebugObjectNameW",
-          "GetFrameBufferPreserveMemorySizeBytes"
+          "GetFrameBufferPreserveMemorySizeBytes",
+          "PixGetPixieEntryPoints",
+          "D3D12ConfigureVirtualMemoryX",
+          "D3D12XboxEnableMemoryProfiling",
+          "D3DFlushEntireCpuCache",
+          "InternalDriverCallX"
         ],
-        "notes": "Fifteen of 22 functions and all 32 data exports have verified behavior. The original DLL returns DXGI_ERROR_UNSUPPORTED for four legacy DXGIX exports. Rendering coverage is tracked through separate device and command-list tests. D3D12ZeroMemoryX was checked in CPU mode."
+        "notes": "Twenty-one of 22 functions and all 32 data exports have verified behavior. The original DLL returns DXGI_ERROR_UNSUPPORTED for four legacy DXGIX exports. Rendering coverage is tracked through separate device and command-list tests. D3D12ZeroMemoryX was checked in CPU mode."
       },
       "inventory": {
         "source_path": "EmbeddedXvd/Windows/System32/d3d12_xs.dll",
@@ -168,15 +177,18 @@
       "name": "dxcompiler_xs.dll",
       "group": "Graphics and memory",
       "status": "partial",
-      "provider": "TuxBox PE forwarder to desktop DXC.",
-      "scope": "Both SDK factories create a desktop DXC utility object through the Xbox DLL. Tests check blob contents, lifetime and use of a caller-supplied allocator.",
-      "remaining": "The console ray-tracing factories CreateXdxrCompiler and CreateXdxrCompiler2 remain unimplemented.",
+      "provider": "TuxBox Rust ray compiler adapter and desktop DXC.",
+      "scope": "All four factories have tested behavior. Three Frosty ray-generation shaders passed shader table preparation, and the Xbox linker accepted TuxBox continuation collections for five Frosty miss shaders. Global and local root UAVs produced the expected results on a desktop GPU.",
+      "remaining": "General shader suspension and traversal, additional root-signature layouts, and a host implementation of the Xbox scheduler\u2019s indirect GPU calls.",
       "evidence": [
         "runtime/dxc/dxcompiler_xs.def",
         "evidence/matrix-awakens/valve-dxc-utils.json",
         "evidence/matrix-awakens/ge-dxc-utils.json",
         "evidence/providers/dxc-allocator.json",
-        "evidence/providers/dxc-factories.json"
+        "evidence/providers/dxc-factories.json",
+        "runtime/dxc/README.md",
+        "evidence/providers/xdxr-link.json",
+        "evidence/matrix-awakens/three-library-comparison.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/dxcompiler_xs.dll",
@@ -184,6 +196,8 @@
         "total": 4,
         "data_exports": [],
         "verified": [
+          "CreateXdxrCompiler",
+          "CreateXdxrCompiler2",
           "DxcCreateInstance",
           "DxcCreateInstance2"
         ]
@@ -208,8 +222,8 @@
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox Rust CPU memory provider.",
-      "scope": "Nine exports cover heap allocation, working-set statistics, virtual memory, and the CPU side of the title\u2019s 64 KiB physical-page profile. The guest preserves 131,072 bytes across unmap and remap in reversed page order. XMemMakeTag matches the supplied routine on 5,120 inputs. XMemVirtualQuery explicitly reports unsupported pending a verified Xbox success path. Allocation and free calls route through installed callbacks; a local reference control checks argument forwarding and restoring defaults. XMemGetWriteWatch and XMemResumeWriteWatch match the checked suspension transitions and host dirty-page query. The checked write-watch allocation profiles are exercised end-to-end on the CPU. Scatter mapping supports provider-owned CPU pages with remapping and guard checks. Profile 1 accepts checked CPU reserve/commit and ordinary protection combinations. Ordinary CPU heap routing covers the tested attribute fields, including zero. The tested CPU virtual allocation profile includes executable and guard protections. The host title heap interoperates with XMem default allocation; ordinary private heap modes are supported.",
-      "remaining": "GPU-visible backing, concurrent aliases, the Xbox partition allocator, additional allocation profiles and retail validation remain open. XMemVirtualQuery console metadata and success-path reference comparison remain open. Memory profiling callbacks and concurrent guest callback lifetime remain unverified. Other XMemSetOption IDs and untested Xbox allocation profiles remain unsupported; console concurrency has not been compared. Scatter mapping has not been compared against the console NT success path and does not support GPU backing or simultaneous aliases. Xbox partition heap, special alignment and allocation-failure behavior remain unverified. XMemCreateWin32Heap custom-base and Xbox partition modes remain unsupported; title heap is host-backed.",
+      "scope": "All 31 functions and the history data export have tested behavior. Frosty\u2019s physical-page reservations share writable 64 KiB pages across virtual addresses. Tests cover partition accounting, heaps, pools, virtual queries, allocation tags, write-watch, scatter mapping, history and the seven HTTP callbacks.",
+      "remaining": "GPU-visible physical pages, DirectStorage access, additional allocation profiles and native partition handles need further verification. Stock Proton requires explicit binding to the Xbox WinHTTP callback table.",
       "evidence": [
         "runtime/xmem/xmem.def",
         "runtime/xmem/README.md",
@@ -224,7 +238,11 @@
         "evidence/providers/xmem-scatter.json",
         "evidence/providers/xmem-virtual-cpu.json",
         "evidence/providers/xmem-heap-profiles.json",
-        "evidence/providers/xmem-heaps.json"
+        "evidence/providers/xmem-heaps.json",
+        "evidence/providers/xmem-partitions.json",
+        "evidence/providers/xmem-query-http.json",
+        "evidence/providers/xmem-pools-diagnostics.json",
+        "evidence/matrix-awakens/three-library-comparison.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/xmem.dll",
@@ -237,18 +255,35 @@
           "XMemAlloc",
           "XMemAllocDefault",
           "XMemAllocatePhysicalPages",
+          "XMemCreateWin32Heap",
+          "XMemDumpMemoryStats",
           "XMemFree",
           "XMemFreeDefault",
           "XMemFreePhysicalPages",
+          "XMemGetAllocationHysteresis",
+          "XMemGetAllocationStatistics",
+          "XMemGetFreePageStatistics",
+          "XMemGetPartitionHandleAndId",
+          "XMemGetPhysicalMemoryLayout",
+          "XMemGetTitleHeap",
+          "XMemGetWin32HeapStatistics",
           "XMemGetWorkingSetStatistics",
-          "XMemMapPhysicalPages",
-          "XMemVirtualAlloc",
-          "XMemMakeTag",
-          "XMemSetAllocationHooks",
           "XMemGetWriteWatch",
-          "XMemResumeWriteWatch",
+          "XMemHistoryData",
+          "XMemIsToolsMemAvailable",
+          "XMemMakeTag",
+          "XMemMapPhysicalPages",
           "XMemMapPhysicalPagesScatter",
-          "XMemGetTitleHeap"
+          "XMemPreallocateFreeSpace",
+          "XMemResumeWriteWatch",
+          "XMemSetAllocationHooks",
+          "XMemSetAllocationHysteresis",
+          "XMemSetOption",
+          "XMemSetWin32HeapTrackingHooks",
+          "XMemSetWinHttpHooks",
+          "XMemTransferMemory",
+          "XMemVirtualAlloc",
+          "XMemVirtualQuery"
         ],
         "notes": "The physical-page controls validate CPU data and ownership for flags 0x20400000. The packaged DLL could not initialize xbthunk on either Proton build."
       },
@@ -280,8 +315,8 @@
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox texture address computer.",
-      "scope": "Computes linear and 4 KiB tiled 2D textures, array slices and packed mip chains. TuxBox and the supplied DLL matched on 9,231,018 texel or block addresses across 78 formats and 156 layouts. A separate check includes eight descriptors from Frosty. XGComputeBufferLayout matches the supplied DLL on 967 buffer descriptors, including invalid arguments and full output guards. The 2D-specific layout and computer exports match the supplied DLL on 7,020 sampled layouts and 81,432 sampled addresses for the checked usage and swizzle profiles. The 1D-specific layout and computer exports match 4,104 sampled linear layouts and 45,144 addresses for 57 uncompressed formats. The 3D-specific layout and computer exports match 17,385 sampled linear and single-mip tiled layouts and 673,740 sampled addresses for 57 uncompressed formats. Tile shapes for buffers and checked 2D formats matched the supplied DLL across 11,990 cases. Depth/stencil swizzle validation matched the supplied DLL across 6,125 cases. Optimal swizzle selection matches the supplied DLL across 70,200 cases; the eight-argument ABI is confirmed at two supplied driver call sites. Unpacked tiled 3D mip chains match 5,472 sampled layouts and 1,723,680 addresses. Bounded packed 3D mip tails match 13,760 sampled layouts and 5,191,200 addresses. Additional default and 64 KiB 2D profiles cover selected color formats, usage flags, metadata planes, bounded rectangular mip chains, and one-mip arrays of up to eight slices; the linked differential controls define the tested bounds. A startup trace replay matched full layouts and two sampled addresses for 1,637 of 1,639 distinct successful Frosty descriptors, with the remaining two rejected.",
-      "remaining": "Further formats and tiling modes, other packed and untested tiled 3D mip chains, multisampling and subresource copies. Calling an unimplemented texture computer method terminates the guest. Other 2D-specific descriptor profiles return unsupported. Block-compressed and other untested 1D descriptor profiles return unsupported. Compressed 3D textures, depth-only mip chains and other untested 3D profiles return unsupported. Tile shapes for 1D and 3D match the sampled reference rejections; unknown formats remain unsupported. Other SDK versions and source-level defaults for the eighth argument are unverified. The newer 64 KiB profiles remain bounded to the dimensions, formats, flags, mip and array combinations checked by the differential controls; other combinations are unsupported.",
+      "scope": "All 21 exports and all 13 texture-computer methods have tested behavior. TuxBox matched the full layout and sampled addresses of all 1,760 distinct Frosty descriptors captured through frame two. DCC checks cross-decoded 205,920 blocks across 45 formats.",
+      "remaining": "Additional descriptor views, multisampling and sparse mip chains. DCC deltas for wider components and further swizzles.",
       "evidence": [
         "runtime/xg-layout/src/lib.rs",
         "evidence/providers/xg-control.json",
@@ -315,7 +350,10 @@
         "evidence/providers/xg-texture-64k-arrays.json",
         "evidence/providers/xg-texture-64k-arrayflags.json",
         "evidence/providers/xg-texture-64kmipsrect.json",
-        "evidence/providers/xg-frosty-trace-replay.json"
+        "evidence/providers/xg-frosty-trace-replay.json",
+        "evidence/providers/xg-library.json",
+        "evidence/providers/xg-dcc.json",
+        "evidence/matrix-awakens/three-library-comparison.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/xg_xs.dll",
@@ -323,17 +361,27 @@
         "total": 21,
         "data_exports": [],
         "verified": [
-          "XGCreateTextureComputer",
           "XGComputeBufferLayout",
-          "XGComputeTexture2DLayout",
-          "XGCreateTexture2DComputer",
+          "XGComputeOptimalDepthStencilSwizzleMode",
+          "XGComputeOptimalSwizzleMode",
           "XGComputeTexture1DLayout",
-          "XGCreateTexture1DComputer",
+          "XGComputeTexture2DLayout",
           "XGComputeTexture3DLayout",
-          "XGCreateTexture3DComputer",
           "XGComputeTileShape",
-          "XGValidateDepthStencilSwizzleMode",
-          "XGComputeOptimalSwizzleMode"
+          "XGCreateTexture1DComputer",
+          "XGCreateTexture2DComputer",
+          "XGCreateTexture3DComputer",
+          "XGCreateTextureComputer",
+          "XGCreateTextureComputerFromDescriptor",
+          "XGDecodeDCC",
+          "XGEnableExclusiveLocking",
+          "XGEncodeDCC",
+          "XGEnterExclusiveLock",
+          "XGInitializeLibrary",
+          "XGLeaveExclusiveLock",
+          "XGSetHardwareVersion",
+          "XGTerminateLibrary",
+          "XGValidateDepthStencilSwizzleMode"
         ]
       },
       "inventory": {

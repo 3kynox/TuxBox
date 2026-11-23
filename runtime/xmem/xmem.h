@@ -13,6 +13,23 @@ __declspec(dllimport) void *WINAPI XMemAllocDefault(SIZE_T bytes, UINT64 attribu
 __declspec(dllimport) void WINAPI XMemFreeDefault(void *memory, UINT64 attributes);
 __declspec(dllimport) HANDLE WINAPI XMemGetTitleHeap(void);
 __declspec(dllimport) HANDLE WINAPI XMemCreateWin32Heap(UINT64 flags, void *base);
+typedef struct XMEM_POOL_STATS {
+    DWORD size, reserved;
+    UINT64 extent, cached;
+    DWORD commits, decommits;
+} XMEM_POOL_STATS;
+__declspec(dllimport) SIZE_T WINAPI XMemGetAllocationHysteresis(UINT kind, BOOL large);
+__declspec(dllimport) BOOL WINAPI XMemSetAllocationHysteresis(UINT kind, BOOL large, SIZE_T bytes);
+__declspec(dllimport) BOOL WINAPI XMemPreallocateFreeSpace(UINT kind, BOOL large);
+__declspec(dllimport) BOOL WINAPI XMemGetAllocationStatistics(UINT kind, BOOL large, XMEM_POOL_STATS *out);
+typedef void (WINAPI *XMEM_HEAP_ALLOCATED)(HANDLE, DWORD, SIZE_T, void *);
+typedef void (WINAPI *XMEM_HEAP_REALLOCATED)(HANDLE, DWORD, void *, void *, SIZE_T);
+typedef void (WINAPI *XMEM_HEAP_FREED)(HANDLE, DWORD, void *);
+__declspec(dllimport) void WINAPI XMemSetWin32HeapTrackingHooks(XMEM_HEAP_ALLOCATED, XMEM_HEAP_REALLOCATED, XMEM_HEAP_FREED);
+__declspec(dllimport) BOOL WINAPI XMemGetWin32HeapStatistics(HANDLE heap, SIZE_T stats[2]);
+__declspec(dllimport) BOOL WINAPI XMemGetFreePageStatistics(UINT64 counts[7]);
+__declspec(dllimport) BOOL WINAPI XMemIsToolsMemAvailable(void);
+__declspec(dllimport) void WINAPI XMemDumpMemoryStats(char *buffer, SIZE_T capacity);
 typedef void *(WINAPI *XMEM_ALLOC_HOOK)(SIZE_T bytes, UINT64 attributes);
 typedef void (WINAPI *XMEM_FREE_HOOK)(void *memory, UINT64 attributes);
 __declspec(dllimport) void WINAPI XMemSetAllocationHooks(XMEM_ALLOC_HOOK allocate, XMEM_FREE_HOOK release);

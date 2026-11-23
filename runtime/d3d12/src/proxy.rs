@@ -149,8 +149,15 @@ pub(crate) unsafe extern "system" fn add_ref<N, S>(this: *mut Proxy<N, S>) -> u3
 }
 
 pub(crate) unsafe extern "system" fn release<N, S>(this: *mut Proxy<N, S>) -> u32 {
+    unsafe { release_with(this, || {}) }
+}
+
+/// Run the device disposal notification while the native object and guest
+/// identity are still available. Only the final releasing thread invokes it.
+pub(crate) unsafe fn release_with<N, S>(this: *mut Proxy<N, S>, on_final: impl FnOnce()) -> u32 {
     let refs = unsafe { (*this).refs.fetch_sub(1, Ordering::AcqRel) } - 1;
     if refs == 0 {
+        on_final();
         // Only the thread that dropped the last reference can destroy the proxy.
         drop(unsafe { Box::from_raw(this) });
     }

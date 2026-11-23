@@ -172,8 +172,13 @@ def build_target(tools, target, dxc, d3d12_reference=None):
         out.mkdir(parents=True, exist_ok=True)
         dll = tools.rust_library("tuxbox-xmem")
         tools.link(out / "xmem.dll", dll, *RUST_STD_LIBS, exports=src / "xmem.def")
+        tools.link(out / "tuxbox_xhttp.dll", tools.rust_library("tuxbox-xmem-http"), "winhttp.lib", *RUST_STD_LIBS, exports=src / "xhttp.def")
+        http = tools.compile(src / "http_control.cpp", out, "/W4", "/WX")
+        tools.link(out / "xmem-http.exe", http, "xmem.lib", "tuxbox_xhttp.lib", "kernel32.lib")
         guest = tools.compile(src / "guest.c", out, "/W4")
         tools.link(out / "xmem-smoke.exe", guest, "xmem.lib", "kernel32.lib")
+        partitions = tools.compile(src / "partition_control.c", out, "/W4", "/WX")
+        tools.link(out / "xmem-partitions.exe", partitions, "xmem.lib", "kernel32.lib")
     elif target in ("xgameruntime", "xcrdapi"):
         src, out = ROOT / "runtime" / target, OUTPUT / target
         out.mkdir(parents=True, exist_ok=True)
@@ -192,6 +197,10 @@ def build_target(tools, target, dxc, d3d12_reference=None):
         out.mkdir(parents=True, exist_ok=True)
         tools.link(out / "xg_xs.dll", tools.rust_library("tuxbox-xg"), *RUST_STD_LIBS,
                    exports=src / "xg_xs.def")
+        library = tools.compile(src / "library_control.cpp", out, "/W4", "/WX")
+        tools.link(out / "xg-library.exe", library, "xg_xs.lib", "kernel32.lib")
+        dcc = tools.compile(src / "dcc_control.cpp", out, "/W4", "/WX")
+        tools.link(out / "xg-dcc.exe", dcc, "xg_xs.lib", "kernel32.lib")
         guest = tools.compile(src / "guest.cpp", out, "/W4", "/WX")
         tools.link(out / "xg-texture.exe", guest, "xg_xs.lib", "kernel32.lib")
         # The optional console control uses the same guest and its own supplied DLL.
@@ -234,9 +243,12 @@ def build_target(tools, target, dxc, d3d12_reference=None):
     elif target == "dxc-utils":
         src, out = ROOT / "runtime/dxc", OUTPUT / "dxc-utils"
         obj = tools.compile(src / "module.c", out, "/W4", "/WX")
-        tools.link(out / "dxcompiler_xs.dll", obj, exports=src / "dxcompiler_xs.def", no_entry=True)
+        tools.link(out / "dxcompiler_xs.dll", tools.rust_library("tuxbox-dxc"), *RUST_STD_LIBS,
+                   exports=src / "dxcompiler_xs.def")
         guest = tools.compile(src / "guest.cpp", out, "/W4", "/WX")
         tools.link(out / "dxc-utils.exe", guest, "dxcompiler_xs.lib", "kernel32.lib")
+        xdxr = tools.compile(src / "xdxr_guest.cpp", out, "/W4", "/WX")
+        tools.link(out / "xdxr-link.exe", xdxr, "dxcompiler_xs.lib", "kernel32.lib", "ole32.lib")
         tools.link(out / "dxcompiler_x.dll", obj, exports=src / "dxcompiler_x.def", no_entry=True)
         guest_x = tools.compile(src / "guest.cpp", out, "/W4", "/WX", "/DTUXBOX_DXC_XBOX_ONE")
         tools.link(out / "dxc-x.exe", guest_x, "dxcompiler_x.lib", "kernel32.lib")
@@ -323,7 +335,7 @@ def build_target(tools, target, dxc, d3d12_reference=None):
         xmem, d3d, gameinput = OUTPUT / "xmem-smoke", OUTPUT / "d3d12-smoke", OUTPUT / "gameinput"
         tools.link(objects / "lanes.exe", course, screen, controls, game, xmem / "xmem.lib", d3d / "d3d12_xs.lib",
                    gameinput / "guest-gameinput.lib", "onecore_apiset.lib", "/nodefaultlib:kernel32.lib")
-        for source in (objects / "lanes.exe", xmem / "xmem.dll", d3d / "d3d12_xs.dll",
+        for source in (objects / "lanes.exe", xmem / "xmem.dll", xmem / "tuxbox_xhttp.dll", d3d / "d3d12_xs.dll",
                        gameinput / "GameInput.dll", src / "MicrosoftGame.config"):
             shutil.copyfile(source, package / source.name)
         print(package / "MicrosoftGame.config", flush=True)

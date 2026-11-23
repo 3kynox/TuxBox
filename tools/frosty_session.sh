@@ -78,6 +78,11 @@ if (( $# == 0 )) && [[ ${run_options[0]:-} != --prepare-only ]]; then
         set -- "$@" -nosound
     fi
 fi
+if [[ " ${*,,} " == *" -nosound "* ]]; then
+    # Wine's media enumeration can still probe PulseAudio in a muted game.
+    # An unresponsive server otherwise blocks the game thread before frame one.
+    export PULSE_SERVER=unix:/dev/null
+fi
 if [[ ${run_options[0]:-} != --prepare-only && " ${*,,} " != *" -nullrhi "* ]]; then
     if [[ ${profile_pipelines:-false} == true ]]; then run_options+=(--profile-pipelines); fi
     case ${TUXBOX_MANGOHUD:-auto} in

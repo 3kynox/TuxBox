@@ -685,9 +685,35 @@ unsafe extern "system" fn create_list_x(
     }
 }
 
+pub(crate) type DisposeCallback = unsafe extern "system" fn(*mut c_void, *mut c_void);
+
+/// Accept the controlling guest device identity. Other COM object layouts
+/// cannot contain the device's callback slot.
+pub(crate) unsafe fn set_dispose_callback(
+    device: *mut c_void, callback: Option<DisposeCallback>, context: *mut c_void,
+) -> HRESULT {
+    if device.is_null() || unsafe { device.cast::<*const Slot>().read_unaligned() } != DEVICE.as_ptr() {
+        return E_INVALIDARG;
+    }
+    let state = unsafe { &(*device.cast::<Device>()).state };
+    *state.disposal.lock().unwrap_or_else(|e| e.into_inner()) =
+        callback.map(|callback| (callback, context.expose_provenance()));
+    HRESULT(0)
+}
+
+unsafe extern "system" fn release_device(this: *mut Device) -> u32 {
+    unsafe { crate::proxy::release_with(this, || {
+        let hook = (*this).state.disposal.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some((callback, context)) = hook {
+            callback(this.cast(), core::ptr::with_exposed_provenance_mut(context));
+        }
+    }) }
+}
+
 static DEVICE: Slots<160> = {
     let mut slots = object_slots::<ID3D12Device, dxgi::DxgiDevice, 160>();
     slots[0] = crate::slot!(dxgi::query);
+    slots[2] = crate::slot!(release_device);
     slots[8] = crate::slot!(create_queue);
     slots[9] = crate::slot!(create_allocator);
     slots[13] = crate::slot!(features::query);

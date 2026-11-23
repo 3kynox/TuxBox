@@ -2,6 +2,7 @@ LIBRARY d3d12_xs
 EXPORTS
     D3D12ZeroMemoryX @1
     GetFrameBufferPreserveMemorySizeBytes @2
+    PixGetPixieEntryPoints @3
     D3D12ConfigureVirtualMemoryX @5
     D3D10CreateBlob=d3dcompiler_47.D3DCreateBlob @4
     D3D12CreateRootSignatureDeserializer=d3d12.D3D12CreateRootSignatureDeserializer @7
@@ -10,9 +11,12 @@ EXPORTS
     D3D12GetDebugInterface @9
     D3D12SerializeRootSignature=d3d12.D3D12SerializeRootSignature @10
     D3D12SerializeVersionedRootSignature=d3d12.D3D12SerializeVersionedRootSignature @11
+    D3D12UploadCustomMicrocodeX @12
+    D3D12XboxEnableMemoryProfiling @14
     D3D12XboxGetProcessDebugFlags @15
     D3D12XboxSetProcessDebugFlags @16
     D3D12XboxCreateDevice @13
+    D3DFlushEntireCpuCache @17
     DXGIXGetFrameStatistics=tuxbox_dxgix_unsupported @18
     DXGIXPresentArray=tuxbox_dxgix_unsupported @19
     DXGIXSetFrameNotification=tuxbox_dxgix_unsupported @20
@@ -48,4 +52,5 @@ EXPORTS
     IID_IDXGISwapChain @50 DATA
     IID_IDXGISwapChain1 @51 DATA
     IID_IGraphicsUnknown @52 DATA
+    InternalDriverCallX @53
     WKPDID_D3DDebugObjectNameW @54 DATA

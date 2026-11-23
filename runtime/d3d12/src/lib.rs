@@ -6,6 +6,7 @@ mod diagnostics;
 mod exports;
 mod guids;
 mod present;
+mod private_driver;
 mod proxy;
 
 // Guest vtables mix signatures. Each entry is called by its x64 ABI slot.
@@ -133,7 +134,12 @@ pub unsafe extern "system" fn create_device(
     }
     // SAFETY: The host helper accepts a null or borrowed adapter and writes
     // a single owned guest device reference to the caller's cleared output.
-    unsafe { device::create(adapter, requested, out) }
+    let status = unsafe { device::create(adapter, requested, out) };
+    if status.is_ok() {
+        exports::device_vm_created();
+        private_driver::activate();
+    }
+    status
 }
 
 /// The console's standard-named factory selects its default Xbox record.

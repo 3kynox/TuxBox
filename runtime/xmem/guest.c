@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <psapi.h>
 #include <wchar.h>
@@ -146,8 +147,43 @@ static int virtual_query(void)
     REQUIRE(GetLastError() == ERROR_INVALID_PARAMETER);
     REQUIRE(VirtualFree(base, 0, MEM_RELEASE));
     memset(&out, 0xa5, sizeof out);
-    REQUIRE(!XMemVirtualQuery(GetCurrentProcess(), base, &out.info));
-    REQUIRE(GetLastError() == ERROR_NOT_SUPPORTED && !memcmp(&out, sentinel, sizeof out));
+    MEMORY_BASIC_INFORMATION released = {0};
+    REQUIRE(VirtualQuery(base, &released, sizeof released) == sizeof released);
+    REQUIRE(XMemVirtualQuery(GetCurrentProcess(), base, &out.info));
+    REQUIRE(!memcmp(&out.info.memory, &released, sizeof released) && released.State == MEM_FREE);
+    REQUIRE(out.info.console_flags == 1 && !out.info.console_tag);
+    REQUIRE(out.before == 0xa5a5a5a5a5a5a5a5ull && out.after == out.before);
+    base = XMemVirtualAlloc(NULL, 2 * system.dwPageSize, MEM_RESERVE, 1, PAGE_READONLY);
+    REQUIRE(base && XMemVirtualAlloc(base + system.dwPageSize, system.dwPageSize, MEM_COMMIT, 1, PAGE_READONLY));
+    const void *addresses[] = {base, base + system.dwPageSize, module};
+    for (unsigned i = 0; i < 3; ++i) {
+        MEMORY_BASIC_INFORMATION expected = {0};
+        REQUIRE(VirtualQuery(addresses[i], &expected, sizeof expected) == sizeof expected);
+        memset(&out, 0xa5, sizeof out);
+        REQUIRE(XMemVirtualQuery(GetCurrentProcess(), addresses[i], &out.info));
+        REQUIRE(!memcmp(&out.info.memory, &expected, sizeof expected));
+        REQUIRE(out.info.console_flags == 1 && !out.info.console_tag);
+        REQUIRE(out.before == 0xa5a5a5a5a5a5a5a5ull && out.after == out.before);
+    }
+    REQUIRE(VirtualFree(base, 0, MEM_RELEASE));
+    for (DWORD watch = 0; watch < 2; ++watch) {
+        DWORD kind = MEM_RESERVE | MEM_COMMIT | (watch ? MEM_WRITE_WATCH : 0);
+        base = XMemVirtualAlloc(NULL, 65536, kind, 1, PAGE_READWRITE);
+        REQUIRE(base);
+        base[0] = 0x77;
+        REQUIRE(XMemVirtualQuery(GetCurrentProcess(), base, &out.info));
+        REQUIRE(out.info.memory.State == (MEM_COMMIT | (watch ? (1u << 21) : 0)));
+        REQUIRE(out.info.memory.Protect == PAGE_READWRITE && out.info.console_flags == 1);
+        if (watch) {
+            void* dirty = NULL; ULONG_PTR count = 1; DWORD granularity = 0;
+            REQUIRE(!GetWriteWatch(0,base,4096,&dirty,&count,&granularity) && count == 1 && dirty == base);
+        }
+        REQUIRE(VirtualFree(base,0,MEM_RELEASE));
+    }
+    void *placement = XMemAllocDefault(65536, XMEM_PLACEMENT_ATTRIBUTES);
+    REQUIRE(placement && !XMemVirtualQuery(GetCurrentProcess(),placement,&out.info));
+    REQUIRE(GetLastError() == ERROR_NOT_SUPPORTED);
+    XMemFreeDefault(placement,XMEM_PLACEMENT_ATTRIBUTES);
     return 0;
 }
 
@@ -247,10 +283,34 @@ static int write_watch(void)
     REQUIRE(XMemResumeWriteWatch());
     REQUIRE(!XMemGetWriteWatch(0, (void *)base, 4 * page, output.pages, &count, &granularity));
     REQUIRE(count == 1 && output.pages[0] == (void *)(base + page));
+    // New direct CPU allocations capture the active tagging policy.
+    for (unsigned enabled = 0; enabled < 2; ++enabled) {
+        setting.id = 2; setting.value = enabled;
+        XMemSetOption(&setting);
+        BYTE *direct = XMemAllocDefault(0x21003, 0x05000000);
+        REQUIRE(direct && !((UINT_PTR)direct & 31));
+        direct[0x21002] = 42;
+        XMEM_VIRTUAL_INFO query = {0};
+        REQUIRE(XMemVirtualQuery(GetCurrentProcess(), direct + 4096, &query));
+        REQUIRE(query.memory.RegionSize == (enabled ? 0x22000 : 0x21000));
+        REQUIRE(query.console_tag == (enabled ? ((UINT64)0x41566d58 << 32) | (XMemMakeTag(0x586d5641) >> 40) : 0));
+        XMemFreeDefault(direct, 0x05000000);
+    }
+    setting.id = 2; setting.value = 0; XMemSetOption(&setting);
+    for (unsigned enabled = 0; enabled < 2; ++enabled) {
+        setting.id = 0x10001; setting.value = enabled; XMemSetOption(&setting);
+        volatile BYTE *aperture = XMemVirtualAlloc(NULL, 0x10000, 0x20402000, 3, 0x2404);
+        REQUIRE(aperture && XMemVirtualAlloc((void *)aperture, 0x10000, 0x20401000, 3, 0x2404) == aperture);
+        aperture[page] = 7;
+        count = 4; granularity = 0;
+        DWORD status = XMemGetWriteWatch(0, (void *)aperture, 0x10000, output.pages, &count, &granularity);
+        REQUIRE(status != 0);  // desktop retail has no tools partition
+        REQUIRE(VirtualFree((void *)aperture, 0, MEM_RELEASE));
+    }
     setting.id = 0xfeed;
-    SetLastError(0);
+    SetLastError(0xbee7);
     XMemSetOption(&setting);
-    REQUIRE(GetLastError() == ERROR_NOT_SUPPORTED);
+    REQUIRE(GetLastError() == 0xbee7);
     XMemSetOption(NULL);
     REQUIRE(GetLastError() == ERROR_INVALID_PARAMETER);
     REQUIRE(VirtualFree((void *)base, 0, MEM_RELEASE));
@@ -383,6 +443,104 @@ static int heap_profiles(void)
     return 0;
 }
 
+static int allocator_pools(void)
+{
+    const SIZE_T block = 4u << 20;
+    XMEM_POOL_STATS stats = {0};
+    stats.size = sizeof stats; stats.reserved = 0xa5a5a5a5;
+    REQUIRE(XMemGetAllocationHysteresis(16, 0) == (SIZE_T)-1 && GetLastError() == ERROR_INVALID_PARAMETER);
+    for (unsigned i = 0; i < 16; ++i) {
+        SIZE_T initial = (i >= 1 && i <= 6) || (i >= 10 && i <= 12) ? 16 * block : 2 * block;
+        REQUIRE(XMemGetAllocationHysteresis(i, 0) == initial && XMemGetAllocationHysteresis(i, 2) == initial);
+    }
+    REQUIRE(XMemSetAllocationHysteresis(0, 0, block + 1) && XMemGetAllocationHysteresis(0, 0) == 2 * block);
+    REQUIRE(XMemPreallocateFreeSpace(0, 0) && XMemGetAllocationStatistics(0, 0, &stats));
+    REQUIRE(stats.cached == 2 * block && stats.extent == stats.cached && stats.commits == 2);
+    BYTE *first = XMemAllocDefault(240, 0x08000000), *second = XMemAllocDefault(258, 0x09000000);
+    REQUIRE(first && second && !((UINT_PTR)first & 255) && !((UINT_PTR)second & 511));
+    memset(first, 0x1b, 240); memset(second, 0xce, 258);
+    REQUIRE(first[239] == 0x1b && second[257] == 0xce && XMemGetAllocationStatistics(0, 0, &stats));
+    REQUIRE(stats.cached == block && stats.reserved == 0xa5a5a5a5 && stats.commits == 2);
+    REQUIRE(XMemSetAllocationHysteresis(0, 0, 0));
+    REQUIRE(XMemGetAllocationStatistics(0, 0, &stats) && stats.cached == 0 && stats.decommits == 1);
+    XMemFreeDefault(first, 0x08000000);
+    REQUIRE(second[257] == 0xce); XMemFreeDefault(second, 0x09000000);
+    REQUIRE(XMemGetAllocationStatistics(0, 0, &stats) && stats.decommits == 2 && stats.extent == 2 * block);
+    REQUIRE(XMemGetAllocationStatistics(0, 1, &stats) && stats.commits == 0 && stats.decommits == 0);
+    REQUIRE(XMemGetAllocationHysteresis(0, 1) == 2 * block);
+    stats.size = 31; REQUIRE(!XMemGetAllocationStatistics(0, 0, &stats) && GetLastError() == ERROR_BAD_LENGTH);
+    return 0;
+}
+
+static void *tracked_allocation, *tracked_release;
+static void WINAPI on_heap_alloc(HANDLE heap, DWORD flags, SIZE_T bytes, void *pointer)
+{
+    if (heap == XMemGetTitleHeap() && !flags && bytes == 73) tracked_allocation = pointer;
+}
+static void WINAPI on_heap_free(HANDLE heap, DWORD flags, void *pointer)
+{
+    if (heap == XMemGetTitleHeap() && !flags) tracked_release = pointer;
+}
+static int heap_diagnostics(void)
+{
+    SetLastError(0); REQUIRE(!XMemIsToolsMemAvailable() && GetLastError() == ERROR_OBJECT_NOT_FOUND);
+    UINT64 page_counts[9] = {0};
+    page_counts[0] = page_counts[8] = 0x1122334455667788ULL;
+    REQUIRE(XMemGetFreePageStatistics(&page_counts[1]));
+    REQUIRE(page_counts[0] == page_counts[8] && page_counts[8] == 0x1122334455667788ULL);
+    REQUIRE(!page_counts[1] && page_counts[2] && !page_counts[3] && !page_counts[4]);
+    REQUIRE(!memcmp(&page_counts[2], &page_counts[5], 3 * sizeof(UINT64)));
+    MEMORYSTATUSEX host = {0};
+    host.dwLength = sizeof host;
+    REQUIRE(GlobalMemoryStatusEx(&host));
+    UINT64 observed = page_counts[2] << 12;
+    UINT64 available = min(host.ullAvailPhys, host.ullAvailPageFile);
+    UINT64 drift = observed > available ? observed - available : available - observed;
+    REQUIRE(drift < 64ull * 1024 * 1024);
+    if (available >= (2ull << 30)) {
+        // Empty CPU tokens claim physical budget without touching 512 MiB of RAM.
+        SIZE_T n = 8192;
+        UINT64 *tokens = calloc(n, sizeof *tokens);
+        REQUIRE(tokens && XMemAllocatePhysicalPages(0x20400000, &n, tokens) && n == 8192);
+        UINT64 charged[7];
+        REQUIRE(XMemGetFreePageStatistics(charged));
+        REQUIRE(charged[1] + 65536 < page_counts[2]);
+        REQUIRE(XMemFreePhysicalPages(n, tokens));
+        free(tokens);
+    }
+    HMODULE module = GetModuleHandleW(L"xmem.dll");
+    const UINT64 *volatile *history = (const UINT64 *volatile *)GetProcAddress(module, "XMemHistoryData");
+    REQUIRE(history && (FARPROC)history == GetProcAddress(module, MAKEINTRESOURCEA(18)) && *history);
+    MEMORY_BASIC_INFORMATION view;
+    REQUIRE(VirtualQuery(*history, &view, sizeof view) == sizeof view && view.Protect == PAGE_READONLY);
+    for (int retry = 0; retry < 30 && !((const volatile UINT64 *)*history)[15]; ++retry) Sleep(100);
+    REQUIRE((*history)[0] >= (*history)[1] && (*history)[1] && (*history)[15] && (*history)[16]);
+    XMemSetWin32HeapTrackingHooks(on_heap_alloc, NULL, on_heap_free);
+    void *p = XMemAllocDefault(73, 0);
+    REQUIRE(p && tracked_allocation == p);
+    XMemFreeDefault(p, 0);
+    REQUIRE(tracked_release == p);
+    XMemSetWin32HeapTrackingHooks(NULL, NULL, NULL);
+    tracked_allocation = tracked_release = NULL;
+    p = XMemAllocDefault(73, 0); REQUIRE(p); XMemFreeDefault(p, 0);
+    REQUIRE(!tracked_allocation && !tracked_release);
+
+    HANDLE heap = XMemCreateWin32Heap(4, NULL);
+    SIZE_T before[2], after[2];
+    REQUIRE(heap && XMemGetWin32HeapStatistics(heap, before) && before[0] > 0);
+    SIZE_T bytes = 8u << 20;
+    void *big = HeapAlloc(heap, 0, bytes);
+    REQUIRE(big && XMemGetWin32HeapStatistics(heap, after));
+    REQUIRE(after[0] + after[1] >= before[0] + before[1] + bytes);
+    REQUIRE(HeapFree(heap, 0, big) && HeapDestroy(heap));
+    char dump[4096], small[] = "123456789";
+    XMemDumpMemoryStats(dump, sizeof dump);
+    REQUIRE(strstr(dump, "SYSTEM PERFORMANCE INFO") && strstr(dump, "CommittedPages: "));
+    XMemDumpMemoryStats(small + 1, 5);
+    REQUIRE(!memcmp(small, "1XXXX\0""789", sizeof small));
+    return 0;
+}
+
 static int title_and_private_heaps(void)
 {
     HMODULE module = GetModuleHandleW(L"xmem.dll");
@@ -447,7 +605,7 @@ static int allocation_pair(Allocation allocate, Release release)
     release((void *)placed, XMEM_PLACEMENT_ATTRIBUTES);
     REQUIRE(VirtualQuery((void *)placed, &area, sizeof area) == sizeof area && area.State == MEM_FREE);
     REQUIRE(!allocate(0, XMEM_ORDINARY_ATTRIBUTES));
-    REQUIRE(!allocate(1, 0x00804000) && GetLastError() == ERROR_NOT_SUPPORTED);
+    REQUIRE(!allocate(1, 0x1f804000) && GetLastError() == ERROR_NOT_SUPPORTED);
     release(NULL, XMEM_ORDINARY_ATTRIBUTES);
 
     return 0;
@@ -457,6 +615,54 @@ static BOOL page_state(BYTE *at, DWORD state)
 {
     MEMORY_BASIC_INFORMATION info;
     return VirtualQuery(at, &info, sizeof info) == sizeof info && info.State == state;
+}
+
+static int physical_aliases(void)
+{
+    const SIZE_T page = 65536;
+    UINT64 tokens[2]; SIZE_T count = 2;
+    REQUIRE(XMemAllocatePhysicalPages(0x20400000, &count, tokens) && count == 2);
+    BYTE *a = XMemVirtualAlloc(NULL, page * 4, 0x20402000, 0x23, 0x2404);
+    BYTE *b = XMemVirtualAlloc(NULL, page * 2, 0x20402000, 0x23, 0x10404);
+    REQUIRE(a && b && page_state(a, MEM_RESERVE) && page_state(b, MEM_RESERVE));
+    UINT64 twice[] = {tokens[0], tokens[0]};
+    REQUIRE(XMemMapPhysicalPages(a + page, 2, twice) == a + page);
+    REQUIRE(XMemMapPhysicalPages(b, 1, tokens) == b);
+    for (SIZE_T i = 0; i < page; ++i) {
+        a[page + i] = (BYTE)(i ^ (i >> 8));
+        REQUIRE(a[2 * page + i] == a[page + i] && b[i] == a[page + i]);
+    }
+    b[34] = 99;
+    REQUIRE(a[page + 34] == 99 && a[2 * page + 34] == 99);
+    // The second destination is occupied. The first view must roll back
+    // while all previous aliases and their contents remain usable.
+    void *mixed[] = {a, b};
+    REQUIRE(!XMemMapPhysicalPagesScatter(mixed, 2, tokens));
+    REQUIRE(page_state(a, MEM_RESERVE) && b[34] == 99);
+    REQUIRE(XMemMapPhysicalPages(a + page, 2, NULL) == a + page);
+    REQUIRE(page_state(a + page, MEM_RESERVE) && b[34] == 99);
+    REQUIRE(XMemMapPhysicalPages(b, 1, NULL) == b);
+    void *spread[] = {b + page, a + 3 * page};
+    REQUIRE(XMemMapPhysicalPagesScatter(spread, 2, twice));
+    REQUIRE(b[page + 34] == 99 && a[3 * page + 34] == 99);
+    a[3 * page + 34] = 101;
+    REQUIRE(b[page + 34] == 101 && XMemMapPhysicalPagesScatter(spread, 2, NULL));
+    MEMORY_BASIC_INFORMATION region;
+    REQUIRE(VirtualQuery(a, &region, sizeof region) && region.RegionSize == page * 4);
+    REQUIRE(VirtualQuery(b, &region, sizeof region) && region.RegionSize == page * 2);
+    REQUIRE(VirtualFree(a, 0, MEM_RELEASE) && VirtualFree(b, 0, MEM_RELEASE));
+    BYTE *ordinary = VirtualAlloc(NULL, page, MEM_RESERVE, PAGE_NOACCESS);
+    REQUIRE(ordinary && XMemMapPhysicalPages(ordinary, 1, tokens) == ordinary && ordinary[34] == 101);
+    ordinary[34] = 102;
+    REQUIRE(XMemMapPhysicalPages(ordinary, 1, NULL) == ordinary && VirtualFree(ordinary, 0, MEM_RELEASE));
+    a = XMemVirtualAlloc(NULL, page, 0x20402000, 0x23, 0x2404);
+    REQUIRE(a && XMemMapPhysicalPages(a, 1, tokens) == a && a[34] == 102);
+    b = XMemVirtualAlloc(NULL, page, 0x20402000, 0x23, 0x10404);
+    REQUIRE(b && XMemMapPhysicalPages(b, 1, tokens) == b && b[34] == 102);
+    REQUIRE(XMemFreePhysicalPages(2, tokens));
+    REQUIRE(page_state(a, MEM_RESERVE) && page_state(b, MEM_RESERVE));
+    REQUIRE(VirtualFree(a, 0, MEM_RELEASE) && VirtualFree(b, 0, MEM_RELEASE));
+    return 0;
 }
 
 static int physical_pages(void)
@@ -580,7 +786,9 @@ int wmain(int argc, wchar_t **argv)
     REQUIRE(app_local_provider());
     if (heaps_only) {
         REQUIRE(!title_and_private_heaps());
-        const char result[] = "xmem-heaps PASS title=1 private=4 invalid=2\n";
+        REQUIRE(!allocator_pools());
+        REQUIRE(!heap_diagnostics());
+        const char result[] = "xmem-heaps PASS title=1 private=4 invalid=2 pool-commits=2 pool-decommits=2 heap-callbacks=2 stats=1 dump=1 history=2 page-classes=3\n";
         if (report && (fputs(result, report) == EOF || fclose(report))) return 2;
         fputs(result, stdout);
         return 0;
@@ -608,7 +816,7 @@ int wmain(int argc, wchar_t **argv)
     }
     if (watch_only) {
         REQUIRE(!write_watch());
-        const char result[] = "xmem-watch PASS initial=2 reset=2 next=1 guards=2 invalid=1 pause=2 resume=3 allocations=2\n";
+        const char result[] = "xmem-watch PASS initial=2 reset=2 next=1 guards=2 invalid=1 pause=2 resume=3 allocations=2 direct-tags=2 retail-apertures=2\n";
         if (report && (fputs(result, report) == EOF || fclose(report))) return 2;
         fputs(result, stdout);
         return 0;
@@ -629,14 +837,15 @@ int wmain(int argc, wchar_t **argv)
     }
     if (query_only) {
         REQUIRE(!virtual_query());
-        const char result[] = "xmem-query PASS unsupported=3 guards=2 null=1\n";
+        const char result[] = "xmem-query PASS cpu=5 released=1 unsupported=3 guards=2 null=1\n";
         if (report && (fputs(result, report) == EOF || fclose(report))) return 2;
         fputs(result, stdout);
         return 0;
     }
     if (pages_only) {
         REQUIRE(!physical_pages());
-        const char result[] = "xmem-pages PASS cpu-pages=2 remapped-bytes=131072 stale-and-foreign-rejected=1\n";
+        REQUIRE(!physical_aliases());
+        const char result[] = "xmem-pages PASS cpu-pages=2 remapped-bytes=131072 stale-and-foreign-rejected=1 shared-aliases=3 scatter-aliases=2 rollback=1 free-unmaps=2\n";
         if (report && (fputs(result, report) == EOF || fclose(report))) return 2;
         fputs(result, stdout);
         return 0;
