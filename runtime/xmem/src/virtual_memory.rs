@@ -254,6 +254,19 @@ pub unsafe extern "system" fn virtual_alloc(
     profile: u64,
     protect: u32,
 ) -> *mut c_void {
+    let result = unsafe { virtual_alloc_inner(address, bytes, allocation_type, profile, protect) };
+    super::diagnostics::watch("XMemVirtualAlloc", result as usize, bytes, || format!(
+        "requested={address:p} type={allocation_type:#x} profile={profile:#x} protect={protect:#x}"));
+    result
+}
+
+unsafe fn virtual_alloc_inner(
+    address: *mut c_void,
+    bytes: usize,
+    allocation_type: u32,
+    profile: u64,
+    protect: u32,
+) -> *mut c_void {
     // GTA's startup heap requests a single committed read/write range with
     // console page and cache attributes. Back its CPU accesses with ordinary
     // host pages so the original base can also be released with VirtualFree.

@@ -162,6 +162,11 @@ unsafe fn create(
                     }
                 }
             }
+            16 => {
+                // Depth-stencil format; Scarlett-only depth formats use a host family.
+                let format = payload.cast::<windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT>();
+                unsafe { format.write(super::format::host_format(format.read())) };
+            }
             7 => {
                 stream_output =
                     unsafe { (*payload.cast::<D3D12_STREAM_OUTPUT_DESC>()).NumEntries != 0 }
@@ -175,7 +180,12 @@ unsafe fn create(
                         .write(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE.0)
                 };
             }
-            15 => formats = payload.cast(),
+            15 => {
+                formats = payload.cast();
+                let targets = unsafe { &mut *formats };
+                let mut none = windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_UNKNOWN;
+                super::format::host_targets(&mut targets.RTFormats, &mut none);
+            }
             17 => samples = unsafe { (*payload.cast::<DXGI_SAMPLE_DESC>()).Count },
             18 => node_mask = unsafe { payload.cast::<u32>().read() },
             // Cached native Xbox PSOs are hints, specific to the console driver.
@@ -402,10 +412,51 @@ unsafe fn create(
             }
             Err(error) => crate::diagnostics::pipeline_stages(&hashes, error.code().0, true),
         }
-        return retry;
+        if retry.is_ok() { return retry; }
+        return unsafe { null_pipeline(host, &native_desc, &fields, stream_output, geometry_record) }.unwrap_or(retry);
     }
     crate::diagnostics::pipeline_stages(&hashes, status.0, false);
-    initial
+    unsafe { null_pipeline(host, &native_desc, &fields, stream_output, geometry_record) }.unwrap_or(initial)
+}
+
+/// Retry a rejected stream with resource-free shaders (see `fallback`). Mesh
+/// and stream-output pipelines keep their original failure.
+unsafe fn null_pipeline(
+    host: &ID3D12Device2,
+    desc: &D3D12_PIPELINE_STATE_STREAM_DESC,
+    fields: &[Option<*mut D3D12_SHADER_BYTECODE>; 8],
+    stream_output: bool,
+    geometry: *mut D3D12_SHADER_BYTECODE,
+) -> Option<windows::core::Result<ID3D12PipelineState>> {
+    use super::fallback::{Stage, bytecode, enabled, shader, substituted};
+    if !enabled() || stream_output || fields[6].is_some() || fields[7].is_some() {
+        return None;
+    }
+    let compute = fields[5].is_some();
+    let replacement = |index: usize| match index {
+        0 => shader(Stage::Vertex).map(bytecode),
+        1 => shader(Stage::Pixel).map(bytecode),
+        5 => shader(Stage::Compute).map(bytecode),
+        _ => Some(D3D12_SHADER_BYTECODE::default()),
+    };
+    // Compute shaders first, so a missing compiler leaves the stream untouched.
+    let codes: Vec<_> = (0..6).map(|i| fields[i].map(|_| replacement(i))).collect();
+    if codes.iter().any(|c| matches!(c, Some(None))) {
+        return None;
+    }
+    for (i, code) in codes.into_iter().enumerate() {
+        if let (Some(field), Some(Some(code))) = (fields[i], code) {
+            unsafe { field.write(code) };
+        }
+    }
+    if !geometry.is_null() {
+        unsafe { geometry.write(D3D12_SHADER_BYTECODE::default()) };
+    }
+    let result = unsafe { host.CreatePipelineState(desc) };
+    if result.is_ok() {
+        substituted(if compute { "compute stream" } else { "raster stream" });
+    }
+    Some(result)
 }
 
 pub(super) unsafe extern "system" fn create_pipeline(

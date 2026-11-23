@@ -1047,7 +1047,7 @@ unsafe fn create_inner(desc: *const Desc, out: *mut *mut Computer) -> i32 {
             Ok(plane) => (plane, 3),
             Err(hr) => return hr,
         },
-        3 if matches!(desc.layout, 266 | 273 | 274) => match Plane::compute_sparse_64k(desc) {
+        3 if matches!(desc.layout, 265 | 266 | 273 | 274) => match Plane::compute_sparse_64k(desc) {
             Ok(plane) => (plane, 3),
             Err(hr) => return hr,
         },

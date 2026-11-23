@@ -14,6 +14,7 @@ use crate::commands::{wrap_command_list, wrap_command_queue};
 use crate::proxy::{Proxy, Slot, Slots, allocate, check_output, child_slots, object_slots, unwrap};
 
 mod allocation;
+mod fallback;
 pub(crate) mod blas;
 pub(crate) mod compute;
 mod compute_scene;
@@ -23,6 +24,7 @@ mod descriptor_copy;
 pub(crate) mod descriptor_paging;
 mod dxgi;
 mod features;
+pub(crate) mod format;
 pub(crate) mod frame_events;
 mod fence;
 mod graphics;
@@ -50,6 +52,8 @@ pub(crate) enum Backing {
     Addressed(std::sync::Arc<views::TextureAddress>, D3D12_RESOURCE_DESC),
     Placed(std::sync::Arc<placement::Texture>),
     Depth(Box<depth::Pair>),
+    /// A host image in a different format family; reports the guest description.
+    Translated(D3D12_RESOURCE_DESC),
 }
 impl Backing {
     pub(crate) fn placed(&self) -> Option<&std::sync::Arc<placement::Texture>> {
@@ -73,6 +77,19 @@ pub(crate) struct ResourceState {
     stencil: std::sync::OnceLock<std::sync::Arc<stencil::Surface>>,
 }
 impl ResourceState {
+    /// Guest description of an image whose host format family differs.
+    pub(crate) fn translated(&self) -> Option<&D3D12_RESOURCE_DESC> {
+        match &self.backing {
+            Backing::Translated(guest) | Backing::Addressed(_, guest)
+                if !depth::paired(guest) && format::substitute(guest).is_some() => Some(guest),
+            _ => None,
+        }
+    }
+    /// A Scarlett depth image whose unordered access has no host backing yet:
+    /// its UAVs are null and unordered-access states use COMMON on the host.
+    pub(crate) fn unbacked_uav(&self) -> bool {
+        self.translated().is_some_and(format::is_depth)
+    }
     pub(crate) fn buffer_window(&self) -> Option<(u64, u64)> {
         if let Backing::Addressed(address, desc) = &self.backing
             && address.buffer_offset != 0
@@ -170,8 +187,30 @@ unsafe extern "system" fn map_resource(
     data: Out,
 ) -> HRESULT {
     let host = &this.native;
+    if let Backing::Placed(texture) = &this.state.backing {
+        // The host image is device memory; its contents live at the guest address.
+        let Some(address) = texture.guest_pointer(subresource) else { return E_INVALIDARG };
+        if !data.is_null() {
+            unsafe { data.write(address as *mut c_void) };
+        }
+        return windows::Win32::Foundation::S_OK;
+    }
     let Some((offset, width)) = this.state.buffer_window() else {
-        return unsafe { (host.vtable().Map)(host.as_raw(), subresource, read, data) };
+        let hr = unsafe { (host.vtable().Map)(host.as_raw(), subresource, read, data) };
+        if hr.is_err() {
+            let desc = unsafe { host.GetDesc() };
+            let kind = match &this.state.backing {
+                Backing::Native => "native", Backing::ConsoleLayout(..) => "console-layout",
+                Backing::Addressed(..) => "addressed", Backing::Placed(_) => "placed",
+                Backing::Depth(_) => "depth", Backing::Translated(_) => "translated",
+            };
+            let heap = unsafe { host.GetHeapProperties(None, None) }.map(|_| ()).is_ok();
+            crate::diagnostics::log_once(&std::sync::Once::new(), || format!(
+                "Map failed {:#010x}: {kind} dim={} {}x{}x{} format={} layout={:#x} flags={:#x} subresource={subresource} heap-properties={heap} title RVA {:#x}",
+                hr.0, desc.Dimension.0, desc.Width, desc.Height, desc.DepthOrArraySize, desc.Format.0, desc.Layout.0, desc.Flags.0,
+                crate::survey::title_rva().unwrap_or(0)));
+        }
+        return hr;
     };
     let Some(range) = buffer_map_range(offset, width, unsafe { read.as_ref() }) else {
         return E_INVALIDARG;
@@ -189,6 +228,9 @@ unsafe extern "system" fn unmap_resource(
     written: *const D3D12_RANGE,
 ) {
     let host = &this.native;
+    if this.state.placed().is_some() {
+        return;
+    }
     let window;
     let written = if let Some((offset, width)) = this.state.buffer_window() {
         window = buffer_map_range(offset, width, unsafe { written.as_ref() })
@@ -226,6 +268,7 @@ unsafe extern "system" fn resource_desc(
     unsafe {
         out.write(match &this.state.backing {
             Backing::Depth(pair) => pair.guest,
+            Backing::Translated(guest) => *guest,
             Backing::Addressed(_, guest) => *guest,
             Backing::Placed(texture) => texture.desc,
             Backing::Native => this.native.GetDesc(),
@@ -274,6 +317,7 @@ pub(crate) struct DescriptorHeapState {
     pub(crate) desc: D3D12_DESCRIPTOR_HEAP_DESC,
     pub(crate) placed_views: Option<placement::DescriptorRange<placement::PlacedView>>,
     _depth_views: Option<placement::HeapViews<stencil::Surface>>,
+    _placed_targets: Option<placement::HeapViews<placement::Texture>>,
     _imported_views: Option<placement::DescriptorRange<views::DescriptorBacking>>,
     _scene_views: Option<placement::DescriptorRange<blas::SceneView>>,
 }
@@ -439,6 +483,7 @@ unsafe extern "system" fn create_heap(
         cpu_start: arena.as_ref().map_or_else(|| unsafe { native.GetCPUDescriptorHandleForHeapStart().ptr }, |arena| arena.base()),
         arena,
         placed_views,
+        _placed_targets: this.state.placements.targets.heap(&this.native, &native, &resident_desc, D3D12_DESCRIPTOR_HEAP_TYPE_RTV),
         _imported_views: this.state.imported_views.heap(&this.native, &native, &resident_desc, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV),
         _scene_views: this.state.blas.views.heap(
             &this.native, &native, &resident_desc, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
@@ -560,7 +605,9 @@ unsafe extern "system" fn create_resource<const EXTENDED: bool>(
             host_desc.Flags.0 &= !DCC_FLAGS;
         }
     }
+    host_desc.Flags.0 &= format::HOST_FLAGS;
     let primary = depth::primary(desc);
+    let initial = format::host_initial_state(desc, initial);
     if primary.is_some()
         && (flags != D3D12_HEAP_FLAG_NONE
             || heap.Type != D3D12_HEAP_TYPE_DEFAULT
@@ -568,6 +615,7 @@ unsafe extern "system" fn create_resource<const EXTENDED: bool>(
     {
         return E_NOTIMPL;
     }
+    let host_clear = format::host_clear(clear);
     let mut native = None;
     if let Err(error) = unsafe {
         this.native.CreateCommittedResource::<ID3D12Resource>(
@@ -575,7 +623,7 @@ unsafe extern "system" fn create_resource<const EXTENDED: bool>(
             flags,
             primary.as_ref().unwrap_or(&host_desc),
             host_state(initial, desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER),
-            Some(clear),
+            Some(host_clear.as_ref().map_or(clear, core::ptr::from_ref)),
             &mut native,
         )
     } {
@@ -858,15 +906,15 @@ static DEVICE: Slots<160> = {
     slots[24] = crate::slot!(descriptor_copy::simple);
     slots[25] = crate::slot!(allocation::info);
     slots[26] = crate::slot!(allocation::custom_heap_properties);
-    slots[27] = crate::slot!(create_resource::<false>);
+    slots[27] = crate::slot!(traced::committed::<false>);
     slots[28] = crate::slot!(heap::create);
-    slots[29] = crate::slot!(heap::place);
+    slots[29] = crate::slot!(traced::place);
     slots[36] = crate::slot!(create_fence);
     slots[38] = crate::slot!(allocation::footprints);
     slots[39] = crate::slot!(queries::create_heap);
     slots[41] = crate::slot!(indirect::create_signature);
     slots[43] = crate::slot!(adapter_luid);
-    slots[44] = crate::slot!(heap::place_virtual);
+    slots[44] = crate::slot!(traced::place_virtual);
     slots[48] = crate::slot!(create_queue_x);
     // Precompiled graphics PSO with separate driver metadata and GPU shader addresses.
     slots[57] = crate::slot!(compute::deserialize_pipeline_x);
@@ -879,7 +927,7 @@ static DEVICE: Slots<160> = {
     slots[73] = crate::slot!(create_list_x);
     slots[74] = crate::slot!(heap::register_pages);
     slots[75] = crate::slot!(heap::unregister_pages);
-    slots[76] = crate::slot!(create_resource::<true>);
+    slots[76] = crate::slot!(traced::committed::<true>);
     slots[78] = crate::slot!(frame_events::interval);
     slots[79] = crate::slot!(frame_events::schedule);
     slots[80] = crate::slot!(frame_events::wait);
@@ -891,8 +939,8 @@ static DEVICE: Slots<160> = {
     slots[106] = crate::slot!(ray_pipeline::add);
     slots[108] = crate::slot!(allocation::info2);
     slots[115] = crate::slot!(state_object::deserialize);
-    slots[127] = crate::slot!(heap::committed_layout);
-    slots[133] = crate::slot!(heap::place_virtual_layout);
+    slots[127] = crate::slot!(traced::committed_layout);
+    slots[133] = crate::slot!(traced::place_virtual_layout);
     slots
 };
 
@@ -964,4 +1012,58 @@ pub(crate) unsafe fn create(adapter: *mut c_void, requested: GUID, out: Out) -> 
         Err(err) => return err.code(),
     };
     unsafe { allocate(&DEVICE, interfaces, native, None, state, out) }
+}
+
+/// Resource-creation slots, reporting failed descriptions (see diagnostics).
+mod traced {
+    use super::{Device, Out, create_resource, heap};
+    use core::ffi::c_void;
+    use windows::Win32::Graphics::{Direct3D12::*, Dxgi::Common::DXGI_FORMAT};
+    use windows::core::{GUID, HRESULT};
+
+    fn report(slot: u32, status: HRESULT, initial: i32, desc: *const D3D12_RESOURCE_DESC) -> HRESULT {
+        crate::diagnostics::resource_failure(slot, status, initial, unsafe { desc.as_ref() });
+        status
+    }
+
+    pub(super) unsafe extern "system" fn committed<const EXTENDED: bool>(
+        device: &Device, properties: *const D3D12_HEAP_PROPERTIES, flags: D3D12_HEAP_FLAGS,
+        desc: *const D3D12_RESOURCE_DESC, initial: D3D12_RESOURCE_STATES,
+        clear: *const D3D12_CLEAR_VALUE, iid: *const GUID, out: Out,
+    ) -> HRESULT {
+        let status = unsafe { create_resource::<EXTENDED>(device, properties, flags, desc, initial, clear, iid, out) };
+        report(if EXTENDED { 76 } else { 27 }, status, initial.0, desc)
+    }
+
+    pub(super) unsafe extern "system" fn place(
+        device: &Device, heap: *mut c_void, offset: u64, desc: *const D3D12_RESOURCE_DESC,
+        initial: D3D12_RESOURCE_STATES, clear: *const D3D12_CLEAR_VALUE, iid: *const GUID, out: Out,
+    ) -> HRESULT {
+        report(29, unsafe { heap::place(device, heap, offset, desc, initial, clear, iid, out) }, initial.0, desc)
+    }
+
+    pub(super) unsafe extern "system" fn place_virtual(
+        device: &Device, address: u64, desc: *const D3D12_RESOURCE_DESC,
+        initial: D3D12_RESOURCE_STATES, clear: *const D3D12_CLEAR_VALUE, iid: *const GUID, out: Out,
+    ) -> HRESULT {
+        report(44, unsafe { heap::place_virtual(device, address, desc, initial, clear, iid, out) }, initial.0, desc)
+    }
+
+    pub(super) unsafe extern "system" fn committed_layout(
+        device: &Device, properties: *const D3D12_HEAP_PROPERTIES, flags: D3D12_HEAP_FLAGS,
+        desc: *const D3D12_RESOURCE_DESC, initial: D3D12_BARRIER_LAYOUT, clear: *const D3D12_CLEAR_VALUE,
+        protected: *mut c_void, count: u32, formats: *const DXGI_FORMAT, iid: *const GUID, out: Out,
+    ) -> HRESULT {
+        let status = unsafe {
+            heap::committed_layout(device, properties, flags, desc, initial, clear, protected, count, formats, iid, out)
+        };
+        report(127, status, initial.0, desc)
+    }
+
+    pub(super) unsafe extern "system" fn place_virtual_layout(
+        device: &Device, address: u64, desc: *const D3D12_RESOURCE_DESC, layout: D3D12_BARRIER_LAYOUT,
+        clear: *const D3D12_CLEAR_VALUE, iid: *const GUID, out: Out,
+    ) -> HRESULT {
+        report(133, unsafe { heap::place_virtual_layout(device, address, desc, layout, clear, iid, out) }, layout.0, desc)
+    }
 }

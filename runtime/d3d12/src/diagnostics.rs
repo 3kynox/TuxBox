@@ -47,6 +47,7 @@ impl RasterDraw {
 }
 
 pub(super) fn device_created(device: &ID3D12Device) {
+    crate::survey::install();
     static FIRST_DEVICE: Once = Once::new();
     log_once(&FIRST_DEVICE, || {
         // SAFETY: The factory holds this native device reference through the call.
@@ -163,4 +164,46 @@ pub(crate) fn pipeline_stages(stages: &[Option<(String, bool)>; 8], status: i32,
             )
         });
     }
+}
+
+// A title checks the returned resource, not the HRESULT. Report the first
+// distinct failed creations so the unsupported description is visible.
+pub(crate) fn resource_failure(
+    slot: u32, status: windows::core::HRESULT, initial: i32,
+    desc: Option<&windows::Win32::Graphics::Direct3D12::D3D12_RESOURCE_DESC>,
+) {
+    use std::sync::Mutex;
+    static SEEN: Mutex<Vec<(u32, i32, i32, u32)>> = Mutex::new(Vec::new());
+    if status.is_ok() { return; }
+    let key = desc.map_or((slot, status.0, 0, 0), |d| (slot, status.0, d.Format.0, d.Flags.0 as u32));
+    {
+        let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+        if seen.len() >= 32 || seen.contains(&key) { return; }
+        seen.push(key);
+    }
+    let detail = desc.map_or_else(|| "no description".to_owned(), |d| format!(
+        "dim={} {}x{}x{} mips={} format={} samples={} layout={:#x} flags={:#x} align={:#x}",
+        d.Dimension.0, d.Width, d.Height, d.DepthOrArraySize, d.MipLevels, d.Format.0,
+        d.SampleDesc.Count, d.Layout.0, d.Flags.0, d.Alignment));
+    log_once(&Once::new(), || format!("resource slot {slot} failed {:#010x}: {detail} initial={initial:#x}", status.0));
+}
+
+/// `TUXBOX_WATCH_ADDRESS=<hex>[,<hex radius>]`: report each resource whose
+/// guest memory range comes within the radius of that address. Used to find
+/// the writer of corrupted title memory.
+pub(crate) fn watch(kind: &str, start: u64, len: u64, detail: impl FnOnce() -> String) {
+    static ADDRESS: std::sync::LazyLock<Option<(u64, u64)>> = std::sync::LazyLock::new(|| {
+        let text = std::env::var("TUXBOX_WATCH_ADDRESS").ok()?;
+        let (at, radius) = text.split_once(',').unwrap_or((&text, "0"));
+        let hex = |t: &str| u64::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok();
+        Some((hex(at)?, hex(radius)?))
+    });
+    let Some((address, radius)) = *ADDRESS else { return };
+    let end = start.saturating_add(len);
+    if !(start <= address.saturating_add(radius) && address.saturating_sub(radius) < end) {
+        return;
+    }
+    let rva = crate::survey::title_rva().unwrap_or(0);
+    let line = format!("watch {address:#x}: {kind} {start:#x}+{len:#x} {} from title RVA {rva:#x}", detail());
+    log_once(&Once::new(), || line);
 }

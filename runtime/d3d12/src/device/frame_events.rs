@@ -28,6 +28,8 @@ struct State {
     pending: Option<u64>,
     issued: VecDeque<u64>,
     displayed: VecDeque<(u64, i64)>,
+    // Tokens increase monotonically; every token up to this one has flipped.
+    last_displayed: u64,
     flip: Vec<OwnedHandle>,
     flip_scheduled: bool,
 }
@@ -71,6 +73,7 @@ pub(super) unsafe extern "system" fn interval(
         state.pending = None;
         state.issued.clear();
         state.displayed.clear();
+        state.last_displayed = 0;
         state.flip.clear();
         state.flip_scheduled = false;
     }
@@ -177,9 +180,15 @@ pub(super) unsafe extern "system" fn wait(
     if !matches!(kind, 0 | 2) || !objects.is_null() || !matches!(flags, 0 | 2) {
         return E_NOTIMPL;
     }
-    let input = unsafe { token.read_unaligned() };
+    let mut input = unsafe { token.read_unaligned() };
     let frames = &device.state.frames;
     let mut state = frames.state.lock().unwrap_or_else(|e| e.into_inner());
+    // ProjectScarlett clears its token before every timeout poll (RVA 0x248241e)
+    // and asserts on failure. A fresh poll continues the outstanding origin.
+    let continued = kind == 0 && input == 0 && flags == 2 && state.pending.is_some();
+    if continued {
+        input = state.pending.unwrap_or_default();
+    }
     let timeout =
         (timeout_ms != u32::MAX).then(|| Instant::now() + Duration::from_millis(timeout_ms.into()));
     loop {
@@ -187,7 +196,7 @@ pub(super) unsafe extern "system" fn wait(
             if input == 0 || flags != 0 || !state.flip_scheduled {
                 return E_INVALIDARG;
             }
-            if state.displayed.iter().any(|&(id, _)| id == input) {
+            if input <= state.last_displayed || state.displayed.iter().any(|&(id, _)| id == input) {
                 return S_OK;
             }
             if state.pending != Some(input) && !state.issued.contains(&input) {
@@ -202,8 +211,8 @@ pub(super) unsafe extern "system" fn wait(
         let Some(origin) = state.next_origin else {
             return E_INVALIDARG;
         };
-        if (input != 0 && (flags != 0 || state.pending != Some(input)))
-            || (input == 0 && state.pending.is_some())
+        if !continued && ((input != 0 && (flags != 0 || state.pending != Some(input)))
+            || (input == 0 && state.pending.is_some()))
         {
             return E_INVALIDARG;
         }
@@ -273,15 +282,21 @@ pub(crate) unsafe fn display_flip(identity: *mut c_void, token: u64) {
     let frames = &device.state.frames;
     let mut state = frames.state.lock().unwrap_or_else(|e| e.into_inner());
     if token != 0 && (state.pending == Some(token) || state.issued.contains(&token)) {
-        // PresentX selects synchronized presentation. Sample the successful
-        // host present for this token, independently of later queries.
+        // PresentX selects synchronized presentation. Sample the host present
+        // for this token, independently of later queries. Earlier issued
+        // origins that were never presented are superseded by this flip; a
+        // title waiting on one of them (ProjectScarlett RVA 0x2482405, with an
+        // infinite timeout) must not block forever.
         let mut qpc = 0;
-        if unsafe { QueryPerformanceCounter(&mut qpc) }.is_ok() {
+        let _ = unsafe { QueryPerformanceCounter(&mut qpc) };
+        let superseded: Vec<u64> = state.issued.iter().copied().take_while(|&v| v != token).collect();
+        for id in superseded.into_iter().chain([token]) {
             if state.displayed.len() == 16 {
                 state.displayed.pop_front();
             }
-            state.displayed.push_back((token, qpc));
+            state.displayed.push_back((id, qpc));
         }
+        state.last_displayed = state.last_displayed.max(token);
     }
     if state.pending == Some(token) {
         state.pending = None;

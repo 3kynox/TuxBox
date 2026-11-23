@@ -316,7 +316,7 @@ impl Plane {
     /// 64 KiB display swizzle. The packed image factory can mark this layout sparse.
     pub fn compute_sparse_64k(desc: &Desc) -> Result<Self, i32> {
         if desc.dimension != 3
-            || !matches!(desc.layout, 266 | 273 | 274)
+            || !matches!(desc.layout, 265 | 266 | 273 | 274)
             || desc.alignment != 0
             || desc.samples != 1
             || desc.quality != 0
@@ -797,8 +797,10 @@ impl Plane {
             let tile = (y >> yb.len()) * (mip.pitch_elements >> xb.len()) + (x >> xb.len());
             return Some(origin + u64::from(tile) * 256 + u64::from(scatter(x, xb) | scatter(y, yb)));
         }
-        if matches!(mip.swizzle, 10 | 17 | 18) || (mip.swizzle == 2 && self.alignment == 65536) {
-            let (xb, yb): (&[u8], &[u8]) = match (self.element_bytes, mip.swizzle) {
+        if matches!(mip.swizzle, 9 | 10 | 17 | 18) || (mip.swizzle == 2 && self.alignment == 65536) {
+            // Swizzle 9 (64 KiB standard) shares the S_X bit table without the bank XOR.
+            let table = if mip.swizzle == 9 { 17 } else { mip.swizzle };
+            let (xb, yb): (&[u8], &[u8]) = match (self.element_bytes, table) {
                 (1, 17) => (&[0, 1, 2, 3, 9, 11, 13, 15], &[4, 5, 6, 7, 8, 10, 12, 14]),
                 (1, _) => (&[0, 1, 2, 6, 9, 11, 13, 15], &[4, 3, 5, 7, 8, 10, 12, 14]),
                 (2, _) => (&[1, 2, 3, 7, 9, 11, 13, 15], &[4, 5, 6, 8, 10, 12, 14]),

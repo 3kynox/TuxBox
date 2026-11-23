@@ -17,11 +17,13 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::System::{Diagnostics::Debug::ReadProcessMemory, Threading::GetCurrentProcess};
 use windows::core::{HRESULT, Result};
 
-pub(crate) fn supported_state(state: D3D12_RESOURCE_STATES) -> bool {
+pub(crate) fn supported_state(state: D3D12_RESOURCE_STATES, flags: D3D12_RESOURCE_FLAGS) -> bool {
     let allowed = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
         | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
         | D3D12_RESOURCE_STATE_COPY_SOURCE;
-    state == D3D12_RESOURCE_STATE_COPY_DEST || state.0 & !allowed.0 == 0
+    state == D3D12_RESOURCE_STATE_COPY_DEST
+        || state == D3D12_RESOURCE_STATE_RENDER_TARGET && flags.contains(D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+        || state.0 & !allowed.0 == 0
 }
 
 fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -149,10 +151,21 @@ pub(super) fn color_plane(desc: &D3D12_RESOURCE_DESC) -> Result<Plane> {
     if matches!(layout.layout, 257 | 258) {
         return Plane::compute_microtile(&layout).map_err(|status| HRESULT(status).into());
     }
+    if layout.layout == 265 {
+        // 64 KiB standard swizzle, as selected by XGCreateTextureComputer.
+        return Plane::compute_sparse_64k(&layout).map_err(|status| HRESULT(status).into());
+    }
     if desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE1D && desc.Layout.0 == 0x100
         && desc.Height == 1 && matches!(desc.Alignment, 0 | 256 | 4096 | 65536) {
         let linear = Desc { dimension: 3, alignment: 0, ..layout };
         return Plane::compute(&linear).map_err(|status| HRESULT(status).into());
+    }
+    if desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D && desc.Layout.0 == 0x100
+        && desc.Alignment == 0 && desc.Flags.0 & !0x300004 == 0 && !matches!(desc.Format.0, 70..=84 | 94..=99)
+        && desc.Width <= 2048 && desc.Height <= 2048 {
+        // Same selection as XGCreateTextureComputer for a linear volume.
+        let volume = Desc { dimension: 3, alignment: 0, flags: 0, ..layout };
+        return Plane::compute_linear_volume(&volume).map_err(|status| HRESULT(status).into());
     }
     if desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D && desc.Layout.0 == 0x105
         && matches!(desc.Alignment, 0 | 4096) && desc.Width <= 2048 && desc.Height <= 2048 {
@@ -164,6 +177,17 @@ pub(super) fn color_plane(desc: &D3D12_RESOURCE_DESC) -> Result<Plane> {
 }
 
 impl Texture {
+    /// Guest address of a subresource's texels. On the console Map returns this
+    /// memory directly; the uploader publishes CPU writes before GPU reads.
+    pub(crate) fn guest_pointer(&self, subresource: u32) -> Option<u64> {
+        let mip = self.mips.get(subresource as usize)?;
+        self.address.checked_add(mip.source.start)
+    }
+
+    pub(crate) fn flags(&self) -> D3D12_RESOURCE_FLAGS {
+        self.desc.Flags
+    }
+
     fn new(
         device: &ID3D12Device,
         images: &Arc<Images>,
@@ -182,8 +206,15 @@ impl Texture {
             || !address.is_multiple_of(alignment)
             || !crate::exports::placement_fits(address, size)
         {
+            static RANGE: std::sync::Once = std::sync::Once::new();
+            crate::diagnostics::log_once(&RANGE, || format!(
+                "placed texture range at {address:#x}: size={size:#x} alignment={alignment:#x} fits={} {}x{} format={} layout={:#x}",
+                crate::exports::placement_fits(address, size), desc.Width, desc.Height, desc.Format.0, desc.Layout.0));
             return Err(E_INVALIDARG.into());
         }
+        crate::diagnostics::watch("placed texture", address, size, || format!(
+            "{}x{}x{} format={} layout={:#x} flags={:#x} mips={}", desc.Width, desc.Height,
+            desc.DepthOrArraySize, desc.Format.0, desc.Layout.0, desc.Flags.0, desc.MipLevels));
         // A simultaneous-access texture implicitly promotes on first use and
         // decays to COMMON after ExecuteCommandLists, including copy-queue uploads.
         let host = D3D12_RESOURCE_DESC {
@@ -312,7 +343,36 @@ impl Texture {
 #[derive(Default)]
 pub(super) struct Placements {
     pub(super) views: Arc<DescriptorMap<PlacedView>>,
+    pub(super) targets: Arc<Views<Texture>>,
     memory: Arc<PlacementMemory>,
+}
+
+pub(crate) unsafe fn render_target(device: *mut c_void, handle: usize) -> Option<Arc<Texture>> {
+    let device = unsafe { &*device.cast::<Device>() };
+    device.state.placements.targets.get(handle)
+}
+
+pub(crate) unsafe fn render_targets(
+    device: *mut c_void, count: u32, handles: *const D3D12_CPU_DESCRIPTOR_HANDLE, contiguous: bool,
+    output: &mut Vec<Arc<Texture>>,
+) -> Result<()> {
+    let device = unsafe { &*device.cast::<Device>() };
+    output.clear();
+    let stride = if contiguous && count > 1 {
+        (unsafe { device.native.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) }) as usize
+    } else { 0 };
+    for i in 0..count as usize {
+        let handle = if contiguous {
+            unsafe { (*handles).ptr }.checked_add(i * stride).ok_or(E_INVALIDARG)?
+        } else {
+            unsafe { (*handles.add(i)).ptr }
+        };
+        if let Some(texture) = device.state.placements.targets.get(handle) {
+            output.try_reserve(1).map_err(|_| E_OUTOFMEMORY)?;
+            output.push(texture);
+        }
+    }
+    Ok(())
 }
 
 #[derive(Default)]
@@ -391,7 +451,7 @@ impl Placements {
         initial: D3D12_RESOURCE_STATES,
         clear: Option<&D3D12_CLEAR_VALUE>,
     ) -> Result<Arc<Texture>> {
-        if !supported_state(initial) {
+        if !supported_state(initial, desc.Flags) {
             return Err(E_NOTIMPL.into());
         }
         if let Some(value) = clear {

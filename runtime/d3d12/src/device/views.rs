@@ -1,4 +1,7 @@
 //! Standard Xbox resource views and samplers, device slots 17 through 22.
+mod byte_offset;
+pub(super) use byte_offset::AddressViews;
+
 use super::{Device, identity, resource};
 use crate::proxy::fail_call;
 use core::ffi::c_void;
@@ -234,15 +237,24 @@ fn rebase_view(window: (u64, u64), format: i32, structure_stride: u32, first: u6
     first + prefix / stride
 }
 
-fn placed_view(
-    device: &Device, address: &TextureAddress, width: u64, format: i32, stride: u32,
-    first: u64, count: u32, flags: D3D12_RESOURCE_FLAGS,
-) -> (u64, Option<ID3D12Resource>) {
+enum PlacedView<'a> {
+    Elements(u64, Option<ID3D12Resource>),
+    Displaced(&'a AddressViews, u64, u32),
+}
+
+fn placed_view<'a>(
+    device: &'a Device, address: &TextureAddress, width: u64, format: i32, stride: u32,
+    first: u64, count: u32, view_flags: i32, flags: D3D12_RESOURCE_FLAGS,
+) -> PlacedView<'a> {
     // Check the guest view against its own allocation before importing an alias.
     let first = rebase_view((0, width), format, stride, first, count);
     let element = element_stride(format, stride).expect("validated element stride");
     if address.buffer_offset.is_multiple_of(element.into()) {
-        return (first + address.buffer_offset / u64::from(element), None);
+        return PlacedView::Elements(first + address.buffer_offset / u64::from(element), None);
+    }
+    let mode = AddressViews::get(device);
+    if mode.supports(format, view_flags, stride, count) {
+        return PlacedView::Displaced(mode, address.buffer_offset, element);
     }
     // FirstElement advances by whole records. An alternate buffer placed on
     // the same XMem pages can supply the missing byte displacement.
@@ -251,7 +263,7 @@ fn placed_view(
     let heap_base = (base - address.buffer_offset) & !65535;
     let (alias, extra) = heap.buffer_alias(&device.native, base - heap_base, width, element, flags)
         .unwrap_or_else(|e| fail_call(format_args!("buffer view alias at {base:#x} width={width} stride={element}: {:?}", e.code())));
-    (first + extra, Some(alias))
+    PlacedView::Elements(first + extra, Some(alias))
 }
 
 pub(super) unsafe extern "system" fn address_srv(
@@ -265,35 +277,40 @@ pub(super) unsafe extern "system" fn address_srv(
     crate::commands::page_mapping::GPU_APERTURE.wait(desc.address,1)
         .unwrap_or_else(|e| fail_call(format_args!("address SRV pending GPU mapping: {:?}", e.code())));
     let mut view = desc.view;
-    let existing = device.state.texture_addresses.preceding(desc.address as usize).filter(|entry| {
-        let backing = unsafe { entry.native.GetDesc() };
-        if backing.Dimension != resource_desc.Dimension { return false; }
-        let offset = entry.offset(desc.address);
-        if offset == 0 { return true; }
-        if view.ViewDimension != D3D12_SRV_DIMENSION_BUFFER
-            || offset.checked_add(resource_desc.Width).is_none_or(|end| end > backing.Width) { return false; }
-        let Some(stride) = buffer_stride(&view) else { return false; };
-        let buffer = unsafe { &mut view.Anonymous.Buffer };
-        if !offset.is_multiple_of(u64::from(stride)) { return false; }
-        buffer.FirstElement = rebase_view((offset, resource_desc.Width), view.Format.0,
-            buffer.StructureByteStride, buffer.FirstElement, buffer.NumElements);
-        true
-    });
-    // Address-only Xbox buffer views can describe committed XMem directly,
-    // without a preceding CreatePlacedResource call. Import those pages so
-    // writes through the title's CPU mapping remain visible to the GPU.
-    let imported = if desc.address != 0 && existing.is_none() && resource_desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER && view.ViewDimension == D3D12_SRV_DIMENSION_BUFFER {
-        let stride = buffer_stride(&view).unwrap_or_else(|| fail_call(format_args!("unsupported address SRV format {}",view.Format.0)));
-        let entry = buffer_at(device, desc.address, resource_desc.Width, stride, true)
-            .unwrap_or_else(|e| fail_call(format_args!("import SRV at {:#x}, {} bytes stride={} fmt={} first={} count={} failed {:?}", desc.address, resource_desc.Width, stride, view.Format.0, unsafe { view.Anonymous.Buffer.FirstElement }, unsafe { view.Anonymous.Buffer.NumElements }, e.code())))
+    let mut byte_view = None;
+    let buffer_view = resource_desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER
+        && view.ViewDimension == D3D12_SRV_DIMENSION_BUFFER;
+    let imported = if desc.address != 0 && buffer_view {
+        let stride = buffer_stride(&view).unwrap_or_else(|| fail_call(format_args!("unsupported address SRV format {}", view.Format.0)));
+        let buffer = unsafe { view.Anonymous.Buffer };
+        rebase_view((0, resource_desc.Width), view.Format.0, buffer.StructureByteStride, buffer.FirstElement, buffer.NumElements);
+        // Byte-offset descriptors can share the original pages even when no
+        // host placement boundary is a whole number of records from the VA.
+        let mode = AddressViews::get(device);
+        let placement_stride = if mode.supports(view.Format.0, buffer.Flags.0, buffer.StructureByteStride, buffer.NumElements) { 1 } else { stride };
+        let region = || {
+            use windows::Win32::System::Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery};
+            let mut r = MEMORY_BASIC_INFORMATION::default();
+            unsafe { VirtualQuery(Some(desc.address as _), &mut r, size_of_val(&r)) };
+            (r.AllocationBase.addr(), r.BaseAddress.addr(), r.RegionSize, r.State.0, r.Protect.0)
+        };
+        let entry = buffer_at(device, desc.address, resource_desc.Width, placement_stride, true)
+            .unwrap_or_else(|e| fail_call(format_args!("import SRV at {:#x}, {} bytes stride={stride} fmt={} first={} count={} failed {:?} ({}; region {:#x?}, placement stride {})",
+                desc.address, resource_desc.Width, view.Format.0, buffer.FirstElement, buffer.NumElements, e.code(), mode.name(), region(), placement_stride)))
             .expect("required buffer import");
         let offset = entry.offset(desc.address);
-        if !offset.is_multiple_of(u64::from(stride)) { fail_call(format_args!("unaligned SRV address {:#x}", desc.address)); }
-        let buffer = unsafe { &mut view.Anonymous.Buffer };
-        buffer.FirstElement = rebase_view((offset, resource_desc.Width), view.Format.0,
-            buffer.StructureByteStride, buffer.FirstElement, buffer.NumElements);
+        if offset.is_multiple_of(u64::from(stride)) {
+            view.Anonymous.Buffer.FirstElement = buffer.FirstElement + offset / u64::from(stride);
+        } else {
+            byte_view = Some((mode, offset, stride));
+        }
         Some(entry)
     } else { None };
+    let existing = if buffer_view { None } else {
+        device.state.texture_addresses.preceding(desc.address as usize).filter(|entry| {
+            unsafe { entry.native.GetDesc() }.Dimension == resource_desc.Dimension && entry.offset(desc.address) == 0
+        })
+    };
     let placed = if desc.address != 0 && existing.is_none() && imported.is_none() {
         Some(device.state.placements.texture(&device.native, desc.address, resource_desc,
             D3D12_RESOURCE_STATE_COMMON, None)
@@ -308,7 +325,12 @@ pub(super) unsafe extern "system" fn address_srv(
     device.state.blas.views.store(handle.ptr, None);
     device.state.placements.views.set(handle.ptr, placed.as_ref(), false);
     let native = existing.as_ref().map(|e| &e.native).or_else(|| placed.as_ref().map(|p| &p.native)).or_else(|| imported.as_ref().map(|e| &e.native));
-    unsafe { device.native.CreateShaderResourceView(native, Some(&view), handle) };
+    if let Some((mode, offset, stride)) = byte_view {
+        mode.create_srv(device, native.expect("buffer import retained"), view, offset, stride, handle)
+            .unwrap_or_else(|e| fail_call(format_args!("byte-offset SRV at {:#x} offset={offset} stride={stride}: {:?}", desc.address, e.code())));
+    } else {
+        unsafe { device.native.CreateShaderResourceView(native, Some(&view), handle) };
+    }
 }
 
 pub(super) unsafe extern "system" fn srv(
@@ -321,6 +343,7 @@ pub(super) unsafe extern "system" fn srv(
     let resource = unsafe { view_resource(device, object, desc, handle) };
     let proxy = unsafe { super::resource_proxy(object, identity(device).as_raw()) };
     let mut alias = None;
+    let mut byte_view = None;
     let mut adjusted;
     let desc = if let Some(super::Backing::Addressed(address, original)) = proxy.map(|p| &p.state.backing)
         && address.buffer_offset != 0
@@ -329,21 +352,40 @@ pub(super) unsafe extern "system" fn srv(
         if view.ViewDimension != D3D12_SRV_DIMENSION_BUFFER { fail_call(format_args!("placed buffer SRV has non-buffer dimension")); }
         adjusted = *view;
         let b = unsafe { &mut adjusted.Anonymous.Buffer };
-        let (first, native) = placed_view(device, address, original.Width, adjusted.Format.0,
-            b.StructureByteStride, b.FirstElement, b.NumElements, D3D12_RESOURCE_FLAG_NONE);
-        b.FirstElement = first;
-        alias = native.map(|native| (native, address.clone()));
+        match placed_view(device, address, original.Width, adjusted.Format.0,
+            b.StructureByteStride, b.FirstElement, b.NumElements, b.Flags.0, D3D12_RESOURCE_FLAG_NONE) {
+            PlacedView::Elements(first, native) => {
+                b.FirstElement = first;
+                alias = native.map(|native| (native, address.clone()));
+            }
+            PlacedView::Displaced(mode, offset, stride) => byte_view = Some((mode, offset, stride)),
+        }
         &adjusted
     } else { desc };
+    let translated;
+    let substitute = proxy.and_then(|p| p.state.translated());
+    let desc = match unsafe { desc.as_ref() } {
+        Some(view) if super::format::view_format(substitute.is_some(), view.Format) != view.Format => {
+            translated = D3D12_SHADER_RESOURCE_VIEW_DESC {
+                Format: super::format::view_format(substitute.is_some(), view.Format), ..*view
+            };
+            &raw const translated
+        }
+        None if substitute.is_some_and(super::format::is_depth) => {
+            fail_call(format_args!("Scarlett depth SRV needs an explicit plane format"))
+        }
+        _ => desc,
+    };
     let texture = proxy.and_then(|resource| resource.state.placed());
     let scene = device.state.blas.scene_view(proxy, unsafe { desc.as_ref() });
     device.state.blas.views.store(handle.ptr, scene);
     device.state.placements.views.set(handle.ptr, texture, false);
-    unsafe {
-        device
-            .native
-            .CreateShaderResourceView(alias.as_ref().map(|(native, _)| native).or(resource), Some(desc), handle)
-    };
+    if let Some((mode, offset, stride)) = byte_view {
+        mode.create_srv(device, resource.expect("placed buffer"), unsafe { *desc }, offset, stride, handle)
+            .unwrap_or_else(|e| fail_call(format_args!("placed SRV offset={offset} stride={stride}: {:?}", e.code())));
+    } else {
+        unsafe { device.native.CreateShaderResourceView(alias.as_ref().map(|(native, _)| native).or(resource), Some(desc), handle) };
+    }
     device.state.imported_views.store(handle.ptr, alias.map(|(native, original)| DescriptorBacking::BufferAlias { native, original }));
 }
 
@@ -362,6 +404,7 @@ pub(super) unsafe extern "system" fn uav(
     let counter_window = unsafe { super::resource_proxy(counter, owner) }.and_then(|p| p.state.buffer_window());
     let mut adjusted;
     let mut uav_alias = None;
+    let mut byte_view = None;
     let desc = if window.is_some() || counter_window.is_some() {
         let Some(view) = (unsafe { desc.as_ref() }) else { fail_call(format_args!("placed buffer UAV requires a buffer description")); };
         if view.ViewDimension != D3D12_UAV_DIMENSION_BUFFER { fail_call(format_args!("placed buffer UAV has non-buffer dimension")); }
@@ -373,10 +416,14 @@ pub(super) unsafe extern "system" fn uav(
             if !original.Flags.contains(D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) {
                 fail_call(format_args!("placed buffer was not created for unordered access"));
             }
-            let (first, alias) = placed_view(device, address, original.Width, adjusted.Format.0,
-                b.StructureByteStride, b.FirstElement, b.NumElements, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-            b.FirstElement = first;
-            uav_alias = alias.map(|alias| (alias, address.clone()));
+            match placed_view(device, address, original.Width, adjusted.Format.0,
+                b.StructureByteStride, b.FirstElement, b.NumElements, b.Flags.0, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) {
+                PlacedView::Elements(first, alias) => {
+                    b.FirstElement = first;
+                    uav_alias = alias.map(|alias| (alias, address.clone()));
+                }
+                PlacedView::Displaced(mode, offset, stride) => byte_view = Some((mode, offset, stride)),
+            }
         }
         if let Some((prefix, width)) = counter_window {
             if b.CounterOffsetInBytes.checked_add(4).is_none_or(|end| end > width) {
@@ -406,6 +453,32 @@ pub(super) unsafe extern "system" fn uav(
                 .unwrap_or_else(|| fail_call(format_args!("invalid UAV counter resource"))),
         )
     };
+    let substitute = unsafe { super::resource_proxy(object, identity(device).as_raw()) }.and_then(|r| r.state.translated());
+    let translated;
+    let desc = match unsafe { desc.as_ref() } {
+        Some(view) if super::format::view_format(substitute.is_some(), view.Format) != view.Format => {
+            translated = D3D12_UNORDERED_ACCESS_VIEW_DESC {
+                Format: super::format::view_format(substitute.is_some(), view.Format), ..*view
+            };
+            &raw const translated
+        }
+        _ => desc,
+    };
+    if let Some(guest) = substitute.filter(|g| super::format::is_depth(g)) {
+        // The host depth image has no writable view yet. Keep the descriptor
+        // defined (null: reads return zero, writes are dropped) and report it.
+        let Some(view) = (unsafe { desc.as_ref() }) else {
+            fail_call(format_args!("UAV on Scarlett depth format {} needs a description", guest.Format.0));
+        };
+        static DEPTH_UAV: std::sync::Once = std::sync::Once::new();
+        crate::diagnostics::log_once(&DEPTH_UAV, || format!(
+            "null UAV for Scarlett depth format={} {}x{}x{} flags={:#x}: view format={} dimension={}",
+            guest.Format.0, guest.Width, guest.Height, guest.DepthOrArraySize, guest.Flags.0,
+            view.Format.0, view.ViewDimension.0
+        ));
+        unsafe { device.native.CreateUnorderedAccessView(None, None, Some(view), handle) };
+        return;
+    }
     if let Some(pair) = unsafe { super::resource_proxy(object, identity(device).as_raw()) }
         .and_then(|r| r.state.depth())
     {
@@ -417,12 +490,19 @@ pub(super) unsafe extern "system" fn uav(
         };
         if counter.is_some()
             || view.ViewDimension != D3D12_UAV_DIMENSION_TEXTURE2D
-            || view.Format != DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS
+            // Either the plane format or the float format of the depth plane.
+            || !matches!(view.Format, DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS | DXGI_FORMAT_R32_FLOAT)
             || unsafe {
                 view.Anonymous.Texture2D.MipSlice != 0 || view.Anonymous.Texture2D.PlaneSlice != 0
             }
         {
-            fail_call(format_args!("unsupported depth UAV plane view"));
+            fail_call(format_args!(
+                "unsupported depth UAV plane view: format={} dimension={} mip/plane={:?} counter={} on {}x{}x{}",
+                view.Format.0, view.ViewDimension.0,
+                (view.ViewDimension == D3D12_UAV_DIMENSION_TEXTURE2D)
+                    .then(|| unsafe { (view.Anonymous.Texture2D.MipSlice, view.Anonymous.Texture2D.PlaneSlice) }),
+                counter.is_some(), pair.guest.Width, pair.guest.Height, pair.guest.DepthOrArraySize
+            ));
         }
         let host = D3D12_UNORDERED_ACCESS_VIEW_DESC {
             Format: DXGI_FORMAT_R32_FLOAT,
@@ -435,11 +515,12 @@ pub(super) unsafe extern "system" fn uav(
         };
         return;
     }
-    unsafe {
-        device
-            .native
-            .CreateUnorderedAccessView(buffer, counter, Some(desc), handle)
-    };
+    if let Some((mode, offset, stride)) = byte_view {
+        mode.create_uav(device, buffer.expect("placed buffer"), counter, unsafe { *desc }, offset, stride, handle)
+            .unwrap_or_else(|e| fail_call(format_args!("placed UAV offset={offset} stride={stride}: {:?}", e.code())));
+    } else {
+        unsafe { device.native.CreateUnorderedAccessView(buffer, counter, Some(desc), handle) };
+    }
 }
 
 pub(super) unsafe extern "system" fn rtv(
@@ -450,6 +531,16 @@ pub(super) unsafe extern "system" fn rtv(
 ) {
     let resource = unsafe { view_resource(device, object, desc, handle) };
     let proxy = unsafe { super::resource_proxy(object, identity(device).as_raw()) };
+    device.state.placements.targets.set(handle.ptr, proxy.and_then(|p| p.state.placed()));
+    let substitute = proxy.is_some_and(|p| p.state.translated().is_some());
+    let translated;
+    let desc = match unsafe { desc.as_ref() } {
+        Some(view) if super::format::view_format(substitute, view.Format) != view.Format => {
+            translated = D3D12_RENDER_TARGET_VIEW_DESC { Format: super::format::view_format(substitute, view.Format), ..*view };
+            &raw const translated
+        }
+        _ => desc,
+    };
     let mut adjusted;
     let desc = if let Some(window) = proxy.and_then(|p| p.state.buffer_window()) {
         let Some(view) = (unsafe { desc.as_ref() }) else { fail_call(format_args!("placed buffer RTV requires a buffer description")); };
@@ -473,6 +564,39 @@ pub(super) unsafe extern "system" fn dsv(
     handle: D3D12_CPU_DESCRIPTOR_HANDLE,
 ) {
     let resource = unsafe { view_resource(device, object, desc, handle) };
+    let translated;
+    let desc = match unsafe { desc.as_ref() } {
+        Some(view) if super::format::host_format(view.Format) != view.Format => {
+            translated = D3D12_DEPTH_STENCIL_VIEW_DESC { Format: super::format::host_format(view.Format), ..*view };
+            &raw const translated
+        }
+        None if let Some(guest) = unsafe { super::resource_proxy(object, identity(device).as_raw()) }
+            .and_then(|p| p.state.translated()) => {
+            // A typeless host image needs the typed depth format the guest implied.
+            let mut view = D3D12_DEPTH_STENCIL_VIEW_DESC { Format: super::format::host_format(guest.Format), ..Default::default() };
+            let layers = u32::from(guest.DepthOrArraySize);
+            match (guest.Dimension, guest.SampleDesc.Count > 1) {
+                (D3D12_RESOURCE_DIMENSION_TEXTURE1D, _) if layers == 1 => view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE1D,
+                (D3D12_RESOURCE_DIMENSION_TEXTURE1D, _) => {
+                    view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE1DARRAY;
+                    view.Anonymous.Texture1DArray = D3D12_TEX1D_ARRAY_DSV { MipSlice: 0, FirstArraySlice: 0, ArraySize: layers };
+                }
+                (_, false) if layers == 1 => view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D,
+                (_, true) if layers == 1 => view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DMS,
+                (_, false) => {
+                    view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+                    view.Anonymous.Texture2DArray = D3D12_TEX2D_ARRAY_DSV { MipSlice: 0, FirstArraySlice: 0, ArraySize: layers };
+                }
+                (_, true) => {
+                    view.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY;
+                    view.Anonymous.Texture2DMSArray = D3D12_TEX2DMS_ARRAY_DSV { FirstArraySlice: 0, ArraySize: layers };
+                }
+            }
+            translated = view;
+            &raw const translated
+        }
+        _ => desc,
+    };
     if super::stencil::needs_emulation(device) {
         let source = unsafe { super::resource_proxy(object, identity(device).as_raw()) };
         let surface = source

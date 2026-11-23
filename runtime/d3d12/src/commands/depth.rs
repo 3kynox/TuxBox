@@ -62,6 +62,12 @@ pub(super) unsafe extern "system" fn clear_uav<const FLOAT: bool>(
         recording.error = E_INVALIDARG;
         return;
     }
+    if resource.state.unbacked_uav() {
+        // Its UAV descriptor is null on the host; the clear has nothing to write.
+        static SKIPPED: std::sync::Once = std::sync::Once::new();
+        crate::diagnostics::log_once(&SKIPPED, || "skipped UAV clear of a Scarlett depth image".to_owned());
+        return;
+    }
     let (gpu, cpu) = if let Some(arena) = &recording.descriptor_arena
         && arena.contains(gpu.ptr)
     {

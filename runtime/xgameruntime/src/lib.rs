@@ -77,6 +77,7 @@ unsafe extern "system" fn QueryApiImpl(
         return unsafe { query(&SYSTEM_OBJECT, iid, out) };
     }
     if !same(class, &THREADING) {
+        report(format_args!("unsupported API class {} (interface {})", guid_text(class), guid_text(iid)));
         return NO_INTERFACE;
     }
     unsafe { query(&THREAD_OBJECT, iid, out) }
@@ -132,12 +133,45 @@ extern "system" fn release(this: &Object) -> u32 {
     this.references.fetch_sub(1, Ordering::Relaxed) - 1
 }
 
-extern "system" fn unsupported(_: &Object) -> i32 {
+// Each unmapped method reports its interface and slot once, then returns E_NOTIMPL.
+extern "system" fn unsupported_method<const SYSTEM: bool, const N: usize>(_: &Object) -> i32 {
+    use std::sync::Mutex;
+    static REPORTED: Mutex<Vec<(bool, usize)>> = Mutex::new(Vec::new());
+    let mut reported = REPORTED.lock().unwrap_or_else(|e| e.into_inner());
+    if !reported.contains(&(SYSTEM, N)) {
+        reported.push((SYSTEM, N));
+        drop(reported);
+        report(format_args!("unsupported {} method slot {N}", if SYSTEM { "XSystem" } else { "XThreading" }));
+    }
     NOT_IMPLEMENTED
+}
+
+macro_rules! unsupported_methods {
+    ($system:literal; $($n:literal),*) => { [$(slot!(unsupported_method::<$system, $n>)),*] };
+}
+
+fn guid_text(g: &GUID) -> String {
+    format!("{:08x}-{:04x}-{:04x}-{}", g.data1, g.data2, g.data3,
+        g.data4.iter().map(|b| format!("{b:02x}")).collect::<String>())
+}
+
+/// Report each distinct unsupported request once (bounded).
+fn report(text: std::fmt::Arguments<'_>) {
+    use std::sync::Mutex;
+    static SEEN: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    let line = format!("TuxBox xgameruntime: {text}");
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if seen.len() >= 128 || seen.contains(&line) {
+        return;
+    }
+    seen.push(line.clone());
+    drop(seen);
+    let message = format!("{line}\n\0");
+    unsafe { OutputDebugStringA(message.as_ptr()) };
 }
 extern "system" fn idle_thread(_: &Object) {} // No guest thread is designated time-sensitive.
 static THREAD_TABLE: [Slot; 32] = {
-    let mut t = [slot!(unsupported); 32];
+    let mut t = unsupported_methods!(false; 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31);
     t[0] = slot!(query);
     t[1] = slot!(add_ref);
     t[2] = slot!(release);
@@ -184,7 +218,7 @@ unsafe extern "system" fn sandbox_id(
     OK
 }
 static SYSTEM_TABLE: [Slot; 32] = {
-    let mut slots = [slot!(unsupported); 32];
+    let mut slots = unsupported_methods!(true; 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31);
     slots[0] = slot!(query);
     slots[1] = slot!(add_ref);
     slots[2] = slot!(release);

@@ -158,6 +158,12 @@ fn process_heap_attributes(attributes: u64) -> bool {
 /// Allocate guest memory with the selected backing. A null return denotes failure.
 #[unsafe(export_name = "XMemAllocDefault")]
 pub extern "system" fn alloc_default(bytes: usize, attributes: u64) -> *mut c_void {
+    let result = alloc_default_inner(bytes, attributes);
+    diagnostics::watch("XMemAllocDefault", result as usize, bytes, || format!("attributes={attributes:#x}"));
+    result
+}
+
+fn alloc_default_inner(bytes: usize, attributes: u64) -> *mut c_void {
     if bytes == 0 {
         return ptr::null_mut();
     }

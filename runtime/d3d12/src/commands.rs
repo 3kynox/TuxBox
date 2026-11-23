@@ -49,6 +49,7 @@ struct Recording {
     media: Option<media::Recording>,
     placed_reads: Vec<Arc<Texture>>,
     placed_writes: Vec<Arc<Texture>>,
+    bound_placed_targets: Vec<Arc<Texture>>,
     resource_heap: Option<descriptors::ResourceHeap>,
     descriptor_arena: Option<Arc<device::descriptor_paging::Arena>>,
     indexed_arenas: Vec<Arc<device::descriptor_paging::Arena>>,
@@ -59,6 +60,14 @@ struct Recording {
 }
 
 impl Recording {
+    fn track_texture(accesses: &mut Vec<Arc<Texture>>, texture: &Arc<Texture>) -> Result<(), HRESULT> {
+        if !accesses.iter().any(|known| Arc::ptr_eq(known, texture)) {
+            accesses.try_reserve(1).map_err(|_| E_OUTOFMEMORY)?;
+            accesses.push(Arc::clone(texture));
+        }
+        Ok(())
+    }
+
     fn prepare_copy(
         &mut self,
         destination: Option<&Arc<Texture>>,
@@ -68,11 +77,8 @@ impl Recording {
             (&mut self.placed_reads, source),
             (&mut self.placed_writes, destination),
         ] {
-            if let Some(texture) = texture
-                && !accesses.iter().any(|known| Arc::ptr_eq(known, texture))
-            {
-                accesses.try_reserve(1).map_err(|_| E_OUTOFMEMORY)?;
-                accesses.push(Arc::clone(texture));
+            if let Some(texture) = texture {
+                Self::track_texture(accesses, texture)?;
             }
         }
         Ok(())
@@ -129,7 +135,15 @@ impl Recording {
         }
     }
 
-    fn draw(&mut self, list: &List, draw: impl FnOnce()) {
+    fn draw(&mut self, list: &List, rasterizes: bool, draw: impl FnOnce()) {
+        if rasterizes {
+            for target in &self.bound_placed_targets {
+                if let Err(error) = Self::track_texture(&mut self.placed_writes, target) {
+                    self.error = error;
+                    return;
+                }
+            }
+        }
         let trace = self.bindings.draw_trace.clone();
         let draw = || {
             draw();
@@ -358,6 +372,7 @@ unsafe extern "system" fn reset(
         state.dsv_bound = false;
         state.placed_reads.clear();
         state.placed_writes.clear();
+        state.bound_placed_targets.clear();
         state.resource_heap = None;
         state.descriptor_arena = None;
         state.indexed_arenas.clear();
@@ -556,6 +571,14 @@ unsafe extern "system" fn transition(
                     != D3D12_RESOURCE_DIMENSION_BUFFER;
             host.before = device::host_state(host.before, texture);
             host.after = device::host_state(host.after, texture);
+            if resource.state.unbacked_uav() {
+                // The host depth image has no unordered access; see unbacked_uav.
+                for state in [&mut host.before, &mut host.after] {
+                    if *state == D3D12_RESOURCE_STATE_UNORDERED_ACCESS {
+                        *state = D3D12_RESOURCE_STATE_COMMON;
+                    }
+                }
+            }
             if let Some(pair) = resource.state.depth()
                 && (host.before == D3D12_RESOURCE_STATE_UNORDERED_ACCESS
                     || host.after == D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
@@ -572,9 +595,9 @@ unsafe extern "system" fn transition(
                     handoffs.push((index, &resource.native, pair));
                 }
                 host.resource = ptr::null_mut();
-            } else if resource.state.placed().is_some() {
-                if !placement::supported_state(host.before)
-                    || !placement::supported_state(host.after)
+            } else if let Some(placed) = resource.state.placed() {
+                if !placement::supported_state(host.before, placed.flags())
+                    || !placement::supported_state(host.after, placed.flags())
                 {
                     crate::diagnostics::recording_error(format_args!(
                         "placed texture transition {:#x} to {:#x}",
@@ -583,10 +606,10 @@ unsafe extern "system" fn transition(
                     return Err(E_NOTIMPL);
                 }
                 // Read promotions can accumulate implicitly. An explicit barrier
-                // orders copy writes against other uses within the same batch.
+                // orders writes against other uses within the same batch.
                 host.resource = if different
-                    && (host.before == D3D12_RESOURCE_STATE_COPY_DEST
-                        || host.after == D3D12_RESOURCE_STATE_COPY_DEST)
+                    && [host.before, host.after].iter().any(|state|
+                        matches!(*state, D3D12_RESOURCE_STATE_COPY_DEST | D3D12_RESOURCE_STATE_RENDER_TARGET))
                 {
                     resource.native.as_raw()
                 } else {
@@ -742,6 +765,12 @@ unsafe extern "system" fn clear_rtv(
     }
     if handle.ptr == 0 || color.is_null() || (count != 0 && rects.is_null()) {
         state.error = E_INVALIDARG;
+        return;
+    }
+    if let Some(target) = unsafe { placement::render_target(parent(&list.parent), handle.ptr) }
+        && let Err(error) = Recording::track_texture(&mut state.placed_writes, &target)
+    {
+        state.error = error;
         return;
     }
     unsafe {
@@ -999,7 +1028,8 @@ unsafe extern "system" fn execute_indirect(
     if signature.state.kind == D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH {
         state.compute_dispatch(list, execute);
     } else {
-        state.draw(list, execute);
+        let rasterizes = max_count != 0 && signature.state.kind != D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_RAYS;
+        state.draw(list, rasterizes, execute);
     }
 }
 
@@ -1352,6 +1382,18 @@ unsafe extern "system" fn present(
     if result.is_err() {
         static FIRST: std::sync::Once = std::sync::Once::new();
         crate::diagnostics::log_once(&FIRST, || format!("PresentX failed planes={count} HRESULT={:#010x}", result.0));
+        if result == windows::Win32::Graphics::Dxgi::DXGI_ERROR_ACCESS_LOST {
+            // The desktop window was closed. A console title has no such event
+            // and would otherwise wait for this frame's flip until its own
+            // watchdog fires. Treat the close as a request to quit.
+            crate::diagnostics::log_once(&std::sync::Once::new(), || "presentation window closed; exiting title".into());
+            use windows::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+            let _ = unsafe { TerminateProcess(GetCurrentProcess(), 0) };
+        }
+        // A rejected present still ends this frame for the title's pacing.
+        if count >= 1 && let Some(plane) = unsafe { planes.as_ref() } {
+            unsafe { device::frame_events::display_flip(parent(&queue.parent), plane.token) };
+        }
     }
     result
 }
@@ -1409,8 +1451,10 @@ unsafe fn present_planes(
         }
     }
     let result = queue.state.presentation.present(&queue.native, source);
+    // Frame pacing must advance even if the host present failed; the title
+    // otherwise waits forever for this token's flip.
+    unsafe { device::frame_events::display_flip(parent(&queue.parent), plane.token) };
     if result == S_OK {
-        unsafe { device::frame_events::display_flip(parent(&queue.parent), plane.token) };
         static COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         static EARLY: [std::sync::Once;4] = [const { std::sync::Once::new() };4];
         if COUNT.load(Ordering::Relaxed) < EARLY.len() {
@@ -1491,6 +1535,7 @@ pub(crate) unsafe fn wrap_command_list(
             dsv_bound: false,
             placed_reads: Vec::new(),
             placed_writes: Vec::new(),
+            bound_placed_targets: Vec::new(),
             resource_heap: None,
             descriptor_arena: None,
             indexed_arenas: Vec::new(),
