@@ -6,7 +6,11 @@ use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL, E_POINTER};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::{GUID, HRESULT, Interface};
 
-static ROOT: Slots<8> = child_slots::<ID3D12RootSignature, (), 8>();
+pub(crate) use super::compute_scene::{RootSource, SceneRoot, SceneSource};
+
+static ROOT: Slots<8> = child_slots::<ID3D12RootSignature, RootSource, 8>();
+pub(crate) type Root = Proxy<ID3D12RootSignature, RootSource>;
+pub(crate) type Pipeline = Proxy<ID3D12PipelineState, PipelineData>;
 // Inline console SetPipelineState copies 32 bytes starting at +0x10 from
 // this object to the guest command list. Desktop command lists use slot 25
 // with an empty packet buffer, so no Xbox command packets are advertised.
@@ -16,6 +20,7 @@ pub(crate) struct PipelineData {
     reserved: usize,
     packets: [u8; 32],
     pub(crate) stencil_slot: Option<u32>,
+    pub(crate) scene_root: Option<SceneRoot>,
 }
 
 const _: () = assert!(
@@ -47,17 +52,24 @@ unsafe extern "system" fn scratch_info(
 
 // A null root signature is valid for a shader with an embedded signature.
 // The caller keeps every non-null guest object alive for the returned borrow.
-pub(crate) unsafe fn root_signature<'a>(
+pub(crate) unsafe fn root_proxy<'a>(
     guest: *mut c_void,
     device: *mut c_void,
-) -> Result<Option<&'a ID3D12RootSignature>, HRESULT> {
+) -> Result<Option<&'a Root>, HRESULT> {
     if guest.is_null() {
         return Ok(None);
     }
     // SAFETY: unwrap checks both the guest vtable and device identity.
-    unsafe { unwrap::<ID3D12RootSignature, ()>(guest, device, &ROOT) }
-        .map(|object| Some(&object.native))
+    unsafe { unwrap::<ID3D12RootSignature, RootSource>(guest, device, &ROOT) }
+        .map(Some)
         .ok_or(E_INVALIDARG)
+}
+
+pub(crate) unsafe fn root_signature<'a>(
+    guest: *mut c_void,
+    device: *mut c_void,
+) -> Result<Option<&'a ID3D12RootSignature>, HRESULT> {
+    unsafe { root_proxy(guest, device) }.map(|root| root.map(|p| &p.native))
 }
 
 pub(crate) unsafe fn pipeline<'a>(
@@ -102,7 +114,7 @@ pub(super) unsafe extern "system" fn create_root_signature(
                 &[ID3D12DeviceChild::IID, ID3D12RootSignature::IID],
                 native,
                 Some(&identity(this)),
-                (),
+                RootSource::new(bytes),
                 out,
             )
         },
@@ -155,7 +167,7 @@ pub(super) unsafe extern "system" fn create_pipeline_x(
         .as_ref()
         .map_or(core::ptr::null_mut(), Interface::as_raw);
     // SAFETY: the descriptor borrows its root signature for pipeline creation.
-    let root = match unsafe { root_signature(guest, identity(this).as_raw()) } {
+    let root = match unsafe { root_proxy(guest, identity(this).as_raw()) } {
         Ok(root) => root,
         Err(error) => return error,
     };
@@ -163,9 +175,29 @@ pub(super) unsafe extern "system" fn create_pipeline_x(
     let bytes =
         unsafe { slice::from_raw_parts(desc.CS.pShaderBytecode.cast(), desc.CS.BytecodeLength) };
     let translation = super::shader_cache::prepared(bytes);
+    let scene_root = if let Some(translated) = &translation {
+        match super::compute_scene::private_root(
+            &this.native,
+            bytes,
+            translated,
+            root.map(|p| &p.state),
+            desc.NodeMask,
+        ) {
+            Ok(root) => root,
+            Err(e) => return e.code(),
+        }
+    } else {
+        None
+    };
     let code = translation.as_deref().unwrap_or(bytes);
     let mut host = D3D12_COMPUTE_PIPELINE_STATE_DESC {
-        pRootSignature: ManuallyDrop::new(root.cloned()),
+        pRootSignature: ManuallyDrop::new(
+            scene_root
+                .as_ref()
+                .map(|s| &s.native)
+                .or(root.map(|p| &p.native))
+                .cloned(),
+        ),
         CS: D3D12_SHADER_BYTECODE {
             pShaderBytecode: code.as_ptr().cast(),
             BytecodeLength: code.len(),
@@ -181,7 +213,7 @@ pub(super) unsafe extern "system" fn create_pipeline_x(
             .CreateComputePipelineState::<ID3D12PipelineState>(descriptor)
     };
     let mut native = create(&host);
-    if translation.is_some() && native.is_err() {
+    if translation.is_some() && scene_root.is_none() && native.is_err() {
         // Structural checks cannot validate DXIL instructions or root bindings.
         // Let the adapter handle the original guest shader if it rejects the cache.
         host.CS = desc.CS;
@@ -191,5 +223,16 @@ pub(super) unsafe extern "system" fn create_pipeline_x(
     if let Err(error) = &native {
         crate::diagnostics::compute_failure(bytes, error.code().0);
     }
-    unsafe { wrap_pageable(native, &PIPELINE, this, PipelineData::default(), out) }
+    unsafe {
+        wrap_pageable(
+            native,
+            &PIPELINE,
+            this,
+            PipelineData {
+                scene_root,
+                ..Default::default()
+            },
+            out,
+        )
+    }
 }

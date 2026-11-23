@@ -6,8 +6,12 @@ use windows::Win32::Foundation::{E_FAIL, E_INVALIDARG, E_NOTIMPL};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::{GUID, HRESULT, Interface};
 
-pub(crate) type Signature = Proxy<ID3D12CommandSignature, u32>;
-static SIGNATURE: Slots<8> = child_slots::<ID3D12CommandSignature, u32, 8>();
+pub(crate) struct Action {
+    pub(crate) stride: u32,
+    pub(crate) compute: bool,
+}
+pub(crate) type Signature = Proxy<ID3D12CommandSignature, Action>;
+static SIGNATURE: Slots<8> = child_slots::<ID3D12CommandSignature, Action, 8>();
 
 // The guest holds this reference and the list's device throughout recording.
 pub(crate) unsafe fn signature<'a>(
@@ -97,7 +101,10 @@ pub(super) unsafe extern "system" fn create_signature(
             ],
             native,
             Some(&parent),
-            desc.ByteStride,
+            Action {
+                stride: desc.ByteStride,
+                compute: kind == D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH,
+            },
             out,
         )
     }

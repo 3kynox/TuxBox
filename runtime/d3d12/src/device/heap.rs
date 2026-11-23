@@ -139,33 +139,76 @@ pub(super) unsafe extern "system" fn place(
     {
         return E_NOTIMPL;
     }
-    let host = primary.as_ref().unwrap_or(desc);
-    let info = unsafe {
+    let mut host = primary.unwrap_or(*desc);
+    let allocation = |host: &D3D12_RESOURCE_DESC| unsafe {
         device
             .native
             .GetResourceAllocationInfo(0, core::slice::from_ref(host))
     };
-    if info.SizeInBytes == u64::MAX
-        || info.Alignment == 0
-        || !offset.is_multiple_of(info.Alignment)
-        || offset
-            .checked_add(info.SizeInBytes)
-            .is_none_or(|end| end > heap.state.SizeInBytes)
+    let fits = |info: &D3D12_RESOURCE_ALLOCATION_INFO| {
+        info.SizeInBytes != u64::MAX
+            && info.Alignment != 0
+            && offset.is_multiple_of(info.Alignment)
+            && offset
+                .checked_add(info.SizeInBytes)
+                .is_some_and(|end| end <= heap.state.SizeInBytes)
+    };
+    let mut info = allocation(&host);
+    let small_msaa = u64::from(D3D12_SMALL_MSAA_RESOURCE_PLACEMENT_ALIGNMENT);
+    if host.SampleDesc.Count > 1
+        && host.Alignment == 0
+        && offset.is_multiple_of(small_msaa)
+        && (!fits(&info) || info.Alignment > heap.state.Alignment)
     {
-        return E_INVALIDARG;
+        // The guest can suballocate MSAA targets on 64 KiB boundaries. Ask
+        // this adapter whether it can place this image at the exact guest offset.
+        let small = D3D12_RESOURCE_DESC {
+            Alignment: small_msaa,
+            ..host
+        };
+        let small_info = allocation(&small);
+        if small_info.Alignment == small_msaa && fits(&small_info) {
+            host = small;
+            info = small_info;
+        }
+    }
+    let report = |step, status: HRESULT| {
+        crate::diagnostics::log_once(&std::sync::Once::new(), || {
+            format!(
+                "placed resource {step} {:#010x} offset={offset:#x} heap={:#x}/{:#x} host={:#x}/{:#x} {}x{}x{} fmt={} samples={} flags={:#x} align={:#x} state={:#x} clear={:?}",
+                status.0,
+                heap.state.SizeInBytes,
+                heap.state.Alignment,
+                info.SizeInBytes,
+                info.Alignment,
+                host.Width,
+                host.Height,
+                host.DepthOrArraySize,
+                host.Format.0,
+                host.SampleDesc.Count,
+                host.Flags.0,
+                host.Alignment,
+                initial.0,
+                unsafe { clear.as_ref() }.map(|c| c.Format.0),
+            )
+        });
+        status
+    };
+    if !fits(&info) {
+        return report("range", E_INVALIDARG);
     }
     let mut native = None;
     if let Err(error) = unsafe {
         device.native.CreatePlacedResource::<_, ID3D12Resource>(
             &heap.native,
             offset,
-            host,
+            &host,
             super::host_state(initial, desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER),
             Some(clear),
             &mut native,
         )
     } {
-        return error.code();
+        return report("host", error.code());
     }
     unsafe {
         super::depth::wrap::<false>(

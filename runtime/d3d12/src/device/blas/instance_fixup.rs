@@ -170,7 +170,7 @@ impl Instances {
             &device.native,
             u64::from(count) * 64,
             D3D12_HEAP_TYPE_DEFAULT,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
         )?;
         let heap: ID3D12DescriptorHeap = unsafe {
@@ -200,6 +200,9 @@ impl Instances {
         let x = groups.min(D3D12_CS_DISPATCH_MAX_THREAD_GROUPS_PER_DIMENSION);
         let bounds = [count, x];
         unsafe {
+            // A replay starts and ends with the patched array available to both
+            // the DXR builder and later shaders that need its instance records.
+            instances.barrier(host, false);
             host.SetDescriptorHeaps(&[Some(instances.heap.clone())]);
             host.SetComputeRootSignature(&kernel.root);
             host.SetPipelineState(&kernel.pipeline);
@@ -220,7 +223,7 @@ impl Instances {
         &self.output
     }
 
-    pub(crate) unsafe fn barrier(&self, host: &ID3D12GraphicsCommandList4, read: bool) {
+    unsafe fn barrier(&self, host: &ID3D12GraphicsCommandList4, read: bool) {
         let (write, srv) = (
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,

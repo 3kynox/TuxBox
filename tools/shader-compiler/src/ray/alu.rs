@@ -27,6 +27,11 @@ float tb_ray_mac(float a, float b, float c) {
     precise float sum = product + c;
     return sum;
 }
+float tb_ray_legacy_mad(float a, float b, float c) {
+    precise float product = tb_ray_legacy_mul(a, b);
+    precise float sum = product + c;
+    return sum;
+}
 float tb_ray_median(float a, float b, float c) {
     if (tb_ray_nan(asuint(a)) || tb_ray_nan(asuint(b)) || tb_ray_nan(asuint(c)))
         return min(min(a, b), c);
@@ -154,10 +159,17 @@ pub(super) fn vector(ins: &Insn) -> Result<String, String> {
         if name == "v_cvt_f16_f32" && control == 5 && sdwa >> 16 == 6 {
             return Ok(format!("{dst} = tb_ray_half(asfloat({})) << 16u;", raw(0)?));
         }
-        if name == "v_cvt_u32_f32" && control == 5 && sdwa >> 16 == 6 {
-            // SDWA WORD_1 with UNUSED_PAD puts the converted low halfword
-            // into bits 31:16 and clears bits 15:0.
-            return Ok(format!("{dst} = tb_ray_to_uint(asfloat({})) << 16u;", raw(0)?));
+        if matches!(name, "v_cvt_u32_f32" | "v_cvt_i32_f32") && control <= 6 && sdwa >> 16 == 6 {
+            // Full float source, UNUSED_PAD destination. Select the low bits
+            // after conversion and zero all other bytes of the destination.
+            let convert = if name == "v_cvt_i32_f32" { "tb_ray_to_int" } else { "tb_ray_to_uint" };
+            let converted = format!("{convert}(asfloat({}))", raw(0)?);
+            let packed = match control {
+                0..=3 => format!("(({converted} & 255u) << {}u)", 8 * control),
+                4 | 5 => format!("(({converted} & 65535u) << {}u)", 16 * (control - 4)),
+                _ => converted,
+            };
+            return Ok(format!("{dst} = {packed};"));
         }
         // Full DWORD destination, no saturation or floating-point modifiers.
         if (sdwa >> 8) & 0xff != 6 || sdwa & 0x7070_0000 != 0 {
@@ -180,6 +192,16 @@ pub(super) fn vector(ins: &Insn) -> Result<String, String> {
             _ => return Err(format!("unsupported ray SDWA operation {name}")),
         };
         return Ok(format!("{dst} = {a} {op} {b};"));
+    }
+    if matches!(name, "v_swap_b32" | "v_movrels_b32" | "v_movreld_b32") {
+        let (Opnd::Vgpr(d), Opnd::Vgpr(s)) = (dest, *source(0)?) else {
+            return Err(format!("ray {name} requires two vector registers"));
+        };
+        return Ok(match name {
+            "v_swap_b32" => format!("{{ uint tmp = v[{d}]; v[{d}] = v[{s}]; v[{s}] = tmp; }}"),
+            "v_movrels_b32" => format!("v[{d}] = v[({s}u + m0) & 255u];"),
+            _ => format!("v[({d}u + m0) & 255u] = v[{s}];"),
+        });
     }
     let bits = |i: usize| -> Result<String, String> {
         let mut word = raw(i)?;
@@ -278,6 +300,9 @@ pub(super) fn vector(ins: &Insn) -> Result<String, String> {
             "lg" if ty == "f32" => {
                 format!("!tb_ray_nan({a}) && !tb_ray_nan({b}) && {left} != {right}")
             }
+            "neq" if ty == "f32" => {
+                format!("tb_ray_nan({a}) || tb_ray_nan({b}) || {left} != {right}")
+            }
             "ngt" if ty == "f32" => {
                 format!("tb_ray_nan({a}) || tb_ray_nan({b}) || {left} <= {right}")
             }
@@ -335,6 +360,8 @@ pub(super) fn vector(ins: &Insn) -> Result<String, String> {
                 f(2)?
             ))
         }
+        "v_mad_f32" => Some(format!("tb_ray_mac({}, {}, {})", f(0)?, f(1)?, f(2)?)),
+        "v_mad_legacy_f32" => Some(format!("tb_ray_legacy_mad({}, {}, {})", f(0)?, f(1)?, f(2)?)),
         "v_fma_f32" => Some(format!("mad({}, {}, {})", f(0)?, f(1)?, f(2)?)),
         "v_fmaak_f32" if ins.raw.len() == 2 => Some(format!(
             "mad({}, {}, asfloat(0x{:08x}u))",

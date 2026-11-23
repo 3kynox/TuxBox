@@ -2,7 +2,7 @@
 """Compare Xbox XG 2D texture exports with the TuxBox provider.
 
 The same Windows guest runs with each DLL and compares every output byte for
-18,640 supported-subset layouts and 11,084,800 sampled element addresses. No game
+18,745 supported-subset layouts and 11,147,800 sampled element addresses. No game
 bytes are distributed. Supply the original XG DLL and a TuxBox XMem DLL.
 """
 import argparse
@@ -58,10 +58,10 @@ def main():
             run = subprocess.run([str(wine), str(guest)], cwd=trial, env=env, timeout=60,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
             out = run.stdout.decode('utf-8', errors='replace').strip()
-            if run.returncode or 'xg-64kmipsrect PASS 18640 layouts 11084800 element addresses' not in out:
+            if run.returncode or 'xg-64kmipsrect PASS 18745 layouts 11147800 element addresses' not in out:
                 raise RuntimeError(f'{name} control failed ({run.returncode}): {out}')
             data = (trial / 'texture-64kmipsrect-results.bin').read_bytes()
-            if len(data) != 18640 * 0x1b40 + 11084800 * 12:
+            if len(data) != 18745 * 0x1b40 + 11147800 * 12:
                 raise ValueError(f'{name} emitted an unexpected number of result bytes')
             outputs.append(data)
             results[name] = {'dll_sha256': digest(dll), 'guest_receipt': out.splitlines()[-1],
@@ -76,18 +76,18 @@ def main():
             raise RuntimeError(f'unsupported-subset control failed: {check.stdout!r}')
         receipt = {
             'scope': 'XGCreateTextureComputer (ordinal 11) with default layout 0 for a bounded subset. Identical guest and XMem dependency; complete layouts and sampled element addresses compared against the supplied Xbox XG DLL.',
-            'subset': '57 color formats, eight square and rectangular dimensions from 32 to 2048, two to twelve mips within the supported tail limits, eight related flags; one slice, one sample, default layout. Other combinations are unsupported.',
+            'subset': 'Default 2D render-target layout with one slice and one sample. Eight shapes between 32 and 2048 exercise 57 color formats, eight flag combinations and two to twelve mips. Seven larger six-mip shapes from 2049x1153 to 16384x16384 include the observed 2976x1676 target and exercise five formats with three flag combinations.',
             'host': (proton / 'version').read_text().strip(),
             'guest_sha256': digest(exe), 'guest_source_sha256': digest(source),
             'xmem_sha256': digest(args.xmem),
-            'layouts': 18640, 'sampled_element_addresses': 11084800,
+            'layouts': 18745, 'sampled_element_addresses': 11147800,
             'checks': ['complete layouts', 'sampled mip and array-slice addresses',
                        'output guards', 'unverified flags rejected by provider'],
             'runs': results,
         }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(receipt, indent=2) + '\n')
-    print('xg-64kmipsrect differential PASS: 18640 layouts and 11084800 addresses match')
+    print('xg-64kmipsrect differential PASS: 18745 layouts and 11147800 addresses match')
 
 
 if __name__ == '__main__':

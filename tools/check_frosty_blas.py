@@ -92,10 +92,11 @@ def sphere_results(path, expected):
     return dict(hits=len(expected) - misses, misses=misses, max_distance_error=worst, readback_sha256=digest(path))
 
 
-MATERIAL_HITS = (3559, 15261, 17501, 17901, 18610, 18676, 19004, 28725, 29878, 29890, 30995, 38210)
+MASKED_MATERIAL_HITS = (0, 31, 520, 5384, 31834)
+MATERIAL_HITS = (1840, 2036, 3559, 15261, 17501, 17901, 18610, 18676, 18964, 19004, 28725, 29878, 29890, 30995, 38210)
 
 
-def extract_material_states(mount, work):
+def extract_material_states(mount, work, selected=MATERIAL_HITS):
     from check_frosty_shaders import ARCHIVES, ENTRY, decoder, decompress, parse_tables, serialized_state
     import hashlib
 
@@ -107,7 +108,7 @@ def extract_material_states(mount, work):
         raise ValueError("Unexpected material archive fingerprint")
     _, _, table, _, payload = parse_tables(data)
     lz4 = decoder()
-    for entry in MATERIAL_HITS:
+    for entry in selected:
         row = ENTRY.unpack_from(table, entry * ENTRY.size)
         _, state = serialized_state(decompress(payload, row, lz4))
         (work / f"material-{entry}.sptr").write_bytes(state)
@@ -143,21 +144,34 @@ def main():
     parser.add_argument("--lumen-volume", action="store_true", help="dispatch the two packaged Lumen translucency ray generators")
     parser.add_argument("--lumen-reflections", action="store_true", help="dispatch the material and compact reflection raygens used by the opening scene")
     parser.add_argument("--lumen-material", action="store_true", help="dispatch the packaged five-word Lumen geometry closest-hit and miss pair")
-    parser.add_argument("--material-hits", action="store_true", help="check the 12 closest-hit shaders in the first retail ray pipeline")
+    parser.add_argument("--material-hits", action="store_true", help="check material closest-hit shaders observed in retail ray pipelines")
+    parser.add_argument("--masked-materials", action="store_true", help="check packaged material any-hit filtering and closest-hit linkage")
     parser.add_argument("--lighting-hits", action="store_true", help="dispatch the retail lighting miss and hidden material shaders")
     parser.add_argument("--single-build", action="store_true", help="use Xbox List4 slot 117 and compare inline BLAS size outputs with explicit size queries")
     parser.add_argument("--gpu-instances", action="store_true", help="populate the TLAS instance array on the GPU before the scene build and update its transforms after Close")
+    parser.add_argument("--reuse-blas", action="store_true", help="reuse a cooked BLAS address across sizes, then check its native pointer and trace the rebuilt scene")
+    parser.add_argument("--promote-blas", action="store_true", help="trace direct and relocated versions of one guest BLAS in queue execution order")
     parser.add_argument("--ambiguous-as", action="store_true", help="reject ambiguous overlapping placed acceleration-structure buffers")
     args = parser.parse_args()
+    if args.xshader:
+        # The Xbox runtime compiler must use the worker that built the desktop control.
+        os.environ["TUXBOX_XSHADER"] = str(args.xshader.resolve())
+    material_entries = (MATERIAL_HITS if args.material_hits else ()) + (MASKED_MATERIAL_HITS if args.masked_materials else ())
     if args.shadow_tlas and not args.sphere_vertices:
         parser.error("--shadow-tlas needs --sphere-vertices")
     if args.ambiguous_as and (not args.provider or args.copy_only or args.prebuild_only):
         parser.error("--ambiguous-as requires a provider and a build run")
+    if args.reuse_blas and args.promote_blas:
+        parser.error("choose one BLAS reuse control per run")
+    if args.reuse_blas or args.promote_blas:
+        if args.sphere_vertices:
+            parser.error("BLAS reuse controls use generated two- and fourteen-triangle scenes")
+        args.gpu_instances = True
     if args.gpu_instances and (not args.provider or args.copy_only or args.prebuild_only):
         parser.error("--gpu-instances requires a provider and a build run")
     if args.single_build and (not args.provider or args.prebuild_only or args.copy_only):
         parser.error("--single-build needs an Xbox provider and a build run")
-    if (args.material_hits or args.lumen_material or args.lighting_hits) and not (args.ray_states or args.ray_archive):
+    if (material_entries or args.lumen_material or args.lighting_hits) and not (args.ray_states or args.ray_archive):
         parser.error("material and lighting probes need --ray-states or --ray-archive")
     if args.card_tiles and not (args.ray_states or args.ray_archive):
         parser.error("--card-tiles needs --ray-states or --ray-archive")
@@ -190,6 +204,10 @@ def main():
             probe_flags.append("/DTUXBOX_SHADOW_TLAS_PROBE")
         if args.ambiguous_as:
             probe_flags.append("/DTUXBOX_AMBIGUOUS_AS_PROBE")
+        if args.reuse_blas:
+            probe_flags.append("/DTUXBOX_REUSED_BLAS_PROBE")
+        if args.promote_blas:
+            probe_flags.append("/DTUXBOX_PROMOTED_BLAS_PROBE")
         if args.gpu_instances:
             probe_flags.append("/DTUXBOX_GPU_INSTANCE_PROBE")
             subprocess.run([find_dxc(None), "-T", "cs_6_0", "-E", "main", "-O3", "-Fh", work / "instance_bindings_dxil.h",
@@ -306,11 +324,11 @@ def main():
                 _, state = serialized_state(decompress(payload, entries[entry], lz4))
                 (work / f"{entry}.sptr").write_bytes(state)
         material_names = []
-        if args.material_hits:
+        if material_entries:
             if args.ray_archive:
-                extract_material_states(args.ray_archive, work)
-            ray_entries += tuple(f"material-{i}" for i in MATERIAL_HITS)
-        if args.material_hits or args.lumen_material:
+                extract_material_states(args.ray_archive, work, material_entries)
+            ray_entries += tuple(f"material-{i}" for i in material_entries)
+        if material_entries or args.lumen_material:
             probe_flags.append("/DTUXBOX_MATERIAL_HIT_PROBE")
         if args.ray_states or args.ray_archive:
             translator = args.xshader.resolve() if args.xshader else shader_compiler()
@@ -322,13 +340,14 @@ def main():
                 generation = subprocess.run([translator, state, "--hlsl-out", hlsl, "--profile-out", profile],
                                             check=True, text=True, stdout=subprocess.PIPE)
                 if entry == 1238 or isinstance(entry, str) and entry.startswith("material-"):
+                    generated = hlsl.read_text()
                     export = re.fullmatch(r"entry=((?:LumenHardwareRayTracing)?MaterialCHS_[a-f0-9]{8})", generation.stdout.strip())
                     if export is None:
                         raise ValueError(f"Unexpected closest-hit export for {entry}")
                     views = ["0"] * 64
                     kinds = {"StructuredBuffer<uint4>": "s", "Buffer<float4>": "b",
                              "Texture2D<uint4>": "i", "Texture2D<float4>": "f"}
-                    for kind, slot in re.findall(r"(\w+<\w+>) tbSrv\d+ : register\(t(\d+),space0\)", hlsl.read_text()):
+                    for kind, slot in re.findall(r"(\w+<\w+>) tbSrv\d+ : register\(t(\d+),space0\)", generated):
                         views[int(slot)] = kinds[kind]
                     if entry != 1238 and "s" not in views:
                         raise ValueError(f"Missing material scene buffers for {entry}")
@@ -337,7 +356,11 @@ def main():
                     groups = {g for k in (0, 1) for g in re.findall(pattern, raw[k:].decode("utf-16-le", "ignore"))}
                     if len(groups) != 1:
                         raise ValueError(f"Unexpected hit group in {entry}")
-                    material_names.append(f'{{"{entry}", L"{export.group(1)}", L"{groups.pop()}", "{"".join(views)}"}},')
+                    any_hit = re.search(r'void (MaterialAHS_[a-f0-9]{8})\(', generated)
+                    if entry in {f"material-{i}" for i in MASKED_MATERIAL_HITS} and not any_hit:
+                        raise ValueError(f"Missing any-hit export for {entry}")
+                    any_name = f'L"{any_hit.group(1)}"' if any_hit else 'nullptr'
+                    material_names.append(f'{{"{entry}", L"{export.group(1)}", L"{groups.pop()}", "{"".join(views)}", {any_name}}},')
                 if profile.read_text() != "lib_6_3":
                     raise ValueError(f"Unexpected desktop profile for state {entry}")
                 subprocess.run([find_dxc(None), "-T", "lib_6_3", "-O3", "-Fo", dxil, hlsl], check=True)
@@ -347,7 +370,7 @@ def main():
                 subprocess.run([find_dxc(None), "-T", "lib_6_3", "-O3", "-Fo", work / "occlusion-observer.dxil",
                                 src / "occlusion_observer.hlsl"], check=True)
                 probe_flags.append("/DTUXBOX_SCREEN_OCCLUSION_PROBE")
-        if args.material_hits or args.lumen_material:
+        if material_entries or args.lumen_material:
             (work / "material_inputs.h").write_text("\n".join(material_names) + "\n")
             subprocess.run([find_dxc(None), "-T", "lib_6_3", "-O3", "-Fo", work / "material-observer.dxil",
                             src / "material_observer.hlsl"], check=True)
@@ -366,6 +389,7 @@ def main():
             result["xbox_build_slot"] = 117
         if ray_inputs:
             result["translated_ray_libraries"] = ray_inputs
+            result["translator_sha256"] = digest(translator)
         modes = ["desktop"]
         if args.deserialize:
             shutil.copyfile(args.deserialize, work / "sphere.serialized")
@@ -422,6 +446,10 @@ def main():
             result["runs"][mode] = {"exit": run.returncode, **observation}
             if run.returncode or not observation:
                 passed = False
+            elif args.reuse_blas and mode == "xbox" and observation.get("blas_reuse_guest_bytes") != "192,704,192,704":
+                passed = False
+            elif args.promote_blas and mode == "xbox" and observation.get("promotion_first_primitive") != "1,0,1,0":
+                passed = False
             elif args.single_build and mode == "xbox" and observation.get("inline_postbuild_sizes_matched") != "4":
                 passed = False
             elif args.ambiguous_as and mode.startswith("xbox") and (
@@ -447,13 +475,14 @@ def main():
                     passed = passed and mismatches == 0
             elif observation.get("ray_query_results") != "70010,70120,80010,80120,dead":
                 passed = False
-        if (args.material_hits or args.lumen_material) and args.provider and "xbox" in result["runs"]:
+        if (material_entries or args.lumen_material) and args.provider and "xbox" in result["runs"]:
             desktop = result["runs"]["desktop"]
             xbox = result["runs"]["xbox"]
-            hits = [f"material-{entry}" for entry in MATERIAL_HITS] if args.material_hits else []
+            hits = [f"material-{entry}" for entry in material_entries]
             if args.lumen_material:
                 hits.append("1238")
-            fields = [f"hit_{entry}_{ray}" for entry in hits for ray in range(5)]
+            masked = {f"material-{i}" for i in MASKED_MATERIAL_HITS}
+            fields = [f"hit_{entry}_{ray}" for entry in hits for ray in range(7 if entry in masked else 5)]
             mismatches = [field for field in fields if field not in desktop or desktop[field] != xbox.get(field)]
             result["material_payload_comparison"] = {"rays": len(fields), "words_per_ray": 16, "mismatches": mismatches}
             passed = passed and not mismatches

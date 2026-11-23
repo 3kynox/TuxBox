@@ -16,6 +16,7 @@ use crate::proxy::{Proxy, Slot, Slots, allocate, check_output, child_slots, obje
 mod allocation;
 pub(crate) mod blas;
 pub(crate) mod compute;
+mod compute_scene;
 pub(crate) mod depth;
 mod descriptor_copy;
 mod dxgi;
@@ -232,6 +233,7 @@ pub(crate) struct DescriptorHeapState {
     pub(crate) desc: D3D12_DESCRIPTOR_HEAP_DESC,
     pub(crate) placed_views: Option<placement::HeapViews<placement::Texture>>,
     _depth_views: Option<placement::HeapViews<stencil::Surface>>,
+    _scene_views: Option<placement::DescriptorRange<blas::SceneView>>,
 }
 type DescriptorHeap = Proxy<ID3D12DescriptorHeap, DescriptorHeapState>;
 
@@ -380,6 +382,9 @@ unsafe extern "system" fn create_heap(
     let state = DescriptorHeapState {
         desc: *desc,
         placed_views,
+        _scene_views: this.state.blas.views.heap(
+            &this.native, &native, desc, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+        ),
         _depth_views: this.state.depth_views.heap(
             &this.native,
             &native,
@@ -714,8 +719,7 @@ unsafe extern "system" fn create_list_x(
         wrap_command_list(
             list,
             allocator,
-            initial.map(|p| &p.native),
-            initial.and_then(|p| p.state.stencil_slot),
+            initial,
             &parent,
             compact,
             out,

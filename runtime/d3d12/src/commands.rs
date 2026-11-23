@@ -35,8 +35,7 @@ enum ListState {
 
 struct Recording {
     resources: device::MediaResources,
-    blas_inputs: Vec<device::blas::Input>,
-    instance_uploads: Vec<build_raytracing::Instances>,
+    scene_commands: Vec<raytracing::SceneCommand>,
     bindings: compute_bindings::Bindings,
     stencil_slot: Option<u32>,
     stencil_targets: Option<stencil::Targets>,
@@ -68,6 +67,44 @@ impl Recording {
             }
         }
         Ok(())
+    }
+
+    fn compute_dispatch(&mut self, list: &List, dispatch: impl FnOnce()) {
+        self.sample_heap();
+        let Some(root) = self.bindings.scene_root() else {
+            dispatch();
+            return;
+        };
+        let result = self.bindings.scene_resource(list)
+            .and_then(|scene| {
+                if let Some([instances, normals]) = &scene.geometry {
+                    raytracing::retain(self, &[&scene.scene.0, &instances.0, &normals.0])?;
+                } else {
+                    raytracing::retain(self, &[&scene.scene.0])?;
+                }
+                Ok(scene)
+            })
+            .and_then(|scene| {
+                let va = scene.scene.1;
+                let geometry = scene.geometry.as_ref().map(|[instances, normals]| [instances.1, normals.1]);
+                if scene.recheck_on_submit()
+                    && !matches!(self.scene_commands.last(), Some(raytracing::SceneCommand::Check(last)) if *last == scene)
+                {
+                    self.scene_commands.try_reserve(1).map_err(|_| E_OUTOFMEMORY)?;
+                    self.scene_commands.push(raytracing::SceneCommand::Check(scene));
+                }
+                unsafe { self.bindings.dispatch_scene(&list.native, root, va, geometry, dispatch) };
+                crate::diagnostics::log_once(&root.program.first_dispatch, || {
+                    format!("recorded inline compute shader {} dispatch with scene GPU VA {va:#x}", root.program.source_hash)
+                });
+                Ok(())
+            });
+        if let Err(error) = result {
+            crate::diagnostics::recording_error(format_args!(
+                "inline ray scene binding: {:?}", error.code()
+            ));
+            self.error = error.code();
+        }
     }
 
     fn draw(&mut self, list: &ID3D12GraphicsCommandList, draw: impl FnOnce()) {
@@ -228,9 +265,8 @@ unsafe extern "system" fn reset(
     if hr.is_ok() {
         state.phase = ListState::Open;
         state.resources = allocator.state.clone();
-        state.blas_inputs.clear();
-        state.instance_uploads.clear();
-        state.bindings = compute_bindings::Bindings::new(initial.map(|p| &p.native));
+        state.scene_commands.clear();
+        state.bindings = compute_bindings::Bindings::new(initial);
         if state.media.is_some() {
             state.media = Some(media::Recording::new(allocator));
         }
@@ -540,23 +576,27 @@ unsafe extern "system" fn flush_texture_cache(list: &List, mask: u32, address: u
     if !state.can_record(&list.native) {
         return;
     }
-    // FlushTextureCache covers the GPU address space. RHIFlushTextureCacheBOP
-    // supplies one allocation's VA and extent. A global barrier orders either
-    // range without changing the resource's layout or dereferencing a guest VA.
-    let valid = match mask {
-        0xc0_0000 => address == 0 && bytes == 0xff_ffff_ff00,
-        0x3000 => address != 0 && bytes != 0 && address.checked_add(bytes).is_some(),
-        _ => {
-            crate::diagnostics::recording_error(format_args!(
-                "texture cache flush mask {mask:#x} address {address:#x} bytes {bytes:#x}"
-            ));
-            state.error = E_NOTIMPL;
-            return;
-        }
-    };
-    if !valid {
+    // The mask selects the caches to flush. Both can use the same host
+    // global memory barrier, which also covers subranges and empty ranges.
+    if !matches!(mask, 0xc0_0000 | 0x3000) {
+        crate::diagnostics::recording_error(format_args!(
+            "texture cache flush mask {mask:#x} address {address:#x} bytes {bytes:#x}"
+        ));
+        state.error = E_NOTIMPL;
+        return;
+    }
+    if address.checked_add(bytes).is_none() {
+        crate::diagnostics::recording_error(format_args!(
+            "overflowing texture cache flush address {address:#x} bytes {bytes:#x}"
+        ));
         state.error = E_INVALIDARG;
         return;
+    }
+    if address != 0 || bytes != 0xff_ffff_ff00 {
+        static RANGE_FLUSH: std::sync::Once = std::sync::Once::new();
+        crate::diagnostics::log_once(&RANGE_FLUSH, || {
+            format!("texture cache range flush mask {mask:#x} address {address:#x} bytes {bytes:#x}")
+        });
     }
     let Some(native) = list
         .state
@@ -788,7 +828,7 @@ unsafe extern "system" fn execute_indirect(
         state.error = E_INVALIDARG;
         return;
     };
-    let bytes = u64::from(signature.state) * u64::from(max_count);
+    let bytes = u64::from(signature.state.stride) * u64::from(max_count);
     if !(argument_offset | count_offset).is_multiple_of(4)
         || !compute::contains_range(arguments, argument_offset, bytes)
     {
@@ -806,7 +846,7 @@ unsafe extern "system" fn execute_indirect(
         };
         Some(buffer)
     };
-    state.draw(&list.native, || unsafe {
+    let execute = || unsafe {
         list.native.ExecuteIndirect(
             &signature.native,
             max_count,
@@ -815,7 +855,12 @@ unsafe extern "system" fn execute_indirect(
             count,
             count_offset,
         );
-    });
+    };
+    if signature.state.compute {
+        state.compute_dispatch(list, execute);
+    } else {
+        state.draw(&list.native, execute);
+    }
 }
 
 static LIST_SLOTS: Slots<149> = {
@@ -844,6 +889,7 @@ static LIST_SLOTS: Slots<149> = {
     slots[35] = crate::slot!(descriptors::table::<true>);
     slots[36] = crate::slot!(descriptors::table::<false>);
     slots[39] = crate::slot!(compute::constants);
+    slots[41] = crate::slot!(compute::constant_buffer);
     slots[43] = crate::slot!(compute::shader_resource);
     slots[45] = crate::slot!(compute::unordered_access);
     slots[47] = crate::slot!(graphics::index_buffer);
@@ -900,8 +946,8 @@ unsafe extern "system" fn execute(queue: &Queue, count: u32, lists: *const *mut 
     let guest = unsafe { slice::from_raw_parts(lists, count as usize) };
     let result = translate_batch(
         guest,
-        (Vec::new(), Vec::new(), Vec::new()),
-        |&item, (textures, writes, shader_views)| {
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+        |&item, (textures, writes, shader_views, scene_lists)| {
             let list: &List = unsafe {
                 unwrap(item, parent(&queue.parent), &LIST_SLOTS)
                     .or_else(|| unwrap(item, parent(&queue.parent), &media::SLOTS))
@@ -914,13 +960,9 @@ unsafe extern "system" fn execute(queue: &Queue, count: u32, lists: *const *mut 
             {
                 return Err(E_INVALIDARG);
             }
-            for input in &state.blas_inputs {
-                let owner = list.parent.as_ref().ok_or(E_INVALIDARG)?;
-                unsafe { input.prepare(owner) }.map_err(|e| e.code())?;
-            }
-            for instances in &state.instance_uploads {
-                let owner = list.parent.as_ref().ok_or(E_INVALIDARG)?;
-                unsafe { instances.prepare(owner) }.map_err(|e| e.code())?;
+            if !state.scene_commands.is_empty() {
+                scene_lists.try_reserve(1).map_err(|_| E_OUTOFMEMORY)?;
+                scene_lists.push(list);
             }
             textures
                 .try_reserve(state.placed_reads.len())
@@ -933,7 +975,7 @@ unsafe extern "system" fn execute(queue: &Queue, count: u32, lists: *const *mut 
             shader_views.extend(state.sampled_heaps.iter().cloned());
             Ok(list.native.as_raw())
         },
-        |host, (mut textures, mut writes, shader_views)| {
+        |host, (mut textures, mut writes, shader_views, scene_lists)| {
             unsafe {
                 placement::submit(
                     parent(&queue.parent),
@@ -943,12 +985,30 @@ unsafe extern "system" fn execute(queue: &Queue, count: u32, lists: *const *mut 
                     &mut writes,
                     &shader_views,
                     || {
+                        // Placement dependencies are settled. Publish scene writes and
+                        // snapshot each instance table in recorded order across lists.
+                        let submission = if scene_lists.is_empty() {
+                            None
+                        } else {
+                            let owner = queue.parent.as_ref().ok_or(E_INVALIDARG)?;
+                            Some(device::blas::begin_submission(owner))
+                        };
+                        for list in scene_lists {
+                            let state = recording(list);
+                            for command in &state.scene_commands {
+                                command.prepare(list)?;
+                            }
+                        }
                         (queue.native.vtable().ExecuteCommandLists)(
                             queue.native.as_raw(),
                             count,
                             host.as_ptr(),
                         );
+                        if let Some(submission) = submission {
+                            submission.commit();
+                        }
                         crate::diagnostics::submitted(queue.state.kind, count);
+                        Ok(())
                     },
                 )
             }
@@ -1105,8 +1165,7 @@ static QUEUE_SLOTS: Slots<64> = {
 pub(crate) unsafe fn wrap_command_list(
     native: ID3D12GraphicsCommandList,
     allocator: &device::Allocator,
-    initial: Option<&ID3D12PipelineState>,
-    stencil_slot: Option<u32>,
+    initial: Option<&device::compute::Pipeline>,
     device: &IUnknown,
     compact: bool,
     out: *mut *mut c_void,
@@ -1131,10 +1190,9 @@ pub(crate) unsafe fn wrap_command_list(
         raytracing,
         recording: Mutex::new(Recording {
             resources: allocator.state.clone(),
-            blas_inputs: Vec::new(),
-            instance_uploads: Vec::new(),
+            scene_commands: Vec::new(),
             bindings: compute_bindings::Bindings::new(initial),
-            stencil_slot,
+            stencil_slot: initial.and_then(|p| p.state.stencil_slot),
             stencil_targets: None,
             dsv_bound: false,
             placed_reads: Vec::new(),
@@ -1142,7 +1200,7 @@ pub(crate) unsafe fn wrap_command_list(
             resource_heap: None,
             sampled_heaps: Vec::new(),
             media: compact.then(|| media::Recording::new(allocator)),
-            phase: ListState::Fresh(allocator.native.clone(), initial.cloned()),
+            phase: ListState::Fresh(allocator.native.clone(), initial.map(|p| p.native.clone())),
             error: S_OK,
         }),
     };

@@ -36,10 +36,16 @@ int main(int argc, char** argv) {
     const uint32_t formats[] = {1,2,3,4,9,10,11,12,13,14,15,16,17,18,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,41,42,43,48,49,50,51,52,53,54,56,57,58,59,60,61,62,63,64,65,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,87,88,90,91,92,93,94,95,96,97,98,99};
     FILE* file = nullptr; if (fopen_s(&file, "texture-64kmipsrect-results.bin", "wb") || !file) return 6;
     struct Shape { uint32_t width, height; };
-    constexpr Shape shapes[] = {{32,32}, {64,64}, {512,1024}, {1024,2048}, {1536,1024}, {1536,2048}, {513,257}, {257,513}};
+    constexpr Shape shapes[] = {{32,32}, {64,64}, {512,1024}, {1024,2048}, {1536,1024}, {1536,2048}, {513,257}, {257,513},
+                              {2049,1153}, {2560,1440}, {2976,1676}, {2977,1677},
+                              {3840,2160}, {2160,3840}, {16384,16384}};
     unsigned cases = 0, addresses = 0;
     for (uint32_t format : formats) for (uint32_t flag : {1u,5u,0x100001u,0x100005u,0x200001u,0x200005u,0x300001u,0x300005u})
-    for (Shape shape : shapes) for (uint32_t levels : {2u,3u,5u,8u,10u,11u,12u}) for (uint32_t slices : {1u}) {
+    for (Shape shape : shapes) for (uint32_t levels : {2u,3u,5u,6u,8u,10u,11u,12u}) for (uint32_t slices : {1u}) {
+        const bool large = shape.width > 2048 || shape.height > 2048;
+        if (large != (levels == 6)) continue;
+        if (large && ((format != 2 && format != 10 && format != 28 && format != 54 && format != 61)
+                      || (flag != 1 && flag != 5 && flag != 0x300005))) continue;
         unsigned max_dim = shape.width > shape.height ? shape.width : shape.height; unsigned max_levels = 0; while (max_dim) { ++max_levels; max_dim >>= 1; } if (levels > max_levels) continue;
         const unsigned bytes = format <= 4 ? 16 : format <= 18 ? 8 : (format >= 48 && format <= 59) ? 2 : (format >= 60 && format <= 65) ? 1 : 4;
         if ((format >= 70 && format <= 84) || (format >= 94 && format <= 99)) continue;

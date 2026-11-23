@@ -124,7 +124,6 @@ std::string run(const wchar_t* requested, bool) {
         if (list->Close() != expected_hr) throw std::runtime_error("invalid cache flush result");
     };
     reject_flush(UINT_MAX, 0, 512, E_NOTIMPL);
-    reject_flush(0x3000, out->GetGPUVirtualAddress(), 0, E_INVALIDARG);
     reject_flush(0x3000, UINT64_MAX - 255, 512, E_INVALIDARG);
     const auto budget = method<ComputeBudget>(list.Get(), 96);
     std::array<UINT, 6> budget_record{};
@@ -165,6 +164,13 @@ std::string run(const wchar_t* requested, bool) {
     consume(7, 23);
     flush(list.Get(), 0x3000, out->GetGPUVirtualAddress(), sizeof(expected));
     consume(3, 37);
+    // Wake Up flushes a 0xa30000-byte texture allocation at guest address zero.
+    flush(list.Get(), 0x3000, 0, 0xa30000);
+    consume(2, 5);
+    flush(list.Get(), 0x3000, out->GetGPUVirtualAddress(), 0);
+    consume(3, 11);
+    flush(list.Get(), 0xc00000, out->GetGPUVirtualAddress(), sizeof(expected));
+    consume(5, 7);
     D3D12_RESOURCE_BARRIER order{};
     order.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
     order.UAV.pResource = out.Get();
@@ -188,10 +194,10 @@ std::string run(const wchar_t* requested, bool) {
     const bool match = std::memcmp(mapped, expected.data(), sizeof(expected)) == 0;
     result->Unmap(0, &empty);
     if (!match) throw std::runtime_error("indirect dispatch or guarded words differ from CPU reference");
-    char receipt[210];
+    char receipt[256];
     std::snprintf(receipt, sizeof(receipt),
                   "d3d12-indirect PASS pci=%04x:%04x sdk=0x20004 device=41 list=59 words=64/64 "
-                  "counts=direct,one,zero flush=global,range budget=default,rejected2 mesh=0x%08lx rays=0x%08lx",
+                  "counts=direct,one,zero flush=global,range,wake-up(0x3000:0+0xa30000),zero-length,global-range budget=default,rejected2 mesh=0x%08lx rays=0x%08lx",
                   selected.VendorId, selected.DeviceId, static_cast<unsigned long>(mesh), static_cast<unsigned long>(ray));
     return receipt;
 }

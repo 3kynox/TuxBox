@@ -96,7 +96,7 @@ def compile_request(source, key, tools, cache, session):
         target = profile.read_text()
         # Mesh and amplification stages start at shader model 6.5. Linked
         # requests currently repack the outputs of vertex and geometry shaders.
-        profiles = r"(vs|gs)_6_[016]" if linked else r"((cs|ps|vs|gs)_6_[016]|cs_6_4|(ms|as)_6_[56]|lib_6_3)"
+        profiles = r"(vs|gs)_6_[016]" if linked else r"((cs|ps|vs|gs)_6_[016]|cs_6_[45]|(ms|as)_6_[56]|lib_6_3)"
         if not re.fullmatch(profiles, target):
             raise ValueError(f"unsupported compiler profile {target!r}")
         entry = [] if target == "lib_6_3" else ["-E", "main"]

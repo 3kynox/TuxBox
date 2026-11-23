@@ -1,4 +1,4 @@
-//! The single-sample 64 KiB Z-order surface used by Scarlett depth/stencil textures.
+//! The 64 KiB Z-order surface used by Scarlett depth/stencil textures.
 use super::{Desc, Layout, Mip, Plane};
 use windows_sys::Win32::Foundation::E_NOTIMPL;
 
@@ -11,6 +11,7 @@ pub struct DepthStencil {
     slices: u32,
     htile: bool,
     depth_bytes: u32,
+    samples: u32,
     stencil: bool,
 }
 
@@ -23,7 +24,7 @@ impl DepthStencil {
         if desc.dimension != 3
             || desc.layout != 0
             || desc.alignment != 0
-            || desc.samples != 1
+            || !matches!(desc.samples, 1 | 2 | 4 | 8)
             || desc.quality != 0
             || !(1..=2048).contains(&desc.slices)
             || desc.mips != 1
@@ -45,25 +46,58 @@ impl DepthStencil {
             slices: u32::from(desc.slices),
             htile: desc.flags != 0x8130_0002,
             depth_bytes,
+            samples: desc.samples,
             stencil,
         })
     }
 
+    fn tile_shape(self, bytes: u32) -> (u32, u32) {
+        let (width, height) = (
+            if bytes == 4 { 128 } else { 256 },
+            if bytes == 1 { 256 } else { 128 },
+        );
+        let log_samples = self.samples.trailing_zeros();
+        (
+            width >> log_samples.div_ceil(2),
+            height >> (log_samples / 2),
+        )
+    }
+
     fn geometry(self, stencil: bool) -> (u32, u32, u32, u64) {
         let bytes = if stencil { 1 } else { self.depth_bytes };
-        let tile_width = if bytes == 4 { 128 } else { 256 };
-        let tile_height = if bytes == 1 { 256 } else { 128 };
+        let (tile_width, tile_height) = self.tile_shape(bytes);
         let pitch = self.width.next_multiple_of(tile_width);
         let rows = self.height.next_multiple_of(tile_height);
-        (pitch, rows, bytes, u64::from(pitch * rows * bytes))
+        (
+            pitch,
+            rows,
+            bytes,
+            u64::from(pitch) * u64::from(rows) * u64::from(bytes * self.samples),
+        )
     }
 
     pub fn htile_bytes(self) -> u64 {
         if self.htile {
-            u64::from(self.width.div_ceil(1024) * self.height.div_ceil(1024)) * TILE_BYTES * u64::from(self.slices)
+            u64::from(self.width.div_ceil(1024) * self.height.div_ceil(1024))
+                * TILE_BYTES
+                * u64::from(self.slices)
         } else {
             0
         }
+    }
+
+    pub fn samples(self) -> u32 {
+        self.samples
+    }
+
+    /// The packaged address query validates the sample against its first
+    /// plane. HTILE is single-sampled even when the data planes are MSAA.
+    pub fn query_sample(self, plane: u32, sample: u32) -> Option<u64> {
+        if sample >= self.samples || (self.htile && sample != 0) {
+            return None;
+        }
+        let bytes = if plane == self.depth_index() { self.depth_bytes } else { 1 };
+        Some(u64::from(bytes * sample))
     }
 
     pub fn depth_index(self) -> u32 {
@@ -121,7 +155,7 @@ impl DepthStencil {
             width_texels: self.width,
             height_texels: self.height,
             depth: self.slices,
-            slices: 1,
+            slices: self.samples,
             swizzle: 24,
             reserved: [0, 0x8000, 0, 0x8000, 0],
             samples: 1,
@@ -166,29 +200,17 @@ impl DepthStencil {
                 1024,
                 1024,
             )
-        } else if index == depth && self.depth_bytes == 2 {
-            (
-                &[2, 8, 0x20, 0x80, 0x200, 0x800, 0x1400, 0x8100],
-                &[4, 0x10, 0x40, 0x2000, 0x300, 0x400, 0x5800, 0x8100],
-                256,
-                128,
-            )
-        } else if index == depth {
-            (
-                &[4, 0x10, 0x40, 0x2000, 0x200, 0x800, 0x1400, 0x8100],
-                &[8, 0x20, 0x80, 0x4000, 0x300, 0x400, 0x9800, 0x100],
-                128,
-                128,
-            )
-        } else if self.stencil && index == depth + 1 {
-            (
-                &[1, 4, 0x10, 0x40, 0x200, 0x800, 0x1400, 0x4100, 0x8000],
-                &[2, 8, 0x20, 0x80, 0x300, 0x400, 0x3800, 0x8100, 0],
-                256,
-                256,
-            )
         } else {
-            return None;
+            let bytes = if index == depth {
+                self.depth_bytes
+            } else if self.stencil && index == depth + 1 {
+                1
+            } else {
+                return None;
+            };
+            let (xb, yb) = depth_equation(bytes, self.samples)?;
+            let (tw, th) = self.tile_shape(bytes);
+            (xb, yb, tw, th)
         };
         let mut inner = 0;
         for (bit, (&a, &b)) in xb.iter().zip(yb).enumerate() {
@@ -206,4 +228,49 @@ impl DepthStencil {
         let bank = ((slice & 1) << 10) | ((slice & 2) << 8);
         Some(tile * TILE_BYTES + u64::from(inner ^ bank))
     }
+}
+
+// Address XORs for each bit of X and Y in the 64 KiB Scarlett Z swizzle.
+// The footprint shrinks with MSAA. The bank XORs also depend on the
+// element size, even when two layouts have equal total bytes per pixel.
+fn depth_equation(bytes: u32, samples: u32) -> Option<(&'static [u32], &'static [u32])> {
+    Some(match (bytes, samples) {
+        (4, 1) | (1, 4) => (
+            &[4, 0x10, 0x40, 0x2000, 0x200, 0x800, 0x1400, 0x8100],
+            &[8, 0x20, 0x80, 0x4000, 0x300, 0x400, 0x9800, 0x100],
+        ),
+        (1, 1) => (
+            &[1, 4, 0x10, 0x40, 0x200, 0x800, 0x1400, 0x4100, 0x8000],
+            &[2, 8, 0x20, 0x80, 0x300, 0x400, 0x3800, 0x8100, 0],
+        ),
+        (4, 2) | (1, 8) => (
+            &[8, 0x20, 0x80, 0x2000, 0x200, 0x800, 0x9400, 0x100],
+            &[0x10, 0x40, 0x8000, 0x4000, 0x300, 0x400, 0x1800, 0x8100],
+        ),
+        (1, 2) => (
+            &[2, 8, 0x20, 0x80, 0x200, 0x800, 0x5400, 0x8100],
+            &[4, 0x10, 0x40, 0x2000, 0x300, 0x400, 0x1800, 0x8100],
+        ),
+        (4, 4) | (2, 8) => (
+            &[0x10, 0x40, 0x8000, 0x2000, 0x200, 0x800, 0x9400, 0x100],
+            &[0x20, 0x80, 0x1000, 0x4000, 0x300, 0x400, 0x9800, 0x100],
+        ),
+        (4, 8) => (
+            &[0x20, 0x80, 0x1000, 0x2000, 0x200, 0x800, 0x9400, 0x100],
+            &[0x40, 0x8000, 0x800, 0x4000, 0x300, 0x400, 0x9800, 0x100],
+        ),
+        (2, 1) => (
+            &[2, 8, 0x20, 0x80, 0x200, 0x800, 0x1400, 0x8100],
+            &[4, 0x10, 0x40, 0x2000, 0x300, 0x400, 0x5800, 0x8100],
+        ),
+        (2, 2) => (
+            &[4, 0x10, 0x40, 0x2000, 0x200, 0x800, 0x9400, 0x100],
+            &[8, 0x20, 0x80, 0x4000, 0x300, 0x400, 0x1800, 0x8100],
+        ),
+        (2, 4) => (
+            &[8, 0x20, 0x80, 0x2000, 0x200, 0x800, 0x1400, 0x8100],
+            &[0x10, 0x40, 0x8000, 0x4000, 0x300, 0x400, 0x9800, 0x100],
+        ),
+        _ => return None,
+    })
 }

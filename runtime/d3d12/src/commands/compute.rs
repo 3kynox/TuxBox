@@ -15,10 +15,11 @@ pub(super) unsafe extern "system" fn bind_root(list: &List, signature: *mut c_vo
     }
     // SAFETY: the guest holds its signature during this call. Only a native
     // interface belonging to this list's device is passed to the driver.
-    match unsafe { device::compute::root_signature(signature, parent(&list.parent)) } {
+    match unsafe { device::compute::root_proxy(signature, parent(&list.parent)) } {
         Ok(root) => {
-            state.bindings.compute_root(root);
-            unsafe { list.native.SetComputeRootSignature(root) };
+            let native = root.map(|r| &r.native);
+            state.bindings.compute_root(native, root.map(|r| &r.state));
+            unsafe { list.native.SetComputeRootSignature(native) };
         }
         Err(error) => state.error = error,
     }
@@ -47,6 +48,16 @@ pub(super) unsafe extern "system" fn constants(
         list.native
             .SetComputeRoot32BitConstants(index, count, data, offset)
     };
+}
+
+pub(super) unsafe extern "system" fn constant_buffer(list: &List, index: u32, address: u64) {
+    let mut state = recording(list);
+    if state.can_record(&list.native) {
+        state
+            .bindings
+            .arg(index, super::compute_bindings::Argument::Cbv(address));
+        unsafe { list.native.SetComputeRootConstantBufferView(index, address) };
+    }
 }
 
 pub(super) unsafe extern "system" fn shader_resource(list: &List, index: u32, address: u64) {
@@ -108,8 +119,7 @@ pub(super) unsafe extern "system" fn dispatch(list: &List, x: u32, y: u32, z: u3
         return;
     }
     // SAFETY: the native list remains open under its recording lock.
-    state.sample_heap();
-    unsafe { list.native.Dispatch(x, y, z) };
+    state.compute_dispatch(list, || unsafe { list.native.Dispatch(x, y, z) });
 }
 
 pub(super) fn contains_range(resource: &ID3D12Resource, offset: u64, bytes: u64) -> bool {

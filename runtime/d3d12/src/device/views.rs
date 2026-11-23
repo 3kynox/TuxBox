@@ -41,6 +41,7 @@ pub(super) unsafe extern "system" fn cbv(
 ) {
     check_destination(handle);
     device.state.placements.views.set(handle.ptr, None);
+    device.state.blas.views.store(handle.ptr, None);
     // Xbox uses the actual constant data length. A desktop CBV's size is in
     // 256-byte units. Keep the address at the start chosen by the guest.
     let aligned = unsafe { desc.as_ref() }.copied().map(|mut value| {
@@ -65,8 +66,10 @@ pub(super) unsafe extern "system" fn srv(
     handle: D3D12_CPU_DESCRIPTOR_HANDLE,
 ) {
     let resource = unsafe { view_resource(device, object, desc, handle) };
-    let texture = unsafe { super::resource_proxy(object, identity(device).as_raw()) }
-        .and_then(|resource| resource.state.placed());
+    let proxy = unsafe { super::resource_proxy(object, identity(device).as_raw()) };
+    let texture = proxy.and_then(|resource| resource.state.placed());
+    let scene = device.state.blas.scene_view(proxy, unsafe { desc.as_ref() });
+    device.state.blas.views.store(handle.ptr, scene);
     device.state.placements.views.set(handle.ptr, texture);
     unsafe {
         device
@@ -83,6 +86,7 @@ pub(super) unsafe extern "system" fn uav(
     handle: D3D12_CPU_DESCRIPTOR_HANDLE,
 ) {
     device.state.placements.views.set(handle.ptr, None);
+    device.state.blas.views.store(handle.ptr, None);
     let buffer = unsafe { view_resource(device, object, desc, handle) };
     let counter = if counter.is_null() {
         None

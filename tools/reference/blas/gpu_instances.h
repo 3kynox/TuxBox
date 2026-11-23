@@ -11,37 +11,152 @@ static std::array<UINT, 64> packed_quad() {
     return words;
 }
 
-static UINT64 publish_quad(ID3D12Device* dev, ID3D12CommandQueue* queue,
-                         ID3D12CommandAllocator* allocator, ID3D12Resource* destination) {
-    const auto words = packed_quad();
-    auto input = upload(dev, words.data(), sizeof(words));
-    auto list = guest_list(dev, allocator);
-    using Copy = void(WINAPI*)(IUnknown*, UINT64, UINT64, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE);
-    method<Copy>(list.Get(), 119)(list.Get(), destination->GetGPUVirtualAddress(), input->GetGPUVirtualAddress(),
-                                  D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_DESERIALIZE);
-    D3D12_RESOURCE_BARRIER barrier{};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-    list->ResourceBarrier(1, &barrier);
-    auto size = buffer(dev, 8, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
-    auto readback = buffer(dev, 8, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
-    using Postbuild = void(WINAPI*)(IUnknown*, const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC*, UINT, const UINT64*);
-    const UINT64 address = destination->GetGPUVirtualAddress();
-    const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC request{
-        size->GetGPUVirtualAddress(), D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_COMPACTED_SIZE};
-    method<Postbuild>(list.Get(),118)(list.Get(), &request, 1, &address);
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition = {size.Get(), 0, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE};
-    list->ResourceBarrier(1, &barrier);
-    list->CopyBufferRegion(readback.Get(), 0, size.Get(), 0, 8);
-    submit(dev, queue, list.Get());
-    void* data{};
-    D3D12_RANGE range{0,8}, empty{};
-    check(readback->Map(0,&range,&data), "read native quad size");
-    UINT64 bytes{};
-    std::memcpy(&bytes,data,sizeof(bytes));
-    readback->Unmap(0,&empty);
-    return bytes;
+struct CompactedSize {
+    ComPtr<ID3D12Resource> output, readback;
+
+    void record(ID3D12Device* dev, ID3D12GraphicsCommandList* list, UINT64 address) {
+        output = buffer(dev, sizeof(UINT64), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
+        readback = buffer(dev, sizeof(UINT64), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+        using Postbuild = void(WINAPI*)(IUnknown*, const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC*,
+                                        UINT, const UINT64*);
+        const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC request{
+            output->GetGPUVirtualAddress(), D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_COMPACTED_SIZE};
+        method<Postbuild>(list, 118)(list, &request, 1, &address);
+        D3D12_RESOURCE_BARRIER barrier{};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition = {output.Get(), 0, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE};
+        list->ResourceBarrier(1, &barrier);
+        list->CopyBufferRegion(readback.Get(), 0, output.Get(), 0, sizeof(UINT64));
+    }
+
+    UINT64 read() const {
+        void* data{};
+        D3D12_RANGE range{0, sizeof(UINT64)}, empty{};
+        check(readback->Map(0, &range, &data), "read native compacted size");
+        UINT64 bytes{};
+        std::memcpy(&bytes, data, sizeof(bytes));
+        readback->Unmap(0, &empty);
+        return bytes;
+    }
+};
+
+struct CookedWrite {
+    ComPtr<ID3D12Resource> source;
+    ComPtr<ID3D12GraphicsCommandList> list;
+    CompactedSize compacted;
+
+    CookedWrite(ID3D12Device* device, ID3D12CommandAllocator* allocator, UINT64 address,
+                const std::vector<UINT>& words) {
+        source = upload(device, words.data(), words.size() * sizeof(UINT));
+        list = guest_list(device, allocator);
+        using Copy = void(WINAPI*)(IUnknown*, UINT64, UINT64, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE);
+        method<Copy>(list.Get(), 119)(list.Get(), address, source->GetGPUVirtualAddress(),
+                                      D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_DESERIALIZE);
+        D3D12_RESOURCE_BARRIER ready{};
+        ready.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        list->ResourceBarrier(1, &ready);
+        compacted.record(device, list.Get(), address);
+        check(list->Close(), "close cooked BLAS write");
+    }
+};
+
+#ifndef TUXBOX_PROMOTED_BLAS_PROBE
+static UINT64 publish_quad(ID3D12Device* dev, ID3D12CommandQueue* queue, ID3D12CommandAllocator* allocator,
+                           ID3D12Resource* destination, const std::vector<UINT>& words) {
+    CookedWrite quad(dev, allocator, destination->GetGPUVirtualAddress(), words);
+    submit_closed(dev, queue, quad.list.Get());
+    return quad.compacted.read();
 }
+
+#endif
+
+#if defined(TUXBOX_REUSED_BLAS_PROBE) || defined(TUXBOX_PROMOTED_BLAS_PROBE)
+// Seven leaves plus two inner boxes and their parent form a 768-byte stream.
+static std::vector<UINT> expanded_quads() {
+    const auto quad = packed_quad();
+    std::vector<UINT> words(768 / 4);
+    std::copy_n(quad.begin(), 32, words.begin());
+    words[8] = 768;
+    words[10] = 704;
+    words[17] = 10;
+    words[19] = 7;
+    const float max_x = 25.f;
+    std::memcpy(&words[23], &max_x, sizeof(max_x));
+    words[28] = (10u << 3) | 4u;
+    for (UINT leaf = 0; leaf < 7; ++leaf) {
+        auto* node = words.data() + 32 + 16 * leaf;
+        std::copy_n(quad.begin() + 32, 16, node);
+        for (UINT v = 0; v < 4; ++v) {
+            float x;
+            std::memcpy(&x, node + 3 * v, 4);
+            x += 4.f * leaf;
+            std::memcpy(node + 3 * v, &x, 4);
+        }
+        node[13] = 2 * leaf;
+        node[14] = 2 * leaf + 1;
+    }
+    for (UINT box = 0; box < 3; ++box) {
+        auto* node = words.data() + 16 * (9 + box);
+        std::fill_n(node, 4, ~0u);
+        if (box < 2) {
+            for (UINT leaf = 4 * box; leaf < (box == 0 ? 4u : 7u); ++leaf)
+                node[leaf % 4] = (1 + leaf) << 3;
+        } else {
+            node[0] = (8u << 3) | 4u;
+            node[1] = (9u << 3) | 4u;
+        }
+    }
+    return words;
+}
+#endif
+
+#ifdef TUXBOX_REUSED_BLAS_PROBE
+static void check_blas_reuse(ID3D12Device* dev, ID3D12CommandQueue* queue, ID3D12CommandAllocator* allocator,
+                             ID3D12Resource* original, FILE* receipt) {
+    // Slot 118 resolves the private native address while recording. Closing
+    // before the rewrite and executing afterwards tests that exact old address.
+    auto query = guest_list(dev, allocator);
+    CompactedSize prior;
+    prior.record(dev, query.Get(), original->GetGPUVirtualAddress());
+    check(query->Close(), "close original BLAS size query");
+    const auto larger = expanded_quads();
+    UINT64 large_bytes = publish_quad(dev, queue, allocator, original, larger);
+    submit_closed(dev, queue, query.Get());
+    const UINT64 saved_size = prior.read();
+    if (saved_size != large_bytes)
+        throw std::runtime_error("old native BLAS address no longer holds the replacement");
+    std::fprintf(receipt, "prior_address_compacted_bytes=%llu\n", saved_size);
+    const auto initial = packed_quad();
+    auto short_target =
+        buffer(dev, 192, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, true);
+    auto full_target =
+        buffer(dev, 704, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, true);
+    const auto copy = [&](ID3D12Resource* dst, ID3D12Resource* src,
+                          D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE mode, bool fits) {
+        auto list = guest_list(dev, allocator);
+        using Copy = void(WINAPI*)(IUnknown*, UINT64, UINT64, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE);
+        method<Copy>(list.Get(), 119)(list.Get(), dst->GetGPUVirtualAddress(), src->GetGPUVirtualAddress(), mode);
+        if (!fits) {
+            if (list->Close() != E_INVALIDARG)
+                throw std::runtime_error("oversized BLAS copy accepted");
+        } else {
+            D3D12_RESOURCE_BARRIER ready{};
+            ready.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+            list->ResourceBarrier(1, &ready);
+            submit(dev, queue, list.Get());
+        }
+    };
+    copy(short_target.Get(), original, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_CLONE, false);
+    copy(full_target.Get(), original, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_CLONE, true);
+    auto small_bytes = publish_quad(dev, queue, allocator, original, {initial.begin(), initial.end()});
+    copy(short_target.Get(), original, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT, true);
+    copy(original, full_target.Get(), D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT, true);
+    if (large_bytes <= small_bytes)
+        throw std::runtime_error("fixture did not increase native BLAS size");
+    std::fprintf(receipt, "blas_reuse_host_compacted=%llu,%llu\nblas_reuse_guest_bytes=192,704,192,704\n", small_bytes,
+                 large_bytes);
+}
+#endif
 
 #include "instance_bindings_dxil.h"
 

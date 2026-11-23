@@ -228,6 +228,20 @@ fn store_body(isa: &[u8], stride: u32) -> Option<String> {
     None
 }
 
+pub(crate) fn card_direct_shadow(shader: &ShaderExtract) -> bool {
+    shader.stage == Stage::Compute
+        && shader.entry.as_deref() == Some("LumenSceneDirectLightingHardwareRayTracingCS")
+        && shader.psv_threads == Some([8, 4, 1])
+        && shader.isa.len() == 5048
+        && shader.resources.iter().all(|r| r.space == 0 && r.lower == r.upper)
+        && shader.resources.iter().map(|r| (r.res_type, r.lower)).eq([
+            (2, 0), (2, 1), (2, 2), (1, 0), (5, 0), (5, 1), (3, 2), (3, 3),
+            (5, 4), (4, 5), (5, 6), (8, 0),
+        ])
+        && shader.isa.iter().fold(0xcbf29ce484222325u64, |hash, &byte|
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)) == 0x97c181838546ca6e
+}
+
 pub(super) fn hlsl(shader: &ShaderExtract) -> Option<String> {
     if shader.stage != Stage::Compute
         || !shader.has_psv0
@@ -248,6 +262,9 @@ pub(super) fn hlsl(shader: &ShaderExtract) -> Option<String> {
             return None;
         }
         return Some(format!("[numthreads({x}, {y}, {z})]\nvoid main() {{}}\n"));
+    }
+    if card_direct_shadow(shader) {
+        return Some(include_str!("compute_hlsl/card_direct_shadow.hlsl").to_owned());
     }
     if let Some(source) = lumen_update_tiles::translate(shader) {
         return Some(source);

@@ -1,7 +1,7 @@
 //! Leaf hit programs address the caller's payload directly and return through
 //! a separate word. Validate both address calculations before indexing either.
 use super::{alu, continuation, layout, resources, scratch, target};
-use crate::rdna2::{instructions, Enc, Insn, Opnd};
+use crate::rdna2::{Enc, Insn, Opnd, instructions};
 use std::ops::Range;
 use tuxbox_dxbc::ray::State;
 
@@ -15,7 +15,12 @@ pub(super) struct Stack {
     pub return_read: usize,
 }
 
-fn writes(ins: &Insn, vgpr: u8) -> bool {
+pub(in crate::ray) fn writes(ins: &Insn, vgpr: u8) -> bool {
+    if ins.mnemonic == "v_movreld_b32"
+        || (ins.mnemonic == "v_swap_b32" && ins.src.first() == Some(&Opnd::Vgpr(vgpr)))
+    {
+        return true;
+    }
     if ins.mnemonic.contains("store")
         || matches!(
             ins.mnemonic.as_str(),
@@ -40,6 +45,160 @@ fn writes(ins: &Insn, vgpr: u8) -> bool {
     )
 }
 
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+enum Location {
+    Register(u8),
+    Private(i64),
+}
+
+// Follow all reaching definitions. A large material can spill the two return
+// operands inside separate branches and restore them in different VGPRs.
+fn reaches_register(
+    ops: &[Insn],
+    predecessors: &[Vec<usize>],
+    before: usize,
+    operand: &Opnd,
+    original: u8,
+    definition: Option<usize>,
+) -> bool {
+    use std::collections::HashSet;
+    let Opnd::Vgpr(reg) = *operand else {
+        return false;
+    };
+    let mut work = vec![(before, Location::Register(reg))];
+    let mut seen = HashSet::new();
+    let mut reached_origin = false;
+    while let Some((pc, value)) = work.pop() {
+        if !seen.insert((pc, value)) {
+            continue;
+        }
+        if pc == 0 {
+            if definition.is_some() || value != Location::Register(original) {
+                return false;
+            }
+            reached_origin = true;
+        }
+        for &previous in &predecessors[pc] {
+            if definition == Some(previous) && value == Location::Register(original) {
+                reached_origin = true;
+                continue;
+            }
+            let ins = &ops[previous];
+            let value = match value {
+                Location::Register(reg) if writes(ins, reg) => {
+                    if ins.dst.first() != Some(&Opnd::Vgpr(reg)) {
+                        return false;
+                    }
+                    if ins.mnemonic == "v_mov_b32" {
+                        let [Opnd::Vgpr(source)] = ins.src.as_slice() else {
+                            return false;
+                        };
+                        Location::Register(*source)
+                    } else if ins.mnemonic == "buffer_load_dword"
+                        && scratch(ins)
+                        && ins.aux.mask == 0
+                    {
+                        Location::Private(ins.aux.imm)
+                    } else {
+                        return false;
+                    }
+                }
+                Location::Private(slot)
+                    if scratch(ins)
+                        && ins.aux.mask == 0
+                        && ins.aux.imm == slot
+                        && ins.mnemonic.contains("store") =>
+                {
+                    let [Opnd::Vgpr(source)] = ins.dst.as_slice() else {
+                        return false;
+                    };
+                    if ins.mnemonic != "buffer_store_dword" {
+                        return false;
+                    }
+                    Location::Register(*source)
+                }
+                other => other,
+            };
+            work.push((previous, value));
+        }
+    }
+    reached_origin
+}
+
+// For live VGPRs, a saved EXEC mask partitions the lanes at an if/else.
+// Each lane continuing under the restored mask ran exactly one arm. A scalar
+// CFG also includes a path skipping both bodies, which reaches the join only
+// with an empty EXEC. Recognize straight-line THEN bodies with no other entry.
+fn split_lane_branches(ops: &[Insn], predecessors: &mut [Vec<usize>]) {
+    for branch in 1..ops.len() {
+        let save = &ops[branch - 1];
+        if save.mnemonic != "s_and_saveexec_b32" || ops[branch].mnemonic != "s_cbranch_execz" {
+            continue;
+        }
+        let [Opnd::Sgpr(mask)] = save.dst.as_slice() else {
+            continue;
+        };
+        let at =
+            |op| target(op).and_then(|pc| ops.binary_search_by_key(&pc, |ins| ins.offset).ok());
+        let Some(split) = at(&ops[branch]) else {
+            continue;
+        };
+        if split <= branch + 1
+            || split + 2 >= ops.len()
+            || ops[split].mnemonic != "s_andn2_b32"
+            || ops[split].dst != [Opnd::ExecLo]
+            || ops[split].src != [Opnd::Sgpr(*mask), Opnd::ExecLo]
+            || ops[split + 1].mnemonic != "s_cbranch_execz"
+            || predecessors[split + 1] != [split]
+        {
+            continue;
+        }
+        // In an outlined arm the true path may jump out of line. The false
+        // edge still enters ELSE when the saved mask was active. Prove that
+        // from the fallthrough edge of an enclosing EXECZ guard.
+        let mut guard = branch - 1;
+        while guard != 0 && predecessors[guard] == [guard - 1] {
+            let prev = &ops[guard - 1];
+            if prev.mnemonic == "s_cbranch_execz" {
+                predecessors[split].retain(|&i| i != branch);
+                predecessors[split + 2].push(branch);
+                break;
+            }
+            if target(prev).is_some()
+                || prev.dst.contains(&Opnd::ExecLo)
+                || prev.mnemonic.contains("saveexec")
+            {
+                break;
+            }
+            guard -= 1;
+        }
+        if !predecessors[split].contains(&branch)
+            || predecessors[split] != [branch, split - 1]
+            || (branch + 1..split).any(|i| {
+                predecessors[i] != [i - 1]
+                    || target(&ops[i]).is_some()
+                    || ops[i].dst.contains(&Opnd::ExecLo)
+                    || ops[i].dst.contains(&Opnd::Sgpr(*mask))
+            })
+        {
+            continue;
+        }
+        let Some(join) = at(&ops[split + 1]) else {
+            continue;
+        };
+        if join <= split + 2
+            || ops[join].mnemonic != "s_mov_b32"
+            || ops[join].dst != [Opnd::ExecLo]
+            || ops[join].src != [Opnd::Sgpr(*mask)]
+            || predecessors[split + 2] != [split + 1]
+        {
+            continue;
+        }
+        predecessors[split].retain(|&i| i != branch);
+        predecessors[split + 2][0] = branch;
+    }
+}
+
 impl Stack {
     fn analyze(isa: &[u8], span: &Range<usize>, words: usize) -> Result<Self, String> {
         if !(1..=64).contains(&words) {
@@ -49,28 +208,28 @@ impl Stack {
         for ins in &mut ops {
             ins.offset += span.start;
         }
+        let mut predecessors = vec![Vec::new(); ops.len()];
+        for (i, op) in ops.iter().enumerate() {
+            if i + 1 < ops.len()
+                && !matches!(
+                    op.mnemonic.as_str(),
+                    "s_branch" | "s_setpc_b64" | "s_endpgm"
+                )
+            {
+                predecessors[i + 1].push(i);
+            }
+            if let Some(pc) = target(op) {
+                let dest = ops
+                    .binary_search_by_key(&pc, |op| op.offset)
+                    .map_err(|_| "ray leaf branch outside of program")?;
+                predecessors[dest].push(i);
+            }
+        }
+        split_lane_branches(&ops, &mut predecessors);
         let prefix = ops
             .iter()
             .position(|i| target(i).is_some())
             .unwrap_or(ops.len());
-        let initial = |operand: &Opnd, original: u8, before: usize| {
-            let Opnd::Vgpr(reg) = *operand else {
-                return false;
-            };
-            let prefix = &ops[..before.min(prefix)];
-            if reg == original {
-                !prefix.iter().any(|i| writes(i, original))
-            } else {
-                prefix
-                    .iter()
-                    .rposition(|i| writes(i, reg))
-                    .is_some_and(|copy| {
-                        prefix[copy].mnemonic == "v_mov_b32"
-                            && prefix[copy].src == [Opnd::Vgpr(original)]
-                            && !prefix[..copy].iter().any(|i| writes(i, original))
-                    })
-            }
-        };
         let address = |ins: &Insn| {
             ins.mnemonic == "v_lshl_add_u32"
                 && matches!(
@@ -83,11 +242,14 @@ impl Stack {
             .enumerate()
             .position(|(i, op)| {
                 address(op)
-                    && op.dst == [Opnd::Vgpr(8)]
-                    && initial(&op.src[0], 9, i)
-                    && initial(&op.src[2], 26, i)
+                    && matches!(op.dst.as_slice(), [Opnd::Vgpr(_)])
+                    && reaches_register(&ops, &predecessors, i, &op.src[0], 9, None)
+                    && reaches_register(&ops, &predecessors, i, &op.src[2], 26, None)
             })
             .ok_or("missing ray leaf payload address")?;
+        let Opnd::Vgpr(base) = ops[payload].dst[0] else {
+            unreachable!()
+        };
         let return_read = ops
             .iter()
             .rposition(|i| scratch(i) && i.aux.mask == 1)
@@ -109,41 +271,29 @@ impl Stack {
         }
         let exit = ops[..return_read]
             .iter()
-            .rposition(|i| {
-                address(i) && i.dst.first() == read.src.first() && i.src[2] == ops[payload].src[2]
-            })
+            .rposition(|i| address(i) && i.dst.first() == read.src.first())
             .ok_or("missing ray leaf return address")?;
-        // A large leaf may preserve SP in a VGPR, then reuse v7 for the
-        // duration of the shader. On exit it restores v7 from that VGPR.
-        let stack_source = &ops[exit].src[0];
-        let sp = Opnd::Vgpr(7);
-        let saved_sp = ops[..exit].iter().rev().find(|i| writes(i, 7));
-        let native_sp = if stack_source == &sp {
-            saved_sp.is_none()
-        } else {
-            let copied = ops[..prefix.min(exit)].iter().position(|i| {
-                i.mnemonic == "v_mov_b32"
-                    && i.dst.first() == Some(stack_source)
-                    && i.src == [sp.clone()]
-            });
-            copied.is_some_and(|i| !ops[..i].iter().any(|op| writes(op, 7)))
-                && saved_sp.is_some_and(|i| {
-                    i.mnemonic == "v_mov_b32" && i.src.first() == Some(stack_source)
-                })
+        let Opnd::Vgpr(return_base) = ops[exit].dst[0] else {
+            return Err("invalid ray leaf return base".into());
         };
+        let valid_return = reaches_register(&ops, &predecessors, exit, &ops[exit].src[0], 7, None)
+            && reaches_register(&ops, &predecessors, exit, &ops[exit].src[2], 26, None)
+            && !ops[exit + 1..return_read]
+                .iter()
+                .any(|op| writes(op, return_base));
         if payload >= prefix
             || payload >= exit
-            || !native_sp
-            || ops[payload + 1..return_read]
-                .iter()
-                .enumerate()
-                .any(|(i, op)| writes(op, 8) && payload + 1 + i != exit)
+            || !valid_return
             || ops.iter().filter_map(target).any(|pc| {
                 pc <= ops[payload].offset || (ops[exit].offset < pc && pc <= ops[ret].offset)
             })
         {
             return Err("unsupported ray leaf payload or return address lifetime".into());
         }
+        // The allocator can reuse the original payload VGPR and reload its
+        // address into another VGPR for the final stores. Bypass the graph
+        // walk for the common case where the same VGPR remains live.
+        let stable_base = !ops[payload + 1..exit].iter().any(|op| writes(op, base));
         for (index, ins) in ops[..return_read]
             .iter()
             .enumerate()
@@ -151,8 +301,16 @@ impl Stack {
         {
             let word_offset = ins.aux.imm;
             if index <= payload
-                || (index >= exit && ops[exit].dst == [Opnd::Vgpr(8)])
-                || ins.src[0] != Opnd::Vgpr(8)
+                || (index >= exit && return_base == base)
+                || (!(stable_base && index < exit && ins.src[0] == Opnd::Vgpr(base))
+                    && !reaches_register(
+                        &ops,
+                        &predecessors,
+                        index,
+                        &ins.src[0],
+                        base,
+                        Some(payload),
+                    ))
                 || !matches!(
                     ins.mnemonic.as_str(),
                     "buffer_load_dword" | "buffer_store_dword"
@@ -217,5 +375,44 @@ mod tests {
         words[8] &= !4;
         words.insert(0, 0xbf82_0002); // skip the payload address calculation
         assert!(run(&words, 10).is_err());
+    }
+
+    #[test]
+    fn renamed_payload_address_must_reach_each_store() {
+        let mut words = vec![
+            0xd746002d, 0x04690509, // v45 = v9 * 4 + v26
+            0x7e32032d, // v25 = v45
+            0xe0701000, 0x04000619, // payload[v25] = v6
+            0xd7460008, 0x04690507, // v8 = v7 * 4 + v26
+            0xe0301000, 0x04000808, // v8 = scratch[v8]
+            0xbe80201e, // return
+        ];
+        let analyze = |words: &[u32]| {
+            let bytes = words
+                .iter()
+                .flat_map(|w| w.to_le_bytes())
+                .collect::<Vec<_>>();
+            Stack::analyze(&bytes, &(0..bytes.len()), 16)
+        };
+        assert!(analyze(&words).is_ok());
+        words.insert(2, 0xbf85_0001); // one predecessor skips the copy into v25
+        assert!(analyze(&words).is_err());
+        // Restoring the same alias in complementary EXEC arms covers every
+        // lane that continues under their saved mask.
+        words.splice(
+            2..4,
+            [
+                0xbeb7_3c35, // s_and_saveexec_b32 s55, s53
+                0xbf88_0001, // skip THEN for an empty mask
+                0x7e32_032d, // v25 = v45
+                0x8a7e_7e37, // EXEC = s55 & ~EXEC
+                0xbf88_0001, // skip ELSE for an empty mask
+                0x7e32_032d, // v25 = v45
+                0xbefe_0337, // EXEC = s55
+            ],
+        );
+        assert!(analyze(&words).is_ok());
+        words[7] = 0x7e32_032c; // ELSE now uses a different VGPR
+        assert!(analyze(&words).is_err());
     }
 }

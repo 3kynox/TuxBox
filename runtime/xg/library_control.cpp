@@ -139,6 +139,36 @@ static bool is_uncompressed(UINT fmt) {
         fmt==87 || fmt==88 || (fmt>=90 && fmt<=93);
 }
 
+static bool check_depth_samples(Computer* obj, const ResourceDesc& desc, const BYTE* layout, UINT plane) {
+    if (!check_image(obj, plane)) return false;
+    for (UINT sample = 1; sample <= desc.samples; ++sample) {
+        UINT bit = 73;
+        const auto offset = obj->methods->address(obj, plane, 0, 3, 2, 0, sample, &bit);
+        if (!record(&offset, sizeof(offset)) || !record(&bit, sizeof(bit))) return false;
+    }
+    if (desc.width != 17) return true;
+    const BYTE* field = layout + 0x18 + plane * 0x6c8;
+    UINT bytes{};
+    std::memcpy(&bytes, field + 40, sizeof(bytes));
+    if (!bytes) return true; // HTILE has no element copies.
+    if (!check_copy(obj, layout, 0, 1, 0, 1, 17, desc.height, bytes, plane)) return false;
+    const UINT row = 17 * bytes + 8, pitch = row * desc.height;
+    UINT64 size{};
+    std::memcpy(&size, field + 8, sizeof(size));
+    std::vector<BYTE> tiled(static_cast<size_t>(size), 0xcd), expected(pitch, 0xa5), actual(expected);
+    for (UINT sample = 0; sample < desc.samples; ++sample) {
+        std::fill(actual.begin(), actual.end(), 0xa5);
+        for (UINT y = 0; y < desc.height; ++y) for (UINT x = 0; x < 17; ++x) {
+            const UINT64 at = obj->methods->address(obj, plane, 0, x, y, 0, 0, nullptr) + bytes * sample;
+            if (at > size || bytes > size - at) return false;
+            for (UINT b = 0; b < bytes; ++b)
+                tiled[at + b] = expected[y * row + x * bytes + b] = static_cast<BYTE>(x + 17*y + 51*sample + b);
+        }
+        if (obj->methods->from(obj, actual.data(), plane, 0, sample, tiled.data(), row, pitch) != S_OK || actual != expected) return false;
+    }
+    return true;
+}
+
 static bool check_large_surface(const ResourceDesc& desc, UINT64 metadata_bytes=0, UINT64 expected_bit=0) {
     Computer* obj=nullptr;
     if (XGCreateTextureComputer(&desc,&obj)!=S_OK || !obj) return false;
@@ -163,6 +193,7 @@ static bool check_large_surface(const ResourceDesc& desc, UINT64 metadata_bytes=
             if (offset==UINT64_MAX) return false;
             hash=(hash^(offset*8+bit))*1099511628211ull;
         }
+        if (desc.samples > 1 && !check_depth_samples(obj, desc, layout.data(), plane)) return false;
         if (!record(&hash,sizeof(hash))) return false;
     }
     return obj->methods->release(obj)==0;
@@ -199,6 +230,13 @@ static bool check_map_targets() {
             }
         }
     }
+    struct Shape { UINT width, height; UINT16 slices; };
+    const Shape surfaces[] = {{17,13,1}, {257,144,6}, {2976,1676,1}, {3840,2160,1}};
+    for (const auto& surface : surfaces) for (UINT fmt : {19u,20u,39u,40u,44u,45u,53u,55u})
+        for (UINT samples : {2u,4u,8u}) for (UINT flags : {0x1000002u,0x1000006u,0x100000au,0x81300002u}) {
+            ResourceDesc desc{3,0,surface.width,surface.height,surface.slices,1,fmt,samples,0,0,flags};
+            if (!check_large_surface(desc)) return false;
+        }
     return true;
 }
 
@@ -274,7 +312,14 @@ static unsigned check_typed_images() {
     return count;
 }
 
+#include "color_msaa_control.h"
+
 int wmain(int argc, wchar_t** argv) {
+    if (argc == 2 && !wcscmp(argv[1], L"--color-msaa")) {
+        if (!check_color_msaa() || result_hash != 0x8b6aadde5f4cd7c1ull) return 36;
+        std::printf("xg-color-msaa 36 layouts %016llx\n", result_hash);
+        return 0;
+    }
     const bool report = argc==3 && !wcscmp(argv[1],L"--report");
     if (!report && argc!=1) return 2;
     auto init = XGInitializeLibrary;
@@ -411,9 +456,9 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (!check_map_targets()) return 35;
     if (dump && fclose(dump)) return 18;
-    if (result_hash != 0xaf589d97b6800766ull) { std::fprintf(stderr,"XG library hash %016llx\n",result_hash); return 19; }
+    if (result_hash != 0x6df5bf4b600049faull) { std::fprintf(stderr,"XG library hash %016llx\n",result_hash); return 19; }
     FILE* out = stdout;
     if (report && _wfopen_s(&out,argv[2],L"wb")) return 20;
-    std::fprintf(out,"xg-library PASS depth=516 descriptors=%u lock=recursive+factory copies=bidirectional depth_surfaces=%u typed_images=%u map_targets=1474\n",records,depth_surfaces,typed_images);
+    std::fprintf(out,"xg-library PASS depth=516 descriptors=%u lock=recursive+factory copies=bidirectional depth_surfaces=%u typed_images=%u map_targets=1474 msaa_depth=384\n",records,depth_surfaces,typed_images);
     return report && fclose(out);
 }

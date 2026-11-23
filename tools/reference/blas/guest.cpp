@@ -5,6 +5,7 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <vector>
 
 using frame_abi::check;
@@ -184,8 +185,23 @@ static ComPtr<ID3D12GraphicsCommandList> guest_list(ID3D12Device* guest, ID3D12C
 #ifdef TUXBOX_LIGHTING_PROBE
 #include "lighting_probe.h"
 #endif
-#if defined(TUXBOX_SCREEN_OCCLUSION_PROBE) || defined(TUXBOX_SCREEN_GATHER_PROBE) || defined(TUXBOX_CARD_TILE_PROBE)
+#if defined(TUXBOX_INLINE434_REPLAY) || defined(TUXBOX_INLINE426_REPLAY)
+#define TUXBOX_REFLECTION_PROBE
+#endif
+#if defined(TUXBOX_INLINE58_REPLAY) || defined(TUXBOX_INLINE114_REPLAY)
+#define TUXBOX_SCREEN_GATHER_PROBE
+#endif
+#if defined(TUXBOX_INLINE318_REPLAY)
+#define TUXBOX_INLINE_RADIANCE 318
+#elif defined(TUXBOX_INLINE313_REPLAY) || defined(TUXBOX_INLINE306_REPLAY)
+#define TUXBOX_INLINE_RADIANCE 306
+#endif
+#if defined(TUXBOX_REFLECTION_PROBE) || defined(TUXBOX_INLINE_RADIANCE) || defined(TUXBOX_INLINE219_REPLAY) || defined(TUXBOX_SCREEN_OCCLUSION_PROBE) || defined(TUXBOX_SCREEN_GATHER_PROBE) || defined(TUXBOX_CARD_TILE_PROBE)
 #include "observed_ray_pipeline.h"
+#endif
+#ifdef TUXBOX_INLINE219_REPLAY
+#include "inline219_replay.h"
+#include "card_tile_probe.h"
 #endif
 #ifdef TUXBOX_CARD_TILE_PROBE
 #include "card_candidate_dxil.h"
@@ -200,7 +216,7 @@ static ComPtr<ID3D12GraphicsCommandList> guest_list(ID3D12Device* guest, ID3D12C
 #ifdef TUXBOX_SCREEN_GATHER_PROBE
 #include "screen_gather_probe.h"
 #endif
-#ifdef TUXBOX_RADIANCE_PROBE
+#if defined(TUXBOX_RADIANCE_PROBE) || defined(TUXBOX_INLINE_RADIANCE)
 #include "radiance_probe.h"
 #endif
 #ifdef TUXBOX_SCREEN_OCCLUSION_PROBE
@@ -236,6 +252,10 @@ static void guest_batch(ID3D12GraphicsCommandList* list, UINT count, const Entry
     method<BatchBuild>(list6.Get(), 131)(list6.Get(), count, entries);
 #endif
 }
+
+#ifdef TUXBOX_PROMOTED_BLAS_PROBE
+#include "blas_promotion.h"
+#endif
 
 #ifdef TUXBOX_AMBIGUOUS_AS_PROBE
 static void probe_ambiguous_as(ID3D12Device* guest, ID3D12CommandAllocator* allocator,
@@ -460,7 +480,13 @@ static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, 
         auto& instance = instances[i];
         for (UINT axis = 0; axis < 3; ++axis) instance.Transform[axis][axis] = 1;
         instance.Transform[0][3] = static_cast<float>(i) * (sphere ? 512.0f : 4.0f);
+#if defined(TUXBOX_INLINE434_REPLAY) || defined(TUXBOX_INLINE219_REPLAY)
+        instance.InstanceMask = i == 0 ? 0x20 : 0x01;
+#elif defined(TUXBOX_INLINE313_REPLAY) || defined(TUXBOX_INLINE58_REPLAY)
+        instance.InstanceMask = i == 0 ? 0x01 : 0x20;
+#else
         instance.InstanceMask = 0xff;
+#endif
         instance.InstanceID = 7 + i;
         instance.AccelerationStructure = structures[i % structures.size()]->GetGPUVirtualAddress();
     }
@@ -486,7 +512,15 @@ static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, 
 #endif
     ComPtr<ID3D12Resource> tiny;
     if (guest_build && !sphere) {
-        tiny = buffer(provider.Get(), 192, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, true);
+#ifdef TUXBOX_PROMOTED_BLAS_PROBE
+        constexpr UINT pool_bytes = 2048;
+#elif defined(TUXBOX_REUSED_BLAS_PROBE)
+        constexpr UINT pool_bytes = 704;
+#else
+        constexpr UINT pool_bytes = 192;
+#endif
+        tiny = buffer(provider.Get(), pool_bytes, D3D12_HEAP_TYPE_DEFAULT,
+                      D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, true);
         gpu_instances[2].AccelerationStructure = tiny->GetGPUVirtualAddress();
         gpu_instances[2].InstanceID = 11;
         gpu_instances[2].Transform[0][3] = 10.0f;
@@ -580,22 +614,38 @@ static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, 
 #ifdef TUXBOX_GPU_INSTANCE_PROBE
         bindings.dispatch(list.Get());
         check(list->Close(), "close scene list");
+#ifndef TUXBOX_PROMOTED_BLAS_PROBE
         if (tiny) {
-            const auto native_size = publish_quad(provider.Get(), guest_queue.Get(), guest_allocator.Get(), tiny.Get());
+            const auto quad = packed_quad();
+            const auto native_size = publish_quad(provider.Get(), guest_queue.Get(), guest_allocator.Get(), tiny.Get(), {quad.begin(), quad.end()});
             if (native_size <= 192) throw std::runtime_error("quad fits guest destination on this adapter, missing relocation coverage");
             std::fprintf(receipt, "quad_guest_bytes=192\nquad_native_bytes=%llu\n", native_size);
         }
+#endif
         auto short_list = guest_list(provider.Get(), guest_allocator.Get());
         auto outside = entry;
         outside.build.Inputs.InstanceDescs += 2 * sizeof(D3D12_RAYTRACING_INSTANCE_DESC);
         guest_batch(short_list.Get(), 1, &outside);
         if (short_list->Close() != E_INVALIDARG) throw std::runtime_error("partially unmapped GPU instance array accepted");
         write_upload(instance_buffer.Get(), gpu_instances.data(), sizeof(gpu_instances));
+#ifdef TUXBOX_PROMOTED_BLAS_PROBE
+        check_blas_promotion(provider.Get(), guest_queue.Get(), guest_allocator.Get(), tiny.Get(), entry, gpu_records.Get(),
+                             offset, instance_buffer.Get(), sizeof(gpu_instances), receipt);
+#endif
         submit_closed(provider.Get(), guest_queue.Get(), list.Get());
         bindings.check_result();
         submit_closed(provider.Get(), guest_queue.Get(), list.Get());
         bindings.check_result();
-        std::fprintf(receipt, "restored_compute_bindings=17,23,37,53\nclosed_list_executions=2\n");
+        UINT executions = 2;
+#ifdef TUXBOX_REUSED_BLAS_PROBE
+        if (tiny) {
+            check_blas_reuse(provider.Get(), guest_queue.Get(), guest_allocator.Get(), tiny.Get(), receipt);
+            // Rebuild the TLAS after all modifications to the referenced BLAS.
+            submit_closed(provider.Get(), guest_queue.Get(), list.Get());
+            ++executions;
+        }
+#endif
+        std::fprintf(receipt, "restored_compute_bindings=17,23,37,53\nclosed_list_executions=%u\n", executions);
         std::fprintf(receipt, "instance_memory=default_heap_gpu_copy_after_close\n");
 #else
         submit(provider.Get(), guest_queue.Get(), list.Get());
@@ -669,10 +719,15 @@ static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, 
     }
 #ifdef TUXBOX_GPU_INSTANCE_PROBE
     if (guest_build) {
-        if (hits[5] != std::array<UINT,4>{11,0,1,0x3f800000} ||
-            hits[6] != std::array<UINT,4>{11,0,0,0x3f800000} || hits[7][0] != ~0u)
+#if defined(TUXBOX_REUSED_BLAS_PROBE) || defined(TUXBOX_PROMOTED_BLAS_PROBE)
+        constexpr UINT first = 0, second = 1;
+#else
+        constexpr UINT first = 1, second = 0;
+#endif
+        if (hits[5] != std::array<UINT,4>{11,0,first,0x3f800000} ||
+            hits[6] != std::array<UINT,4>{11,0,second,0x3f800000} || hits[7][0] != ~0u)
             throw std::runtime_error("late relocated instance rays differ");
-        std::fprintf(receipt, "late_relocation_rays=11/0/1/1,11/0/0/1,miss\n");
+        std::fprintf(receipt, "late_relocation_rays=11/0/%u/1,11/0/%u/1,miss\n", first, second);
     }
 #endif
     std::array<UINT, 5> values{};
@@ -694,6 +749,21 @@ static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, 
 #endif
 #ifdef TUXBOX_MATERIAL_HIT_PROBE
     probe_materials(owner.Get(), queue.Get(), scene.Get(), instances, receipt, xbox ? provider.Get() : nullptr);
+#endif
+#ifdef TUXBOX_INLINE_RADIANCE
+    for (auto input : {RadianceInput::empty, RadianceInput::tile, RadianceInput::geometry})
+        probe_radiance_cache(owner.Get(), queue.Get(), scene.Get(), receipt, input, TUXBOX_INLINE_RADIANCE == 306 ? 299 : 323);
+#ifdef TUXBOX_INLINE313_REPLAY
+    probe_radiance_cache(owner.Get(), queue.Get(), scene.Get(), receipt, RadianceInput::far_geometry, 299);
+#endif
+#endif
+#ifdef TUXBOX_INLINE219_REPLAY
+    probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,218,false);
+    probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,218,true,false,true,false,8.f,8.f,1,20.f,-1.f);
+    probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,218,true,false,true,true,0.f,2.f,2,-1.f,-1.f);
+    probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,218,true,false,true,true,2.f,4.f,3,3.f,-1.f);
+    probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,218,true,false,true,false,2.f,4.f,4,-1.f,-1.f);
+    probe_card_tile(owner.Get(),queue.Get(),scene.Get(),receipt,218,true,false,true,false,0.f,2.f,5,3.f,-1.f);
 #endif
 #ifdef TUXBOX_CARD_TILE_PROBE
     if (!xbox) {
@@ -732,11 +802,88 @@ static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, 
         probe_card_tile(owner.Get(),queue.Get(),stacked_scene.Get(),receipt,218,true,false,true,true,1.25f,3.f,11,-1.f,-1.f);
     }
 #endif
-#ifdef TUXBOX_SCREEN_GATHER_PROBE
-    if (!xbox) for (UINT entry : {64u,71u}) {
-        probe_screen_gather(owner.Get(),queue.Get(),scene.Get(),receipt,entry,false,false);
-        probe_screen_gather(owner.Get(),queue.Get(),scene.Get(),receipt,entry,true,false);
-        probe_screen_gather(owner.Get(),queue.Get(),scene.Get(),receipt,entry,true,true);
+#if defined(TUXBOX_INLINE58_REPLAY) || defined(TUXBOX_INLINE114_REPLAY)
+#ifdef TUXBOX_INLINE58_REPLAY
+    constexpr UINT tested = 58, control = 64;
+#else
+    constexpr UINT tested = 114, control = 71;
+#endif
+    const auto shader_name = std::to_string(tested) + ".dxbc";
+    InlineSceneFixture forward(shader_name.c_str(), tested == 58 ? 1 : 0xff, tested == 58 ? 0x20 : 0xff, true);
+    std::optional<InlineSceneFixture> reversed;
+    for (UINT scenario = 0; scenario < (tested == 114 ? 5u : 2u); ++scenario) {
+        if (scenario == 3) {
+            reversed.emplace(shader_name.c_str(), 0xff, 0xff, true, true);
+            // Reverse exactly the same triangle as the guest on the independent native scene.
+            float positions[6][3];
+            std::memcpy(positions, vertices, sizeof(positions));
+            std::swap(positions[1], positions[2]);
+            std::swap(positions[4], positions[5]);
+            write_upload(mesh.Get(), positions, sizeof(positions));
+            ComPtr<ID3D12GraphicsCommandList4> rebuild;
+            check(owner->CreateCommandList(0, queue_desc.Type, allocator.Get(), nullptr, IID_PPV_ARGS(&rebuild)),
+                  "rebuild reversed screen fixture");
+            for (auto& e : batch)
+                rebuild->BuildRaytracingAccelerationStructure(&e.build, 0, nullptr);
+            ready.UAV.pResource = nullptr;
+            rebuild->ResourceBarrier(1, &ready);
+            rebuild->BuildRaytracingAccelerationStructure(&tlas, 0, nullptr);
+            rebuild->ResourceBarrier(1, &ready);
+            submit(owner.Get(), queue.Get(), rebuild.Get());
+        }
+        auto reference = probe_screen_gather(owner.Get(), queue.Get(), scene.Get(), receipt, control, scenario != 0,
+                                             scenario >= 2, nullptr, nullptr, scenario);
+        probe_screen_gather(owner.Get(), queue.Get(), scene.Get(), receipt, tested, scenario != 0, scenario >= 2,
+                            reversed ? &*reversed : &forward, &reference, scenario);
+    }
+#ifdef TUXBOX_INLINE58_REPLAY
+    const auto original114 = read_file("114.dxbc");
+    D3D12_COMPUTE_PIPELINE_STATE_DESC desc114{};
+    desc114.pRootSignature = forward.root.Get();
+    desc114.CS = {original114.data(), original114.size()};
+    using CreateScreen =
+        HRESULT(WINAPI*)(ID3D12Device*, const D3D12_COMPUTE_PIPELINE_STATE_DESC*, UINT, const void*, REFIID, void**);
+    ComPtr<ID3D12PipelineState> producer;
+    check(method<CreateScreen>(forward.dev.Get(), 62)(forward.dev.Get(), &desc114, 0, nullptr, IID_PPV_ARGS(&producer)),
+          "near-field producer pipeline");
+    auto consumer = forward.pipeline;
+    for (UINT scenario : {5u, 6u}) {
+        auto reference_produced = probe_screen_gather(owner.Get(), queue.Get(), scene.Get(), receipt, 71, true, true,
+                                                      nullptr, nullptr, scenario);
+        forward.pipeline = producer;
+        auto produced = probe_screen_gather(owner.Get(), queue.Get(), scene.Get(), receipt, 114, true, true, &forward,
+                                            &reference_produced, scenario);
+        auto reference = probe_screen_gather(owner.Get(), queue.Get(), scene.Get(), receipt, 64, true, true, nullptr,
+                                             nullptr, scenario, &reference_produced);
+        forward.pipeline = consumer;
+        probe_screen_gather(owner.Get(), queue.Get(), scene.Get(), receipt, 58, true, true, &forward, &reference,
+                            scenario, &produced);
+    }
+#endif
+#elif defined(TUXBOX_SCREEN_GATHER_PROBE)
+    if (!xbox)
+        for (UINT entry : {64u, 71u}) {
+            probe_screen_gather(owner.Get(), queue.Get(), scene.Get(), receipt, entry, false, false);
+            probe_screen_gather(owner.Get(), queue.Get(), scene.Get(), receipt, entry, true, false);
+            probe_screen_gather(owner.Get(), queue.Get(), scene.Get(), receipt, entry, true, true);
+        }
+#endif
+#if defined(TUXBOX_INLINE434_REPLAY) || defined(TUXBOX_INLINE426_REPLAY)
+    {
+#ifdef TUXBOX_INLINE434_REPLAY
+        constexpr UINT compute = 434, control = 432;
+#else
+        constexpr UINT compute = 426, control = 421;
+#endif
+        const auto original = std::to_string(compute) + ".dxbc";
+        InlineSceneFixture fixture(original.c_str(), compute == 434 ? 0x20 : 0xff, compute == 434 ? 0x01 : 0xff, true);
+        for (UINT scenario = 0; scenario < (compute == 434 ? 3u : 2u); ++scenario) {
+            bool geometry = scenario != 0, masked = scenario == 2;
+            auto reference = probe_reflections(owner.Get(), queue.Get(), scene.Get(), receipt, control, geometry,
+                                               nullptr, nullptr, masked);
+            probe_reflections(owner.Get(), queue.Get(), scene.Get(), receipt, compute, geometry, &fixture, &reference,
+                              masked);
+        }
     }
 #endif
 #ifdef TUXBOX_LIGHTING_PROBE

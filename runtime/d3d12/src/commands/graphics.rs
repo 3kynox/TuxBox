@@ -42,9 +42,7 @@ pub(super) unsafe extern "system" fn pipeline(list: &List, guest: *mut c_void) {
     match unsafe { crate::device::compute::pipeline(guest, parent(&list.parent)) } {
         Ok(Some(host)) => {
             state.stencil_slot = host.state.stencil_slot;
-            state.bindings.pipeline = Some(super::compute_bindings::Pipeline::Regular(
-                host.native.clone(),
-            ));
+            state.bindings.pipeline = Some(host.into());
             unsafe { list.native.SetPipelineState(&host.native) };
         }
         _ => state.error = E_INVALIDARG,

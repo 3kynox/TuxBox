@@ -11,6 +11,9 @@ python tools/reference/xg-proxy/prepare.py \
   --original-xg /path/to/xg_xs.dll --output /tmp/new-xg-reference-trace
 ```
 
+For a whole scene, add `--unique` to capture the first 16,384 distinct
+descriptor and HRESULT pairs. Each record keeps its original call number.
+
 The directory contains `xg_xs.dll`, `xg_reference.dll`, a guest control and
 `provenance.json` with hashes. Use `stage.py` with a separate existing Frosty
 work directory prepared with TuxBox XG and `--no-select`. It verifies the staged
@@ -39,9 +42,9 @@ helper checks the backup and staged hashes before restoring; unexpected changes
 require manual inspection. Never overwrite the installed title or its DLLs.
 
 Only `XGCreateTextureComputer` (ordinal 11) is traced; the remaining exports
-are PE forwarders. The first 16,384 calls with non-null descriptors emit numeric
-descriptor fields and HRESULT; the limit warning marks omitted calls. Calls
-with a null descriptor are not logged. The proxy returns the reference object's
+are PE forwarders. By default the proxy records non-null descriptors and their
+HRESULTs during the first 16,384 calls. A limit warning marks the end of
+capture. The proxy returns the reference object's
 pointer and HRESULT without wrapping the object, and restores the reference
 call's last-error value after logging. Its diagnostics add overhead and do not
 demonstrate TuxBox XG support or graphics correctness.

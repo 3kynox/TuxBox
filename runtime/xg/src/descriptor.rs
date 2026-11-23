@@ -40,7 +40,7 @@ unsafe extern "system" fn from_descriptor(words: *const [u32; 8], out: *mut *mut
     };
     let dimension = match kind {
         8 | 12 => 2,
-        9 | 13 => 3,
+        9 | 13 | 15 => 3,
         10 => 4,
         _ => return E_NOTIMPL,
     };
@@ -53,6 +53,10 @@ unsafe extern "system" fn from_descriptor(words: *const [u32; 8], out: *mut *mut
     {
         return E_NOTIMPL;
     }
+    let multisampled = kind == 15;
+    if multisampled && !(swizzle == 27 && (1..=3).contains(&last)) {
+        return E_NOTIMPL;
+    }
     let mut desc = Desc {
         dimension: 3,
         alignment: 0,
@@ -62,9 +66,9 @@ unsafe extern "system" fn from_descriptor(words: *const [u32; 8], out: *mut *mut
             Ok(n) => n,
             Err(_) => return E_INVALIDARG,
         },
-        mips: last as u16 + 1,
+        mips: if multisampled { 1 } else { last as u16 + 1 },
         format,
-        samples: 1,
+        samples: if multisampled { 1 << last } else { 1 },
         quality: 0,
         layout: 256 + swizzle,
         flags: 0,
@@ -220,22 +224,27 @@ pub(super) unsafe extern "system" fn get(this: &Computer, plane: u32, out: *mut 
             } else {
                 return E_INVALIDARG;
             };
+            let samples = this
+                .depth_stencil
+                .map_or_else(|| this.plane.color_samples(), |depth| depth.samples());
             let kind = match this.dimension {
+                3 if samples > 1 => 15,
                 2 => 12,
                 3 => 13,
                 4 => 10,
                 _ => return E_NOTIMPL,
             };
+            let sample_levels = samples.trailing_zeros();
             let width = width - 1;
             let single_render_mip = last == 0 && matches!(swizzle, 24 | 27);
             [
                 0,
                 (width & 3) << 30 | hw_format << 20,
                 0x8000_0000 | (height - 1) << 14 | width >> 2,
-                kind << 28 | swizzle << 20 | last << 16 | channels,
+                kind << 28 | swizzle << 20 | (last | sample_levels) << 16 | channels,
                 this.plane.array_size() - 1,
                 if single_render_mip {
-                    0x0040_0000
+                    0x0040_0000 | sample_levels << 4
                 } else {
                     0x8040_0000 | last << 4
                 },

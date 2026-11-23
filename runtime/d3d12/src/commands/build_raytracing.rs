@@ -1,5 +1,9 @@
 //! Xbox List6 batches 48-byte DXR build descriptions with 32 bytes of extensions.
-use super::{List, Recording, raytracing::retain, recording};
+use super::{
+    List, Recording,
+    raytracing::{SceneCommand, retain},
+    recording,
+};
 use crate::device::{blas, ray_build};
 use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL, E_OUTOFMEMORY};
 use windows::Win32::Graphics::Direct3D12::*;
@@ -138,7 +142,10 @@ fn translate(
     owner: &IUnknown,
     host: &ID3D12GraphicsCommandList4,
     mut desc: D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC,
-) -> Result<D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC> {
+) -> Result<(
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC,
+    Option<ID3D12Resource>,
+)> {
     let relocated = unsafe { blas::resolve(owner, desc.DestAccelerationStructureData) }?;
     if relocated.is_some() || desc.ScratchAccelerationStructureData == 0 {
         let mut device = None::<ID3D12Device5>;
@@ -177,69 +184,70 @@ fn translate(
         retain(state, &[&source.resource])?;
         desc.SourceAccelerationStructureData = unsafe { source.resource.GetGPUVirtualAddress() };
     }
-    if desc.Inputs.Type == D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL
-        && desc.Inputs.NumDescs != 0
-    {
-        let address = unsafe { desc.Inputs.Anonymous.InstanceDescs };
-        if desc.Inputs.NumDescs
-            > D3D12_RAYTRACING_MAX_INSTANCES_PER_TOP_LEVEL_ACCELERATION_STRUCTURE
-        {
-            return Err(E_INVALIDARG.into());
+    if desc.Inputs.Type != D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL {
+        return Ok((desc, None));
+    }
+    if desc.Inputs.NumDescs == 0 {
+        // Failure to allocate optional shader metadata cannot invalidate an
+        // ordinary empty TLAS build. Inline traversal will report its absence.
+        return Ok((desc, unsafe { blas::empty_instance_buffer(owner) }.ok()));
+    }
+    let address = unsafe { desc.Inputs.Anonymous.InstanceDescs };
+    if desc.Inputs.NumDescs > D3D12_RAYTRACING_MAX_INSTANCES_PER_TOP_LEVEL_ACCELERATION_STRUCTURE {
+        return Err(E_INVALIDARG.into());
+    }
+    let count = desc.Inputs.NumDescs as usize;
+    let indirect = desc.Inputs.DescsLayout == D3D12_ELEMENTS_LAYOUT_ARRAY_OF_POINTERS;
+    let stride = if indirect { 8 } else { INSTANCE_BYTES };
+    let bytes = (count * stride) as u64;
+    let instances = match unsafe { blas::upload_range(owner, address) } {
+        Ok((source, _, available)) => {
+            if available < bytes {
+                return Err(E_INVALIDARG.into());
+            }
+            let patched = unsafe { blas::instance_buffer(owner, (count * INSTANCE_BYTES) as u64)? };
+            retain(state, &[&source, &patched])?;
+            desc.Inputs.Anonymous.InstanceDescs = unsafe { patched.GetGPUVirtualAddress() };
+            desc.Inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+            Instances::Upload {
+                address,
+                count,
+                indirect,
+                patched,
+            }
         }
-        let count = desc.Inputs.NumDescs as usize;
-        state
-            .instance_uploads
-            .try_reserve(1)
-            .map_err(|_| E_OUTOFMEMORY)?;
-        let indirect = desc.Inputs.DescsLayout == D3D12_ELEMENTS_LAYOUT_ARRAY_OF_POINTERS;
-        let stride = if indirect { 8 } else { INSTANCE_BYTES };
-        let bytes = (count * stride) as u64;
-        let instances = match unsafe { blas::upload_range(owner, address) } {
-            Ok((source, _, available)) => {
-                if available < bytes {
+        Err(e) if e.code() != E_INVALIDARG => return Err(e),
+        Err(_) => match unsafe { blas::default_instances(owner, address) } {
+            Ok((source, available)) if !indirect => {
+                if available < bytes
+                    || unsafe { source.GetDesc() }
+                        .Flags
+                        .contains(D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE)
+                {
                     return Err(E_INVALIDARG.into());
                 }
-                let patched =
-                    unsafe { blas::instance_buffer(owner, (count * INSTANCE_BYTES) as u64)? };
-                retain(state, &[&source, &patched])?;
-                desc.Inputs.Anonymous.InstanceDescs = unsafe { patched.GetGPUVirtualAddress() };
-                desc.Inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
-                Instances::Upload {
-                    address,
-                    count,
-                    indirect,
-                    patched,
+                let patched = unsafe {
+                    blas::instance_fixup::Instances::record(owner, host, address, count as u32)?
+                };
+                unsafe {
+                    state.bindings.restore(host);
                 }
+                retain(state, &[&source, patched.output()])?;
+                desc.Inputs.Anonymous.InstanceDescs =
+                    unsafe { patched.output().GetGPUVirtualAddress() };
+                Instances::Gpu(patched)
             }
             Err(e) if e.code() != E_INVALIDARG => return Err(e),
-            Err(_) => match unsafe { blas::default_instances(owner, address) } {
-                Ok((source, available)) if !indirect => {
-                    if available < bytes
-                        || unsafe { source.GetDesc() }
-                            .Flags
-                            .contains(D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE)
-                    {
-                        return Err(E_INVALIDARG.into());
-                    }
-                    let patched = unsafe {
-                        blas::instance_fixup::Instances::record(owner, host, address, count as u32)?
-                    };
-                    unsafe {
-                        state.bindings.restore(host);
-                    }
-                    retain(state, &[&source, patched.output()])?;
-                    desc.Inputs.Anonymous.InstanceDescs =
-                        unsafe { patched.output().GetGPUVirtualAddress() };
-                    Instances::Gpu(patched)
-                }
-                Err(e) if e.code() != E_INVALIDARG => return Err(e),
-                _ if unsafe { blas::has_relocations(owner) } => return Err(E_NOTIMPL.into()),
-                _ => Instances::Direct,
-            },
-        };
-        state.instance_uploads.push(instances);
-    }
-    Ok(desc)
+            _ => Instances::Direct,
+        },
+    };
+    let snapshot = match &instances {
+        Instances::Direct => None,
+        Instances::Upload { patched, .. } => Some(patched.clone()),
+        Instances::Gpu(records) => Some(records.output().clone()),
+    };
+    state.scene_commands.push(SceneCommand::Fixup(instances));
+    Ok((desc, snapshot))
 }
 
 // The scene builder passes one ordinary 48-byte description to List4, along
@@ -341,29 +349,46 @@ unsafe fn record_builds(
         state.error = E_INVALIDARG;
         return;
     };
-    let initial_uploads = state.instance_uploads.len();
-    let mut builds = Vec::new();
-    if builds.try_reserve_exact(entries.len()).is_err() {
-        state.error = E_OUTOFMEMORY;
-        return;
-    }
-    for e in entries {
-        match translate(&mut state, owner, host, e.build) {
-            Ok(build) => builds.push(build),
+    for entry in entries {
+        // One build can need a late-bound instance table, an update-source
+        // check, and a destination publication, in that command order.
+        if state.scene_commands.try_reserve(3).is_err() {
+            state.error = E_OUTOFMEMORY;
+            return;
+        }
+        let (build, instances) = match translate(&mut state, owner, host, entry.build) {
+            Ok(build) => build,
             Err(err) => {
                 state.error = err.code();
                 return;
             }
+        };
+        if entry.build.SourceAccelerationStructureData != 0 {
+            state.scene_commands.push(SceneCommand::Source {
+                guest: entry.build.SourceAccelerationStructureData,
+                native: build.SourceAccelerationStructureData,
+            });
         }
-    }
-    for build in &builds {
-        unsafe { host.BuildRaytracingAccelerationStructure(build, Some(outputs)) };
-    }
-    for input in &state.instance_uploads[initial_uploads..] {
-        if let Instances::Gpu(records) = input {
-            unsafe {
-                records.barrier(host, false);
-            }
+        unsafe {
+            host.BuildRaytracingAccelerationStructure(&build, Some(outputs));
+            let guest_va = entry.build.DestAccelerationStructureData;
+            let native_va = build.DestAccelerationStructureData;
+            let command =
+                if build.Inputs.Type == D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL {
+                    blas::set_inline_instances(owner, guest_va, native_va, instances.clone());
+                    SceneCommand::Instances {
+                        guest: guest_va,
+                        native: native_va,
+                        records: instances,
+                    }
+                } else {
+                    SceneCommand::Native {
+                        guest: guest_va,
+                        native: native_va,
+                        build: blas::NativeBuild::record(owner, guest_va, native_va, &build.Inputs),
+                    }
+                };
+            state.scene_commands.push(command);
         }
     }
 }

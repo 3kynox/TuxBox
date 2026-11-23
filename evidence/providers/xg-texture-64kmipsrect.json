@@ -1,12 +1,12 @@
 {
   "scope": "XGCreateTextureComputer (ordinal 11) with default layout 0 for a bounded subset. Identical guest and XMem dependency; complete layouts and sampled element addresses compared against the supplied Xbox XG DLL.",
-  "subset": "57 color formats, eight square and rectangular dimensions from 32 to 2048, two to twelve mips within the supported tail limits, eight related flags; one slice, one sample, default layout. Other combinations are unsupported.",
+  "subset": "Default 2D render-target layout with one slice and one sample. Eight shapes between 32 and 2048 exercise 57 color formats, eight flag combinations and two to twelve mips. Seven larger six-mip shapes from 2049x1153 to 16384x16384 include the observed 2976x1676 target and exercise five formats with three flag combinations.",
   "host": "1793301796 experimental-11.0-20261027b-x86_64",
-  "guest_sha256": "3780ef74aa2f1733ad89e2ce8d1daa8cff2fd39de7a8bcf2b5bbdf5b80c942e2",
-  "guest_source_sha256": "7322de7b5a4a33061acefbc5bd51749d7810624052c80f0103944b9a98f6b87f",
-  "xmem_sha256": "9b3a3c2435f8f90e1dc30067cb72de6e7b2a516c38fc6fe42f13d7eeaef6babd",
-  "layouts": 18640,
-  "sampled_element_addresses": 11084800,
+  "guest_sha256": "ed7a41ead267626befe9b93effaba30b74d32366163448bb9337585f78e1e28d",
+  "guest_source_sha256": "efd9cfefb23693ff5a4b39a6f75af3d5e7d6ef3807749bd11fbc02777b00f059",
+  "xmem_sha256": "1151f3569939eada5e6a20b967495d4ae2d1706cf5ab1120a418af1dd67b1e8b",
+  "layouts": 18745,
+  "sampled_element_addresses": 11147800,
   "checks": [
     "complete layouts",
     "sampled mip and array-slice addresses",
@@ -16,13 +16,13 @@
   "runs": {
     "original": {
       "dll_sha256": "fee85ef80b6fe47edaa083270933c08a37f9e27e7541f86f731daecf7ead1493",
-      "guest_receipt": "xg-64kmipsrect PASS 18640 layouts 11084800 element addresses",
-      "result_sha256": "68052ec568dfb976d3dda052a8a206d1fd47df98f0486d309868eb77cd508645"
+      "guest_receipt": "xg-64kmipsrect PASS 18745 layouts 11147800 element addresses",
+      "result_sha256": "d806ec9b4566b5db9d5a4d499e38510bbebfd0f144463c7f87c491766827e9d9"
     },
     "tuxbox": {
-      "dll_sha256": "2580a6f1cf84d55f8ea61f153ce3ebf8d55311f5aa190a3e1e5686d3166eb3bf",
-      "guest_receipt": "xg-64kmipsrect PASS 18640 layouts 11084800 element addresses",
-      "result_sha256": "68052ec568dfb976d3dda052a8a206d1fd47df98f0486d309868eb77cd508645"
+      "dll_sha256": "e080a9f4f1bb2dea048b78f627aaa1ab4e026fa42ccd90717ec9baf21207e1a3",
+      "guest_receipt": "xg-64kmipsrect PASS 18745 layouts 11147800 element addresses",
+      "result_sha256": "d806ec9b4566b5db9d5a4d499e38510bbebfd0f144463c7f87c491766827e9d9"
     }
   }
 }

@@ -1,8 +1,10 @@
 //! Local shader records and descriptor waterfalls in triangle hit programs.
 //! Descriptor addresses below are internal values. The host reads the actual
 //! root arguments associated with this hit record for each invocation.
-use super::{local_record, Bindings};
-use crate::rdna2::{instructions, Enc, Insn, Opnd};
+mod image;
+mod relative;
+use super::{Bindings, local_record};
+use crate::rdna2::{Enc, Insn, Opnd, instructions};
 use std::{collections::BTreeMap, fmt::Write, ops::Range};
 use tuxbox_dxbc::ray::State;
 
@@ -27,7 +29,10 @@ fn index(op: &Opnd) -> Option<usize> {
 }
 
 #[derive(Clone)]
-struct Values([Option<u32>; 384]);
+struct Values {
+    words: [Option<u32>; 384],
+    code_address: [bool; 384],
+}
 
 impl Values {
     fn new() -> Self {
@@ -42,33 +47,49 @@ impl Values {
         ] {
             words[i] = Some(v);
         }
-        Self(words)
+        Self {
+            words,
+            code_address: [false; 384],
+        }
     }
 
     fn get(&self, op: &Opnd) -> Option<u32> {
         match op {
             Opnd::ConstInt(x) => Some(*x as u32),
             Opnd::Literal(x) => Some(*x),
-            _ => self.0[index(op)?],
+            _ => self.words[index(op)?],
         }
     }
 
     fn pair(&self, op: &Opnd) -> Option<u64> {
         let k = index(op)?;
-        Some(u64::from(self.0[k]?) | (u64::from(self.0[k + 1]?) << 32))
+        Some(u64::from(self.words[k]?) | (u64::from(self.words[k + 1]?) << 32))
     }
 
     fn alu(&self, ins: &Insn) -> [Option<u32>; 2] {
         let x = ins.src.first().and_then(|x| self.get(x));
         let y = ins.src.get(1).and_then(|x| self.get(x));
         let z = ins.src.get(2).and_then(|x| self.get(x));
+        if ins.mnemonic == "s_getpc_b64" {
+            return [
+                Some(super::super::continuation::CODE_BASE + (ins.offset + ins.dwords * 4) as u32),
+                Some(0),
+            ];
+        }
         let pair = match ins.mnemonic.as_str() {
-            "s_lshr_b64" => ins
-                .src
-                .first()
-                .and_then(|op| self.pair(op))
-                .zip(y)
-                .map(|(x, s)| x.wrapping_shr(s)),
+            "s_lshr_b64" | "s_lshl_b64" => {
+                ins.src
+                    .first()
+                    .and_then(|op| self.pair(op))
+                    .zip(y)
+                    .map(|(x, s)| {
+                        if ins.mnemonic == "s_lshl_b64" {
+                            x.wrapping_shl(s)
+                        } else {
+                            x.wrapping_shr(s)
+                        }
+                    })
+            }
             "v_lshlrev_b64" => ins
                 .src
                 .get(1)
@@ -150,15 +171,20 @@ enum View {
     Constant,
     Page,
     Texture,
+    Volume,
+    Cube,
+    Array,
     Sampler,
 }
 
 #[derive(Default)]
 struct Layout {
+    constant_addresses: Range<u32>,
+    relative_writes: BTreeMap<usize, Range<usize>>,
     views: BTreeMap<(u32, u32), View>,
     emitted: BTreeMap<usize, String>,
     // Known VGPR contents saved at fixed offsets in the compiler-private frame.
-    spills: BTreeMap<u32, Option<u32>>,
+    spills: BTreeMap<u32, (Option<u32>, bool)>,
 }
 
 impl Layout {
@@ -233,37 +259,39 @@ impl Layout {
         Some(body)
     }
 
-    fn image(&mut self, ins: &Insn, regs: &Values, dst: u8) -> Option<String> {
-        if ins.aux.imm != 1 || ins.raw.get(1)? & (3 << 30) != 0 {
-            return None;
-        }
-        let src = &ins.src;
-        let base = src.get(src.len().checked_sub(2)?)?;
-        let mip = ins.op == 1;
-        let tex = self.resource(
-            regs.get(base)?,
-            SRV,
-            if mip { View::Page } else { View::Texture },
-        )?;
-        let n = if matches!(ins.op, 1 | 36) { 3 } else { 2 };
-        let c = super::lumen::coords(ins, n)?;
-        let (x, y) = (c[0], c[1]);
-        let sample = if mip {
-            format!("{tex}.Load(int3(v[{x}],v[{y}],v[{}]))", c[2])
-        } else {
-            let level = match ins.op {
-                39 => "0.0".to_string(),
-                36 => format!("asfloat(v[{}])", c[2]),
-                _ => return None,
-            };
-            let samp = self.resource(regs.get(src.last()?)?, SAMPLER, View::Sampler)?;
-            format!("asuint({tex}.SampleLevel({samp},asfloat(uint2(v[{x}],v[{y}])),{level}))")
-        };
-        super::lumen::save_components(dst.into(), ins.aux.mask, &sample)
-    }
-
     fn instruction(&mut self, ins: &Insn, regs: &mut Values) -> Option<()> {
         let dst = ins.dst.first().and_then(index);
+        match ins.mnemonic.as_str() {
+            "v_swap_b32" => {
+                let source = index(ins.src.first()?)?;
+                regs.words.swap(dst?, source);
+                regs.code_address.swap(dst?, source);
+                return Some(());
+            }
+            "v_movreld_b32" => {
+                // A runtime M0 can select any physical VGPR after wrapping.
+                let range = self
+                    .relative_writes
+                    .get(&ins.offset)
+                    .cloned()
+                    .unwrap_or(0..256);
+                regs.words[128 + range.start..128 + range.end].fill(None);
+                regs.code_address[128 + range.start..128 + range.end].fill(false);
+                return Some(());
+            }
+            _ => {}
+        }
+
+        let from_code = |operand: &Opnd| index(operand).is_some_and(|reg| regs.code_address[reg]);
+        let is_table_pointer = match ins.mnemonic.as_str() {
+            "s_getpc_b64" => !self.constant_addresses.is_empty(),
+            "v_add_co_u32" | "v_add_nc_u32" | "s_add_u32" => ins.src.iter().take(2).any(from_code),
+            "v_mov_b32" | "s_mov_b32" | "v_readfirstlane_b32" => {
+                ins.src.first().is_some_and(from_code)
+            }
+            _ => false,
+        };
+
         let dw = match ins.dst.first() {
             Some(Opnd::Sgpr(x) | Opnd::Vgpr(x)) => *x,
             _ => 0,
@@ -286,9 +314,11 @@ impl Layout {
             }
             let k = dst?;
             if ins.op == 28 {
-                self.spills.insert(addr, regs.0[k]);
+                self.spills
+                    .insert(addr, (regs.words[k], regs.code_address[k]));
             } else {
-                regs.0[k] = self.spills.get(&addr).copied().flatten();
+                (regs.words[k], regs.code_address[k]) =
+                    self.spills.get(&addr).copied().unwrap_or_default();
             }
             return Some(());
         }
@@ -310,20 +340,41 @@ impl Layout {
                 }
                 let offset = u32::try_from(ins.aux.imm).ok()?;
                 let (lo, hi) = if matches!(scalar, Opnd::Null) {
-                    (regs.get(&ins.src[0]), regs.0[128 + usize::from(*addr) + 1])
+                    (
+                        regs.get(&ins.src[0]),
+                        regs.words[128 + usize::from(*addr) + 1],
+                    )
                 } else {
                     (
                         regs.get(&ins.src[0])
                             .zip(regs.get(scalar))
                             .map(|(v, s)| v.wrapping_add(s)),
-                        regs.0[index(scalar)? + 1],
+                        regs.words[index(scalar)? + 1],
                     )
                 };
                 if usize::from(dw) + count > 128 {
                     return None;
                 }
                 let mut b = String::from("{ ");
-                if matches!(hi, Some(1 | 2)) {
+                if matches!(scalar, Opnd::Null) && regs.code_address[128 + usize::from(*addr)] {
+                    // RDNA reads the whole address before the load updates vdata,
+                    // including when the destination overlaps the address pair.
+                    write!(
+                        b,
+                        "uint2 at = uint2(v[{addr}], v[{}]); ",
+                        usize::from(*addr) + 1
+                    )
+                    .ok()?;
+                    for i in 0..count {
+                        write!(
+                            b,
+                            "v[{}] = tbMaterialCode(at.x + {}u, at.y); ",
+                            usize::from(dw) + i,
+                            offset + i as u32 * 4
+                        )
+                        .ok()?;
+                    }
+                } else if matches!(hi, Some(1 | 2)) {
                     let resource = if hi == Some(1) {
                         "tbIndices"
                     } else {
@@ -364,6 +415,31 @@ impl Layout {
                 }
                 b.push('}');
                 (count, Some(b))
+            }
+            Enc::Smem if ins.op <= 3 && regs.code_address[index(ins.src.first()?)?] => {
+                let [Opnd::Sgpr(base)] = ins.src.as_slice() else {
+                    return None;
+                };
+                let offset = u32::try_from(ins.aux.imm).ok()?;
+                if *base >= 127 || ins.raw.get(1)? >> 25 != 125 {
+                    return None;
+                }
+                let count = 1usize << ins.op;
+                if usize::from(dw) + count > 128 {
+                    return None;
+                }
+                let mut body = format!("{{ uint2 at = uint2(s[{base}], s[{}]); ", base + 1);
+                for lane in 0..count {
+                    write!(
+                        body,
+                        "s[{}] = tbMaterialCode(at.x + {}u, at.y); ",
+                        usize::from(dw) + lane,
+                        offset.checked_add(4 * lane as u32)?
+                    )
+                    .ok()?;
+                }
+                body.push('}');
+                (count, Some(body))
             }
             Enc::Smem => {
                 if !matches!(ins.op, 2 | 3) || ins.aux.imm != 0 || (ins.raw.get(1)? >> 25) != 125 {
@@ -418,7 +494,9 @@ impl Layout {
             self.emitted.insert(ins.offset, body);
         }
         if let Some(k) = dst {
-            regs.0.get_mut(k..k + n)?.copy_from_slice(&words[..n]);
+            regs.words.get_mut(k..k + n)?.copy_from_slice(&words[..n]);
+            regs.code_address.get_mut(k..k + n)?.fill(false);
+            regs.code_address[k] = is_table_pointer;
         }
         Some(())
     }
@@ -426,12 +504,15 @@ impl Layout {
     fn finish(self, export: &str) -> Bindings {
         let mut declarations = local_record(export);
         declarations.push_str(GEOMETRY);
+        if self.views.values().any(|view| *view == View::Cube) {
+            declarations.push_str(super::lumen::CUBE_DIRECTION);
+        }
         for ((_, slot), view) in self.views {
             match view {
                 View::Constant=>writeln!(declarations,"cbuffer RecordCb{slot} : register(b{slot},space0) {{ uint4 tbCb{slot}[4096]; }};"),
                 View::Sampler=>writeln!(declarations,"SamplerState tbSampler{slot} : register(s{slot},space0);"),
                 kind=>{
-                    let ty=match kind{View::Structured=>"StructuredBuffer<uint4>",View::Typed=>"Buffer<float4>",View::Page=>"Texture2D<uint4>",View::Texture=>"Texture2D<float4>",_=>unreachable!()};
+                    let ty=match kind{View::Structured=>"StructuredBuffer<uint4>",View::Typed=>"Buffer<float4>",View::Page=>"Texture2D<uint4>",View::Texture=>"Texture2D<float4>",View::Volume=>"Texture3D<float4>",View::Cube=>"TextureCube<float4>",View::Array=>"Texture2DArray<float4>",_=>unreachable!()};
                     writeln!(declarations,"{ty} tbSrv{slot} : register(t{slot},space0);")
                 }
             }.expect("writing a String");
@@ -443,26 +524,108 @@ impl Layout {
     }
 }
 
-pub(super) fn analyze(state: &State<'_>, span: &Range<usize>) -> Result<Bindings, String> {
+pub(super) fn analyze(
+    state: &State<'_>,
+    span: &Range<usize>,
+    candidate: bool,
+) -> Result<Bindings, String> {
     let mut regs = Values::new();
+    if candidate {
+        for reg in [2, 3, 5] {
+            regs.words[128 + reg] = None;
+        }
+        regs.words[128 + 26] = Some(8);
+        regs.words[128 + 27] = Some(8);
+        regs.words[128 + 29] = Some(0);
+    }
+    let constants = super::super::continuation::leaf_constants(state);
     let mut layout = Layout::default();
+    if let Some(range) = &constants {
+        let base = super::super::continuation::CODE_BASE;
+        layout.constant_addresses = base + range.start as u32..base + range.end as u32;
+    }
+
     let mut saved_exec = BTreeMap::new();
     let isa = state
         .program
         .get(span.clone())
         .ok_or("invalid ray material substate range")?;
-    for mut ins in instructions(isa) {
-        ins.offset += span.start;
+    let ops: Vec<_> = instructions(isa)
+        .map(|mut op| {
+            op.offset += span.start;
+            op
+        })
+        .collect();
+    // A compiler-outlined arm following an unconditional branch is not
+    // reached by falling through the preceding instructions. Recover its
+    // exact incoming values when it has one forward control-flow edge.
+    let mut incoming = BTreeMap::new();
+    for op in &ops {
+        if let Some(dest) = super::super::continuation::target(op) {
+            incoming
+                .entry(dest)
+                .and_modify(|source| *source = None)
+                .or_insert(Some(op.offset));
+        }
+    }
+    let mut arms = BTreeMap::new();
+    let mut falls_through = true;
+    for op in &ops {
+        if !falls_through {
+            if let Some(source) = incoming.get(&op.offset) {
+                if let Some(source) = source.filter(|&source| source < op.offset) {
+                    arms.insert(source, op.offset);
+                }
+                falls_through = true;
+            }
+        }
+        // Alignment nops between an unconditional transfer and the actual
+        // forward target do not introduce a predecessor.
+        if op.mnemonic != "s_nop" {
+            falls_through = !matches!(op.mnemonic.as_str(), "s_branch" | "s_setpc_b64");
+        }
+    }
+    for (i, op) in ops
+        .iter()
+        .enumerate()
+        .filter(|(_, op)| op.mnemonic == "v_movreld_b32")
+    {
+        if let Some(range) = relative::bounded_write(&ops, i) {
+            layout.relative_writes.insert(op.offset, range);
+        }
+    }
+    let mut saved_arms = BTreeMap::new();
+    for ins in ops {
+        if ins.mnemonic == "image_load"
+            && !image::packed_load(&ins, &state.program[ins.offset + ins.dwords * 4..span.end])
+        {
+            return Err(format!(
+                "unresolved material image_load element type at {:#x}",
+                ins.offset
+            ));
+        }
+        if let Some((r, spills, masks)) = saved_arms.remove(&ins.offset) {
+            regs = r;
+            layout.spills = spills;
+            saved_exec = masks;
+        }
+        if let Some(&dest) = arms.get(&ins.offset) {
+            saved_arms.insert(
+                dest,
+                (regs.clone(), layout.spills.clone(), saved_exec.clone()),
+            );
+        }
         // The ELSE side of an EXEC-masked block sees the original VGPRs
         // in those lanes. The THEN path may have reused them for load data.
         if ins.mnemonic == "s_and_saveexec_b32" {
             if let [Opnd::Sgpr(saved)] = ins.dst.as_slice() {
-                saved_exec.insert(*saved, regs.clone());
+                saved_exec.insert(*saved, std::rc::Rc::new(regs.clone()));
             }
         } else if ins.mnemonic == "s_andn2_b32" && ins.dst == [Opnd::ExecLo] {
             if let [Opnd::Sgpr(saved), Opnd::ExecLo] = ins.src.as_slice() {
                 if let Some(entry) = saved_exec.get(saved) {
-                    regs.0[128..].copy_from_slice(&entry.0[128..]);
+                    regs.words[128..].copy_from_slice(&entry.words[128..]);
+                    regs.code_address[128..].copy_from_slice(&entry.code_address[128..]);
                 }
             }
         }
@@ -473,7 +636,16 @@ pub(super) fn analyze(state: &State<'_>, span: &Range<usize>) -> Result<Bindings
             )
         })?;
     }
-    Ok(layout.finish(&state.name))
+    let base = layout.constant_addresses.start;
+    let mut bindings = layout.finish(&state.name);
+    if let Some(range) = constants {
+        let words = state.program[range]
+            .chunks_exact(4)
+            .map(|bytes| format!("0x{:08x}u", u32::from_le_bytes(bytes.try_into().unwrap())))
+            .collect::<Vec<_>>();
+        writeln!(bindings.declarations, "uint tbMaterialCode(uint lo, uint hi) {{ static const uint words[{}] = {{ {} }}; uint offset = lo - {base}u; return hi == 0u && (offset & 3u) == 0u && offset / 4u < {}u ? words[offset / 4u] : 0u; }}", words.len(), words.join(","), words.len()).unwrap();
+    }
+    Ok(bindings)
 }
 
 #[cfg(test)]
@@ -492,11 +664,11 @@ mod tests {
         let mut layout = Layout::default();
         // global_load_dwordx3 v[51:53], v[51:52], off (triangle vertices).
         let load = decode(&[3694952448, 863830067]);
-        regs.0[128 + 51] = None;
-        regs.0[128 + 52] = Some(2);
-        regs.0[128 + 54] = Some(SRV + 32);
+        regs.words[128 + 51] = None;
+        regs.words[128 + 52] = Some(2);
+        regs.words[128 + 54] = Some(SRV + 32);
         layout.instruction(&load, &mut regs).unwrap();
-        assert_eq!(regs.0[128 + 54], Some(SRV + 32));
+        assert_eq!(regs.words[128 + 54], Some(SRV + 32));
         assert!(layout.emitted[&0].contains("tbVertices.Load(at + 8u)"));
     }
 
@@ -509,9 +681,9 @@ mod tests {
         let store = decode(&[3765436464, 83890176]);
         let load = decode(&[3761242160, 83890176]);
         layout.instruction(&store, &mut regs).unwrap();
-        regs.0[128 + 16] = None;
+        regs.words[128 + 16] = None;
         layout.instruction(&load, &mut regs).unwrap();
-        assert_eq!(regs.0[128 + 16], Some(BVH_BASE >> 8));
+        assert_eq!(regs.words[128 + 16], Some(BVH_BASE >> 8));
     }
 
     #[test]
@@ -526,8 +698,10 @@ mod tests {
             Some("tbCb2")
         );
         assert!(layout.resource(SRV + 64, SRV, View::Texture).is_none());
-        assert!(layout
-            .resource(SAMPLER + 3, SAMPLER, View::Sampler)
-            .is_none());
+        assert!(
+            layout
+                .resource(SAMPLER + 3, SAMPLER, View::Sampler)
+                .is_none()
+        );
     }
 }

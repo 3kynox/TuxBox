@@ -45,6 +45,16 @@ fn fingerprint(bytes: &[u8], operands: &[std::ops::Range<usize>]) -> u64 {
         })
 }
 
+// A register-relative move wraps the architectural VGPR number to eight bits.
+// Keep the smaller register file on shaders with only direct operands.
+fn vgpr_count(state: &State<'_>) -> usize {
+    if instructions(state.program).any(|op| matches!(op.mnemonic.as_str(), "v_movrels_b32" | "v_movreld_b32")) {
+        256
+    } else {
+        128
+    }
+}
+
 fn operand(value: &Opnd) -> Result<String, String> {
     Ok(match *value {
         Opnd::Vgpr(n) if n < 128 => format!("v[{n}]"),
@@ -264,8 +274,8 @@ pub fn library(bytes: &[u8]) -> Result<(String, String), String> {
         let hlsl = lighting::translated(&state)?;
         return Ok((state.name, hlsl));
     }
-    if material::matches(&state) {
-        let hlsl = material::translated(&state)?;
+    if let Some(words) = material::payload_words(&state) {
+        let hlsl = material::translated(&state, words)?;
         return Ok((state.name, hlsl));
     }
     let shader = match (state.kind, state.program.len()) {

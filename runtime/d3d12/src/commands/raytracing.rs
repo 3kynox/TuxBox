@@ -5,6 +5,76 @@ use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL, E_OUTOFMEMORY, E_POINT
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::{IUnknown, Result};
 
+// Replay geometry publications in GPU command order. Upload-backed BLAS
+// vertices, indices, transforms and cooked payloads can all change after Close.
+pub(super) enum SceneCommand {
+    Native {
+        guest: u64,
+        native: u64,
+        build: blas::NativeBuild,
+    },
+    Fixup(super::build_raytracing::Instances),
+    Source { guest: u64, native: u64 },
+    Cooked(blas::Input),
+    Instances {
+        guest: u64,
+        native: u64,
+        records: Option<ID3D12Resource>,
+    },
+    Copy {
+        guest: u64,
+        native: u64,
+        source_guest: u64,
+        source_native: u64,
+    },
+    Check(super::compute_bindings::SceneCheck),
+}
+
+impl SceneCommand {
+    pub(super) fn prepare(&self, list: &List) -> Result<()> {
+        let owner = list.parent.as_ref().ok_or(E_INVALIDARG)?;
+        unsafe {
+            match self {
+                Self::Native { guest, native, build } => {
+                    build.prepare(owner);
+                    blas::publish_destination(owner, *guest, *native);
+                }
+                Self::Fixup(instances) => instances.prepare(owner)?,
+                Self::Cooked(input) => input.prepare(owner)?,
+                Self::Instances { guest, native, records } => {
+                    blas::set_inline_instances(owner, *guest, *native, records.clone());
+                    blas::publish_destination(owner, *guest, *native);
+                }
+                Self::Source { guest, native } => validate_source(owner, *guest, *native)?,
+                Self::Copy { guest, native, source_guest, source_native } => {
+                    validate_source(owner, *source_guest, *source_native)?;
+                    blas::copy_geometry(owner, *guest, *native, *source_native);
+                    blas::publish_destination(owner, *guest, *native);
+                }
+                Self::Check(check) => check.validate(list).inspect_err(|_| {
+                    static FIRST: std::sync::Once = std::sync::Once::new();
+                    crate::diagnostics::log_once(&FIRST, || {
+                        "inline ray scene or geometry changed after recording, rejecting submission"
+                            .into()
+                    });
+                })?,
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_source(owner: &IUnknown, guest: u64, recorded: u64) -> Result<()> {
+    let submitted = unsafe { blas::submitted_address(owner, guest) };
+    if submitted != recorded {
+        crate::diagnostics::recording_error(format_args!(
+            "recorded AS source {guest:#x} used {recorded:#x}, now resolves to {submitted:#x}"
+        ));
+        return Err(E_INVALIDARG.into());
+    }
+    Ok(())
+}
+
 pub(super) fn retain(recording: &Recording, resources: &[&ID3D12Resource]) -> Result<()> {
     let mut held = recording
         .resources
@@ -46,16 +116,31 @@ fn record(
             } else {
                 (source, destination)
             };
-            unsafe { host.CopyRaytracingAccelerationStructure(dst, src, mode) };
+            state
+                .scene_commands
+                .try_reserve(1)
+                .map_err(|_| E_OUTOFMEMORY)?;
+            unsafe {
+                host.CopyRaytracingAccelerationStructure(dst, src, mode);
+                blas::copy_geometry(owner, destination, dst, src);
+            }
+            state.scene_commands.push(SceneCommand::Copy {
+                guest: destination,
+                native: dst,
+                source_guest: source,
+                source_native: src,
+            });
         }
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_DESERIALIZE => {
             state
-                .blas_inputs
+                .scene_commands
                 .try_reserve(1)
                 .map_err(|_| E_OUTOFMEMORY)?;
             let result = unsafe { blas::deserialize(owner, source, destination) }?;
             retain(state, &[&result.source, &result.destination])?;
-            state.blas_inputs.push(result.input);
+            state
+                .scene_commands
+                .push(SceneCommand::Cooked(result.input));
             // SAFETY: the private build is complete, the copy fits the checked
             // guest suballocation or its dedicated backing. The guest allocator
             // retains both resources until all executions using it have completed.
@@ -148,25 +233,19 @@ pub(super) unsafe extern "system" fn postbuild(
             return Err(E_INVALIDARG.into());
         }
         let mut patched = Vec::new();
-        if unsafe { blas::has_relocations(owner) } {
-            patched
-                .try_reserve_exact(sources.len())
-                .map_err(|_| E_OUTOFMEMORY)?;
-            for &va in sources {
-                if let Some(target) = unsafe { blas::resolve(owner, va) }? {
-                    retain(&state, &[&target.resource])?;
-                    patched.push(unsafe { target.resource.GetGPUVirtualAddress() });
-                } else {
-                    patched.push(va);
-                }
-            }
+        patched.try_reserve_exact(sources.len()).map_err(|_| E_OUTOFMEMORY)?;
+        state.scene_commands.try_reserve(sources.len()).map_err(|_| E_OUTOFMEMORY)?;
+        for &guest in sources {
+            let native = if let Some(target) = unsafe { blas::resolve(owner, guest) }? {
+                retain(&state, &[&target.resource])?;
+                unsafe { target.resource.GetGPUVirtualAddress() }
+            } else {
+                guest
+            };
+            patched.push(native);
+            state.scene_commands.push(SceneCommand::Source { guest, native });
         }
-        let native = if patched.is_empty() {
-            sources
-        } else {
-            &patched
-        };
-        unsafe { host.EmitRaytracingAccelerationStructurePostbuildInfo(desc, native) };
+        unsafe { host.EmitRaytracingAccelerationStructurePostbuildInfo(desc, &patched) };
         Ok(())
     })();
     if let Err(error) = result {

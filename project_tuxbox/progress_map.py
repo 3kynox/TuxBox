@@ -57,6 +57,8 @@ FROSTY_GATES = {
     "load_world": "World loaded",
     "submit_frame": "Frame submitted",
     "use_menu": "Menu used",
+    "load_wake_up_room": "Wake Up room loaded",
+    "load_chase_intro": "Chase intro loaded",
     "play_chase": "Chase played",
     "explore_city": "City explored",
     "verify_visuals": "Visuals verified",
@@ -412,10 +414,17 @@ def shader_table(evidence):
     return "\n".join(lines)
 
 
-def draw_shaders(svg, y, data, rows):
+def draw_shaders(svg, y, data, rows, material_hits):
     if not data:
         return y
-    height = 146 + 28*len(rows)
+    archive = data.get("archives", {}).get("material", {}).get("member_sha256")
+    stages = material_hits.get("stages", {})
+    hit_groups = [stages.get(kind, {}) for kind in ("opaque", "paired")]
+    show_hits = (archive and material_hits.get("material_archive_sha256") == archive
+                 and material_hits.get("result_set_sha256") and all(
+                     type(stage.get("translated")) is int and type(stage.get("entries")) is int
+                     and 0 <= stage["translated"] <= stage["entries"] for stage in hit_groups))
+    height = 146 + 28*len(rows) + (28 if show_hits else 0)
     group = section(svg, PAD, y, "RDNA 2 shader translation")
     window(group, INNER, height, "~/docs/SHADERS.md")
     text(group, 18, 70, "RDNA 2 shader translation", 25, AMBER, bold=True)
@@ -433,6 +442,9 @@ def draw_shaders(svg, y, data, rows):
         rect(cell, 510, top-10, 125*count/total, 6, AQUA)
         text(cell, INNER-102, top, f"{count:,}/{total:,}", 14, TEXT, anchor="end")
         text(cell, INNER-18, top, f"{count/total:.1%}", 14, TEXT, anchor="end")
+    if show_hits:
+        opaque, paired = (f"{row['translated']:,}/{row['entries']:,}" for row in hit_groups)
+        text(group, 18, height-17, f"Material hit groups emitting HLSL · {opaque} opaque · {paired} with any-hit", 14, MUTED)
     return y + height + GAP
 
 
@@ -468,7 +480,8 @@ def render_map(evidence):
     inventory = read_json(evidence / "matrix-awakens/shader-inventory.json")
     shader_rows = list(shader_archive_results(evidence, inventory))
     y = draw_overall(svg, 48+GAP, paths, inventory, shader_rows)
-    y = draw_shaders(svg, y, inventory, shader_rows)
+    material_hits = read_json(evidence / "matrix-awakens/material-hit-hlsl-survey.json")
+    y = draw_shaders(svg, y, inventory, shader_rows, material_hits)
     y = draw_libraries(svg, y, paths)
     y = draw_frosty_target(svg, y, evidence)
     height = draw_verification(svg, y, evidence) + 6

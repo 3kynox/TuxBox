@@ -21,13 +21,14 @@ cbuffer LightingParameters : register(b1, space0) { uint4 lightParameters; };
 "#;
 
 pub(super) fn translated(state: &State<'_>) -> Result<String, String> {
+    let vgprs = super::vgpr_count(state);
     let leaf = continuation::leaf_body(state, 16)?;
     Ok(format!(
         r#"{}
 struct LightingPayload {{ uint words[16]; }};
 [shader("miss")]
 void {}(inout LightingPayload payload) {{
-    uint s[128] = (uint[128])0, v[128] = (uint[128])0;
+    uint s[128] = (uint[128])0, v[{vgprs}] = (uint[{vgprs}])0;
     uint exec = ~0u, scc = 1u, vcc = 0u, m0 = 0u;
     uint spill[17] = (uint[17])0;
     [unroll] for (uint i=0; i<16; ++i) spill[i] = payload.words[i];

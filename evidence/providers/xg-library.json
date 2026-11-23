@@ -1,18 +1,18 @@
 {
   "scope": "Scarlett XG process state and locking, hardware profiles, packed textures, color and depth/stencil layouts, metadata, element addressing and CPU transfers.",
   "guest_source": "runtime/xg/library_control.cpp",
-  "guest_sha256": "743ed73238d6d83c29881e8b235f2a8fb0e4435a532f2488e0ce66b7b2ca613e",
+  "guest_sha256": "0c09b99e031a71f4b4af1bf394f6eb5a3356aff02c0acb2bbc4f8e961be3fd63",
   "reference_sha256": "fee85ef80b6fe47edaa083270933c08a37f9e27e7541f86f731daecf7ead1493",
-  "provider_sha256": "07576cb2724600e833171ddce6d15fe3a6e392f7eaed2b9acae94b432f12884a",
-  "xmem_sha256": "f7c3748b9b74b42956ba124c2f1a032919c87490f5893c59eb3b748da719b003",
+  "provider_sha256": "69854ff3fe42282ccafed108f8d44dc219179b0c7e8e3fa50f32716f437b2f1e",
+  "xmem_sha256": "1151f3569939eada5e6a20b967495d4ae2d1706cf5ab1120a418af1dd67b1e8b",
   "host": "1793301796 experimental-11.0-20261027b-x86_64",
   "depth_formats": 129,
   "depth_flag_combinations": 4,
   "depth_selections": 516,
   "packed_descriptor_computers": 375,
   "layout_bytes_each": 6976,
-  "layout_and_offset_receipt_bytes": 16420931,
-  "receipt_sha256": "36bf723da197544cd3fbe6ea079051d28515bb3d4a182ae816a978ec015bfc21",
+  "layout_and_offset_receipt_bytes": 19829683,
+  "receipt_sha256": "f6d6ca1f299e7f04d174ac47dd96a2658c9f98f0f3596d55230b0ac1c2be1a7c",
   "checks": [
     "Library first and repeated initialize/terminate, implicit initialization by factory and hardware selection",
     "External recursive exclusive lock blocks another thread inside the packed-descriptor factory until final release, including release after disabling future entry",
@@ -28,7 +28,8 @@
     "Version 3 and 4 color metadata allocation and addressing, including CMASK and DCC planes, five storage widths, tiled metadata, slice bank selection and both byte/bit address outputs. 594,080 address checks on 20 rectangular eight-slice images.",
     "Construct map streaming: 4 KiB color textures with UAV and metadata flags, including the 4096 x 4096 BC7_TYPELESS resource with flags 0x300000 that failed after frame one. All 144 resource layouts and 11,520 element addresses match the packaged DLL.",
     "Large uncompressed targets: complete layouts and 800 sampled byte/bit addresses per plane on 1,140 combinations (57 formats, ten render/UAV/metadata flag combinations, 4096 x 4096 or 16384 x 8193). Two additional R16_UINT and R8_UNORM 2560 x 1440 DCC targets verify metadata plane sizes and the horizontal address bit at x=1024.",
-    "Single-sample D16, D32, D24/S8 and D32/S8, each typed and typeless: all 240 combinations of eight formats, three resource flag sets, five widths from 160 to 16384 and two heights (90 and 1440). Complete layouts and 800 sampled addresses per plane matched the packaged DLL."
+    "Single-sample D16, D32, D24/S8 and D32/S8, each typed and typeless: all 240 combinations of eight formats, three resource flag sets, five widths from 160 to 16384 and two heights (90 and 1440). Complete layouts and 800 sampled addresses per plane matched the packaged DLL.",
+    "384 multisample depth targets match packaged XG on full layouts, HTILE and Z-order plane offsets, packed shader-resource views and individual sample queries. Pitched copies select each sample at the 17 by 13 control size."
   ],
   "remaining": [
     "Packed views of subranges, multisample images, additional swizzle and sparse mip-chain combinations need independent controls.",
@@ -62,5 +63,52 @@
   "typed_image_computers": 880,
   "map_streaming_descriptors": 144,
   "large_color_targets": 1142,
-  "large_depth_targets": 240
+  "large_depth_targets": 240,
+  "multisample_depth": {
+    "surfaces": 384,
+    "formats": [
+      19,
+      20,
+      39,
+      40,
+      44,
+      45,
+      53,
+      55
+    ],
+    "samples": [
+      2,
+      4,
+      8
+    ],
+    "flags": [
+      "0x01000002",
+      "0x01000006",
+      "0x0100000a",
+      "0x81300002"
+    ],
+    "width_height_slices": [
+      [
+        17,
+        13,
+        1
+      ],
+      [
+        257,
+        144,
+        6
+      ],
+      [
+        2976,
+        1676,
+        1
+      ],
+      [
+        3840,
+        2160,
+        1
+      ]
+    ],
+    "sampled_addresses_per_plane": 800
+  }
 }

@@ -22,6 +22,13 @@ pub fn independent_pixel_hlsl(shader: &ShaderExtract) -> Option<String> {
     constant_pixel::hlsl(shader)
 }
 
+/// Whether the lowering needs the runtime's native TLAS root descriptor.
+pub fn requires_inline_ray_query(shader: &ShaderExtract) -> bool {
+    #[cfg(feature = "legacy-hlsl")]
+    if hlsl::radiance_probe::identify(shader).is_some() { return true; }
+    compute_hlsl::card_direct_shadow(shader)
+}
+
 /// Translate a standalone shader when its complete behavior is supported by TuxBox.
 pub fn independent_hlsl(shader: &ShaderExtract) -> Option<String> {
     match shader.stage {

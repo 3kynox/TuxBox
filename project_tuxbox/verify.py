@@ -158,7 +158,7 @@ def verify(host, output, adapter, selected=None, samples=1):
                   r"xg-dcc PASS xbox-blocks=2 encode-bytes=32 atomic-batch=1",
                   providers={"xg-provider/xg_xs.dll": ("XGEncodeDCC", "XGDecodeDCC")})
             check("xg-library", "xg-provider/xg-library.exe", ["--report"],
-                  r"xg-library PASS depth=516 descriptors=375 lock=recursive\+factory copies=bidirectional depth_surfaces=16 typed_images=880 map_targets=1474",
+                  r"xg-library PASS depth=516 descriptors=375 lock=recursive\+factory copies=bidirectional depth_surfaces=16 typed_images=880 map_targets=1474 msaa_depth=384",
                   providers={"xg-provider/xg_xs.dll": ("XGCreateTextureComputerFromDescriptor",
                              "XGInitializeLibrary", "XGTerminateLibrary", "XGSetHardwareVersion",
                              "XGEnableExclusiveLocking", "XGEnterExclusiveLock", "XGLeaveExclusiveLock",
@@ -270,7 +270,7 @@ def verify(host, output, adapter, selected=None, samples=1):
             ("tables", r"words=16/16 guards=4 heaps=2 rejected=3 placed-srv=16/16 range-copies=4 descriptor-mode=1"),
             ("queues", r"queues=3 bytes=64 wait=1 signal-x=2"),
             ("queries", r"timestamps=2 occlusion=0 guards=2 heaps=6 rejected=3"),
-            ("indirect", r"sdk=0x20004 device=41 list=59 words=64/64 counts=direct,one,zero flush=global,range budget=default,rejected2 mesh=0x[0-9a-f]{8} rays=0x[0-9a-f]{8}"),
+            ("indirect", r"sdk=0x20004 device=41 list=59 words=64/64 counts=direct,one,zero flush=global,range,wake-up\(0x3000:0\+0xa30000\),zero-length,global-range budget=default,rejected2 mesh=0x[0-9a-f]{8} rays=0x[0-9a-f]{8}"),
         ):
             name = f"d3d12-{suite}"
             if name in selected:

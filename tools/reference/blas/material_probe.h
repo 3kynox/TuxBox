@@ -8,6 +8,7 @@ static void probe_materials(ID3D12Device5 *dev, ID3D12CommandQueue *queue,
     const char *file;
     const wchar_t *name, *group;
     const char *views;
+    const wchar_t *any_hit;
   };
   static const Case cases[]{
 #include "material_inputs.h"
@@ -31,7 +32,7 @@ static void probe_materials(ID3D12Device5 *dev, ID3D12CommandQueue *queue,
         "material global root");
   const UINT stride = dev->GetDescriptorHandleIncrementSize(
       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-  D3D12_DESCRIPTOR_HEAP_DESC desc{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 96,
+  D3D12_DESCRIPTOR_HEAP_DESC desc{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 112,
                                   D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0};
   ComPtr<ID3D12DescriptorHeap> heap, samplers;
   check(api->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&heap)),
@@ -88,7 +89,7 @@ static void probe_materials(ID3D12Device5 *dev, ID3D12CommandQueue *queue,
     UINT64 srvs, cbvs, samplers, uavs;
   };
   static_assert(sizeof(Record) == 96 && offsetof(Record, srvs) == 64);
-  std::array<ComPtr<ID3D12Resource>, 2> textures, uploads;
+  std::array<ComPtr<ID3D12Resource>, 3> textures, uploads;
   ComPtr<ID3D12CommandAllocator> texture_allocator;
   ComPtr<ID3D12GraphicsCommandList4> setup;
   check(dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
@@ -101,7 +102,7 @@ static void probe_materials(ID3D12Device5 *dev, ID3D12CommandQueue *queue,
   D3D12_HEAP_PROPERTIES local{};
   local.Type = D3D12_HEAP_TYPE_DEFAULT;
   local.CreationNodeMask = local.VisibleNodeMask = 1;
-  for (UINT type = 0; type < 2; ++type) {
+  for (UINT type = 0; type < textures.size(); ++type) {
     D3D12_RESOURCE_DESC tex{};
     tex.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     tex.Format =
@@ -116,6 +117,11 @@ static void probe_materials(ID3D12Device5 *dev, ID3D12CommandQueue *queue,
     const float color[4] = {.25f, .5f, 1, 1};
     if (!type)
       std::memcpy(source.data(), color, sizeof(color));
+    else if (type == 2) {
+      // A page entry above 15 enables the sampled local material texture.
+      const UINT pages[]{0x10u, 0x10u, 0x10u, 0x10u};
+      std::memcpy(source.data(), pages, sizeof(pages));
+    }
     uploads[type] = upload(dev, source.data(), source.size());
     D3D12_TEXTURE_COPY_LOCATION from{}, to{};
     from.pResource = uploads[type].Get();
@@ -165,7 +171,7 @@ static void probe_materials(ID3D12Device5 *dev, ID3D12CommandQueue *queue,
     dev->CreateConstantBufferView(&cv, {cpu.ptr + (64 + i) * stride});
   D3D12_CONSTANT_BUFFER_VIEW_DESC material_view{
       material_cb->GetGPUVirtualAddress(), 256};
-  dev->CreateConstantBufferView(&material_view, {cpu.ptr + 66 * stride});
+
   D3D12_UNORDERED_ACCESS_VIEW_DESC uv{};
   uv.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
   uv.Format = DXGI_FORMAT_R32_UINT;
@@ -176,6 +182,59 @@ static void probe_materials(ID3D12Device5 *dev, ID3D12CommandQueue *queue,
   for (const auto &item : cases) {
     auto code = read_file((std::string(item.file) + ".dxil").c_str());
     const bool lumen = std::strcmp(item.file, "1238") == 0;
+    const bool material2036 = std::strcmp(item.file, "material-2036") == 0;
+    const bool opacity_floor = std::strcmp(item.file, "material-31834") == 0;
+    const bool local_opacity = opacity_floor || std::strcmp(item.file, "material-5384") == 0;
+    const bool paged_material = std::strcmp(item.file, "material-18964") == 0;
+    // This shader multiplies the sampled green channel by b2[8].rgb and b2[17].x.
+    ComPtr<ID3D12Resource> bound_cb;
+    auto bound_view = material_view;
+    if (paged_material) {
+      std::array<float, 128> page_constants{};
+      page_constants[8 * 4] = .25f;
+      page_constants[8 * 4 + 1] = .5f;
+      page_constants[8 * 4 + 2] = 1.f;
+      page_constants[17 * 4] = 1.f;
+      bound_cb = upload(dev, page_constants.data(), sizeof(page_constants));
+      bound_view = {bound_cb->GetGPUVirtualAddress(), sizeof(page_constants)};
+    }
+    if (local_opacity) {
+      auto geometry_constants = constants;
+      geometry_constants[5 * 4 + 3] = 1.f;
+      bound_cb = upload(dev, geometry_constants.data(), sizeof(geometry_constants));
+      bound_view = {bound_cb->GetGPUVirtualAddress(), sizeof(geometry_constants)};
+    }
+    dev->CreateConstantBufferView(&bound_view, {cpu.ptr + 66 * stride});
+    std::array<ComPtr<ID3D12Resource>, 2> opacity_buffers;
+    if (local_opacity) {
+      // The second hit-group record changes one material constant. Both share
+      // the instance, triangles, scene data and remaining descriptor contents.
+      for (UINT slot = 0; slot < 16; ++slot) {
+        auto address = D3D12_CPU_DESCRIPTOR_HANDLE{cpu.ptr + (96 + slot) * stride};
+        dev->CreateConstantBufferView(slot == 2 ? &bound_view : &cv, address);
+      }
+      for (UINT variant = 0; variant < 2; ++variant) {
+        std::array<std::array<float, 4>, 128> cb{};
+        if (opacity_floor) {
+          // Start at the low end of the smoothstep. The final max reads a
+          // floor from b3[28].x and rejects only values strictly below 0.33.
+          cb[26][0] = cb[27][2] = cb[32][0] = 1.f;
+          cb[27][0] = cb[27][1] = 32.f;
+          cb[28][0] = variant ? 0.33f : std::nextafter(0.33f, 0.f);
+        } else {
+          // Keep the reciprocal inputs finite in the procedural noise calculation.
+          cb[58][1] = cb[59][3] = cb[63][1] = cb[65][3] = 1.f;
+          cb[68][1] = cb[69][2] = cb[71][2] = 1.f;
+          cb[80][2] = 16384.f;
+          cb[60][1] = 1.f;
+          cb[94][3] = variant ? -0.66f : -0.67f;
+        }
+        opacity_buffers[variant] = upload(dev, cb.data(), sizeof(cb));
+        D3D12_CONSTANT_BUFFER_VIEW_DESC opacity_view{opacity_buffers[variant]->GetGPUVirtualAddress(), sizeof(cb)};
+        const UINT base = variant ? 96 : 64;
+        dev->CreateConstantBufferView(&opacity_view, {cpu.ptr + (base + 3) * stride});
+      }
+    }
     const UINT64 scene_address = (lumen ? tilted.Get() : scene)->GetGPUVirtualAddress();
     const auto miss = lumen ? read_file("1237.dxil") : decltype(code){};
     D3D12_DXIL_LIBRARY_DESC libs[3]{};
@@ -185,6 +244,7 @@ static void probe_materials(ID3D12Device5 *dev, ID3D12CommandQueue *queue,
     D3D12_HIT_GROUP_DESC group{};
     group.HitGroupExport = item.group;
     group.ClosestHitShaderImport = item.name;
+    group.AnyHitShaderImport = item.any_hit;
     D3D12_RAYTRACING_SHADER_CONFIG config{64, 8};
     D3D12_RAYTRACING_PIPELINE_CONFIG recursion{1};
     D3D12_GLOBAL_ROOT_SIGNATURE root{global.Get()};
@@ -248,14 +308,14 @@ static void probe_materials(ID3D12Device5 *dev, ID3D12CommandQueue *queue,
     }
     ComPtr<ID3D12StateObjectProperties> props;
     check(pso.As(&props), "material hit exports");
-    std::array<BYTE, 256> table{};
+    std::array<BYTE, 128 + 2 * sizeof(Record)> table{};
     auto copy_id = [&](BYTE *out, const wchar_t *name) {
       auto *id = props->GetShaderIdentifier(name);
       if (!id)
         throw std::runtime_error("missing material shader identifier");
       std::memcpy(out, id, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
     };
-    copy_id(table.data(), L"MaterialProbeRay");
+    copy_id(table.data(), local_opacity ? L"LocalOpacityProbeRay" : item.any_hit ? L"MaskedMaterialProbeRay" : L"MaterialProbeRay");
     copy_id(table.data() + 64, lumen ? L"LumenHardwareRayTracingMaterialMS_3b1ba881" : L"MaterialProbeMiss");
     Record record{};
     copy_id(record.id, item.group);
@@ -268,6 +328,10 @@ static void probe_materials(ID3D12Device5 *dev, ID3D12CommandQueue *queue,
     record.samplers = gpu_start(samplers.Get()).ptr;
     record.uavs = gpu.ptr + 80 * stride;
     std::memcpy(table.data() + 128, &record, sizeof(record));
+    if (local_opacity) {
+      record.cbvs = gpu.ptr + 96 * stride;
+      std::memcpy(table.data() + 128 + sizeof(record), &record, sizeof(record));
+    }
     auto sbt = upload(dev, table.data(), table.size());
     for (UINT slot = 0; slot < 64; ++slot) {
       D3D12_SHADER_RESOURCE_VIEW_DESC v{};
@@ -275,7 +339,7 @@ static void probe_materials(ID3D12Device5 *dev, ID3D12CommandQueue *queue,
       auto view = D3D12_CPU_DESCRIPTOR_HANDLE{cpu.ptr + slot * stride};
       const char kind = item.views[slot];
       if (kind == 'f' || kind == 'i') {
-        dev->CreateShaderResourceView(textures[kind == 'i'].Get(), nullptr,
+        dev->CreateShaderResourceView(textures[kind == 'i' ? (paged_material ? 2u : 1u) : 0u].Get(), nullptr,
                                       view);
       } else {
         v.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
@@ -290,7 +354,7 @@ static void probe_materials(ID3D12Device5 *dev, ID3D12CommandQueue *queue,
         }
       }
     }
-    constexpr UINT rays = 5, bytes = rays * 16 * 4;
+    const UINT rays = item.any_hit ? 7u : 5u, bytes = rays * 16 * 4;
     auto output = buffer(dev, bytes, D3D12_HEAP_TYPE_DEFAULT,
                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
     auto rb = buffer(dev, bytes, D3D12_HEAP_TYPE_READBACK,
@@ -308,7 +372,7 @@ static void probe_materials(ID3D12Device5 *dev, ID3D12CommandQueue *queue,
     D3D12_DISPATCH_RAYS_DESC dispatch{};
     dispatch.RayGenerationShaderRecord = {address, 32};
     dispatch.MissShaderTable = {address + 64, 32, 32};
-    dispatch.HitGroupTable = {address + 128, sizeof(Record), sizeof(Record)};
+    dispatch.HitGroupTable = {address + 128, (local_opacity ? 2u : 1u) * sizeof(Record), sizeof(Record)};
     dispatch.Width = rays;
     dispatch.Height = dispatch.Depth = 1;
     if (guest) {
@@ -362,7 +426,17 @@ static void probe_materials(ID3D12Device5 *dev, ID3D12CommandQueue *queue,
       for (UINT i = 0; i < 16; ++i)
         std::fprintf(receipt, "%s%08x", i ? "," : "", hit[i]);
       std::fputc('\n', receipt);
-      if (ray == 4) {
+      if (item.any_hit) {
+        bool payload_mask = !local_opacity && (ray == 2 || ray == 3);
+        bool ignored = ray < 4 && ((local_opacity && ray < 2) || std::strcmp(item.file, "material-520") == 0 ||
+                                  (std::strcmp(item.file, "material-31") == 0 && payload_mask));
+        if (ray == 4 || ignored) {
+          for (UINT i = 0; i < 16; ++i)
+            matched &= hit[i] == (i == 0 ? 0xbf800000u : i == 9 ? UINT(payload_mask) << 26u : 0x1000u + i);
+        } else {
+          matched &= hit[0] == 0x3f800000u;
+        }
+      } else if (ray == 4) {
         for (UINT i = 0; i < 16; ++i)
           matched &= hit[i] == (i == 0   ? 0xbf800000u
                                 : i == 9 ? 1u << 25
@@ -377,16 +451,25 @@ static void probe_materials(ID3D12Device5 *dev, ID3D12CommandQueue *queue,
           matched &= hit[i] == (i == 9 ? (ray < 2 ? 0u : 1u << 25) : 0x1000u + i);
       } else {
         matched &= hit[0] == 0x3f800000u && hit[1] == 0x1001 && hit[2] == 0 &&
-                   hit[3] == 0;
+                   hit[3] == (paged_material ? 0x34003000u : 0u);
         matched &= (hit[9] & (1u << 23)) == ((ray & 1u) << 23);
-        matched &= hit[12] == (ray < 2 ? 0x1affu : 1u) && hit[13] == 0 &&
+        matched &= hit[12] == (ray < 2 ? (material2036 ? 0u : 0x1affu) : 1u) && hit[13] == 0 &&
                    hit[14] == 0 && hit[15] == 0;
         if (std::strcmp(item.file, "material-3559") == 0 ||
             std::strcmp(item.file, "material-28725") == 0)
           matched &= hit[6] == 0x38003400 && hit[7] == 0x3c003a00;
+        if (material2036) {
+          // This guest permutation emits literal half-NaN sentinels in the normal fields.
+          matched &= hit[4] == 0xfe000000u && hit[5] == 0xfe00fe00u &&
+                     hit[6] == 0x38003400u && hit[7] == 0x3c003c00u;
+        }
+        if (paged_material)
+          matched &= hit[4] == 0x00003800u && hit[6] == 0x38003400u &&
+                     hit[7] == 0x3c003c00u;
       }
     }
     rb->Unmap(0, &empty);
+    if (local_opacity) dev->CreateConstantBufferView(&cv, {cpu.ptr + 67 * stride});
     if (!matched)
       throw std::runtime_error("unexpected material hit payload");
   }

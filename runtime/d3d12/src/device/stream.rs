@@ -93,6 +93,9 @@ unsafe fn create(
     let mut stages = Vec::new();
     let mut original = [None; 8];
     let mut fields = [None; 8];
+    let mut root_record = None;
+    let mut guest_root = None;
+    let mut node_mask = 0;
     let mut seen = 0u32;
     let mut at = 0;
     while at < size {
@@ -109,10 +112,12 @@ unsafe fn create(
             0 => {
                 let handle = payload.cast::<*mut c_void>();
                 let root =
-                    unsafe { compute::root_signature(handle.read(), identity(device).as_raw()) }?;
+                    unsafe { compute::root_proxy(handle.read(), identity(device).as_raw()) }?;
+                root_record = Some(handle);
+                guest_root = root.map(|p| &p.state);
                 // The guest keeps its root (and therefore this native interface)
                 // alive until CreatePipelineState returns.
-                unsafe { handle.write(root.map_or(ptr::null_mut(), Interface::as_raw)) };
+                unsafe { handle.write(root.map_or(ptr::null_mut(), |p| p.native.as_raw())) };
             }
             1..=6 | AMPLIFICATION_X | MESH_X => {
                 let index = match tag {
@@ -171,6 +176,7 @@ unsafe fn create(
             }
             15 => formats = payload.cast(),
             17 => samples = unsafe { (*payload.cast::<DXGI_SAMPLE_DESC>()).Count },
+            18 => node_mask = unsafe { payload.cast::<u32>().read() },
             // Cached native Xbox PSOs are hints, specific to the console driver.
             19 => unsafe {
                 payload
@@ -191,6 +197,29 @@ unsafe fn create(
         at += bytes;
     }
 
+    if let Some((code, Some(index))) = original[5]
+        && let Some(root) =
+            super::compute_scene::private_root(&device.native, code, &stages[index], guest_root, node_mask)?
+    {
+        if fields
+            .iter()
+            .enumerate()
+            .any(|(i, field)| i != 5 && field.is_some())
+        {
+            return Err(E_INVALIDARG.into());
+        }
+        let field = root_record.unwrap_or_else(|| {
+            // A compute stream may rely solely on its embedded root. The spare
+            // subobject storage reserved above also fits a root signature pointer.
+            let (offset, bytes) = subobject::<*mut c_void>();
+            let record = unsafe { output.add(size) };
+            unsafe { record.cast::<i32>().write(0) };
+            size += bytes;
+            unsafe { record.add(offset).cast() }
+        });
+        unsafe { field.write(root.native.as_raw()) };
+        pipeline.scene_root = Some(root);
+    }
     let stencil_code;
     if let (Some(depth), Some(formats), Some(blend), Some((ps, Some(_))), Some(field)) = (
         unsafe { depth.as_mut() },

@@ -732,16 +732,38 @@ unsafe extern "system" fn element_offset(
     sample: u32,
     bit: *mut u32,
 ) -> u64 {
-    if !bit.is_null() {
-        // Color elements address whole bytes; metadata may use individual bits.
-        unsafe { bit.write(0) };
-    }
     if let Some(depth) = this.depth_stencil {
-        return if mip == 0 && sample == 0 {
-            depth.offset(plane, x, y, slice).unwrap_or(u64::MAX)
+        let Some((sample_offset, address)) = depth
+            .query_sample(plane, sample)
+            .zip(depth.offset(plane, x, y, slice))
+        else {
+            return u64::MAX;
+        };
+        if mip != 0 {
+            return u64::MAX;
+        }
+        if !bit.is_null() {
+            unsafe { bit.write(0) };
+        }
+        return address + sample_offset;
+    }
+    let color_samples = this.plane.color_samples();
+    if color_samples > 1 {
+        if sample >= color_samples {
+            return u64::MAX;
+        }
+        if !bit.is_null() {
+            unsafe { bit.write(0) };
+        }
+        return if plane == 0 && mip == 0 {
+            this.plane.color_sample_offset(slice, x, y, sample).unwrap_or(u64::MAX)
         } else {
             u64::MAX
         };
+    }
+    if !bit.is_null() {
+        // Color elements address whole bytes; metadata may use individual bits.
+        unsafe { bit.write(0) };
     }
     if plane == 1
         && this.color_metadata != 0
@@ -861,31 +883,50 @@ unsafe extern "system" fn element_offset(
 unsafe extern "system" fn create(desc: *const Desc, out: *mut *mut Computer) -> i32 {
     let _guard = library::Guard::acquire();
     let result = unsafe { create_inner(desc, out) };
-    static FAILURES_LOGGED: AtomicU32 = AtomicU32::new(0);
     if result < 0
-        && std::env::var_os("TUXBOX_XG_TRACE").is_some()
-        && FAILURES_LOGGED.fetch_add(1, Ordering::Relaxed) < 128
         && let Some(desc) = unsafe { desc.as_ref() }
     {
-        let message = format!(
-            "TuxBox XGCreateTextureComputer: hr={result:#010x} dimension={} alignment={} width={} height={} depth_or_array={} mips={} format={} samples={} quality={} layout={} flags={:#x}\n\0",
-            desc.dimension,
-            desc.alignment,
-            desc.width,
-            desc.height,
-            desc.slices,
-            desc.mips,
-            desc.format,
-            desc.samples,
-            desc.quality,
-            desc.layout,
-            desc.flags,
-        );
+        log_rejected_desc(result, desc);
+    }
+    result
+}
+
+fn log_rejected_desc(result: i32, desc: &Desc) {
+    use std::ffi::OsStr;
+    use std::io::Write;
+
+    static FAILURES_LOGGED: AtomicU32 = AtomicU32::new(0);
+    let target = std::env::var_os("TUXBOX_LOG");
+    let stderr = target.as_deref() == Some(OsStr::new("stderr"));
+    if !(stderr
+        || target.as_deref() == Some(OsStr::new("1"))
+        || std::env::var_os("TUXBOX_XG_TRACE").is_some())
+        || FAILURES_LOGGED.fetch_add(1, Ordering::Relaxed) >= 128
+    {
+        return;
+    }
+    let mut message = format!(
+        "TuxBox XGCreateTextureComputer: hr={result:#010x} dimension={} alignment={} width={} height={} depth_or_array={} mips={} format={} samples={} quality={} layout={} flags={:#x}\n",
+        desc.dimension,
+        desc.alignment,
+        desc.width,
+        desc.height,
+        desc.slices,
+        desc.mips,
+        desc.format,
+        desc.samples,
+        desc.quality,
+        desc.layout,
+        desc.flags,
+    );
+    if stderr {
+        let _ = std::io::stderr().lock().write_all(message.as_bytes());
+    } else {
+        message.push('\0');
         unsafe {
             windows_sys::Win32::System::Diagnostics::Debug::OutputDebugStringA(message.as_ptr())
         };
     }
-    result
 }
 
 unsafe fn create_inner(desc: *const Desc, out: *mut *mut Computer) -> i32 {

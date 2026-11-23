@@ -7,18 +7,19 @@ mod layout;
 mod leaf;
 mod waterfall;
 mod wave;
-pub(super) use leaf::leaf_body;
+pub(super) use layout::{any_hit_range, leaf_constants, leaf_span};
+pub(super) use leaf::{leaf_body, writes};
 #[cfg(test)]
 mod tests;
 use super::{alu, operand, resources};
-use crate::rdna2::{instructions, Enc, Insn, Opnd};
+use crate::rdna2::{Enc, Insn, Opnd, instructions};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use tuxbox_dxbc::ray::State;
 
 // Guest continuations store GPU code addresses in 256-byte units. Keep their
 // virtual base distinct from the scheduler's built-in traversal and exit tokens.
-const CODE_BASE: u32 = 0x0100_0000;
+pub(in crate::ray) const CODE_BASE: u32 = 0x0100_0000;
 
 fn pair(op: &Opnd) -> Result<[String; 2], String> {
     match op {
@@ -40,8 +41,9 @@ fn scalar(ins: &Insn) -> Result<String, String> {
     Ok(match op {
         "s_mov_b32" if ins.dst == [Opnd::Null] => String::new(),
         "s_mov_b32" => format!("{} = {};", dst()?, a()?),
-        "s_ff1_i32_b32" if ins.src == [Opnd::ExecLo] =>
-            format!("{} = firstbitlow(tb_ray_ballot(exec != 0u));", dst()?),
+        "s_ff1_i32_b32" if ins.src == [Opnd::ExecLo] => {
+            format!("{} = firstbitlow(tb_ray_ballot(exec != 0u));", dst()?)
+        }
         "s_brev_b32" => format!("{} = reversebits({});", dst()?, a()?),
         "s_ashr_i32" => format!(
             "{} = asuint(asint({}) >> ({} & 31u)); scc = ({} != 0u);",
@@ -105,11 +107,16 @@ fn scalar(ins: &Insn) -> Result<String, String> {
                 dst()?
             )
         }
-        "s_lshr_b64" => {
+        "s_lshr_b64" | "s_lshl_b64" => {
+            let shift = if op == "s_lshl_b64" {
+                "tb_ray_shift_left"
+            } else {
+                "tb_ray_shift_right"
+            };
             let [lo, hi] = pair(&ins.src[0])?;
             let [dlo, dhi] = pair(&ins.dst[0])?;
             format!(
-                "{{ uint2 p = tb_ray_shift_right(uint2({lo}, {hi}), {}); {dlo} = p.x; {dhi} = p.y; scc = any(p != 0u); }}",
+                "{{ uint2 p = {shift}(uint2({lo}, {hi}), {}); {dlo} = p.x; {dhi} = p.y; scc = any(p != 0u); }}",
                 b()?
             )
         }
@@ -233,7 +240,7 @@ fn stack(ins: &Insn, payload: Option<&leaf::Stack>) -> Result<String, String> {
     }
 }
 
-fn target(ins: &Insn) -> Option<usize> {
+pub(in crate::ray) fn target(ins: &Insn) -> Option<usize> {
     match ins.mnemonic.as_str() {
         "s_branch" | "s_cbranch_execz" | "s_cbranch_execnz" | "s_cbranch_scc0"
         | "s_cbranch_scc1" | "s_cbranch_vccz" | "s_cbranch_vccnz" => {
@@ -280,6 +287,74 @@ fn outlined_edges(code: &[Insn]) -> BTreeMap<usize, (usize, &[Insn])> {
     islands
 }
 
+pub(super) fn candidate_body(
+    state: &State<'_>,
+    span: &std::ops::Range<usize>,
+) -> Result<(String, String), String> {
+    let bindings = resources::Bindings::candidate(state, span)?;
+    let mut body = String::new();
+    // The validated candidate body lies between the native register saves
+    // and restores. Appending its normal return lets DXR own that call frame.
+    let mut code = decode_range(state.program, span.start, span.end)?;
+    // Some exports put a wait and unconditional branch after their return.
+    // Only fold an edge when the entire island rejoins the validated body.
+    if code.iter().filter_map(target).any(|dest| dest > span.end) {
+        let leaf = any_hit_range(state).ok_or("missing candidate range")?;
+        for ins in &mut code {
+            let Some(dest) = target(ins).filter(|&dest| dest > span.end) else {
+                continue;
+            };
+            let target = state
+                .program
+                .get(dest..leaf.end)
+                .and_then(|tail| {
+                    instructions(tail).find(|op| {
+                        !matches!(
+                            op.mnemonic.as_str(),
+                            "s_nop" | "s_waitcnt" | "s_waitcnt_vscnt"
+                        )
+                    })
+                })
+                .filter(|op| op.mnemonic == "s_branch")
+                .and_then(|mut op| {
+                    op.offset += dest;
+                    target(&op)
+                })
+                .filter(|entry| span.contains(entry))
+                .ok_or("unsupported candidate branch island")?;
+            ins.aux.imm = (target as i64 - ins.offset as i64 - 4) / 4;
+        }
+    }
+    let mut ret = instructions(&0xbe80_201eu32.to_le_bytes()).next().unwrap();
+    ret.offset = span.end;
+    code.push(ret);
+    waterfall::specialize(&mut code);
+    continuation_code(
+        code,
+        span.start,
+        span.end + 4,
+        &mut body,
+        &bindings,
+        None,
+        false,
+    )?;
+    Ok((bindings.declarations, body))
+}
+
+fn decode_range(isa: &[u8], start: usize, end: usize) -> Result<Vec<Insn>, String> {
+    if start >= end {
+        return Err("empty ray continuation".into());
+    }
+    instructions(isa.get(start..end).ok_or("invalid continuation range")?)
+        .map(|mut ins| {
+            ins.offset += start;
+            ins.is_complete()
+                .then_some(ins)
+                .ok_or_else(|| "truncated ray instruction".to_owned())
+        })
+        .collect()
+}
+
 fn continuation(
     isa: &[u8],
     start: usize,
@@ -289,17 +364,19 @@ fn continuation(
     payload: Option<&leaf::Stack>,
     fold_blocks: bool,
 ) -> Result<(), String> {
-    if start >= end {
-        return Err("empty ray continuation".into());
-    }
-    let mut code = Vec::new();
-    for mut ins in instructions(isa.get(start..end).ok_or("invalid continuation range")?) {
-        ins.offset += start;
-        if !ins.is_complete() {
-            return Err("truncated ray instruction".into());
-        }
-        code.push(ins);
-    }
+    let code = decode_range(isa, start, end)?;
+    continuation_code(code, start, end, out, bindings, payload, fold_blocks)
+}
+
+fn continuation_code(
+    mut code: Vec<Insn>,
+    start: usize,
+    end: usize,
+    out: &mut String,
+    bindings: &resources::Bindings,
+    payload: Option<&leaf::Stack>,
+    fold_blocks: bool,
+) -> Result<(), String> {
     if payload.is_some() {
         waterfall::specialize(&mut code);
     }
@@ -582,9 +659,14 @@ pub(super) fn ray_generation(state: &State<'_>, payload: Payload) -> Result<Stri
     )
     .unwrap();
     writeln!(out, "uint spill[{0}] = (uint[{0}])0;", layout.frame + 1).unwrap();
+    let vgprs = super::vgpr_count(state);
+    write!(
+        out,
+        "\nuint v[{vgprs}] = (uint[{vgprs}])0, s[128] = (uint[128])0;"
+    )
+    .unwrap();
     out.push_str(
         r#"
-uint v[128] = (uint[128])0, s[128] = (uint[128])0;
 uint exec = ~0u, scc = 0u, vcc = 0u, m0 = 0u;
 uint bitsX = uint(firstbithigh(max(DispatchRaysDimensions().x, 2u) - 1u)) + 1u;
 uint2 xy = DispatchRaysIndex().xy;

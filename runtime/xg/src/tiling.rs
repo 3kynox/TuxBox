@@ -51,6 +51,7 @@ pub(super) unsafe extern "system" fn resource_tiling(
         16 => (64, 64),
         _ => return E_FAIL,
     };
+    let (width, height) = plane.multisample_tile().unwrap_or((width, height));
     let mips = plane.mip_count();
     let standard = plane.unpacked_mip_count();
     let has_tail = standard < mips;

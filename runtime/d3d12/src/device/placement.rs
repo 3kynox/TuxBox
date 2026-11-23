@@ -3,7 +3,7 @@ mod descriptors;
 mod publication;
 mod upload;
 mod writeback;
-pub(crate) use descriptors::{HeapViews, Views};
+pub(crate) use descriptors::{DescriptorMap, DescriptorRange, HeapViews, Views};
 pub(crate) use publication::QueueAccess;
 
 use super::Device;
@@ -393,7 +393,7 @@ pub(crate) unsafe fn submit(
     textures: &mut Vec<Arc<Texture>>,
     writes: &mut Vec<Arc<Texture>>,
     heaps: &[Range<usize>],
-    execute: impl FnOnce(),
+    execute: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     let device = unsafe { &*device.cast::<Device>() };
     let placements = &device.state.placements;
@@ -404,8 +404,7 @@ pub(crate) unsafe fn submit(
         .map_err(|_| E_OUTOFMEMORY)?;
     textures.extend(writes.iter().cloned());
     if textures.is_empty() {
-        execute();
-        return Ok(());
+        return execute();
     }
     unique(textures);
     for writer in writes.iter() {
@@ -490,7 +489,7 @@ pub(crate) unsafe fn submit(
             writeback::Readback::record(&device.native, unsafe { queue.GetDesc() }.Type, writes)?;
         Some((worker, readback))
     };
-    execute();
+    execute()?;
     if let Some((_, readback)) = &publication {
         // Separate ExecuteCommandLists calls allow simultaneous-access textures
         // to decay to COMMON between the guest batch and this copy.

@@ -87,10 +87,17 @@ fn symbol_offsets(state: &State<'_>) -> Option<(Vec<usize>, usize)> {
             return None;
         }
         if i < n {
-            if name != format!("{}.ss_{i}", state.name)
-                || start == 0
-                || starts.last().is_some_and(|&prev| start >= prev)
-            {
+            let expected = if let Some(any) = state.any_hit.as_ref() {
+                // Paired material exports each have one leaf. The independent
+                // any-hit entry follows the closest-hit entry in machine code.
+                if n != 2 {
+                    return None;
+                }
+                format!("{}.ss_0", if i == 0 { any } else { &state.name })
+            } else {
+                format!("{}.ss_{i}", state.name)
+            };
+            if name != expected || start == 0 || starts.last().is_some_and(|&prev| start >= prev) {
                 return None;
             }
             starts.push(start);
@@ -107,28 +114,90 @@ fn symbol_offsets(state: &State<'_>) -> Option<(Vec<usize>, usize)> {
     (*starts.last()? == 256).then_some((starts, scheduler))
 }
 
-fn scheduler_matches(program: &[u8], scheduler: usize) -> bool {
+// Some material leaves append literal tables between s_endpgm and the
+// scheduler's s_code_end padding. Keep code, count, alignment and relocation
+// checks separate from the table words, which are actual guest shader data.
+fn constant_range(main: &[u8], scheduler: usize) -> Option<Range<usize>> {
+    // The variant that sets FLAT_SCR_LO/HI has two extra code dwords.
+    let header: usize = if fingerprint(main.get(..0x2a0)?, &[]) == 0x9c136eda913b7f18 {
+        0x2a0
+    } else if fingerprint(main.get(..0x2a8)?, &[]) == 0x0f96235ecaa00100 {
+        0x2a8
+    } else {
+        return None;
+    };
+    let start = header + 8;
+    let count = word(main, header + 4)?;
+    let end = start.checked_add(count.checked_mul(4)?)?;
+    let relocation = main.len().checked_sub(20)?;
+    let padding = main.get(end.checked_add(4)?..relocation)?;
+    if count == 0
+        || main.len() % 4 != 0
+        || word(main, header)? != 0xbf810000
+        || word(main, end)? != 0xbf810000
+        || !padding
+            .chunks_exact(4)
+            .all(|w| w == 0xbf9f0000u32.to_le_bytes())
+        || word(main, relocation)? != ((scheduler + relocation - 20) << 7) | 1
+        || main.get(relocation + 4..)?.iter().any(|&byte| byte != 0)
+    {
+        return None;
+    }
+    Some(scheduler + start..scheduler + end)
+}
+
+pub(in crate::ray) fn leaf_constants(state: &State<'_>) -> Option<Range<usize>> {
+    let (_, scheduler) = symbol_offsets(state)?;
+    constant_range(state.program.get(scheduler..)?, scheduler)
+}
+
+fn scheduler_matches(state: &State<'_>, scheduler: usize) -> bool {
+    let program = state.program;
     let Some(main) = program.get(scheduler..) else {
         return false;
     };
-    main.len() == 872
-        && program
-            .get(..256)
-            .is_some_and(|stub| fingerprint(stub, &[]) == 0x347fdf3658d5b2da)
-        && word(main, 0x354) == Some(((scheduler + 0x340) << 7) | 1)
-        && fingerprint(main, &[0x354..0x358]) == 0x9dd40147fa5f4696
+    program
+        .get(..256)
+        .is_some_and(|stub| fingerprint(stub, &[]) == 0x347fdf3658d5b2da)
+        && ((main.len() == 872
+            && word(main, 0x354) == Some(((scheduler + 0x340) << 7) | 1)
+            && match fingerprint(main, &[0x354..0x358]) {
+                0x9dd40147fa5f4696 => true,
+                // The leaf scheduler also has a form that sets FLAT_SCR_LO/HI
+                // to 0:0x400. Its calls and resume tokens use the same ABI.
+                0xced673c1494fc872 => state.kind == 2,
+                _ => false,
+            })
+            || (state.kind == 2 && constant_range(main, scheduler).is_some()))
 }
 
-pub(super) fn leaf_span(state: &State<'_>) -> Result<Range<usize>, String> {
+pub(in crate::ray) fn any_hit_range(state: &State<'_>) -> Option<Range<usize>> {
+    state.any_hit.as_ref()?;
+    let (starts, scheduler) = symbol_offsets(state)?;
+    let [any, _closest] = starts.as_slice() else {
+        return None;
+    };
+    scheduler_matches(state, scheduler).then_some(*any..scheduler)
+}
+
+pub(in crate::ray) fn leaf_span(state: &State<'_>) -> Result<Range<usize>, String> {
     let (starts, scheduler) = symbol_offsets(state).ok_or("invalid ray leaf symbol table")?;
-    if starts.len() != 1 || !scheduler_matches(state.program, scheduler) {
+    if !scheduler_matches(state, scheduler) {
         return Err("unsupported ray leaf scheduler".into());
     }
-    let start = starts[0];
+    let (start, end) = match (state.any_hit.as_ref(), starts.as_slice()) {
+        (None, [start]) => (*start, scheduler),
+        (Some(_), [any, closest]) => (*closest, *any),
+        _ => return Err("unsupported ray leaf count".into()),
+    };
     let mut returned = false;
     let mut last = None;
-    for ins in instructions(&state.program[start..scheduler]) {
-        if !ins.is_complete() || matches!(ins.mnemonic.as_str(), "s_getpc_b64" | "s_swappc_b64") {
+    for ins in instructions(&state.program[start..end]) {
+        if !ins.is_complete()
+            || ins.mnemonic == "s_swappc_b64"
+            || (ins.mnemonic == "s_getpc_b64"
+                && constant_range(&state.program[scheduler..], scheduler).is_none())
+        {
             return Err("ray leaf has an unsupported call".into());
         }
         if ins.mnemonic == "s_setpc_b64" {
@@ -188,7 +257,7 @@ fn reads_only_incoming_return(code: &[Insn]) -> bool {
 impl Layout {
     pub fn analyze(state: &State<'_>) -> Result<Self, String> {
         let (starts, scheduler) = symbol_offsets(state).ok_or("unsupported ray symbol table")?;
-        if !scheduler_matches(state.program, scheduler) {
+        if !scheduler_matches(state, scheduler) {
             return Err("unsupported ray scheduler".into());
         }
         Self::substates(state.program, &starts, scheduler)
@@ -348,6 +417,24 @@ mod tests {
         assert!(symbol_offsets(&state).is_none());
         state.symbols = &good;
         state.name = "Other".into();
+        assert!(symbol_offsets(&state).is_none());
+
+        // A second entry in a hit group must implement its declared any-hit
+        // export. A similarly positioned continuation of the closest hit cannot
+        // stand in for a candidate callback.
+        let pair = symbols(&[
+            ("Candidate.ss_0", 0x200),
+            ("Material.ss_0", 0x100),
+            ("XDXR_TraceRay.ss_0", 0),
+            ("main", 0x300),
+        ]);
+        state.name = "Material".into();
+        state.kind = 2;
+        state.hit_group = Some("Group".into());
+        state.any_hit = Some("Candidate".into());
+        state.symbols = &pair;
+        assert_eq!(symbol_offsets(&state), Some((vec![0x200, 0x100], 0x300)));
+        state.any_hit = Some("WrongCandidate".into());
         assert!(symbol_offsets(&state).is_none());
     }
 

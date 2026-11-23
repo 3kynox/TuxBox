@@ -1,5 +1,6 @@
 //! Scarlett Texture2D layout and array addressing for single-sample color textures.
 mod depth;
+mod msaa_color;
 pub use depth::DepthStencil;
 
 use windows_sys::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL};
@@ -144,7 +145,7 @@ impl Plane {
         }
     }
 
-    /// Bounded square 64 KiB mip chains, including their shared mip tail.
+    /// Single-sample 2D render-target mip chains, including their shared 64 KiB tail.
     pub fn compute_64k_mips(desc: &Desc) -> Result<Self, i32> {
         if desc.dimension != 3
             || desc.layout != 0
@@ -153,8 +154,8 @@ impl Plane {
             || desc.quality != 0
             || !(1..=8).contains(&desc.slices)
             || !(2..=12).contains(&desc.mips)
-            || !(32..=2048).contains(&desc.width)
-            || !(32..=2048).contains(&desc.height)
+            || !(32..=16384).contains(&desc.width)
+            || !(32..=16384).contains(&desc.height)
             || !matches!(
                 desc.flags,
                 1 | 5 | 0x100001 | 0x100005 | 0x200001 | 0x200005 | 0x300001 | 0x300005
@@ -253,7 +254,6 @@ impl Plane {
             || !(four_byte || color_family)
             || desc.layout != 0
             || desc.alignment != 0
-            || desc.samples != 1
             || desc.quality != 0
             || desc.mips != 1
             || !(1..=8).contains(&desc.slices)
@@ -264,7 +264,11 @@ impl Plane {
         {
             return Err(E_NOTIMPL);
         }
-        Self::single_64k_plane(desc, 27)
+        if desc.samples == 1 {
+            Self::single_64k_plane(desc, 27)
+        } else {
+            Self::multisampled_color(desc)
+        }
     }
 
     /// 64 KiB display swizzle. The packed image factory can mark this layout sparse.
@@ -734,6 +738,9 @@ impl Plane {
         let origin = u64::from(slice) * self.slice_bytes + mip.offset;
         if x >= u64::from(mip.width_elements) || y >= mip.height_elements {
             return None;
+        }
+        if self.color_samples() > 1 {
+            return self.color_sample_offset(slice, x, y, 0);
         }
         let x = x as u32;
         if mip.swizzle == 0 {

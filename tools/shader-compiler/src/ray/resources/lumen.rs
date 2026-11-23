@@ -32,7 +32,11 @@ pub(in crate::ray) fn coords(ins: &Insn, count: usize) -> Option<Vec<usize>> {
     let first = vgpr(ins.src.first()?)?;
     match ins.aux.imm2 {
         0 if first + count <= 128 => Some((first..first + count).collect()),
-        1 if count <= 5 && ins.src.len() == 7 => ins.src[..count].iter().map(vgpr).collect(),
+        words @ 1..=3
+            if count <= 1 + 4 * words as usize && ins.src.len() == 3 + 4 * words as usize =>
+        {
+            ins.src[..count].iter().map(vgpr).collect()
+        }
         _ => None,
     }
 }
@@ -110,7 +114,14 @@ impl Usage {
                 let c = coords(ins, 2)?;
                 self.srv(index, Srv::Texture)?;
                 self.samplers.insert(sampler);
-                save_components(dst, 15, &format!("asuint(tex{index}.Gather{channel}(sampler{sampler}, asfloat(uint2(v[{}],v[{}]))))", c[0], c[1]))
+                save_components(
+                    dst,
+                    15,
+                    &format!(
+                        "asuint(tex{index}.Gather{channel}(sampler{sampler}, asfloat(uint2(v[{}],v[{}]))))",
+                        c[0], c[1]
+                    ),
+                )
             }
             (36 | 39, 1 | 3, Origin::Descriptor(0, index)) => {
                 let Origin::Descriptor(2, samp) = regs.address(ins.src.last()?)? else {
@@ -196,11 +207,16 @@ impl Usage {
             // uses that returned index to append a surface-cache feedback pair.
             (Family::Radiosity | Family::Reflection, 3, 1, 50, 4, 0) => {
                 self.buffer_outputs.insert(index);
-                return Some(format!("{{ uint previous; InterlockedAdd(writable{index}[0], v[{dst}], previous); v[{dst}] = previous; }}"));
+                return Some(format!(
+                    "{{ uint previous; InterlockedAdd(writable{index}[0], v[{dst}], previous); v[{dst}] = previous; }}"
+                ));
             }
             (Family::Radiosity | Family::Reflection, 3, 2, 29, 2, 0) if dst + 1 < 128 => {
                 self.record_outputs.insert(index, 2);
-                return Some(format!("records{index}[v[{at}]].words[0] = v[{dst}]; records{index}[v[{at}]].words[1] = v[{}];", dst+1));
+                return Some(format!(
+                    "records{index}[v[{at}]].words[0] = v[{dst}]; records{index}[v[{at}]].words[1] = v[{}];",
+                    dst + 1
+                ));
             }
             _ => {}
         }

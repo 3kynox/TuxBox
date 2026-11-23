@@ -22,6 +22,7 @@ pub(super) unsafe extern "system" fn into(
             source.cast_mut(),
             row,
             slice,
+            0,
             true,
         )
     }
@@ -40,7 +41,11 @@ pub(super) unsafe extern "system" fn from(
     row: u32,
     slice: u32,
 ) -> i32 {
-    if sample != 0 {
+    if sample
+        >= this
+            .depth_stencil
+            .map_or_else(|| this.plane.color_samples(), |depth| depth.samples())
+    {
         return E_INVALIDARG;
     }
     unsafe {
@@ -52,6 +57,7 @@ pub(super) unsafe extern "system" fn from(
             dest,
             row,
             slice,
+            sample,
             false,
         )
     }
@@ -66,6 +72,7 @@ unsafe fn transfer(
     linear: *mut u8,
     row_pitch: u32,
     slice_pitch: u32,
+    sample: u32,
     upload: bool,
 ) -> i32 {
     let mut base = 0;
@@ -122,7 +129,11 @@ unsafe fn transfer(
             let row_start = z as usize * slice_pitch + y as usize * row_pitch;
             for x in (0..width).step_by(copy_width as usize) {
                 let offset = if let Some(depth) = this.depth_stencil {
-                    depth.offset(plane, x.into(), y, layer)
+                    depth
+                        .offset(plane, x.into(), y, layer)
+                        .map(|offset| offset + u64::from(sample) * bpe as u64)
+                } else if surface.color_samples() > 1 {
+                    surface.color_sample_offset(layer, x.into(), y, sample)
                 } else if this.dimension == 4 {
                     surface.element_offset_in_volume(z, mip, x.into(), y)
                 } else {

@@ -36,9 +36,9 @@
         "Ray hit group": 5975
       },
       "desktop_translation": {
-        "compiled_entries": 890,
-        "unsupported_entries": 5085,
-        "distinct_libraries": 890
+        "compiled_entries": 5975,
+        "unsupported_entries": 0,
+        "distinct_libraries": 5975
       }
     }
   },
@@ -58,6 +58,6 @@
     }
   ],
   "distinct_fourth_programs": 4161,
-  "xshader_sha256": "4236d8bef4118869e34c524f7f4f1eabf69fb60470bc58766a351edac4c721ae",
+  "xshader_sha256": "7f502654627fd947d9e678313dad92ad7c3a4c3fbdbd19641c2b943d300b0844",
   "dxc_sha256": "3dfc856b76291ffc7e45e21fd37ab80e85b34101de76a03253df6608785c92a0"
 }

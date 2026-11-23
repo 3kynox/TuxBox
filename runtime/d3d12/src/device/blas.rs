@@ -9,7 +9,15 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::System::{Diagnostics::Debug::ReadProcessMemory, Threading::GetCurrentProcess};
 use windows::core::{IUnknown, Interface, Result};
 
+mod inline_geometry;
 pub(crate) mod instance_fixup;
+mod native_normals;
+mod scene_view;
+pub(crate) use inline_geometry::{
+    NativeBuild, copy_geometry, inline_geometry, set_inline_instances,
+};
+pub(super) use scene_view::SceneView;
+pub(crate) use scene_view::{inline_scene, inline_scene_address};
 mod rebuild;
 
 #[derive(Clone)]
@@ -37,7 +45,8 @@ struct Buffer {
     start: u64,
     bytes: u64,
     kind: Kind,
-    // None pins an in-pool address that a previously recorded command can still consume.
+    // Recording chooses a backing for new commands. Submission publishes the
+    // address captured by each write in guest execution order.
     targets: Mutex<BTreeMap<u64, Option<NativeAs>>>,
     mappings: Arc<Mutex<Mappings>>,
 }
@@ -45,6 +54,8 @@ struct Buffer {
 #[derive(Default)]
 struct Mappings {
     addresses: BTreeMap<u64, u64>,
+    // Only addresses changed while preparing the current queue batch.
+    previous: BTreeMap<u64, Option<u64>>,
     snapshot: Option<Arc<[(u64, u64)]>>,
     table: Option<instance_fixup::Table>,
 }
@@ -70,6 +81,7 @@ impl Mappings {
 pub(super) struct Registration {
     buffer: Arc<Buffer>,
     index: Weak<Index>,
+    geometry: Weak<Mutex<inline_geometry::Geometry>>,
 }
 
 pub(crate) fn is_structure(resource: &super::Resource) -> bool {
@@ -83,9 +95,13 @@ pub(crate) fn is_structure(resource: &super::Resource) -> bool {
 impl Drop for Registration {
     fn drop(&mut self) {
         if self.buffer.kind == Kind::Structure {
+            if let Some(geo) = self.geometry.upgrade() {
+                lock(&geo).release(&self.buffer);
+            }
             let targets = lock(&self.buffer.targets);
             let mut mappings = lock(&self.buffer.mappings);
             for (&address, backing) in targets.iter() {
+                mappings.previous.remove(&address);
                 if backing.is_some() && mappings.addresses.remove(&address).is_some() {
                     mappings.dirty();
                 }
@@ -105,10 +121,14 @@ impl Drop for Registration {
 
 #[derive(Default)]
 pub(super) struct Buffers {
+    pub(super) views: Arc<super::placement::DescriptorMap<SceneView>>,
     index: Arc<Index>,
+    geometry: Arc<Mutex<inline_geometry::Geometry>>,
     builder: Mutex<Option<rebuild::Builder>>,
     fixup: Mutex<Option<instance_fixup::Kernel>>,
+    empty_instances: Mutex<Option<ID3D12Resource>>,
     mappings: Arc<Mutex<Mappings>>,
+    submission: Mutex<()>,
 }
 
 impl Buffers {
@@ -147,6 +167,7 @@ impl Buffers {
         Some(Registration {
             buffer,
             index: Arc::downgrade(&self.index),
+            geometry: Arc::downgrade(&self.geometry),
         })
     }
 
@@ -177,6 +198,23 @@ pub(crate) unsafe fn instance_buffer(owner: &IUnknown, bytes: u64) -> Result<ID3
     rebuild::upload_buffer(&unsafe { guest(owner) }.native, bytes)
 }
 
+/// Empty TLASes still need a valid root SRV; no ray can index an instance.
+/// Committed upload memory starts zeroed and is read-only to every list.
+///
+/// # Safety
+/// The owner must be the live controlling guest device.
+pub(crate) unsafe fn empty_instance_buffer(owner: &IUnknown) -> Result<ID3D12Resource> {
+    let device = unsafe { guest(owner) };
+    let mut empty = lock(&device.state.blas.empty_instances);
+    if let Some(buffer) = empty.as_ref() {
+        return Ok(buffer.clone());
+    }
+    let bytes = size_of::<D3D12_RAYTRACING_INSTANCE_DESC>() as u64;
+    let buffer = rebuild::upload_buffer(&device.native, bytes)?;
+    *empty = Some(buffer.clone());
+    Ok(buffer)
+}
+
 /// # Safety
 /// The owner must identify the controlling guest device.
 pub(crate) unsafe fn has_relocations(owner: &IUnknown) -> bool {
@@ -190,6 +228,65 @@ pub(crate) unsafe fn has_relocations(owner: &IUnknown) -> bool {
 /// while the original guest AS resource is alive.
 pub(crate) unsafe fn relocated(owner: &IUnknown) -> Arc<[(u64, u64)]> {
     lock(&unsafe { guest(owner) }.state.blas.mappings).snapshot()
+}
+
+/// Return the address visible to commands at this point in submission order.
+/// The owner must be the controlling guest device.
+pub(crate) unsafe fn submitted_address(owner: &IUnknown, address: u64) -> u64 {
+    lock(&unsafe { guest(owner) }.state.blas.mappings)
+        .addresses.get(&address).copied().unwrap_or(address)
+}
+
+pub(crate) struct MappingSubmission<'a> {
+    mappings: &'a Mutex<Mappings>,
+    _submission: MutexGuard<'a, ()>,
+}
+
+/// Serialize address publication in the same order as host queue submissions.
+/// The owner must remain the controlling guest device for the guard's lifetime.
+pub(crate) unsafe fn begin_submission(owner: &IUnknown) -> MappingSubmission<'_> {
+    let registry = &unsafe { guest(owner) }.state.blas;
+    MappingSubmission { mappings: &registry.mappings, _submission: lock(&registry.submission) }
+}
+
+impl MappingSubmission<'_> {
+    pub(crate) fn commit(self) {
+        lock(self.mappings).previous.clear();
+    }
+}
+
+impl Drop for MappingSubmission<'_> {
+    fn drop(&mut self) {
+        let mut maps = lock(self.mappings);
+        if !maps.previous.is_empty() {
+            for (address, old) in std::mem::take(&mut maps.previous) {
+                if let Some(native) = old {
+                    maps.addresses.insert(address, native);
+                } else {
+                    maps.addresses.remove(&address);
+                }
+            }
+            maps.dirty();
+        }
+    }
+}
+
+/// Publish the address written by a recorded AS command, including an older
+/// list replayed after the same guest location was promoted to private storage.
+/// The owner must be the controlling guest device.
+pub(crate) unsafe fn publish_destination(owner: &IUnknown, address: u64, native: u64) {
+    let mut mappings = lock(&unsafe { guest(owner) }.state.blas.mappings);
+    let old = mappings.addresses.get(&address).copied();
+    if old.unwrap_or(address) == native {
+        return;
+    }
+    mappings.previous.entry(address).or_insert(old);
+    if address == native {
+        mappings.addresses.remove(&address);
+    } else {
+        mappings.addresses.insert(address, native);
+    }
+    mappings.dirty();
 }
 
 /// # Safety
@@ -275,9 +372,10 @@ impl Upload {
 
 pub(crate) struct Input {
     upload: Upload,
-    snapshot: Mutex<Vec<u8>>,
+    snapshot: Mutex<(Vec<u8>, inline_geometry::Normals)>,
     source: ID3D12Resource,
     guest_destination: u64,
+    native_destination: u64,
     guest_capacity: u64,
     host_capacity: u64,
 }
@@ -290,7 +388,11 @@ impl Input {
     pub(crate) unsafe fn prepare(&self, owner: &IUnknown) -> Result<()> {
         let mut previous = lock(&self.snapshot);
         let (bytes, _) = self.upload.snapshot(self.guest_capacity)?;
-        if *previous == bytes {
+        let registry = &unsafe { guest(owner) }.state.blas;
+        let pool = registry.find(self.guest_destination, Kind::Structure)?;
+        if previous.0 == bytes {
+            unsafe { publish_destination(owner, self.guest_destination, self.native_destination) };
+            inline_geometry::set_decoded(registry, &pool, self.native_destination, &previous.1);
             return Ok(());
         }
         let src = self.upload.buffer.start + self.upload.offset as u64;
@@ -300,8 +402,8 @@ impl Input {
                 failure(src, dst, "updated triangle decoder", e, Some(&bytes));
                 E_NOTIMPL
             })?;
-        let mut builder = lock(&unsafe { guest(owner) }.state.blas.builder);
-        let builder = builder.as_mut().ok_or(E_INVALIDARG)?;
+        let mut builder_guard = lock(&unsafe { guest(owner) }.state.blas.builder);
+        let builder = builder_guard.as_mut().ok_or(E_INVALIDARG)?;
         let (updated, compacted) = builder
             .build(&triangles)
             .inspect_err(|e| failure(src, dst, "updated native build", e.code(), Some(&bytes)))?;
@@ -324,7 +426,11 @@ impl Input {
                 Some(&bytes),
             )
         })?;
-        *previous = bytes;
+        drop(builder_guard);
+        let normals = Arc::new(inline_geometry::decoded(&triangles));
+        unsafe { publish_destination(owner, self.guest_destination, self.native_destination) };
+        inline_geometry::set_decoded(registry, &pool, self.native_destination, &normals);
+        *previous = (bytes, normals);
         Ok(())
     }
 }
@@ -418,12 +524,15 @@ pub(crate) unsafe fn deserialize(owner: &IUnknown, src: u64, dst: u64) -> Result
             )
         });
     }
+    let normals = Arc::new(inline_geometry::decoded(&triangles));
+    inline_geometry::set_decoded(registry, &buffer, destination_address, &normals);
     Ok(Rebuilt {
         input: Input {
             upload,
-            snapshot: Mutex::new(snapshot),
+            snapshot: Mutex::new((snapshot, normals)),
             source: source.clone(),
             guest_destination: dst,
+            native_destination: destination_address,
             guest_capacity: guest_bytes,
             host_capacity: guest_bytes.max(compacted),
         },
@@ -441,16 +550,19 @@ fn target(
     bytes: u64,
 ) -> Result<(ID3D12Resource, u64)> {
     let mut targets = lock(&buffer.targets);
-    if let Some(previous) = targets.get(&address) {
-        let Some(existing) = previous else {
-            if bytes > guest_bytes {
-                return Err(E_NOTIMPL.into());
-            }
-            return Ok((buffer.native.clone(), address));
-        };
-        if existing.bytes < bytes || existing.guest_bytes != guest_bytes {
-            return Err(E_NOTIMPL.into()); // preserve addresses already taken by a TLAS
+    if let Some(Some(existing)) = targets.get_mut(&address) {
+        let capacity = unsafe { existing.resource.GetDesc() }.Width;
+        if bytes > capacity {
+            crate::diagnostics::recording_error(format_args!(
+                "reused BLAS at {address:#x} needs {bytes} host bytes, backing holds {capacity}"
+            ));
+            return Err(E_NOTIMPL.into());
         }
+        // A pool address can be repopulated with a different cooked mesh.
+        // Keep its native address stable and describe the current contents
+        // to subsequent clone and compact operations.
+        existing.bytes = bytes;
+        existing.guest_bytes = guest_bytes;
         return Ok((existing.resource.clone(), unsafe {
             existing.resource.GetGPUVirtualAddress()
         }));
@@ -459,7 +571,12 @@ fn target(
         targets.insert(address, None);
         return Ok((buffer.native.clone(), address));
     }
-    let resource = rebuild::as_buffer(device, bytes)?;
+    // A committed buffer already consumes whole placement-alignment units.
+    // Expose that space for later meshes reusing the same guest address.
+    let capacity = bytes
+        .checked_next_multiple_of(D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT as u64)
+        .ok_or(E_INVALIDARG)?;
+    let resource = rebuild::as_buffer(device, capacity)?;
     let host = unsafe { resource.GetGPUVirtualAddress() };
     targets.insert(
         address,
@@ -469,9 +586,6 @@ fn target(
             guest_bytes,
         }),
     );
-    let mut mappings = lock(&buffer.mappings);
-    mappings.addresses.insert(address, host);
-    mappings.dirty();
     Ok((resource, host))
 }
 

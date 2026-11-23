@@ -5,7 +5,15 @@ static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D1
                             float near_bound = 8.f, float far_bound = 8.f, UINT scenario = 0,
                             float origin_x = -1.f, float origin_z = -1.f) {
     const bool radiosity = entry == 1064;
-    const UINT count = radiosity ? 16 : 7, width = trace ? 8 : 4, side = 8;
+    const UINT count = radiosity ? 16 : 7, side = 8;
+#ifdef TUXBOX_INLINE219_REPLAY
+    const UINT width = 64;
+    const bool observe_rays = false;
+    std::array<std::array<UINT,32>,7> input_words{};
+#else
+    const UINT width = trace ? 8 : 4;
+    const bool observe_rays = trace;
+#endif
     D3D12_DESCRIPTOR_RANGE ranges[]{{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, count, 0, 1, 0},
                                     {D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 4, 0, 1, 0}};
     D3D12_ROOT_PARAMETER params[7]{};
@@ -31,7 +39,7 @@ static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D1
     ObservedRayPipeline observed(dev, rs, entry,
                                  radiosity ? L"LumenRadiosityHardwareRayTracingRGS_aafff1ba"
                                            : L"LumenSceneDirectLightingHardwareRayTracingRGS_516b84a8",
-                                 trace ? "card-input-observer.dxil" : "occlusion-observer.dxil");
+                                 observe_rays ? "card-input-observer.dxil" : "occlusion-observer.dxil");
     ComPtr<ID3D12CommandAllocator> alloc;
     ComPtr<ID3D12GraphicsCommandList4> list;
     check(dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&alloc)), "card allocator");
@@ -113,6 +121,9 @@ static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D1
                 d.Format = DXGI_FORMAT_R32_TYPELESS;
             }
             d.Buffer.NumElements = sizeof(words) / (d.Buffer.StructureByteStride ? d.Buffer.StructureByteStride : 4u);
+#ifdef TUXBOX_INLINE219_REPLAY
+            input_words[i] = words;
+#endif
             srvs[i] = upload(dev, words.data(), sizeof(words));
         }
         dev->CreateShaderResourceView(srvs[i].Get(), &d, cpu);
@@ -182,6 +193,9 @@ static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D1
         f(0, 38 * 4 + 2, 10.f);
         f(0, 39 * 4, 10.f);
     } else {
+#ifdef TUXBOX_INLINE219_REPLAY
+        cb[0][30 * 4 + 3] = 1024;
+#endif
         cb[0][31 * 4] = 1;
         f(0, 31 * 4 + 1, near_bound);
         f(0, 31 * 4 + 2, far_bound);
@@ -235,7 +249,7 @@ static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D1
     for (UINT i = 0; i < width; ++i) {
         hits += words[initial.size() + i * 4];
         misses += words[initial.size() + i * 4 + 1];
-        if (trace && i > 0 && occluded) {
+        if (observe_rays && i > 0 && occluded) {
             const auto *origin = words + initial.size() + width * 12 + i * 4;
             const auto *direction = words + initial.size() + width * 16 + i * 4;
             const std::array<UINT, 4> expectedOrigin{0xbf800000, 0, 0xbf800000, 0};
@@ -244,7 +258,7 @@ static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D1
                          && std::memcmp(direction, expectedDirection.data(), 16) == 0;
         }
     }
-    if (trace && !radiosity) {
+    if (observe_rays && !radiosity) {
         const UINT base = static_cast<UINT>(initial.size());
         const UINT *events = words + base + width * 9 * 4;
         const UINT *first = words + base + width * 5 * 4;
@@ -276,7 +290,14 @@ static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D1
                 clean &= std::memcmp(pixel.data(), pix, 16) == 0;
             }
         }
+#ifdef TUXBOX_INLINE219_REPLAY
+    std::array<UINT,32> reference{};
+    std::copy_n(words, reference.size(), reference.begin());
+#endif
     rb->Unmap(0, &none);
+#ifdef TUXBOX_INLINE219_REPLAY
+    replay_inline219(input_words, cb, initial, reference, scenario, receipt);
+#else
     if (scenario) {
         const auto candidate_root = root_signature(dev);
         D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
@@ -340,6 +361,7 @@ static void probe_card_tile(ID3D12Device5 *dev, ID3D12CommandQueue *queue, ID3D1
                      candidate_words[0], candidate_words[1], candidate_words[2], mask, candidate_words[3], matches);
         if (!matches) throw std::runtime_error("direct-light candidate differs from translated 218");
     }
+#endif
     const char *name = trace ? (occluded ? "occluded" : "unoccluded") : lit ? "lit" : active ? "active" : "empty";
     if (scenario)
         std::fprintf(receipt, "card_scenario_%u=mask %08x; hits %u; misses %u; guard %u\n", scenario, mask, hits, misses, clean);

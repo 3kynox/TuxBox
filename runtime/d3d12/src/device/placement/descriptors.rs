@@ -7,20 +7,23 @@ use std::{
 };
 use windows::Win32::Graphics::Direct3D12::*;
 
-pub(crate) struct Views<T>(Mutex<BTreeMap<usize, Weak<T>>>);
+pub(crate) type Views<T> = DescriptorMap<Weak<T>>;
+pub(crate) type HeapViews<T> = DescriptorRange<Weak<T>>;
 
-impl<T> Default for Views<T> {
+pub(crate) struct DescriptorMap<V>(Mutex<BTreeMap<usize, V>>);
+
+impl<V> Default for DescriptorMap<V> {
     fn default() -> Self {
         Self(Default::default())
     }
 }
 
-pub(crate) struct HeapViews<T> {
-    views: Arc<Views<T>>,
+pub(crate) struct DescriptorRange<V> {
+    views: Arc<DescriptorMap<V>>,
     pub(crate) range: Range<usize>,
 }
 
-impl<T> Drop for HeapViews<T> {
+impl<V> Drop for DescriptorRange<V> {
     fn drop(&mut self) {
         lock(&self.views.0)
             .extract_if(self.range.clone(), |_, _| true)
@@ -33,31 +36,8 @@ impl<T> Views<T> {
         lock(&self.0).get(&handle)?.upgrade()
     }
 
-    pub(crate) fn heap(
-        self: &Arc<Self>,
-        device: &ID3D12Device,
-        native: &ID3D12DescriptorHeap,
-        desc: &D3D12_DESCRIPTOR_HEAP_DESC,
-        kind: D3D12_DESCRIPTOR_HEAP_TYPE,
-    ) -> Option<HeapViews<T>> {
-        if desc.Type != kind {
-            return None;
-        }
-        let start = unsafe { native.GetCPUDescriptorHandleForHeapStart() }.ptr;
-        let stride = unsafe { device.GetDescriptorHandleIncrementSize(desc.Type) } as usize;
-        Some(HeapViews {
-            views: self.clone(),
-            range: start..start + stride * desc.NumDescriptors as usize,
-        })
-    }
-
-    pub(crate) fn set(&self, handle: usize, texture: Option<&Arc<T>>) {
-        let mut views = lock(&self.0);
-        if let Some(texture) = texture {
-            views.insert(handle, Arc::downgrade(texture));
-        } else {
-            views.remove(&handle);
-        }
+    pub(crate) fn set(&self, handle: usize, value: Option<&Arc<T>>) {
+        self.store(handle, value.map(Arc::downgrade));
     }
 
     pub(crate) fn gather(&self, heaps: &[Range<usize>], textures: &mut Vec<Arc<T>>) {
@@ -71,6 +51,38 @@ impl<T> Views<T> {
                 );
             }
         }
+    }
+}
+impl<V: Clone> DescriptorMap<V> {
+    pub(crate) fn lookup(&self, handle: usize) -> Option<V> {
+        lock(&self.0).get(&handle).cloned()
+    }
+
+    pub(crate) fn store(&self, handle: usize, value: Option<V>) {
+        let mut views = lock(&self.0);
+        if let Some(value) = value {
+            views.insert(handle, value);
+        } else {
+            views.remove(&handle);
+        }
+    }
+
+    pub(crate) fn heap(
+        self: &Arc<Self>,
+        device: &ID3D12Device,
+        native: &ID3D12DescriptorHeap,
+        desc: &D3D12_DESCRIPTOR_HEAP_DESC,
+        kind: D3D12_DESCRIPTOR_HEAP_TYPE,
+    ) -> Option<DescriptorRange<V>> {
+        if desc.Type != kind {
+            return None;
+        }
+        let start = unsafe { native.GetCPUDescriptorHandleForHeapStart() }.ptr;
+        let stride = unsafe { device.GetDescriptorHandleIncrementSize(desc.Type) } as usize;
+        Some(DescriptorRange {
+            views: self.clone(),
+            range: start..start + stride * desc.NumDescriptors as usize,
+        })
     }
 
     pub(crate) fn copy(

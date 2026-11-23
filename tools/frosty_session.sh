@@ -113,4 +113,15 @@ if [[ ${run_options[0]:-} != --prepare-only && $status == 0 && -f "$logdir/steam
     echo "Frosty reported a fatal error. See $logdir/steam-default.log" | tee -a "$logdir/tuxbox.log" >&2
     status=1
 fi
+# The retail executable also returns zero when its built-in Gauntlet test times out.
+if [[ $status == 0 && " ${*,,} " == *" -gauntlet="* && -f "$logdir/steam-default.log" ]]; then
+    test_result=$(awk '/:warn:seh:OutputDebugString[AW] .*LogGauntlet: Display: \*\*\*\* TEST COMPLETE\. EXIT CODE: / {
+        sub(/.*TEST COMPLETE\. EXIT CODE: /, "")
+        if ($1 ~ /^-?[0-9]+$/) result = $1
+    } END { print result }' "$logdir/steam-default.log")
+    if [[ -n $test_result && $test_result != 0 ]]; then
+        echo "Frosty Gauntlet test failed with code $test_result." | tee -a "$logdir/tuxbox.log" >&2
+        status=1
+    fi
+fi
 exit "$status"

@@ -29,9 +29,9 @@ use std::{
     ops::Range,
 };
 
-use crate::rdna2::{instructions, Enc, Insn, Opnd};
+use crate::rdna2::{Enc, Insn, Opnd, instructions};
 use crate::rootsig::parse_rts0;
-use tuxbox_dxbc::{ray::State, Dxbc};
+use tuxbox_dxbc::{Dxbc, ray::State};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Origin {
@@ -482,11 +482,15 @@ impl Usage {
                     [Opnd::Vgpr(first), _, _] if ins.aux.imm2 == 0 && *first < 253 => {
                         [*first, first + 1, first + 2, first + 3]
                     }
-                    [Opnd::Vgpr(x), Opnd::Vgpr(y), Opnd::Vgpr(z), Opnd::Vgpr(mip), _, _, _]
-                        if ins.aux.imm2 == 1 =>
-                    {
-                        [*x, *y, *z, *mip]
-                    }
+                    [
+                        Opnd::Vgpr(x),
+                        Opnd::Vgpr(y),
+                        Opnd::Vgpr(z),
+                        Opnd::Vgpr(mip),
+                        _,
+                        _,
+                        _,
+                    ] if ins.aux.imm2 == 1 => [*x, *y, *z, *mip],
                     _ => return None,
                 };
                 self.srv(index, Srv::Volume)?;
@@ -524,12 +528,15 @@ impl Usage {
 }
 
 impl Bindings {
+    pub(super) fn candidate(state: &State<'_>, span: &Range<usize>) -> Result<Self, String> {
+        material::analyze(state, span, true)
+    }
     pub(super) fn analyze(state: &State<'_>, entries: &[Range<usize>]) -> Result<Self, String> {
         if state.kind == 2 {
             let [span] = entries else {
                 return Err("unexpected material continuation count".into());
             };
-            return material::analyze(state, span);
+            return material::analyze(state, span, false);
         }
         if let [span] = entries {
             if super::lighting::matches(state) {

@@ -57,6 +57,10 @@ mod fspx_wave;
 mod singleton_wave;
 mod wave_sum;
 mod reflection_compact;
+pub(crate) mod radiance_probe;
+mod screen_gather;
+mod reflection_far;
+mod reflection_probe;
 mod wave_scan;
 use packed_root::{PackedRoot, RootAbi};
 
@@ -294,7 +298,10 @@ fn hi(o: &Opnd) -> Opnd {
 
 /// Name of the SGPR used as an SMEM dynamic offset (SOFFSET field).
 fn ssrc_name(code: u32) -> Result<String, String> {
-    if code <= 105 { Ok(format!("s{code}")) } else { Err(format!("unsupported SOFFSET register code {code}")) }
+    match code {
+        0..=107 => r(&sreg_opnd(code as u8)),
+        _ => Err(format!("unsupported SOFFSET register code {code}")),
+    }
 }
 
 fn sig_type(e: &SigElement) -> (String, usize) {
@@ -831,7 +838,7 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
         if let Some(hlsl) = crate::independent_hlsl(ex) {
             let compute = ex.stage == Stage::Compute;
             return Ok(Translated {
-                hlsl, entry: "main", profile: if compute { "cs_5_0" } else { "ps_5_0" },
+                hlsl, entry: "main", profile: if crate::requires_inline_ray_query(ex) { "cs_6_5" } else if compute { "cs_5_0" } else { "ps_5_0" },
                 needs_barycentrics: false, typed_int64_atomics: false, packed_dot_product: false, required_wave_size: None,
                 portable_compute_group: if compute { ex.psv_threads } else { None },
                 ps_input_interp: InputInterp::default(),
@@ -852,6 +859,9 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
         other => return Err(format!("stage {other:?} not supported yet")),
     };
     let mut insns = disassemble(&ex.isa);
+    let probe = radiance_probe::identify(ex);
+    let probe_trace = probe.is_some();
+    if let Some(probe) = probe { radiance_probe::prepare(probe, &mut insns); }
     // Slot 80 explicitly selects a wave width. Only opt in straight-line
     // loads, stores and lane-local arithmetic with ordinary operands.
     let portable_compute_group = (ex.stage == Stage::Compute && insns.iter().all(|ins| {
@@ -865,7 +875,7 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     })).then(|| compute_group(ex));
     lower_local_pc_transfers(&mut insns)?;
     let entry_fallback = ex.stage == Stage::Compute && indexed_lane::skip_empty_wave_fallback(&mut insns);
-    let single_wave32 = entry_fallback && compute_group(ex).into_iter().fold(1u32, u32::saturating_mul) == 32
+    let single_wave32 = (entry_fallback || probe_trace) && compute_group(ex).into_iter().fold(1u32, u32::saturating_mul) == 32
         && insns.iter().any(|op| op.mnemonic == "s_and_saveexec_b32")
         && insns.iter().any(|op| op.mnemonic.starts_with("v_cmp_") && matches!(op.dst[..], [Opnd::Sgpr(n)] if n & 1 != 0));
     let particle_sort = particle_sort::prepare(ex, &mut insns);
@@ -1009,6 +1019,13 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
         em.classify_interpolation();
     }
     em.infer_tbuf_types();
+    if matches!(probe, Some(radiance_probe::Probe::ReflectionFar)) {
+        // Compacted reflection work reads a count, packed pixel coordinates,
+        // and a trace-distance texture with flags in its high bits.
+        em.tbuf_ty.insert((false, 13), 1);
+        em.tbuf_ty.insert((false, 14), 1);
+        em.img_ty.insert((false, 12), 1);
+    }
     if wave_cull && ex.entry.as_deref() == Some("WaterTileCatergorisationCS") {
         // Both the dispatch count and the packed XY tile list use R32_UINT.
         em.tbuf_uint.extend([0, 1]);
@@ -1052,6 +1069,10 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
         for (&(uav, slot), words) in &mut em.sbuf {
             *words = fssm_bindings::structured_words(ex, slot, uav)?;
         }
+    }
+    if matches!(probe, Some(radiance_probe::Probe::ScreenGather | radiance_probe::Probe::ScreenGatherFar)) {
+        // The screen trace packs distance and flags into the integer hit target.
+        em.uav_uint.insert(1);
     }
     if let Some(program) = view_cull { program.resources(&mut em)?; }
     if (ex.stage == Stage::Compute || (ex.stage == Stage::Pixel && ex.entry.as_deref() == Some("HWRasterizePS")))
@@ -1120,6 +1141,11 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
             hlsl.insert_str(0, &page_waves::declarations(compute_group(ex), branchless));
         }
     }
+    if let Some(probe) = probe {
+        hlsl.insert_str(0, radiance_probe::DECLARATIONS);
+        if matches!(probe, radiance_probe::Probe::ReflectionFar | radiance_probe::Probe::Reflection | radiance_probe::Probe::ScreenGather | radiance_probe::Probe::ScreenGatherFar) { hlsl.insert_str(0, "#define TB_SCREEN_GATHER 1\n"); }
+        if matches!(probe, radiance_probe::Probe::ReflectionFar | radiance_probe::Probe::FarField | radiance_probe::Probe::ScreenGatherFar) { hlsl.insert_str(0, "#define TB_PROBE_FAR_FIELD 1\n"); }
+    }
     if particle_sort { hlsl.insert_str(0, particle_sort::DECLARATIONS); }
     if hair_cluster { hlsl.insert_str(0, hair_cluster::DECLARATIONS); }
     if hair_cluster_export { hlsl.insert_str(0, hair_cluster_export::DECLARATIONS); }
@@ -1131,7 +1157,7 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
 ", live_in.join(" ")));
     // ps_5_0 forces UAV slots to start after the render-target outputs (FXC X4509);
     // SM5.1 has no such rule, and D3D12 accepts SM5.1 bytecode.
-    let profile = if is_ps && !em.uav.is_empty() { "ps_5_1" } else { profile };
+    let profile = if probe_trace { "cs_6_5" } else if is_ps && !em.uav.is_empty() { "ps_5_1" } else { profile };
     Ok(Translated {
         hlsl,
         entry: "main",
@@ -2751,6 +2777,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
 
         let insns = self.insns.clone();
         let view_cull = self.view_cull;
+        let probe_trace = insns.iter().any(|op| matches!(op.mnemonic.as_str(),"tb_radiance_query" | "tb_reflection_far_query"));
         if view_cull.is_some() { self.line("uint cull_view = 0u; bool cull_candidate = false; uint3 cull_record = 0;"); }
         if insns.iter().any(|op| op.mnemonic == "tb_view_occluded") {
             self.line("bool hidden = false; uint hidden_id = 0u, hidden_view = 0u;");
@@ -2893,7 +2920,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 }
                 let exits: Vec<String> = labels.iter().filter(|&&t| t > i).map(|t| format!("j{t}")).collect();
                 let exit = if exits.is_empty() { String::new() } else { format!(" && !({})", exits.join(" || ")) };
-                let guard = if self.wave_cull || self.light_grid || self.packed.as_ref().is_some_and(|p| p.copy_backedges.contains(&i) || p.bounded_backedges.contains(&i)) {
+                let guard = if self.wave_cull || self.light_grid || probe_trace || self.packed.as_ref().is_some_and(|p| p.copy_backedges.contains(&i) || p.bounded_backedges.contains(&i)) {
                     ""
                 } else {
                     " && ++tb_guard < 65536u"
@@ -3089,6 +3116,14 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         let d = ins.dst.first().cloned();
         self.line(&format!("// {:#06x} {m}", ins.offset));
         self.cur_idx = idx;
+        if m == "tb_reflection_far_query" {
+            reflection_far::emit(self, ins);
+            return Ok(());
+        }
+        if m == "tb_radiance_query" {
+            radiance_probe::emit(self, ins);
+            return Ok(());
+        }
         if let Some(reg) = self.packed.as_ref().and_then(|p| p.ballot_nonempty.get(&idx)) {
             self.line(&format!("s{reg} &= exec_lo; scc = uint(WaveActiveAnyTrue((s{reg} & 1u) != 0u));"));
             return Ok(());

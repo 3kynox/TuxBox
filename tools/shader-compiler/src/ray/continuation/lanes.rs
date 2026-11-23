@@ -35,6 +35,9 @@ fn slot(ins: &Insn) -> Result<Option<(Slot, u8, bool)>, String> {
 }
 
 fn touches(ins: &Insn, register: u8) -> bool {
+    if matches!(ins.mnemonic.as_str(), "v_movrels_b32" | "v_movreld_b32") {
+        return true;
+    }
     let width = if ins.mnemonic.contains("dwordx4") {
         4
     } else if ins.mnemonic.contains("dwordx3") {
@@ -69,6 +72,9 @@ fn touches(ins: &Insn, register: u8) -> bool {
         Enc::Flat => (width, width.max(2)),
         _ => (width, width),
     };
+    // NSA encodes each address VGPR separately, including noncontiguous
+    // coordinates and LOD. Only a packed address names a contiguous tuple.
+    let addr = if ins.enc == Enc::Mimg && ins.aux.imm2 != 0 { 1 } else { addr };
     ins.dst.iter().any(|o| overlaps(o, data)) || ins.src.iter().any(|o| overlaps(o, addr))
 }
 
@@ -164,6 +170,9 @@ mod tests {
         let packed = code(&[0xf000_1108, 0x4017_1d2c]);
         assert!(touches(&packed[0], 44));
         assert!(!touches(&packed[0], 45));
+        let sample_l = code(&[0xf090_030a, 0x01ed_4934, 0x294d]);
+        assert!(touches(&sample_l[0], 77));
+        assert!(!touches(&sample_l[0], 79));
     }
 
     #[test]

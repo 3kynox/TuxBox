@@ -37,7 +37,7 @@ fn translate(
     };
     let model = if translated.required_wave_size.is_some() || translated.typed_int64_atomics {
         "6_6"
-    } else if shader.stage == Stage::Mesh {
+    } else if shader.stage == Stage::Mesh || translated.profile == "cs_6_5" {
         "6_5"
     } else if translated.packed_dot_product {
         "6_4"
@@ -68,7 +68,7 @@ fn translate(
             shader.stage
         )
     })?;
-    Ok((hlsl, "6_0"))
+    Ok((hlsl, if tuxbox_xshader::requires_inline_ray_query(shader) { "6_5" } else { "6_0" }))
 }
 
 fn run() -> Result<(), String> {

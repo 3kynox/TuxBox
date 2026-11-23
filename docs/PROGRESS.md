@@ -2,14 +2,14 @@
 
 The overall bar gives equal weight to verified library behavior and shader translation. The library percentage counts the reviewed behaviors Frosty can perform. The shader percentage counts entries in its surveyed archives that produced compiler output. Each library behavior counts once, including paths that use packaged or host DLLs. Each verified behavior needs an observable result from the game or a focused check. The percentage describes this workload and moves as games expose new requirements. [Progress map](progress.svg) · [Library audit](LIBRARIES.md) · [Shader survey](SHADERS.md)
 
-With reduced graphics settings, TuxBox reached the Wake Up cinematic and loaded the bullet-time scene. With the packaged settings, the game presented a black frame and stopped while building Lumen shader 219. Gameplay, image quality, audio and frame pacing are checked in retail runs. [Wake Up run](../evidence/matrix-awakens/wake-up-xg.json) · [Original-settings comparison](../evidence/matrix-awakens/three-library-comparison.json)
+With the packaged Xbox graphics settings on stock Proton, Frosty rendered its main menu and accepted Start Chase. The game played Wake Up and activated the first street corner of the chase intro. The NVIDIA driver reported a GPU memory fault before the shooting tutorial. Earlier runs with reduced settings reached the shooting tutorial and the city. [Original-settings menu](../evidence/matrix-awakens/packaged-settings-menu.webp) · [Wake Up transition](../evidence/matrix-awakens/packaged-settings-room.json) · [Earlier chase and city](MATRIX_AWAKENS.md)
 
 ## Games
 
 | Title | Current result | What remains |
 | --- | --- | --- |
 | **Lanes** | Runs through TuxBox's Xbox graphics, memory and input providers. Its replay checks GPU output and game state. | Continue testing presentation, input and other providers across systems. [Lanes](../examples/lanes/README.md) |
-| **The Matrix Awakens (Frosty)** | With the original Xbox graphics settings, the latest recorded Linux run loaded the Construct map and presented a black frame before stopping during Lumen shader creation. The current reduced-settings build reached Wake Up. Earlier reduced-settings runs reached the highway and city with missing and distorted surfaces. | Support the inline ray-traversal shader and validate the full game image, controls and performance with the original settings. [Setup and results](MATRIX_AWAKENS.md) · [Recorded original-settings run](../evidence/matrix-awakens/packaged-renderer.json) |
+| **The Matrix Awakens (Frosty)** | With the original Xbox graphics settings, a Linux run rendered the menu, played Wake Up and loaded the first street corner of the chase intro. Earlier reduced-settings runs reached the highway and city with missing and distorted surfaces. | Verify the shooting tutorial, image quality and frame times with the packaged settings. [Setup and results](MATRIX_AWAKENS.md) · [Recorded original-settings run](../evidence/matrix-awakens/packaged-settings-room.json) |
 | **Supplied ProjectScarlett package** | The declared game executable was not present when inspected. Its packaged FidelityFX upscaler ran in isolation. TuxBox compiled 28 of its 29 compute shaders to validated DXIL. [Upscaler results](SHADERS.md#projectscarlett-upscaler) | Inspect and test the executable when it is available. |
 | **Fortnite** | One supplied build provided graphics API call-site evidence. | Test initialization and rendering in TuxBox for a specific build. [Device evidence](../evidence/fortnite-device.json) |
 
@@ -18,7 +18,7 @@ No other retail title is currently claimed playable. Record the build, settings,
 ## Current priorities
 
 1. Finish the five remaining non-ray-tracing pixel shaders. Two light hair strands and three cull distance-field objects. Check their output with the packaged bindings on both GPUs. [Shader survey](SHADERS.md#measured-on-the-matrix-awakens)
-2. Return to ray tracing, starting with the Xbox-format scene nodes that Lumen shader 219 reads. Check its shadow mask for an empty tile, a hit and a miss, then rerun Frosty with the original settings. [Shader 219 comparison](SHADERS.md#inline-lumen-ray-tracing)
+2. Identify the GPU command that faults while the first chase street corner loads, then verify the shooting tutorial with the packaged settings. [Retail result](../evidence/matrix-awakens/packaged-settings-room.json)
 3. Check the menu, characters, hair, vehicles and city in the game. Test input and audio, then measure cold and warm frame times.
 4. Repeat title and provider checks on additional hardware and games as their executables become available.
 

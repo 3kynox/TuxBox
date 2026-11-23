@@ -84,6 +84,7 @@ pub(super) unsafe extern "system" fn ranges(
             && Some(count) == from.count(stride)
         {
             if kind == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV {
+                device.state.blas.views.copy(stride, to.spans(), from.spans());
                 device
                     .state
                     .placements
@@ -129,6 +130,11 @@ pub(super) unsafe extern "system" fn simple(
 ) {
     if kind == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV {
         let stride = unsafe { device.native.GetDescriptorHandleIncrementSize(kind) } as usize;
+        device.state.blas.views.copy(
+            stride,
+            std::iter::once((dst.ptr, count)),
+            std::iter::once((src.ptr, count)),
+        );
         device.state.placements.views.copy(
             stride,
             std::iter::once((dst.ptr, count)),

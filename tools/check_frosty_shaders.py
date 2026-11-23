@@ -8,6 +8,7 @@ Only the JSON receipt is retained. Requires liblz4, llvm-mc and DirectX Shader C
 """
 import argparse
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 import ctypes
 from ctypes.util import find_library
@@ -20,6 +21,7 @@ import struct
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+from threading import Lock
 from uuid import UUID
 
 import pefile
@@ -30,7 +32,7 @@ from build import find_dxc
 from check_frame_profile import decoded, interface, require, rip
 from check_frosty_profile import BUILD, check_rows, symbols
 from project_tuxbox.inspect import digest
-from project_tuxbox.shader_prep import shader_compiler
+from project_tuxbox.shader_prep import has_dxil_container, shader_compiler
 from project_tuxbox.shader_inventory import ARCHIVES, STAGES, decoder, parse_tables, serialized_state
 
 GLOBAL_SHA = "afab84fa891e491d64f1c2a9bdf26a66afc2054aef2cd9110e358402473b4fb2"
@@ -192,7 +194,48 @@ def ray_state(data, llvm_mc):
             "fnv1a64": f"{hash64:016x}", "sha256": hashlib.sha256(blob).hexdigest(), "programs": programs}
 
 
-def ray_census(mount, work=None, xshader=None, dxc=None):
+RAY_DXC_FLAGS = ["-T", "lib_6_3", "-O3"]
+
+
+def ray_cache_directory(root, dxc):
+    # The release package supplies the compiler and validator as shared
+    # libraries. A change to either must invalidate existing library outputs.
+    components = [dxc, dxc.parent.parent / "lib/libdxcompiler.so", dxc.parent.parent / "lib/libdxil.so",
+                  dxc.parent / "dxcompiler.dll", dxc.parent / "dxil.dll"]
+    key = hashlib.sha256(json.dumps([RAY_DXC_FLAGS, [(f.name, digest(f)) for f in components if f.is_file()]])
+                         .encode()).hexdigest()
+    cache = root / key
+    cache.mkdir(parents=True, exist_ok=True)
+    return cache
+
+
+def compile_ray_state(state, work, xshader, dxc, compiled, lock, cache):
+    with TemporaryDirectory(dir=cache or work) as temp:
+        raw, hlsl, dxil = (Path(temp) / f"state.{ext}" for ext in ("sptr", "hlsl", "dxil"))
+        raw.write_bytes(state)
+        run = subprocess.run([xshader, raw, "--hlsl-out", hlsl], capture_output=True)
+        if run.returncode:
+            require(run.returncode == 1 and run.stderr.strip(),
+                    f"Ray translator failed unexpectedly: {run.stderr.decode(errors='replace')}")
+            return False
+        key = digest(hlsl)
+        with lock:
+            if key in compiled:
+                return True
+            compiled.add(key)
+        # A DXC failure aborts the entire census, including duplicate HLSL
+        # entries which shared this compilation.
+        cached = cache / f"{key}.dxil" if cache else None
+        if cached and cached.is_file() and has_dxil_container(cached.read_bytes()):
+            return True
+        subprocess.run([dxc, *RAY_DXC_FLAGS, "-Fo", dxil, hlsl], check=True)
+        if cached:
+            require(has_dxil_container(dxil.read_bytes()), "Expected compiled ray library")
+            dxil.replace(cached)
+        return True
+
+
+def ray_census(mount, work=None, xshader=None, dxc=None, jobs=1, cache=None):
     decode = decoder()
     archives = {}
     hashes = [Counter() for _ in range(4)]
@@ -205,31 +248,29 @@ def ray_census(mount, work=None, xshader=None, dxc=None):
             _, _, entries, _, payload = parse_tables(data)
             counts = Counter()
             compiled = set()
+            lock = Lock()
             accepted = 0
-            for entry in ENTRY.iter_unpack(entries):
-                if entry[3] < 6:
-                    continue
+
+            def inspect(entry):
                 _, state = serialized_state(decompress(payload, entry, decode))
                 programs = list(state_programs(state))
                 require(len(programs) == 4, "Unexpected ray state program count")
-                for stage, (_, code, metadata) in enumerate(programs):
-                    if stage < 3:
-                        require(metadata.count(label) == 2, "Unrecognized traversal program label")
-                    hashes[stage][hashlib.sha256(code).hexdigest()] += 1
-                counts[STAGES[entry[3]]] += 1
-                if xshader:
-                    raw, hlsl, dxil = (work / f"state.{ext}" for ext in ("sptr", "hlsl", "dxil"))
-                    raw.write_bytes(state)
-                    run = subprocess.run([xshader, raw, "--hlsl-out", hlsl], capture_output=True)
-                    if run.returncode:
-                        require(run.returncode == 1 and run.stderr.strip(),
-                                f"Ray translator failed unexpectedly: {run.stderr.decode(errors='replace')}")
-                        continue
-                    key = digest(hlsl)
-                    if key not in compiled:
-                        subprocess.run([dxc, "-T", "lib_6_3", "-O3", "-Fo", dxil, hlsl], check=True)
-                        compiled.add(key)
-                    accepted += 1
+                for _, _, metadata in programs[:3]:
+                    require(metadata.count(label) == 2, "Unrecognized traversal program label")
+                codes = [hashlib.sha256(code).hexdigest() for _, code, _ in programs]
+                ok = xshader and compile_ray_state(state, work, xshader, dxc, compiled, lock, cache)
+                return STAGES[entry[3]], codes, bool(ok)
+
+            ray_entries = [entry for entry in ENTRY.iter_unpack(entries) if entry[3] >= 6]
+            with ThreadPoolExecutor(max_workers=jobs) as pool:
+                for index, (stage, codes, ok) in enumerate(pool.map(inspect, ray_entries), 1):
+                    for group, code in zip(hashes, codes):
+                        group[code] += 1
+                    counts[stage] += 1
+                    accepted += ok
+                    if xshader and (index % 500 == 0 or index == len(ray_entries)):
+                        print(f"{name}: {index}/{len(ray_entries)} states, {accepted} compiled",
+                              file=sys.stderr, flush=True)
             archives[name] = {"archive_sha256": expected, "entries": dict(counts)}
             if xshader:
                 archives[name]["desktop_translation"] = {"compiled_entries": accepted,
@@ -249,12 +290,18 @@ def main():
     parser.add_argument("--ray-census-only", action="store_true", help="inspect serialized ray states in both archives")
     parser.add_argument("--compile-ray-census", action="store_true",
                         help="also run xshader and DXC over the full ray state census")
+    parser.add_argument("--ray-cache", type=Path, help="reuse completed DXIL by exact HLSL and DXC build")
+    parser.add_argument("--jobs", type=int, default=1, help="parallel workers for the ray state census")
     parser.add_argument("--xshader", type=Path)
     parser.add_argument("--xscan", type=Path, help="also survey HLSL translation across the non-ray global archive")
     parser.add_argument("--dxc", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--compat-log", type=Path, help="verify the retail DeserializeStateObjectX input against the archive")
     args = parser.parse_args()
+    if args.ray_cache and not args.compile_ray_census:
+        parser.error("--ray-cache requires --compile-ray-census")
+    if args.jobs < 1:
+        parser.error("--jobs must be positive")
     if args.ray_census_only or args.compile_ray_census:
         xshader = (args.xshader or shader_compiler()).resolve() if args.compile_ray_census else None
         dxc = Path(find_dxc(args.dxc)).resolve() if args.compile_ray_census else None
@@ -263,7 +310,9 @@ def main():
             # A full archive scan can overlap a compiler rebuild.
             if xshader:
                 xshader = Path(shutil.copy2(xshader, work / "xshader"))
-            results = {"device_contract": device_calls(args.mount), **ray_census(args.mount, work, xshader, dxc)}
+            cache = ray_cache_directory(args.ray_cache, dxc) if args.ray_cache else None
+            results = {"device_contract": device_calls(args.mount),
+                       **ray_census(args.mount, work, xshader, dxc, args.jobs, cache)}
             if xshader:
                 results["xshader_sha256"] = digest(xshader)
                 results["dxc_sha256"] = digest(dxc)

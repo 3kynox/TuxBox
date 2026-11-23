@@ -19,6 +19,7 @@ def sha(path):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--original-xg', type=Path, required=True)
+    p.add_argument('--unique', action='store_true', help='record each distinct descriptor and result once')
     p.add_argument('--output', type=Path, required=True)
     args = p.parse_args()
     original = args.original_xg.resolve(strict=True)
@@ -26,7 +27,8 @@ def main():
     out.mkdir(parents=True, exist_ok=False)
     here = Path(__file__).resolve().parent
     toolchain = Toolchain()
-    obj = toolchain.compile(here / 'proxy.c', out, '/W4', '/WX')
+    flags = ['/DTRACE_UNIQUE=1'] if args.unique else []
+    obj = toolchain.compile(here / 'proxy.c', out, '/W4', '/WX', *flags)
     toolchain.link(out / 'xg_xs.dll', obj, 'kernel32.lib', exports=here / 'xg_xs.def')
     obj = toolchain.compile(here / 'control.c', out, '/W4', '/WX')
     toolchain.link(out / 'xg-proxy-control.exe', obj, 'kernel32.lib')
@@ -35,7 +37,7 @@ def main():
         'purpose': 'temporary local XG descriptor tracing; genuine reference binary is not redistributable',
         'reference_source': str(original), 'reference_sha256': sha(original),
         'proxy_sha256': sha(out / 'xg_xs.dll'), 'control_sha256': sha(out / 'xg-proxy-control.exe'),
-        'log_limit': 16384, 'instrumented_ordinal': 11,
+        'log_limit': 16384, 'unique_descriptors': args.unique, 'instrumented_ordinal': 11,
     }, indent=2) + '\n')
     print('Prepared isolated reference proxy; no title was launched.')
 
