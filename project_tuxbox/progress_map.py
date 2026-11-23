@@ -13,7 +13,7 @@ BG, BAR, CHROME = "#0b0b0f", "#090910", "#0d0d15"
 PANEL, LINE = "#14141d", "#272733"
 TEXT, MUTED, AQUA = "#d7d7de", "#a0a0b1", "#6fc7d4"
 GREEN, AMBER, RED = "#2ecc71", "#e2bc8c", "#e74c3c"
-COLORS = {"complete": GREEN, "partial": AMBER, "incomplete": RED}
+PATH_COLORS = {"verified": GREEN, "partial": AMBER, "unverified": MUTED, "blocked": RED}
 MONO = "'Terminess Nerd Font Mono', 'DejaVu Sans Mono', Consolas, monospace"
 
 
@@ -52,17 +52,6 @@ def window(group, width, height, path, *, focused=False):
     text(group, 68, 22, path, 14, AQUA)
 
 
-def symbol(parent, x, y, level):
-    """A tick, half-disc and ring keep the library levels distinguishable without colour."""
-    group = element(parent, "g", transform=f"translate({x} {y})")
-    color = COLORS[level]
-    element(group, "circle", cx=0, cy=0, r=5.5, fill="none", stroke=color, stroke_width=1.7)
-    if level == "complete":
-        element(group, "path", d="M-3,0 -1,2 3,-2", fill="none", stroke=color, stroke_width=1.5)
-    elif level == "partial":
-        element(group, "path", d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z", fill=color)
-
-
 # Labels for observations in a packaged-settings retail run.
 FROSTY_GATES = {
     "load_world": "World loaded",
@@ -76,14 +65,9 @@ FROSTY_GATES = {
 }
 
 
-def draw_overall(svg, y, libraries, inventory, shader_rows):
-    # Give each active DLL the same weight so large export tables do not drown
-    # out smaller libraries. The shader unit is a packaged archive entry.
-    fractions = [export_progress(lib)[2] for lib in libraries]
-    library_share = None
-    if fractions and None not in fractions:
-        library_share = sum(fractions) / len(fractions)
-
+def draw_overall(svg, y, paths, inventory, shader_rows):
+    verified = sum(row["status"] == "verified" for row in paths)
+    library_share = verified / len(paths) if paths else None
     archives = inventory.get("archives", {})
     totals = [archives.get(name, {}).get("entries") for name in ("global", "material")]
     shader_total = sum(totals) if all(type(n) is int and n > 0 for n in totals) else 0
@@ -101,11 +85,11 @@ def draw_overall(svg, y, libraries, inventory, shader_rows):
     rect(group, 18, 45, INNER-36, 8, LINE)
     if overall:
         rect(group, 18, 45, (INNER-36)*overall, 8, AQUA)
-    library_label = f"{library_share:.1%} across {len(libraries)} DLLs" if library_share is not None else "Unmeasured"
+    library_label = f"{verified}/{len(paths)} verified ({library_share:.1%})" if library_share is not None else "Unmeasured"
     shader_label = f"{translated:,}/{shader_total:,} entries ({shader_share:.1%})" if shader_share is not None else "Unmeasured"
-    text(group, 18, 77, f"Library exports · {library_label}", 15)
+    text(group, 18, 77, f"Library behaviors · {library_label}", 15)
     text(group, INNER-18, 77, f"Shader translation · {shader_label}", 15, anchor="end")
-    text(group, 18, 99, "Equal weight for libraries and shaders. Each tracked DLL counts equally.", 13, MUTED)
+    text(group, 18, 99, "Frosty sample · 50% required library behaviors, 50% shader translation.", 13, MUTED)
     return y+height+GAP
 
 
@@ -133,220 +117,91 @@ def draw_frosty_target(svg, y, evidence):
     lines = [" · ".join(labels[pos:pos+4]) for pos in range(0, len(labels), 4)]
     if not lines:
         lines = ["No verified gameplay observations" if measured else "No matching retail run"]
-    height = 65 + 22*len(lines) + (30 if blocker else 0)
+    reduced = read_json(evidence / "matrix-awakens/wake-up-xg.json")
+    executable = reduced.get("providers", {}).get("Frosty-XSX-Shipping.exe", {})
+    reduced_settings = reduced.get("profile_cvars", {})
+    reached_wake_up = (bool(title.get("sha256")) and executable.get("sha256") == title["sha256"]
+                       and reduced.get("fixed_log_sha256") and reduced_settings.get("r.RayTracing") == "0"
+                       and reduced_settings.get("r.Lumen.DiffuseIndirect.Allow") == "0"
+                       and reduced_settings.get("r.Lumen.Reflections.Allow") == "0"
+                       and any(event.get("event") == "Construct bullet time" for event in reduced.get("events", [])))
+    height = 65 + 22*len(lines) + (30 if blocker else 0) + (30 if reached_wake_up else 0)
     group = section(svg, PAD, y, "Frosty retail test")
     rect(group, 0, 0, INNER, height, PANEL, stroke=LINE)
     text(group, 18, 32, "Frosty retail test", 23, AMBER, bold=True)
-    text(group, INNER-18, 32, "Packaged graphics settings", 15, MUTED, anchor="end")
     for index, line in enumerate(lines):
-        text(group, 18, 61+22*index, line, 15)
+        text(group, 18, 61+22*index, ("Packaged settings · " if index == 0 else "") + line, 15)
     if blocker:
-        text(group, 18, height-15, blocker, 15, AMBER)
+        text(group, 18, 91+22*(len(lines)-1), blocker, 15, AMBER)
+    if reached_wake_up:
+        text(group, 18, height-13, "Reduced settings · Wake Up reached the bullet-time scene", 15, GREEN)
     return y+height+GAP
 
 
-def export_progress(library):
-    record = library.get("export_coverage")
-    if record is None:
-        return "—", "Unmeasured", None
-    verified, total = record["verified"], record["total"]
-    if (not isinstance(verified, list) or not all(isinstance(name, str) and name for name in verified)
-            or len(verified) != len(set(verified))):
-        raise ValueError(f"Invalid verified exports for {library['name']}")
-    count = len(verified)
-    if total is None:
-        return f"{count}/?", "Unmeasured", None
-    if type(total) is not int or total < count:
-        raise ValueError(f"Invalid export total for {library['name']}")
-    if total == 0:
-        return "0/0", "No exports", None
-    fraction = count / total
-    number = f"{fraction * 100:.1f}".removesuffix(".0")
-    if number == "0" and count:
-        number = "<0.1"
-    elif number == "100" and count < total:
-        number = ">99.9"
-    return f"{count}/{total}", number + "%", fraction
-
-
-def export_breakdown(library):
-    coverage = library.get("export_coverage") or {}
-    data = coverage.get("data_exports")
-    if not data or coverage.get("total") is None:
-        return ""
-    verified = set(coverage["verified"])
-    tested_data = len(verified.intersection(data))
-    functions = coverage["total"] - len(data)
-    return f"{len(verified)-tested_data}/{functions} functions, {tested_data}/{len(data)} data"
-
-
-def frosty_import_coverage(evidence, libraries):
-    inventory = read_json(evidence / "frosty-xbox-library-inventory.json")
-    if not inventory:
-        return None
-    direct = {}
-    for entry in inventory["title"]["imports"]:
-        direct.setdefault(entry["module"].casefold(), []).extend(entry["symbols"])
-    binaries = {(pe["name"].casefold(), pe["sha256"]): pe for pe in inventory["libraries"]}
-    results = {}
-    for library in libraries:
-        name = library["name"]
-        if name.casefold() not in direct:
-            continue
-        coverage = library.get("export_coverage") or {}
-        pe = binaries.get((name.casefold(), coverage.get("binary_sha256")))
-        if pe is None:
-            results[name] = None
-            continue
-        slots = {}
-        for entry in pe["exports"]["entries"]:
-            ordinal = entry["ordinal"]
-            slots[f"#{ordinal}"] = ordinal
-            slots.update(dict.fromkeys(entry["names"], ordinal))
-        verified = {slots[symbol] for symbol in coverage["verified"] if symbol in slots}
-        # Multiple import spellings can resolve to one export slot. Preserve the first
-        # title spelling for display and count unresolved imports as outstanding.
-        imported = {}
-        for symbol in direct[name.casefold()]:
-            imported.setdefault(slots.get(symbol, symbol), symbol)
-        results[name] = {symbol: slot in verified for slot, symbol in imported.items()}
-    return results
-
-
-def import_tally(symbols):
-    return f"{sum(symbols.values())}/{len(symbols)}" if symbols is not None else "Unmeasured"
+def load_library_paths(evidence):
+    audit = read_json(evidence / "matrix-awakens/library-paths.json")
+    title = read_json(evidence / "matrix-awakens-launch.json")
+    if not title.get("sha256") or audit.get("title_sha256") != title["sha256"]:
+        return {}
+    names = set()
+    for row in audit["paths"]:
+        name = row["name"]
+        key = name.strip().casefold()
+        if not key or key in names:
+            raise ValueError(f"Missing or duplicate library behavior {name!r}")
+        names.add(key)
+        libs = row.get("libraries")
+        if (row.get("status") not in PATH_COLORS or not isinstance(libs, list) or not libs
+                or not all(isinstance(lib, str) and lib.strip() for lib in libs)
+                or not row.get("provider") or not row.get("scope")):
+            raise ValueError(f"Incomplete library path record for {name}")
+    for row in audit.get("optional", []):
+        if not row.get("name") or not row.get("reason"):
+            raise ValueError("Incomplete optional library record")
+    for row in [*audit["paths"], *audit.get("optional", [])]:
+        refs = row.get("evidence")
+        if (not isinstance(refs, list) or not refs
+                or not all(isinstance(ref, str) and not Path(ref).is_absolute() and ".." not in Path(ref).parts
+                           and (evidence.parent / ref).is_file() for ref in refs)):
+            raise ValueError(f"Missing evidence for {row['name']}")
+    return audit
 
 
 def library_table(evidence):
-    status = read_json(evidence / "library-status.json")
-    libraries = status.get("libraries", [])
-    direct = frosty_import_coverage(evidence, libraries)
-    name_width = max([len("Library"), *(len(lib["name"]) for lib in libraries)])
-    heading = f"{'Library':<{name_width}}  {'Verified TuxBox exports':<26} {'Count':>7}  {'Share':>10}  Status"
-    if direct is not None:
-        heading += "      Static PE path  Frosty imports verified"
-    lines = [heading]
-    for library in libraries:
-        tally, percent, fraction = export_progress(library)
-        if fraction is None:
-            bar = "[      unmeasured      ]"
-        else:
-            # '+' marks a partly filled cell so small positive values remain visible.
-            cells = fraction * 22
-            filled = "#" * int(cells) + ("+" if cells % 1 else "")
-            bar = f"[{filled:.<22}]"
-        name, state = library["name"], library["status"].capitalize()
-        row = f"{name:<{name_width}}  {bar:<26} {tally:>7}  {percent:>10}  "
-        if direct is None:
-            lines.append(row + state)
-            continue
-        relation = (library.get("inventory") or {}).get("title_reachability")
-        path = {"transitive": "transitive", "not statically reachable": "no static path"}.get(relation, "unscanned")
-        path = "direct" if name in direct else path
-        count = import_tally(direct[name]) if name in direct else "—"
-        lines.append(f"{row}{state:<10} {path:<14}  {count}")
-    if direct:
-        measured = [symbols for symbols in direct.values() if symbols is not None]
-        if measured:
-            checked = sum(sum(symbols.values()) for symbols in measured)
-            total = sum(len(symbols) for symbols in measured)
-            lines.extend(["", f"TuxBox has verified {checked}/{total} distinct Frosty imports from the measured DLLs. "
-                          f"Matching build evidence covers {len(measured)} of {len(direct)} directly imported tracked DLLs."])
-        else:
-            lines.extend(["", "Frosty direct import coverage is unmeasured for this build."])
-    details = [f"{library['name']} covers {parts}." for library in libraries if (parts := export_breakdown(library))]
-    if details:
-        lines.extend(["", *details])
-    if external := status.get("external_libraries"):
-        lines.extend(["", "Supplied by the package or host"])
-        lines.extend(f"{row['name']:<{name_width}}  {row['source']}" for row in external)
+    audit = load_library_paths(evidence)
+    if not audit.get("paths"):
+        return "No matching Frosty library behavior audit."
+    rows = audit["paths"]
+    verified = sum(row["status"] == "verified" for row in rows)
+    lines = [f"Frosty · {verified}/{len(rows)} required library behaviors verified"]
+    for row in rows:
+        lines.extend(["", f"{row['status'].capitalize()} · {row['name']} · {row['provider']}",
+                      f"  {', '.join(row['libraries'])}", f"  {row['scope']}"])
+    if audit.get("optional"):
+        lines.extend(["", "Outside the current gameplay target"])
+        lines.extend(f"  {row['name']} · {row['reason']}" for row in audit["optional"])
     return "\n".join(lines)
 
 
-def draw_libraries(svg, y, data, direct):
-    libraries = data.get("libraries", [])
-    if not libraries:
+def draw_libraries(svg, y, rows):
+    if not rows:
         return y
-    counts = Counter(row["status"] for row in libraries)
-    by_group = {}
-    for library in libraries:
-        by_group.setdefault(library["group"], []).append(library)
-    groups = list(by_group.items())
-    # Allow room for the widest filename, the bar and its two right-aligned labels.
-    name_width = 27 + max(len(row["name"]) for row in libraries) * 7.3
-    columns = 2 if len(groups) > 1 and (INNER-36+GAP)/2 >= name_width+110 else 1
-    width = (INNER-36+GAP)/columns
-    bands = [groups[i:i+columns] for i in range(0, len(groups), columns)]
-    row_height = 29
-    # Mixed function/data tables get a second line so large GUID tables remain legible.
-    band_heights = [49 + max(sum(row_height + (16 if export_breakdown(lib) else 0) for lib in entries)
-                             for _, entries in band) for band in bands]
-    height = 151 + sum(band_heights)
-    group = section(svg, PAD, y, "Xbox library coverage")
-    window(group, INNER, height, "~/evidence/library-status.json")
-    text(group, 18, 70, "Xbox library coverage", 25, AMBER, bold=True)
-    text(group, INNER-18, 68, f"{len(libraries)} active Frosty libraries", 14, MUTED, anchor="end")
-    x = 18
-    for name in COLORS:
-        symbol(group, x+5, 99, name)
-        label = f"{counts[name]} {name}"
-        text(group, x+20, 104, label, 15, COLORS[name])
-        x += 20 + 10*len(label) + 24
-    text(group, 18, 130,
-         "Bars count verified exports. Empty circles mark incomplete support.",
-         13, MUTED)
-    y0 = 148
-    for band, band_height in zip(bands, band_heights):
-        for col, (family, entries) in enumerate(band):
-            x = 18+col*width
-            right = x+width-GAP
-            bar_x = x+name_width
-            bar_width = right-bar_x-110
-            rect(group, x, y0, width-GAP, 1, LINE)
-            text(group, x, y0+25, family, 16, AQUA, bold=True)
-            top = y0+52
-            for library in entries:
-                state, name = library["status"], library["name"]
-                tally, percent, fraction = export_progress(library)
-                cell = element(group, "g")
-                parts = export_breakdown(library)
-                inventory = library.get("inventory") or {}
-                title_symbols = inventory.get("title_import_symbols", [])
-                if direct is not None and name in direct:
-                    symbols = direct[name]
-                    reach_note = f"Frosty direct imports verified {import_tally(symbols)}."
-                    if symbols is None:
-                        reach_note += " The reviewed DLL hash does not match the PE inventory."
-                    else:
-                        for checked, label in [(True, "Verified"), (False, "Unverified")]:
-                            names = [symbol for symbol, covered in symbols.items() if covered == checked]
-                            if names:
-                                reach_note += f" {label} ({', '.join(names)})."
-                elif title_symbols:
-                    reach_note = "Title PE imports: " + ", ".join(title_symbols)
-                elif inventory.get("static_import_chain"):
-                    reach_note = "Static title path: " + " -> ".join(inventory["static_import_chain"])
-                else:
-                    reach_note = "No static PE import path found."
-                element(cell, "title").text = (f"{name} · {state.capitalize()} · Verified TuxBox exports {tally} "
-                                               f"({percent}). {library['provider']} {library['scope']} "
-                                               f"{reach_note}")
-                symbol(cell, x+6, top-5, state)
-                text(cell, x+20, top, name, 13)
-                if fraction is None:
-                    element(cell, "line", x1=bar_x, x2=bar_x+bar_width, y1=top-5, y2=top-5,
-                            stroke=MUTED, stroke_dasharray="2 4")
-                else:
-                    rect(cell, bar_x, top-9, bar_width, 7, LINE)
-                    if fraction:
-                        rect(cell, bar_x, top-9, round(bar_width*fraction, 4), 7, AQUA)
-                text(cell, right-58, top, tally, 12, MUTED, anchor="end")
-                text(cell, right, top, percent, 13, TEXT, bold=True, anchor="end")
-                if parts:
-                    text(cell, x+20, top+16, parts, 13, MUTED)
-                    top += 16
-                top += row_height
-        y0 += band_height
+    height = 141 + 29*len(rows)
+    group = section(svg, PAD, y, "Required library behaviors")
+    window(group, INNER, height, "~/docs/LIBRARIES.md")
+    text(group, 18, 70, "Required library behaviors", 25, AMBER, bold=True)
+    text(group, 18, 96, "Verified in a game run or focused check. Partial means some behavior still needs verification.", 15)
+    text(group, 18, 122, "Behavior", 13, MUTED)
+    text(group, 420, 122, "Provided by", 13, MUTED)
+    text(group, INNER-18, 122, "Status", 13, MUTED, anchor="end")
+    for index, row in enumerate(rows):
+        top = 149 + 29*index
+        cell = element(group, "g")
+        element(cell, "title").text = f"{', '.join(row['libraries'])} · {row['scope']}"
+        rect(cell, 18, top-19, INNER-36, 1, LINE)
+        text(cell, 18, top, row["name"], 15)
+        text(cell, 420, top, row["provider"], 14)
+        text(cell, INNER-18, top, row["status"].capitalize(), 14, PATH_COLORS[row["status"]], bold=True, anchor="end")
     return y+height+GAP
 
 
@@ -599,9 +454,8 @@ def render_map(evidence):
                              "aria-labelledby": "map-title map-description"})
     element(svg, "title", id="map-title").text = "TuxBox runtime compatibility"
     element(svg, "desc", id="map-description").text = (
-        "Overall coverage averages verified library exports and translated shader archive entries. "
-        "Frosty gameplay tracks title milestones at packaged graphics settings. "
-        "Shader rows measure the reusable RDNA 2 translator on Frosty archives. DLL bars show verified exports.")
+        "Overall coverage gives equal weight to verified Frosty library behaviors and shader translation. "
+        "Gameplay results identify the graphics settings used.")
     bg = rect(svg, 0, 0, WIDTH, 1, BG)
     rect(svg, 0, 0, WIDTH, 48, BAR)
     rect(svg, 0, 47, WIDTH, 1, LINE)
@@ -610,12 +464,12 @@ def render_map(evidence):
     brand = text(svg, WIDTH//2, 32, "TUXBOX", 22, AMBER, bold=True, anchor="middle")
     brand.set("letter-spacing", "4")
     text(svg, WIDTH-PAD, 30, "Xbox Series X|S", 16, AQUA, anchor="end")
-    data = read_json(evidence / "library-status.json")
+    paths = load_library_paths(evidence).get("paths", [])
     inventory = read_json(evidence / "matrix-awakens/shader-inventory.json")
     shader_rows = list(shader_archive_results(evidence, inventory))
-    y = draw_overall(svg, 48+GAP, data.get("libraries", []), inventory, shader_rows)
+    y = draw_overall(svg, 48+GAP, paths, inventory, shader_rows)
     y = draw_shaders(svg, y, inventory, shader_rows)
-    y = draw_libraries(svg, y, data, frosty_import_coverage(evidence, data.get("libraries", [])))
+    y = draw_libraries(svg, y, paths)
     y = draw_frosty_target(svg, y, evidence)
     height = draw_verification(svg, y, evidence) + 6
     bg.set("height", str(height))

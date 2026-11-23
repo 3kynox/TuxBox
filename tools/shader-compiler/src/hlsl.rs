@@ -5455,7 +5455,14 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         };
         let addr_reg = |i: usize| -> Opnd { if nsa > 0 { ins.src[i] } else { Opnd::Vgpr(vaddr + i as u8) } };
         // Texel-addressed ops (no sampler): image_load / image_store, on SRVs or UAVs.
-        if matches!(ins.mnemonic.as_str(), "image_load" | "image_load_mip" | "image_store" | "image_store_mip" | "image_atomic_add" | "image_atomic_umax") {
+        let atomic = match ins.mnemonic.as_str() {
+            "image_atomic_add" => Some("InterlockedAdd"),
+            "image_atomic_umin" => Some("InterlockedMin"),
+            "image_atomic_umax" => Some("InterlockedMax"),
+            "image_atomic_or" => Some("InterlockedOr"),
+            _ => None,
+        };
+        if atomic.is_some() || matches!(ins.mnemonic.as_str(), "image_load" | "image_load_mip" | "image_store" | "image_store_mip") {
             let with_mip = ins.mnemonic == "image_load_mip";
             let (slot, dim, is_uav) = match rs.first() {
                 Some(Res::Tex(t, d)) => (*t, *d, false),
@@ -5505,7 +5512,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 // The conversion of integer formats to 16 bits is not specified.
                 return Err("D16 image access to an integer-typed image unsupported".into());
             }
-            if ins.mnemonic.starts_with("image_atomic_") {
+            if let Some(func) = atomic {
                 // Image atomics → Interlocked* on a RWTexture<uint> texel; vdata carries the
                 // operand in and the previous value out.
                 if ins.aux.mask == 3 && as_uint && dim == 1 {
@@ -5528,7 +5535,6 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 if !as_uint {
                     return Err("image atomic on a non-UAV table".into());
                 }
-                let func = if ins.mnemonic == "image_atomic_add" { "InterlockedAdd" } else { "InterlockedMax" };
                 let o = Opnd::Vgpr(vd);
                 self.touch(&o);
                 let t = self.tmp;

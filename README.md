@@ -5,7 +5,7 @@ TuxBox is an experimental project for running Xbox Series X|S games on PC. On Li
 ## What runs today?
 
 - **Lanes** is a small game that uses TuxBox’s Xbox graphics, memory and input libraries. Collect coins and dodge barriers using a keyboard, mouse or Xbox controller.
-- **The Matrix Awakens (Frosty)** reached the highway chase and open city in earlier Linux tests with reduced graphics settings. With the original Xbox settings it loads the Construct map and presents a black frame before stopping while creating a compute shader during scene setup. You supply the game, its matching Xbox system files and Proton. [Setup and test results](docs/MATRIX_AWAKENS.md)
+- **The Matrix Awakens (Frosty)** reaches the Wake Up chase cinematic on Linux with TuxBox XG and reduced graphics settings. Earlier reduced-settings runs reached the highway chase and open city. With the original Xbox settings it loads the Construct map and presents a black frame before stopping while creating a compute shader during scene setup. You supply the game, its matching Xbox system files and Proton. [Setup and test results](docs/MATRIX_AWAKENS.md)
 
 ## Try Lanes
 
@@ -35,6 +35,6 @@ Run `python tuxbox.py inspect /path/to/game` to see the executable TuxBox will l
 
 ## Compatibility
 
-[![Xbox Series library and shader coverage measured on Frosty](docs/progress.svg)](docs/progress.svg)
+[![Verified game behavior and Xbox Series shader translation measured on Frosty](docs/progress.svg)](docs/progress.svg)
 
 [Current progress](docs/PROGRESS.md) · [Xbox libraries](docs/LIBRARIES.md) · [Shader coverage](docs/SHADERS.md) · [Test results](docs/RESULTS.md) · [Architecture](docs/ARCHITECTURE.md) · [Credits and references](docs/REFERENCES.md)

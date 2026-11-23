@@ -8,23 +8,28 @@ const TILE_BYTES: u64 = 65536;
 pub struct DepthStencil {
     width: u32,
     height: u32,
+    slices: u32,
     htile: bool,
     depth_bytes: u32,
     stencil: bool,
 }
 
 impl DepthStencil {
+    pub fn supports_flags(flags: u32) -> bool {
+        matches!(flags, 0x0100_0002 | 0x0100_0006 | 0x0100_000a | 0x8130_0002)
+    }
+
     pub fn compute(desc: &Desc) -> Result<Self, i32> {
         if desc.dimension != 3
             || desc.layout != 0
             || desc.alignment != 0
             || desc.samples != 1
             || desc.quality != 0
-            || desc.slices != 1
+            || !(1..=2048).contains(&desc.slices)
             || desc.mips != 1
             || !(1..=16384).contains(&desc.width)
             || !(1..=16384).contains(&desc.height)
-            || !matches!(desc.flags, 0x0100_0006 | 0x0100_000a | 0x8130_0002)
+            || !Self::supports_flags(desc.flags)
         {
             return Err(E_NOTIMPL);
         }
@@ -37,6 +42,7 @@ impl DepthStencil {
         Ok(Self {
             width: desc.width as u32,
             height: desc.height,
+            slices: u32::from(desc.slices),
             htile: desc.flags != 0x8130_0002,
             depth_bytes,
             stencil,
@@ -54,7 +60,7 @@ impl DepthStencil {
 
     pub fn htile_bytes(self) -> u64 {
         if self.htile {
-            u64::from(self.width.div_ceil(1024) * self.height.div_ceil(1024)) * TILE_BYTES
+            u64::from(self.width.div_ceil(1024) * self.height.div_ceil(1024)) * TILE_BYTES * u64::from(self.slices)
         } else {
             0
         }
@@ -71,7 +77,7 @@ impl DepthStencil {
         } else if index == depth {
             Some(self.htile_bytes())
         } else if self.stencil && index == depth + 1 {
-            Some(self.htile_bytes() + self.geometry(false).3)
+            Some(self.htile_bytes() + self.geometry(false).3 * u64::from(self.slices))
         } else {
             None
         }
@@ -79,9 +85,9 @@ impl DepthStencil {
 
     pub fn size(self) -> u64 {
         self.htile_bytes()
-            + self.geometry(false).3
+            + self.geometry(false).3 * u64::from(self.slices)
             + if self.stencil {
-                self.geometry(true).3
+                self.geometry(true).3 * u64::from(self.slices)
             } else {
                 0
             }
@@ -91,7 +97,7 @@ impl DepthStencil {
         let (pitch, rows, bytes, size) = self.geometry(stencil);
         let mut result = Plane {
             color_plane: if stencil { 8 } else { 7 },
-            size,
+            size: size * u64::from(self.slices),
             slice_bytes: size,
             offset: self
                 .base(self.depth_index() + u32::from(stencil))
@@ -109,12 +115,12 @@ impl DepthStencil {
             alignment: TILE_BYTES as u32,
             pitch_elements: pitch,
             padded_rows: rows,
-            padded_depth: 1,
+            padded_depth: self.slices,
             width_elements: self.width,
             height_elements: self.height,
             width_texels: self.width,
             height_texels: self.height,
-            depth: 1,
+            depth: self.slices,
             slices: 1,
             swizzle: 24,
             reserved: [0, 0x8000, 0, 0x8000, 0],
@@ -147,8 +153,8 @@ impl DepthStencil {
 
     /// XG returns a byte offset relative to the selected plane. The tiled
     /// data planes XOR their coordinate bits within a 64 KiB macrotile.
-    pub fn offset(self, index: u32, x: u64, y: u32) -> Option<u64> {
-        if x >= u64::from(self.width) || y >= self.height {
+    pub fn offset(self, index: u32, x: u64, y: u32, slice: u32) -> Option<u64> {
+        if x >= u64::from(self.width) || y >= self.height || slice >= self.slices {
             return None;
         }
         let x = x as u32;
@@ -193,6 +199,11 @@ impl DepthStencil {
                 inner ^= b;
             }
         }
-        Some(u64::from((y / th) * self.width.div_ceil(tw) + x / tw) * TILE_BYTES + u64::from(inner))
+        let tiles_per_row = self.width.div_ceil(tw);
+        let tile = u64::from(slice) * u64::from(tiles_per_row * self.height.div_ceil(th))
+            + u64::from((y / th) * tiles_per_row + x / tw);
+        // Array layers rotate the low bank bits on all three Z-order planes.
+        let bank = ((slice & 1) << 10) | ((slice & 2) << 8);
+        Some(tile * TILE_BYTES + u64::from(inner ^ bank))
     }
 }

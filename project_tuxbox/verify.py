@@ -158,7 +158,7 @@ def verify(host, output, adapter, selected=None, samples=1):
                   r"xg-dcc PASS xbox-blocks=2 encode-bytes=32 atomic-batch=1",
                   providers={"xg-provider/xg_xs.dll": ("XGEncodeDCC", "XGDecodeDCC")})
             check("xg-library", "xg-provider/xg-library.exe", ["--report"],
-                  r"xg-library PASS depth=516 descriptors=375 lock=recursive\+factory copies=bidirectional depth_surfaces=16 typed_images=880 map_targets=1382",
+                  r"xg-library PASS depth=516 descriptors=375 lock=recursive\+factory copies=bidirectional depth_surfaces=16 typed_images=880 map_targets=1474",
                   providers={"xg-provider/xg_xs.dll": ("XGCreateTextureComputerFromDescriptor",
                              "XGInitializeLibrary", "XGTerminateLibrary", "XGSetHardwareVersion",
                              "XGEnableExclusiveLocking", "XGEnterExclusiveLock", "XGLeaveExclusiveLock",
@@ -424,5 +424,5 @@ def status():
         lines.append("| " + " | ".join([GATE_LABELS.get(gate, gate), *cells]) + " |")
     lines += ["", "Rebuild this table from the repository root with "
               "`python tuxbox.py status > docs/RESULTS.md`. A dash means that the gate was omitted from that run. "
-              "[Current Lanes replay](../examples/lanes/README.md#deterministic-replay) · [Xbox DLL checks](LIBRARIES.md#run-the-provider-checks) · [Milestones and retail evidence](PROGRESS.md)"]
+              "[Current Lanes replay](../examples/lanes/README.md#deterministic-replay) · [Xbox DLL checks](LIBRARIES.md#run-the-provider-checks) · [Retail results and priorities](PROGRESS.md)"]
     return "\n".join(lines)

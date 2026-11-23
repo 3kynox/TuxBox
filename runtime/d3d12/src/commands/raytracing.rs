@@ -100,6 +100,22 @@ pub(super) unsafe extern "system" fn copy(
     }
 }
 
+pub(super) fn validate_size_output(
+    desc: &D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC,
+) -> Result<()> {
+    if !matches!(
+        desc.InfoType,
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_COMPACTED_SIZE
+            | D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_CURRENT_SIZE
+    ) {
+        return Err(E_NOTIMPL.into());
+    }
+    if desc.DestBuffer == 0 || !desc.DestBuffer.is_multiple_of(8) {
+        return Err(E_INVALIDARG.into());
+    }
+    Ok(())
+}
+
 // FD3D12RayTracingCompactionRequestHandler::Update passes a destination,
 // count and array of BLAS GPU addresses to Xbox list slot 118 (RVA 0x57a95d5).
 pub(super) unsafe extern "system" fn postbuild(
@@ -116,16 +132,7 @@ pub(super) unsafe extern "system" fn postbuild(
         let desc = unsafe { desc.as_ref() }.ok_or(E_POINTER)?;
         let host = list.state.raytracing.as_ref().ok_or(E_NOTIMPL)?;
         let owner = list.parent.as_ref().ok_or(E_POINTER)?;
-        if !matches!(
-            desc.InfoType,
-            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_COMPACTED_SIZE
-                | D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_CURRENT_SIZE
-        ) {
-            return Err(E_NOTIMPL.into());
-        }
-        if desc.DestBuffer == 0 || !desc.DestBuffer.is_multiple_of(8) {
-            return Err(E_INVALIDARG.into());
-        }
+        validate_size_output(desc)?;
         if count == 0 {
             return Ok(());
         }

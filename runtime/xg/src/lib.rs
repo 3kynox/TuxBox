@@ -737,8 +737,8 @@ unsafe extern "system" fn element_offset(
         unsafe { bit.write(0) };
     }
     if let Some(depth) = this.depth_stencil {
-        return if mip == 0 && slice == 0 && sample == 0 {
-            depth.offset(plane, x, y).unwrap_or(u64::MAX)
+        return if mip == 0 && sample == 0 {
+            depth.offset(plane, x, y, slice).unwrap_or(u64::MAX)
         } else {
             u64::MAX
         };
@@ -897,7 +897,7 @@ unsafe fn create_inner(desc: *const Desc, out: *mut *mut Computer) -> i32 {
         return E_INVALIDARG;
     };
     library::initialize();
-    if matches!(desc.flags, 0x0100_0006 | 0x0100_000a | 0x8130_0002) {
+    if DepthStencil::supports_flags(desc.flags) {
         if library::version_four() {
             return E_NOTIMPL;
         }

@@ -4,6 +4,12 @@ Frosty selects its original XSX graphics profile on stock Proton Experimental. O
 
 TuxBox rebuilt the 528-triangle sphere through the Xbox command list. All 3,171 test rays matched desktop D3D12 on GeForce and Radeon. The Radeon’s compacted structure needed 56,704 bytes, so TuxBox translated the game’s 31,232-byte allocation to a larger host buffer. A street lamp with an empty material section also matched the original mesh, including the geometry indices used to select hit shaders. [Geometry checks](../evidence/matrix-awakens/retail-sphere-blas.json) · [Ray-shader checks](SHADERS.md)
 
+## Wake Up with TuxBox XG
+
+On stock Proton with Lumen and ray tracing disabled in an isolated test copy, Frosty entered the Wake Up chase using TuxBox XG, D3D12, XMem and DXC. The game activated the room, the furniture scene and the bullet-time scene over 96 seconds. The desktop run used MangoHud, muted audio and the normal movie plugin. Testing stopped during the cinematic. [Run and settings](../evidence/matrix-awakens/wake-up-xg.json) · [Desktop capture](../evidence/matrix-awakens/wake-up-cinematic.webp)
+
+Frosty previously reported GPU device removal after XG rejected its 6144 × 2048 shadow atlas. During Wake Up it also requests a six-face depth texture with a different address for each array slice. TuxBox now handles both layouts. All 1,918 distinct descriptors from the packaged-XG comparison matched in the replay. [XG layout checks](../evidence/providers/xg-wake-up.json)
+
 ## Provider audit
 
 A desktop run with the package configuration helper absent reached the Wake Up chase on the earlier graphics build and packaged Series XG. Two runs using the newer TuxBox XG staging reached Construct and reported GPU device removal before the menu. All three used an isolated reduced graphics profile. The successful control also used a different D3D12 build, so the comparison cannot isolate the cause. [Loader and gameplay results](../evidence/matrix-awakens/provider-audit.json)

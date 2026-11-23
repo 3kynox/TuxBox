@@ -44,6 +44,30 @@
         "argument_stride": 104,
         "argument_offset": 104
       }
+    },
+    "inline_build_sizes": {
+      "date": "2026-11-23",
+      "scope": "Two synthetic two-geometry BLAS builds through the slot 117 used by Frosty. Each build requests current and compacted sizes. The GPU readback is compared against separate slot 118 queries of the same structures.",
+      "command": "python tools/check_frosty_blas.py --single-build --provider PROVIDER --proton PROTON --output RESULT",
+      "host": "1793301796 experimental-11.0-20261027b-x86_64",
+      "provider_sha256": "08ffeb035220c40445858966448ea60c5746856de4a93c8de96d5f6fd6dc8ec9",
+      "guest_sha256": "9a0e4db346637f0ceee0e3a9f58a24ef3c32cdbf1bcd4c78c1efe94f0a4fb2e0",
+      "previous_provider_sha256": "50bf45863da3bd36b8573ea84266f3063b539a32ef4a033d0e176d6935fb562e",
+      "previous_result": "close guest build list failed: 0x80004001",
+      "adapters": {
+        "1002:13c0": {
+          "matching_size_words": 4,
+          "blas_current_bytes": 520,
+          "blas_compacted_bytes": 448,
+          "ray_results": "70010,70120,80010,80120,dead"
+        },
+        "10de:2705": {
+          "matching_size_words": 4,
+          "blas_current_bytes": 2816,
+          "blas_compacted_bytes": 1152,
+          "ray_results": "70010,70120,80010,80120,dead"
+        }
+      }
     }
   }
 }

@@ -248,16 +248,12 @@ pub(super) unsafe extern "system" fn single(
     list: &List,
     desc: *const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC,
     postbuild_count: u32,
-    _postbuild: *const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC,
+    postbuild: *const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC,
 ) {
-    if desc.is_null() || postbuild_count != 0 {
+    if desc.is_null() || (postbuild_count != 0 && postbuild.is_null()) {
         let mut state = recording(list);
         if state.can_record(&list.native) {
-            state.error = if desc.is_null() {
-                E_INVALIDARG
-            } else {
-                E_NOTIMPL
-            };
+            state.error = E_INVALIDARG;
         }
         return;
     }
@@ -265,10 +261,25 @@ pub(super) unsafe extern "system" fn single(
         build: unsafe { *desc },
         extension: [0; 4],
     };
-    unsafe { batch(list, 1, &entry) };
+    let outputs = if postbuild_count == 0 {
+        &[]
+    } else {
+        // The guest supplies this array for the duration of the build call.
+        unsafe { core::slice::from_raw_parts(postbuild, postbuild_count as usize) }
+    };
+    unsafe { record_builds(list, 1, &entry, outputs) };
 }
 
 pub(super) unsafe extern "system" fn batch(list: &List, count: u32, entries: *const Entry) {
+    unsafe { record_builds(list, count, entries, &[]) };
+}
+
+unsafe fn record_builds(
+    list: &List,
+    count: u32,
+    entries: *const Entry,
+    outputs: &[D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC],
+) {
     let mut state = recording(list);
     if !state.can_record(&list.native) || count == 0 {
         return;
@@ -279,6 +290,13 @@ pub(super) unsafe extern "system" fn batch(list: &List, count: u32, entries: *co
     };
     if entries.is_null() {
         state.error = E_INVALIDARG;
+        return;
+    }
+    if let Err(error) = outputs
+        .iter()
+        .try_for_each(super::raytracing::validate_size_output)
+    {
+        state.error = error.code();
         return;
     }
     let entries = unsafe { core::slice::from_raw_parts(entries, count as usize) };
@@ -339,7 +357,7 @@ pub(super) unsafe extern "system" fn batch(list: &List, count: u32, entries: *co
         }
     }
     for build in &builds {
-        unsafe { host.BuildRaytracingAccelerationStructure(build, None) };
+        unsafe { host.BuildRaytracingAccelerationStructure(build, Some(outputs)) };
     }
     for input in &state.instance_uploads[initial_uploads..] {
         if let Instances::Gpu(records) = input {

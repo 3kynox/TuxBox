@@ -18,4 +18,4 @@ Each column represents one run on its named host, provider and hardware. Each re
 | Lanes gameplay replay (earlier guest with desktop graphics) | Pass | Pass | Pass | Pass | Pending |
 | 8,388,608-move CPU replay | Pass | Pass | Pass | Pass | Pending |
 
-Rebuild this table from the repository root with `python tuxbox.py status > docs/RESULTS.md`. A dash means that the gate was omitted from that run. [Current Lanes replay](../examples/lanes/README.md#deterministic-replay) · [Xbox DLL checks](LIBRARIES.md#run-the-provider-checks) · [Milestones and retail evidence](PROGRESS.md)
+Rebuild this table from the repository root with `python tuxbox.py status > docs/RESULTS.md`. A dash means that the gate was omitted from that run. [Current Lanes replay](../examples/lanes/README.md#deterministic-replay) · [Xbox DLL checks](LIBRARIES.md#run-the-provider-checks) · [Retail results and priorities](PROGRESS.md)

@@ -95,7 +95,7 @@ def main():
     show = subs.add_parser("status", help="show recorded milestone evidence by host")
     status_format = show.add_mutually_exclusive_group()
     status_format.add_argument("--svg", type=Path, metavar="PATH", help="write the visual progress map")
-    status_format.add_argument("--libraries", action="store_true", help="list verified exports for Xbox DLLs used by Frosty")
+    status_format.add_argument("--libraries", action="store_true", help="show the library behavior Frosty uses and what supplies it")
     status_format.add_argument("--d3d12-xs", action="store_true", help="show checked Xbox D3D12 interface slots")
     status_format.add_argument("--shaders", action="store_true", help="show packaged and requested shaders by stage")
     args = parser.parse_args()

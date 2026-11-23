@@ -1,5 +1,5 @@
 {
-  "scope": "TuxBox implementations and media adapters used by Frosty on Xbox Series. External libraries record the runtime bindings of the tested Linux setup.",
+  "scope": "Reference inventory of Xbox Series library exports, provider checks and known limitations. The progress map uses the game behaviors recorded in evidence/matrix-awakens/library-paths.json.",
   "levels": {
     "complete": "All identified console exports and interfaces for the reviewed build have an implemented, behaviorally verified replacement.",
     "partial": "A TuxBox provider or named reference bridge implements at least one verified Xbox-facing behavior. Other exports, interface methods or execution paths remain open.",
@@ -315,7 +315,7 @@
       "group": "Graphics and memory",
       "status": "partial",
       "provider": "TuxBox texture address computer.",
-      "scope": "All 21 exports and all 13 texture-computer methods have tested behavior. TuxBox matched the full layout and sampled addresses of all 1,760 distinct Frosty descriptors captured through frame two. DCC checks cross-decoded 205,920 blocks across 45 formats.",
+      "scope": "All 21 exports and all 13 texture-computer methods have tested behavior. TuxBox matched the full layout and sampled addresses of all 1,760 distinct Frosty descriptors captured through frame two. DCC checks cross-decoded 205,920 blocks across 45 formats. A reduced-profile Wake Up replay matched 1,918 distinct layouts including the shadow atlas and layered depth targets.",
       "remaining": "Additional descriptor views, multisampling and sparse mip chains. DCC deltas for wider components and further swizzles.",
       "evidence": [
         "runtime/xg-layout/src/lib.rs",
@@ -353,7 +353,8 @@
         "evidence/providers/xg-frosty-trace-replay.json",
         "evidence/providers/xg-library.json",
         "evidence/providers/xg-dcc.json",
-        "evidence/matrix-awakens/three-library-comparison.json"
+        "evidence/matrix-awakens/three-library-comparison.json",
+        "evidence/providers/xg-wake-up.json"
       ],
       "export_coverage": {
         "reference": "EmbeddedXvd/Windows/System32/xg_xs.dll",

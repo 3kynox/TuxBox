@@ -327,7 +327,7 @@
           "method": "BuildRaytracingAccelerationStructure",
           "identified": "ray_commands",
           "checks": {
-            "ray_commands": "Built two triangle structures and their scene with the single-build ABI, then compared four hits and a miss with desktop D3D12 on two adapters."
+            "ray_commands": "Built two triangle structures and their scene. On Radeon and GeForce the current and compacted sizes requested during the builds matched separate size queries. Four ray hits and a miss matched desktop D3D12."
           }
         },
         {

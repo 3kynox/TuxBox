@@ -145,7 +145,7 @@ def main():
     parser.add_argument("--lumen-material", action="store_true", help="dispatch the packaged five-word Lumen geometry closest-hit and miss pair")
     parser.add_argument("--material-hits", action="store_true", help="check the 12 closest-hit shaders in the first retail ray pipeline")
     parser.add_argument("--lighting-hits", action="store_true", help="dispatch the retail lighting miss and hidden material shaders")
-    parser.add_argument("--single-build", action="store_true", help="use Xbox List4 slot 117 for both BLAS and TLAS builds")
+    parser.add_argument("--single-build", action="store_true", help="use Xbox List4 slot 117 and compare inline BLAS size outputs with explicit size queries")
     parser.add_argument("--gpu-instances", action="store_true", help="populate the TLAS instance array on the GPU before the scene build and update its transforms after Close")
     parser.add_argument("--ambiguous-as", action="store_true", help="reject ambiguous overlapping placed acceleration-structure buffers")
     args = parser.parse_args()
@@ -421,6 +421,8 @@ def main():
                 sys.stderr.buffer.write(run.stdout[-4096:])
             result["runs"][mode] = {"exit": run.returncode, **observation}
             if run.returncode or not observation:
+                passed = False
+            elif args.single_build and mode == "xbox" and observation.get("inline_postbuild_sizes_matched") != "4":
                 passed = False
             elif args.ambiguous_as and mode.startswith("xbox") and (
                     observation.get("ambiguous_as_equal_va") != "1" or

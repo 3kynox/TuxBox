@@ -81,6 +81,11 @@ fn scalar_bit_operations_preserve_their_native_condition_codes() {
     let shift = lift(&[2436071731, RETURN]).unwrap();
     assert!(shift.contains("asint(s[51]) >>"));
     assert!(shift.contains("scc = (s[51] != 0u)"));
+    // S_BFE_U32 accepts a seven-bit width. V_BFE_U32 takes five bits.
+    let extract = lift(&[0x938b_0300, 0xd548_0001, 0x040a_0300, RETURN]).unwrap();
+    assert!(extract.contains("tb_ray_bfe(s[0], s[3], ((s[3] >> 16) & 127u))"));
+    assert!(extract.contains("scc = (s[11] != 0u)"));
+    assert!(extract.contains("tb_ray_bfe(v[0], v[1], (v[2] & 31u))"));
     assert!(lift(&[3128952961, 0, RETURN]).is_ok());
     assert!(lift(&[3128952961, 1, RETURN]).is_err());
     let count = lift(&[2268364394, 3199471412, 2234810497, RETURN]).unwrap();

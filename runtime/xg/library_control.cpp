@@ -159,7 +159,7 @@ static bool check_large_surface(const ResourceDesc& desc, UINT64 metadata_bytes=
         for (UINT i=0;i<800;++i) {
             UINT bit=0;
             const UINT64 offset=obj->methods->address(obj,plane,0,(i*53+15)%desc.width,
-                                                      (i*101+3)%desc.height,0,0,&bit);
+                                                      (i*101+3)%desc.height,i%desc.slices,0,&bit);
             if (offset==UINT64_MAX) return false;
             hash=(hash^(offset*8+bit))*1099511628211ull;
         }
@@ -184,9 +184,17 @@ static bool check_map_targets() {
         if (!check_large_surface(desc,fmt==57 ? 49152 : 32768,fmt==57 ? 65536 : 1024)) return false;
     }
     for (UINT fmt : {19u,20u,39u,40u,44u,45u,53u,55u}) {
-        for (UINT flags : {0x1000006u,0x81300002u,0x100000au}) {
+        for (UINT flags : {0x1000002u,0x1000006u,0x81300002u,0x100000au}) {
             for (UINT width : {160u,1024u,2560u,4096u,16384u}) for (UINT height : {90u,1440u}) {
                 ResourceDesc desc{3,0,width,height,1,1,fmt,1,0,0,flags};
+                if (!check_large_surface(desc)) return false;
+            }
+        }
+    }
+    for (UINT flags : {0x1000002u,0x81300002u}) {
+        for (UINT fmt : {19u,39u,53u}) {
+            for (UINT slices : {6u,17u}) {
+                ResourceDesc desc{3,0,1024,1024,static_cast<UINT16>(slices),1,fmt,1,0,0,flags};
                 if (!check_large_surface(desc)) return false;
             }
         }
@@ -403,9 +411,9 @@ int wmain(int argc, wchar_t** argv) {
     }
     if (!check_map_targets()) return 35;
     if (dump && fclose(dump)) return 18;
-    if (result_hash != 0x9736980b3b442d6bull) { std::fprintf(stderr,"XG library hash %016llx\n",result_hash); return 19; }
+    if (result_hash != 0xaf589d97b6800766ull) { std::fprintf(stderr,"XG library hash %016llx\n",result_hash); return 19; }
     FILE* out = stdout;
     if (report && _wfopen_s(&out,argv[2],L"wb")) return 20;
-    std::fprintf(out,"xg-library PASS depth=516 descriptors=%u lock=recursive+factory copies=bidirectional depth_surfaces=%u typed_images=%u map_targets=1382\n",records,depth_surfaces,typed_images);
+    std::fprintf(out,"xg-library PASS depth=516 descriptors=%u lock=recursive+factory copies=bidirectional depth_surfaces=%u typed_images=%u map_targets=1474\n",records,depth_surfaces,typed_images);
     return report && fclose(out);
 }

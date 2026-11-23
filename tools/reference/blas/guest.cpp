@@ -213,13 +213,19 @@ static ComPtr<ID3D12GraphicsCommandList> guest_list(ID3D12Device* guest, ID3D12C
 #include "reflection_probe.h"
 #endif
 
-static void guest_batch(ID3D12GraphicsCommandList* list, UINT count, const Entry* entries) {
+static void guest_batch(ID3D12GraphicsCommandList* list, UINT count, const Entry* entries,
+                        [[maybe_unused]] UINT64 output = 0) {
 #ifdef TUXBOX_SINGLE_BUILD_PROBE
     ComPtr<ID3D12GraphicsCommandList4> list4;
     check(list->QueryInterface(IID_PPV_ARGS(&list4)), "Xbox List4 query");
     using Single = void(WINAPI*)(ID3D12GraphicsCommandList4*, const Build*, UINT, const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC*);
-    for (UINT i = 0; i < count; ++i)
-        method<Single>(list4.Get(), 117)(list4.Get(), &entries[i].build, 0, nullptr);
+    for (UINT i = 0; i < count; ++i) {
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC sizes[] = {
+            {output + i * sizeof(UINT64), D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_CURRENT_SIZE},
+            {output + (count + i) * sizeof(UINT64), D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_COMPACTED_SIZE},
+        };
+        method<Single>(list4.Get(), 117)(list4.Get(), &entries[i].build, output ? 2 : 0, output ? sizes : nullptr);
+    }
 #else
     const IID iid{0xc3827890, 0x4024, 0x474c, {0x98, 0xcf, 0x64, 0x5b, 0x51, 0xdc, 0x48, 0x74}};
     ComPtr<IUnknown> list6;
@@ -346,6 +352,7 @@ static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, 
                  sizes.ResultDataMaxSizeInBytes, sizes.ScratchDataSizeInBytes);
     std::fflush(receipt);
     std::array<ComPtr<ID3D12Resource>, 2> structures, scratch;
+    ComPtr<ID3D12Resource> inline_sizes;
     std::array<Entry, 2> batch{};
     for (size_t i = 0; i < batch.size(); ++i) {
         structures[i] = buffer(owner.Get(), sizes.ResultDataMaxSizeInBytes, D3D12_HEAP_TYPE_DEFAULT,
@@ -397,7 +404,13 @@ static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, 
                     cooked->GetGPUVirtualAddress(), D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_DESERIALIZE);
             }
         } else {
+#ifdef TUXBOX_SINGLE_BUILD_PROBE
+            inline_sizes = buffer(owner.Get(), 4 * sizeof(UINT64), D3D12_HEAP_TYPE_DEFAULT,
+                                  D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
+            guest_batch(list.Get(), static_cast<UINT>(batch.size()), batch.data(), inline_sizes->GetGPUVirtualAddress());
+#else
             guest_batch(list.Get(), static_cast<UINT>(batch.size()), batch.data());
+#endif
         }
         list->ResourceBarrier(1, &ready);
         check(list->Close(), "close guest build list");
@@ -417,7 +430,7 @@ static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, 
         check(extended.As(&single), "Xbox negative List4 query");
         using Single = void(WINAPI*)(ID3D12GraphicsCommandList4*, const Build*, UINT, const D3D12_RAYTRACING_ACCELERATION_STRUCTURE_POSTBUILD_INFO_DESC*);
         method<Single>(single.Get(), 117)(single.Get(), &batch[1].build, 1, nullptr);
-        if (extended->Close() != E_NOTIMPL) throw std::runtime_error("unsupported postbuild request accepted");
+        if (extended->Close() != E_INVALIDARG) throw std::runtime_error("null postbuild array accepted");
 #else
         bad_batch[1] = batch[1];
         bad_batch[1].reserved[0] = 1;
@@ -506,7 +519,7 @@ static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, 
     if (sphere || guest_build) {
         constexpr UINT bytes = 4 * sizeof(UINT64);
         size_output = buffer(owner.Get(), bytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
-        size_readback = buffer(owner.Get(), bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+        size_readback = buffer(owner.Get(), inline_sizes ? 2 * bytes : bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
         const UINT64 sources[] = {original_blas[0]->GetGPUVirtualAddress(), original_blas[1]->GetGPUVirtualAddress()};
         const auto dst = size_output->GetGPUVirtualAddress();
         ComPtr<ID3D12GraphicsCommandList> query;
@@ -534,6 +547,11 @@ static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, 
         to_copy.Transition = {size_output.Get(), 0, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE};
         verify->ResourceBarrier(1, &to_copy);
         verify->CopyBufferRegion(size_readback.Get(), 0, size_output.Get(), 0, bytes);
+        if (inline_sizes) {
+            to_copy.Transition.pResource = inline_sizes.Get();
+            verify->ResourceBarrier(1, &to_copy);
+            verify->CopyBufferRegion(size_readback.Get(), bytes, inline_sizes.Get(), 0, bytes);
+        }
     }
     Build tlas{};
     tlas.Inputs = top;
@@ -627,11 +645,14 @@ static void run(bool xbox, bool guest_build, bool guest_copy, bool deserialize, 
     std::memcpy(hits.data(), data, bytes);
     readback->Unmap(0, &empty);
     if (size_readback) {
-        const D3D12_RANGE range{0, 4 * sizeof(UINT64)};
+        const D3D12_RANGE range{0, (inline_sizes ? 8u : 4u) * sizeof(UINT64)};
         check(size_readback->Map(0, &range, &data), "map BLAS sizes");
         std::array<UINT64, 4> measured{};
         std::memcpy(measured.data(), data, sizeof(measured));
+        const bool match = !inline_sizes || !std::memcmp(measured.data(), static_cast<UINT64*>(data) + 4, sizeof(measured));
         size_readback->Unmap(0, &empty);
+        if (!match) throw std::runtime_error("inline size output differs from explicit size queries");
+        if (inline_sizes) std::fprintf(receipt, "inline_postbuild_sizes_matched=4\n");
         std::fprintf(receipt, "blas_current_bytes=%llu\nblas_compacted_bytes=%llu\n", measured[0], measured[2]);
         if (!measured[0] || !measured[2] || measured[2] > sizes.ResultDataMaxSizeInBytes
                 || measured[0] != measured[1] || measured[2] != measured[3])

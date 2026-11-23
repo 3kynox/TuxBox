@@ -70,8 +70,8 @@ float4 tb_ray_cube(float x, float y, float z) {
     return float4(x < 0.0 ? z : -z, -y, 2.0 * x, x < 0.0 ? 1.0 : 0.0);
 }
 uint tb_ray_bfe(uint x, uint offset, uint width) {
-    width &= 31u;
-    return (x >> (offset & 31u)) & ((1u << width) - 1u);
+    uint shifted = x >> (offset & 31u);
+    return width >= 32u ? shifted : shifted & ((1u << (width & 31u)) - 1u);
 }
 uint2 tb_ray_shift_left(uint2 pair, uint bits) {
     bits &= 63u;
@@ -458,7 +458,7 @@ pub(super) fn vector(ins: &Insn) -> Result<String, String> {
         "v_ashrrev_i32" => format!("asuint(asint({}) >> ({} & 31u))", raw(1)?, raw(0)?),
         "v_lshl_add_u32" => format!("({} << ({} & 31u)) + {}", raw(0)?, raw(1)?, raw(2)?),
         "v_bfrev_b32" => format!("reversebits({})", raw(0)?),
-        "v_bfe_u32" => format!("tb_ray_bfe({}, {}, {})", raw(0)?, raw(1)?, raw(2)?),
+        "v_bfe_u32" => format!("tb_ray_bfe({}, {}, ({} & 31u))", raw(0)?, raw(1)?, raw(2)?),
         _ => {
             return Err(format!(
                 "unsupported ray ALU operation {name} at {:#x}",

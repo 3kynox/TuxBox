@@ -114,7 +114,7 @@ fn scalar(ins: &Insn) -> Result<String, String> {
             )
         }
         "s_bfe_u32" => format!(
-            "{} = tb_ray_bfe({}, {}, {} >> 16); scc = ({} != 0u);",
+            "{} = tb_ray_bfe({}, {}, (({} >> 16) & 127u)); scc = ({} != 0u);",
             dst()?,
             a()?,
             b()?,

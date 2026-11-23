@@ -122,7 +122,7 @@ unsafe fn transfer(
             let row_start = z as usize * slice_pitch + y as usize * row_pitch;
             for x in (0..width).step_by(copy_width as usize) {
                 let offset = if let Some(depth) = this.depth_stencil {
-                    depth.offset(plane, x.into(), y)
+                    depth.offset(plane, x.into(), y, layer)
                 } else if this.dimension == 4 {
                     surface.element_offset_in_volume(z, mip, x.into(), y)
                 } else {

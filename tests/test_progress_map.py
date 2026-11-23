@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from xml.etree import ElementTree as ET
 
-from project_tuxbox.progress_map import export_progress, culling_readbacks, library_table, render_map, shader_checks, write_map
+from project_tuxbox.progress_map import culling_readbacks, library_table, render_map, shader_checks, write_map
 
 
 class ProgressMapTests(unittest.TestCase):
@@ -83,104 +83,64 @@ class ProgressMapTests(unittest.TestCase):
                          render_map(root / "evidence"),
                          "Regenerate the map with python tuxbox.py status --svg docs/progress.svg")
 
-    def test_library_coverage_precedes_regression_summary(self):
+    def write_library_audit(self, root):
+        dest = root / "matrix-awakens"
+        dest.mkdir()
+        (root / "matrix-awakens-launch.json").write_text(json.dumps({"sha256": "game"}))
+        (dest / "run.json").write_text("{}")
+        ref = f"{root.name}/matrix-awakens/run.json"
+        paths = [
+            {"name": "Decode frames", "status": "verified", "libraries": ["codec.dll"],
+             "provider": "Game package", "scope": "Decoded frames reached the game.", "evidence": [ref]},
+            {"name": "Play audio", "status": "partial", "libraries": ["audio.dll", "output.dll"],
+             "provider": "Proton", "scope": "Only menu audio checked.", "evidence": [ref]},
+        ]
+        audit = {"title_sha256": "game", "paths": paths,
+                 "optional": [{"name": "Chat", "reason": "No gameplay use observed.", "evidence": [ref]}]}
+        path = dest / "library-paths.json"
+        path.write_text(json.dumps(audit))
+        return path, audit
+
+    def test_library_table_shows_working_provider_and_open_behavior(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            rows = [{"name": "example<&>.dll", "status": "complete", "group": "Input", "provider": "Host",
-                     "scope": "Pad input"}, {"name": "graphics.dll", "status": "partial", "group": "Graphics",
-                                           "provider": "Rust factory", "scope": "Device creation"}]
-            (root / "library-status.json").write_text(json.dumps({"libraries": rows}))
-            for name, passed in [("provider-a", True), ("provider-b", False)]:
-                (root / (name + ".json")).write_text(json.dumps({"type": "homebrew", "host": "Linux",
-                    "provider": name, "checks": [{"gate": "memory", "passed": passed}]}))
+            self.write_library_audit(root)
+            table = library_table(root)
+            self.assertIn("1/2 required library behaviors verified", table)
+            self.assertIn("Verified · Decode frames · Game package", table)
+            self.assertIn("audio.dll, output.dll", table)
+            self.assertIn("Only menu audio checked.", table)
+            self.assertIn("Chat · No gameplay use observed.", table)
             output = root / "output/map.svg"
             write_map(root, output)
-            self.assertEqual(render_map(root), output.read_text())
-            svg = ET.parse(output)
-            labels = [e.text for e in svg.findall(".//{*}text")]
-            self.assertLess(labels.index("Xbox library coverage"), labels.index("Guest regression checks"))
-            for label in ["example<&>.dll", "1 complete", "1 partial", "0 incomplete",
-                          "1 of 2 passed across 2 host configurations"]:
-                self.assertIn(label, labels)
-            descriptions = [e.text for e in svg.findall(".//{*}title")]
-            self.assertTrue(any("example<&>.dll · Complete" in d and "Host Pad input" in d for d in descriptions))
+            labels = [node.text for node in ET.parse(output).findall(".//{*}text")]
+            self.assertIn("Verified", labels)
+            self.assertIn("Partial", labels)
+            self.assertNotIn("Chat", labels)
 
-    def test_export_bars_use_reviewed_totals_and_verified_exports(self):
+    def test_library_audit_checks_title_evidence_and_unique_behaviors(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            rows = []
-            for name, total, verified in [("factory.dll", 1, ["Create"]), ("memory.dll", 15, ["#10", "Free"]),
-                                          ("external.dll", 12, []), ("pending.dll", None, ["Initialize"])]:
-                rows.append({"name": name, "status": "partial", "group": "Test", "provider": "Test provider",
-                             "scope": "One tested operation", "export_coverage": {"total": total, "verified": verified}})
-            rows[1]["export_coverage"]["data_exports"] = ["#10", "IID_Device", "IID_Queue"]
-            (root / "library-status.json").write_text(json.dumps({"libraries": rows}))
-            svg = ET.fromstring(render_map(root))
-            table = library_table(root)
-            for name, tally, pct in [("factory.dll", "1/1", "100%"), ("memory.dll", "2/15", "13.3%"),
-                                      ("external.dll", "0/12", "0%"), ("pending.dll", "1/?", "Unmeasured")]:
-                cell = next(g for g in svg.findall(".//{*}g") if any(t.text == name for t in g.findall("{*}text")))
-                labels = [t.text for t in cell.findall("{*}text")]
-                self.assertEqual(labels[:3], [name, tally, pct])
-                if name == "memory.dll":
-                    self.assertIn("1/12 functions, 1/3 data", labels)
-                    self.assertIn("1/12 functions, 1/3 data", table)
-                row = next(line for line in table.splitlines() if line.startswith(name))
-                self.assertEqual(row.rsplit(maxsplit=3)[-3:], [tally, pct, "Partial"])
-                self.assertIn("[", row)
-                widths = [float(r.get("width")) for r in cell.findall("{*}rect")]
-                if pct == "Unmeasured":
-                    self.assertIsNotNone(cell.find("{*}line"))
-                elif pct == "0%":
-                    self.assertEqual(len(widths), 1)
-                else:
-                    numerator, denominator = map(int, tally.split("/"))
-                    self.assertAlmostEqual(widths[1] / widths[0], numerator/denominator, places=5)
+            path, audit = self.write_library_audit(root)
+            path.write_text(json.dumps(dict(audit, title_sha256="other")))
+            self.assertIn("No matching", library_table(root))
+            self.assertIn("Library behaviors · Unmeasured", render_map(root))
+            path.write_text(json.dumps(dict(audit, paths=audit["paths"]*2)))
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                library_table(root)
+            path.write_text(json.dumps(audit))
+            (path.parent / "run.json").unlink()
+            with self.assertRaisesRegex(ValueError, "Missing evidence"):
+                render_map(root)
 
-    def test_inconsistent_export_counts_are_rejected_instead_of_plotted(self):
-        for total, verified in [(1, ["One", "Two"]), (2, ["One", "One"]), (-1, []), (2, "fn")]:
-            with self.subTest(total=total, verified=verified), self.assertRaisesRegex(ValueError, "sample.dll"):
-                export_progress({"name": "sample.dll", "export_coverage": {"total": total, "verified": verified}})
-
-    def test_frosty_imports_match_export_slots_and_reviewed_build(self):
+    def test_overall_weights_library_behaviors_and_shader_coverage_equally(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            rows = [{"name": name, "status": "partial", "group": "Test", "scope": "", "provider": "Test",
-                     "export_coverage": {"total": 3, "verified": ["First", "#2"], "binary_sha256": digest}}
-                    for name, digest in [("Sample.dll", "reviewed"), ("Other.dll", "previous")]]
-            entries = [{"ordinal": 1, "names": ["First", "AlsoFirst"], "rva": "0x1000"},
-                       {"ordinal": 2, "names": ["Second"], "rva": "0x2000"},
-                       {"ordinal": 3, "names": ["Third"], "rva": "0x2000"}]
-            inventory = {
-                "title": {"imports": [
-                    {"module": "sample.DLL", "table": "imports", "symbols": ["AlsoFirst", "#1", "Second"]},
-                    {"module": "SAMPLE.dll", "table": "delay_imports", "symbols": ["First", "#3"]},
-                    {"module": "Other.dll", "table": "imports", "symbols": ["First"]}]},
-                "libraries": [{"name": name, "sha256": digest, "exports": {"entries": entries}}
-                              for name, digest in [("sample.dll", "reviewed"), ("Other.dll", "current")]]}
-            (root / "library-status.json").write_text(json.dumps({"libraries": rows}))
-            (root / "frosty-xbox-library-inventory.json").write_text(json.dumps(inventory))
-            table = library_table(root)
-            self.assertRegex(table, r"Sample\.dll[^\n]*direct\s+2/3")
-            self.assertRegex(table, r"Other\.dll[^\n]*direct\s+Unmeasured")
-            self.assertIn("verified 2/3 distinct Frosty imports", table)
-            self.assertIn("covers 1 of 2 directly imported tracked DLLs", table)
-            svg = ET.fromstring(render_map(root))
-            tips = [node.text for node in svg.findall(".//{*}title")]
-            self.assertTrue(any("Frosty direct imports verified 2/3" in tip and
-                                "Verified (AlsoFirst, Second). Unverified (#3)." in tip for tip in tips))
-            self.assertTrue(any("Other.dll" in tip and "Unmeasured" in tip for tip in tips))
-
-    def test_overall_weights_library_and_shader_coverage_equally(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
+            self.write_library_audit(root)
             dest = root / "matrix-awakens"
-            dest.mkdir()
-            libraries = [{"name": name, "group": "Test", "scope": "", "provider": "Test",
-                          "status": "partial", "export_coverage": {"total": total, "verified": verified}}
-                         for name, total, verified in [("small.dll", 1, ["Factory"]), ("large.dll", 100, [])]]
-            (root / "library-status.json").write_text(json.dumps({
-                "libraries": libraries, "external_libraries": [{"name": "packaged.dll"}]}))
+            # Inventorying extra exports does not create a new required behavior.
+            (root / "library-status.json").write_text(json.dumps({"libraries": [
+                {"name": "codec.dll", "export_coverage": {"total": 1000, "verified": []}}]}))
             archives = {"global": {"member_sha256": "g", "entries": 1},
                         "material": {"member_sha256": "m", "entries": 3}}
             (dest / "shader-inventory.json").write_text(json.dumps({"archives": archives}))
@@ -194,7 +154,7 @@ class ProgressMapTests(unittest.TestCase):
             report.write_text(json.dumps({"archives": reports}))
             graphic = render_map(root)
             self.assertIn(">62.5%<", graphic)
-            self.assertIn("Library exports · 50.0% across 2 DLLs", graphic)
+            self.assertIn("Library behaviors · 1/2 verified (50.0%)", graphic)
             self.assertIn("Shader translation · 3/4 entries (75.0%)", graphic)
             reports["material"]["archive_sha256"] = "other"
             report.write_text(json.dumps({"archives": reports}))
@@ -220,7 +180,7 @@ class ProgressMapTests(unittest.TestCase):
             labels = [node.text for node in svg.findall(".//{*}text")]
             self.assertIn("Frosty retail test", labels)
             self.assertNotIn("25%", labels)
-            self.assertIn("World loaded · Frame submitted", labels)
+            self.assertIn("Packaged settings · World loaded · Frame submitted", labels)
             self.assertNotIn("Menu used", render_map(root))
             self.assertIn("Blocked at global shader 219 · ExampleCS", labels)
             for field, value in [("graphics_profile", "reduced"), ("loose_graphics_overrides_in_package", 1),

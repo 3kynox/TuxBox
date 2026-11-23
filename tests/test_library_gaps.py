@@ -1,7 +1,10 @@
+from contextlib import redirect_stdout
+import io
+import json
 import unittest
 from unittest.mock import patch
 
-from tools.library_gaps import gap_rows
+from tools.library_gaps import gap_rows, main
 
 
 class LibraryGapTests(unittest.TestCase):
@@ -42,6 +45,26 @@ class LibraryGapTests(unittest.TestCase):
         self.assertFalse(report['reviewed'])
         self.assertFalse(any(entry['verified'] for entry in report['exports']))
         self.assertEqual(report['exports'][1]['imports'], ['delay_imports:Second'])
+
+    def test_cli_defaults_to_title_imports_and_can_return_the_full_table(self):
+        for options, scope in [([], 'title_imports'), (['--all'], 'all_exports')]:
+            output = io.StringIO()
+            with patch('sys.argv', ['library_gaps.py', 'xcrdapi.dll', '--json', *options]), redirect_stdout(output):
+                main()
+            report, = json.loads(output.getvalue())
+            self.assertEqual(report['scope'], scope)
+            if not options:
+                self.assertEqual([row['names'] for row in report['exports']], [['DStorageGetFactory']])
+            else:
+                self.assertTrue(any(not row['imports'] for row in report['exports']))
+
+    def test_external_decoder_with_no_static_imports_retains_runtime_source(self):
+        self.status['libraries'] = []
+        self.status['external_libraries'] = [{'name': 'Example.dll', 'source': 'Packaged decoder'}]
+        self.inventory['title']['imports'] = []
+        report = gap_rows(self.status, self.inventory, 'example.dll', imports_only=True)
+        self.assertEqual(report['source'], 'Packaged decoder')
+        self.assertEqual(report['exports'], [])
 
     def test_provider_name_and_ordinal_are_checked_separately(self):
         with patch('tools.library_gaps.export_table', return_value=({1: {'Other'}, 8: {'First'}, 3: set()}, set())):

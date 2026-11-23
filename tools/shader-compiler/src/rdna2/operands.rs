@@ -159,6 +159,34 @@ pub(super) fn decode_operands(enc: Enc, raw: &[u32]) -> (Vec<Opnd>, Vec<Opnd>, I
             aux.mask = ((first >> 8) & 15) as u8; // DMASK.
             aux.imm2 = extension_words as i64;
 
+            let opcode = super::encoding::opcode_field(enc, first, Some(second));
+            if matches!(opcode, 230 | 231) {
+                // RDNA 2 table 48. BVH64 adds the high node-pointer word.
+                // A16 packs the six direction and reciprocal components in three VGPRs.
+                let count = 11 + usize::from(opcode == 231) - 3 * ((second >> 30) & 1) as usize;
+                let mut inputs = Vec::with_capacity(count + 1);
+                let first_address = second as u8;
+                if extension_words == 0 {
+                    inputs.extend(
+                        (0..count as u8)
+                            .map_while(|i| first_address.checked_add(i))
+                            .map(Opnd::Vgpr),
+                    );
+                } else {
+                    inputs.push(Opnd::Vgpr(first_address));
+                    inputs.extend(
+                        raw.iter()
+                            .skip(2)
+                            .flat_map(|word| word.to_le_bytes())
+                            .take(count - 1)
+                            .map(Opnd::Vgpr),
+                    );
+                }
+                // SRSRC names four descriptor SGPRs. SSAMP and any unused
+                // bytes in the last NSA word are padding, not live inputs.
+                inputs.push(Opnd::Sgpr((((second >> 16) & 31) * 4) as u8));
+                return (vec![vgpr(second, 8)], inputs, aux);
+            }
             let mut inputs = Vec::with_capacity(3 + extension_words * 4);
             inputs.push(vgpr(second, 0));
             // NSA addresses are individually named VGPRs packed bytewise.
@@ -240,6 +268,47 @@ mod tests {
             .collect();
         assert_eq!(src, expected);
         assert_eq!((aux.imm, aux.mask, aux.imm2), (2, 1, 2));
+    }
+
+    #[test]
+    fn bvh_sources_include_only_ray_inputs_and_descriptor() {
+        // First non-sequential BVH64 in the retail direct-light shader. Its
+        // destination overlaps the pointer and two inverse-direction inputs.
+        let (dst, src, _) = decode_operands(
+            Enc::Mimg,
+            &[
+                0xf19c_9f07,
+                0x0011_3131,
+                0x2322_1732,
+                0x2826_2524,
+                0xff35_3433,
+            ],
+        );
+        let expected: Vec<_> = [49, 50, 23, 34, 35, 36, 37, 38, 40, 51, 52, 53]
+            .map(Opnd::Vgpr)
+            .into_iter()
+            .chain([Opnd::Sgpr(68)])
+            .collect();
+        assert_eq!(dst, [Opnd::Vgpr(49)]);
+        assert_eq!(src, expected); // the final NSA byte is deliberately nonzero
+
+        for (opcode, a16, count) in [
+            (230, false, 11),
+            (231, false, 12),
+            (230, true, 8),
+            (231, true, 9),
+        ] {
+            // Contiguous form starting at v17. A16 only packs direction
+            // and reciprocal components; origin and extent remain float32.
+            let first = 0xf000_9f01 | ((opcode & 127) << 18);
+            let second = (u32::from(a16) << 30) | 0x0003_0211;
+            let (_, src, _) = decode_operands(Enc::Mimg, &[first, second]);
+            let expected: Vec<_> = (17..17 + count)
+                .map(Opnd::Vgpr)
+                .chain([Opnd::Sgpr(12)])
+                .collect();
+            assert_eq!(src, expected);
+        }
     }
 
     #[test]

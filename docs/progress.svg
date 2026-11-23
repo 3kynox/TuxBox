@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" role="img" font-family="'Terminess Nerd Font Mono', 'DejaVu Sans Mono', Consolas, monospace" aria-labelledby="map-title map-description" viewBox="0 0 1000 1169" width="1000" height="1169">
+<svg xmlns="http://www.w3.org/2000/svg" role="img" font-family="'Terminess Nerd Font Mono', 'DejaVu Sans Mono', Consolas, monospace" aria-labelledby="map-title map-description" viewBox="0 0 1000 1117" width="1000" height="1117">
   <title id="map-title">TuxBox runtime compatibility</title>
-  <desc id="map-description">Overall coverage averages verified library exports and translated shader archive entries. Frosty gameplay tracks title milestones at packaged graphics settings. Shader rows measure the reusable RDNA 2 translator on Frosty archives. DLL bars show verified exports.</desc>
-  <rect x="0" y="0" width="1000" height="1169" fill="#0b0b0f" />
+  <desc id="map-description">Overall coverage gives equal weight to verified Frosty library behaviors and shader translation. Gameplay results identify the graphics settings used.</desc>
+  <rect x="0" y="0" width="1000" height="1117" fill="#0b0b0f" />
   <rect x="0" y="0" width="1000" height="48" fill="#090910" />
   <rect x="0" y="47" width="1000" height="1" fill="#272733" />
   <rect x="14" y="10" width="210" height="27" fill="#e2bc8c" />
@@ -12,12 +12,12 @@
     <title>Overall TuxBox coverage</title>
     <rect x="0" y="0" width="972" height="112" fill="#14141d" stroke="#e2bc8c" />
     <text x="18" y="32" fill="#e2bc8c" font-size="25" text-anchor="start" font-weight="bold">Overall TuxBox coverage</text>
-    <text x="954" y="32" fill="#6fc7d4" font-size="23" text-anchor="end" font-weight="bold">74.7%</text>
+    <text x="954" y="32" fill="#6fc7d4" font-size="23" text-anchor="end" font-weight="bold">88.2%</text>
     <rect x="18" y="45" width="936" height="8" fill="#272733" />
-    <rect x="18" y="45" width="699.300879783259" height="8" fill="#6fc7d4" />
-    <text x="18" y="77" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Library exports · 61.9% across 11 DLLs</text>
-    <text x="954" y="77" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">Shader translation · 38,010/43,407 entries (87.6%)</text>
-    <text x="18" y="99" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">Equal weight for libraries and shaders. Each tracked DLL counts equally.</text>
+    <rect x="18" y="45" width="825.832884097035" height="8" fill="#6fc7d4" />
+    <text x="18" y="77" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Library behaviors · 8/9 verified (88.9%)</text>
+    <text x="954" y="77" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">Shader translation · 38,012/43,407 entries (87.6%)</text>
+    <text x="18" y="99" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">Frosty sample · 50% required library behaviors, 50% shader translation.</text>
   </g>
   <g transform="translate(14 184)">
     <title>RDNA 2 shader translation</title>
@@ -53,14 +53,14 @@
       <text x="954" y="173" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">100.0%</text>
     </g>
     <g>
-      <title>Global compute · compiler snapshot 8b09d1d99add1425c99c5d1f98df509dab1c663835f4d1388745aaee1b2ea5ba</title>
+      <title>Global compute · compiler snapshot 0d1cd099c5b0674badbd98f946e469e8469c0dbd5d07c3aa136d8668dc17e31d</title>
       <rect x="18" y="183" width="936" height="1" fill="#272733" />
       <text x="18" y="201" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Global compute</text>
       <text x="301" y="201" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">HLSL emitted</text>
       <rect x="510" y="191" width="125" height="6" fill="#272733" />
-      <rect x="510" y="191" width="113.98524720893143" height="6" fill="#6fc7d4" />
-      <text x="870" y="201" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">2,287/2,508</text>
-      <text x="954" y="201" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">91.2%</text>
+      <rect x="510" y="191" width="114.08492822966507" height="6" fill="#6fc7d4" />
+      <text x="870" y="201" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">2,289/2,508</text>
+      <text x="954" y="201" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">91.3%</text>
     </g>
     <g>
       <title>Material compute · compiler snapshot 8b09d1d99add1425c99c5d1f98df509dab1c663835f4d1388745aaee1b2ea5ba</title>
@@ -94,181 +94,92 @@
     </g>
   </g>
   <g transform="translate(14 510)">
-    <title>Xbox library coverage</title>
-    <rect x="0" y="0" width="972" height="484" fill="#14141d" stroke="#272733" stroke-width="1" />
+    <title>Required library behaviors</title>
+    <rect x="0" y="0" width="972" height="402" fill="#14141d" stroke="#272733" stroke-width="1" />
     <rect x="1" y="1" width="970" height="32" fill="#0d0d15" />
     <rect x="1" y="33" width="970" height="1" fill="#272733" />
     <circle cx="16" cy="17" r="4.5" fill="#e74c3c" />
     <circle cx="32" cy="17" r="4.5" fill="#f1c40f" />
     <circle cx="48" cy="17" r="4.5" fill="#2ecc71" />
-    <text x="68" y="22" fill="#6fc7d4" font-size="14" text-anchor="start" font-weight="normal">~/evidence/library-status.json</text>
-    <text x="18" y="70" fill="#e2bc8c" font-size="25" text-anchor="start" font-weight="bold">Xbox library coverage</text>
-    <text x="954" y="68" fill="#a0a0b1" font-size="14" text-anchor="end" font-weight="normal">11 active Frosty libraries</text>
-    <g transform="translate(23 99)">
-      <circle cx="0" cy="0" r="5.5" fill="none" stroke="#2ecc71" stroke-width="1.7" />
-      <path d="M-3,0 -1,2 3,-2" fill="none" stroke="#2ecc71" stroke-width="1.5" />
-    </g>
-    <text x="38" y="104" fill="#2ecc71" font-size="15" text-anchor="start" font-weight="normal">0 complete</text>
-    <g transform="translate(167 99)">
-      <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
-      <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
-    </g>
-    <text x="182" y="104" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">11 partial</text>
-    <g transform="translate(311 99)">
-      <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-    </g>
-    <text x="326" y="104" fill="#e74c3c" font-size="15" text-anchor="start" font-weight="normal">0 incomplete</text>
-    <text x="18" y="130" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">Bars count verified exports. Empty circles mark incomplete support.</text>
-    <rect x="18.0" y="148" width="462.0" height="1" fill="#272733" />
-    <text x="18.0" y="173" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Graphics and memory</text>
+    <text x="68" y="22" fill="#6fc7d4" font-size="14" text-anchor="start" font-weight="normal">~/docs/LIBRARIES.md</text>
+    <text x="18" y="70" fill="#e2bc8c" font-size="25" text-anchor="start" font-weight="bold">Required library behaviors</text>
+    <text x="18" y="96" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Verified in a game run or focused check. Partial means some behavior still needs verification.</text>
+    <text x="18" y="122" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">Behavior</text>
+    <text x="420" y="122" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">Provided by</text>
+    <text x="954" y="122" fill="#a0a0b1" font-size="13" text-anchor="end" font-weight="normal">Status</text>
     <g>
-      <title>d3d12_xs.dll · Partial · Verified TuxBox exports 53/54 (98.1%). TuxBox Rust device and command providers with desktop D3D12 root-signature serialization. Two Xbox device profiles, eight feature queries, GPU heaps, guest-backed textures, queues, indirect compute, direct and indirect mesh dispatch, descriptor and query operations, and 32 identifiers. Frosty creates 680-byte mesh pipelines and 712-byte graphics pipelines through ID3D12Device2 and presents 3840 × 2160 frames. A fresh Proton prefix running the checkout-built providers displays the menu and video preview, opens Settings and enters the Wake Up sequence. GPU tests cover indexed draws, depth/stencil writes, NV12 plane copies, and whole and regional copies into a tiled RGBA8 texture with guest-memory writeback and alias readback. The framebuffer-preservation size getter matches the supplied DLL in its initial state. The Series VM configuration computes a process GPU address range for zero-preservation requests. Placed-texture GPU readbacks exercise that range, explicit CPU cache flush and memory profiling. Two private UMD operations implement record updates and final-release callbacks. The first three PIX callbacks support capture-device setup. Frosty direct imports verified 6/6. Verified (D3D12XboxCreateDevice, IID_ID3D12Device, D3D12SerializeRootSignature, D3D12SerializeVersionedRootSignature, D3D12CreateDevice, D3D12XboxSetProcessDebugFlags).</title>
-      <g transform="translate(24.0 195)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
-        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
-      </g>
-      <text x="38.0" y="200" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">d3d12_xs.dll</text>
-      <rect x="169.1" y="191" width="200.89999999999998" height="7" fill="#272733" />
-      <rect x="169.1" y="191" width="197.1796" height="7" fill="#6fc7d4" />
-      <text x="422.0" y="200" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">53/54</text>
-      <text x="480.0" y="200" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">98.1%</text>
-      <text x="38.0" y="216" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">21/22 functions, 32/32 data</text>
+      <title>d3d12_xs.dll · The reduced-settings Wake Up run presented the cinematic and activated the room, furniture and bullet-time scenes.</title>
+      <rect x="18" y="130" width="936" height="1" fill="#272733" />
+      <text x="18" y="149" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Submit and present frames</text>
+      <text x="420" y="149" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">TuxBox D3D12</text>
+      <text x="954" y="149" fill="#2ecc71" font-size="14" text-anchor="end" font-weight="bold">Verified</text>
     </g>
     <g>
-      <title>dxcompiler_xs.dll · Partial · Verified TuxBox exports 4/4 (100%). TuxBox Rust ray compiler adapter and desktop DXC. All four factories have tested behavior. Three Frosty ray-generation shaders passed shader table preparation, and the Xbox linker accepted TuxBox continuation collections for five Frosty miss shaders. Global and local root UAVs produced the expected results on a desktop GPU. Frosty direct imports verified 1/1. Verified (DxcCreateInstance).</title>
-      <g transform="translate(24.0 240)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
-        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
-      </g>
-      <text x="38.0" y="245" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">dxcompiler_xs.dll</text>
-      <rect x="169.1" y="236" width="200.89999999999998" height="7" fill="#272733" />
-      <rect x="169.1" y="236" width="200.9" height="7" fill="#6fc7d4" />
-      <text x="422.0" y="245" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">4/4</text>
-      <text x="480.0" y="245" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">100%</text>
+      <title>xg_xs.dll · TuxBox matched the packaged XG layouts and sampled addresses for all 1,918 distinct descriptors in the Wake Up replay.</title>
+      <rect x="18" y="159" width="936" height="1" fill="#272733" />
+      <text x="18" y="178" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Address game textures</text>
+      <text x="420" y="178" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">TuxBox or packaged XG</text>
+      <text x="954" y="178" fill="#2ecc71" font-size="14" text-anchor="end" font-weight="bold">Verified</text>
     </g>
     <g>
-      <title>xmem.dll · Partial · Verified TuxBox exports 32/32 (100%). TuxBox Rust CPU memory provider. All 31 functions and the history data export have tested behavior. Frosty’s physical-page reservations share writable 64 KiB pages across virtual addresses. Tests cover partition accounting, heaps, pools, virtual queries, allocation tags, write-watch, scatter mapping, history and the seven HTTP callbacks. Frosty direct imports verified 9/9. Verified (XMemAlloc, XMemGetWorkingSetStatistics, XMemAllocatePhysicalPages, XMemMapPhysicalPages, XMemFreePhysicalPages, XMemFree, XMemFreeDefault, XMemAllocDefault, XMemVirtualAlloc).</title>
-      <g transform="translate(24.0 269)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
-        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
-      </g>
-      <text x="38.0" y="274" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xmem.dll</text>
-      <rect x="169.1" y="265" width="200.89999999999998" height="7" fill="#272733" />
-      <rect x="169.1" y="265" width="200.9" height="7" fill="#6fc7d4" />
-      <text x="422.0" y="274" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">32/32</text>
-      <text x="480.0" y="274" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">100%</text>
-      <text x="38.0" y="290" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">31/31 functions, 1/1 data</text>
+      <title>dxcompiler_xs.dll · Frosty imports DxcCreateInstance. A guest called that factory and verified a retained 257-byte shader blob.</title>
+      <rect x="18" y="188" width="936" height="1" fill="#272733" />
+      <text x="18" y="207" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Create DXC utilities</text>
+      <text x="420" y="207" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">TuxBox to desktop DXC</text>
+      <text x="954" y="207" fill="#2ecc71" font-size="14" text-anchor="end" font-weight="bold">Verified</text>
     </g>
     <g>
-      <title>xg_xs.dll · Partial · Verified TuxBox exports 21/21 (100%). TuxBox texture address computer. All 21 exports and all 13 texture-computer methods have tested behavior. TuxBox matched the full layout and sampled addresses of all 1,760 distinct Frosty descriptors captured through frame two. DCC checks cross-decoded 205,920 blocks across 45 formats. Frosty direct imports verified 1/1. Verified (XGCreateTextureComputer).</title>
-      <g transform="translate(24.0 314)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
-        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
-      </g>
-      <text x="38.0" y="319" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xg_xs.dll</text>
-      <rect x="169.1" y="310" width="200.89999999999998" height="7" fill="#272733" />
-      <rect x="169.1" y="310" width="200.9" height="7" fill="#6fc7d4" />
-      <text x="422.0" y="319" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">21/21</text>
-      <text x="480.0" y="319" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">100%</text>
-    </g>
-    <rect x="492.0" y="148" width="462.0" height="1" fill="#272733" />
-    <text x="492.0" y="173" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Platform and storage</text>
-    <g>
-      <title>xgameruntime.dll · Partial · Verified TuxBox exports 4/5 (80%). TuxBox Xbox Game Runtime with Rust task queues. TuxBox implements runtime initialization, threading-interface queries and queues. The guest checks manual, threadpool, serialized and immediate dispatch, cancellation and termination. No static PE import path found.</title>
-      <g transform="translate(498.0 195)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
-        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
-      </g>
-      <text x="512.0" y="200" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xgameruntime.dll</text>
-      <rect x="643.1" y="191" width="200.89999999999998" height="7" fill="#272733" />
-      <rect x="643.1" y="191" width="160.72" height="7" fill="#6fc7d4" />
-      <text x="896.0" y="200" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">4/5</text>
-      <text x="954.0" y="200" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">80%</text>
+      <title>xmem.dll · With Frosty's allocation flags, a guest mapped 512 CPU views and read back writes through each paired view.</title>
+      <rect x="18" y="217" width="936" height="1" fill="#272733" />
+      <text x="18" y="236" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Map CPU memory</text>
+      <text x="420" y="236" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">TuxBox XMem</text>
+      <text x="954" y="236" fill="#2ecc71" font-size="14" text-anchor="end" font-weight="bold">Verified</text>
     </g>
     <g>
-      <title>xcrdapi.dll · Partial · Verified TuxBox exports 1/118 (0.8%). TuxBox Rust storage queues over Windows file handles, with Rust zlib decompression. Frosty’s storage factory opens files and reads queue entries into game memory. Isolated guests decoded two 64 KiB blocks directly from its retail container on two Proton builds. Frosty direct imports verified 1/1. Verified (DStorageGetFactory).</title>
-      <g transform="translate(498.0 224)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
-        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
-      </g>
-      <text x="512.0" y="229" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xcrdapi.dll</text>
-      <rect x="643.1" y="220" width="200.89999999999998" height="7" fill="#272733" />
-      <rect x="643.1" y="220" width="1.7025" height="7" fill="#6fc7d4" />
-      <text x="896.0" y="229" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">1/118</text>
-      <text x="954.0" y="229" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0.8%</text>
-    </g>
-    <rect x="18.0" y="345" width="462.0" height="1" fill="#272733" />
-    <text x="18.0" y="370" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Input and audio</text>
-    <g>
-      <title>GameInput.dll · Partial · Verified TuxBox exports 1/1 (100%). TuxBox GameInput v0 provider for polling and device status callbacks. Lanes reads keyboard, mouse and XInput state through ordinal 1. TuxBox handles the blocking device enumeration requested by Frosty. With keyboard-to-gamepad enabled, all 48 tested key edges, mouse confirmation and signed mouse-look reached the gamepad reading. Frosty direct imports verified 1/1. Verified (#1).</title>
-      <g transform="translate(24.0 392)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
-        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
-      </g>
-      <text x="38.0" y="397" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">GameInput.dll</text>
-      <rect x="169.1" y="388" width="200.89999999999998" height="7" fill="#272733" />
-      <rect x="169.1" y="388" width="200.9" height="7" fill="#6fc7d4" />
-      <text x="422.0" y="397" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">1/1</text>
-      <text x="480.0" y="397" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">100%</text>
+      <title>xgameruntime.dll · Frosty loaded the runtime. A startup control initialized its threading interface, dispatched work and completed queue termination.</title>
+      <rect x="18" y="246" width="936" height="1" fill="#272733" />
+      <text x="18" y="265" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Start runtime task queues</text>
+      <text x="420" y="265" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">TuxBox Game Runtime</text>
+      <text x="954" y="265" fill="#2ecc71" font-size="14" text-anchor="end" font-weight="bold">Verified</text>
     </g>
     <g>
-      <title>AcpHal.dll · Partial · Verified TuxBox exports 0/10 (0%). TuxBox Rust AcpHal provider; runtime validation pending. The Rust provider builds seven of Frosty's imported exports: the host-backed APU heap, XMA context allocation, inert IAcpHal object, and release entry point. The earlier reference-provider trial started the mixer; TuxBox behavior remains unverified. Frosty direct imports verified 0/7. Unverified (AcpHalReleaseShapeContexts, AcpHalAllocateShapeContexts, AcpHalCreate, ApuAlloc, ApuFree, ApuHeapGetState, ApuCreateHeap).</title>
-      <g transform="translate(24.0 421)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
-        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
-      </g>
-      <text x="38.0" y="426" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">AcpHal.dll</text>
-      <rect x="169.1" y="417" width="200.89999999999998" height="7" fill="#272733" />
-      <text x="422.0" y="426" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/10</text>
-      <text x="480.0" y="426" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <rect x="492.0" y="345" width="462.0" height="1" fill="#272733" />
-    <text x="492.0" y="370" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Media</text>
-    <g>
-      <title>mfplat.dll · Partial · Verified TuxBox exports 2/140 (1.4%). TuxBox DXGI device bridge and Proton Media Foundation. GPU readback verifies the Xbox device-manager reset and surface buffer. The packaged video decoders matched FFmpeg on both NV12 planes. Frosty direct imports verified 1/13. Verified (MFResetDXGIDeviceManagerX). Unverified (MFShutdown, MFCreateAlignedMemoryBuffer, MFCreateMediaType, MFCreateSample, MFStartup, MFCreateDXGIDeviceManager, MFTEnumEx, MFCreateAttributes, MFCreateMemoryBuffer, MFCreateFile, MFllMulDiv, MFCreateWaveFormatExFromMFMediaType).</title>
-      <g transform="translate(498.0 392)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
-        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
-      </g>
-      <text x="512.0" y="397" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">mfplat.dll</text>
-      <rect x="643.1" y="388" width="200.89999999999998" height="7" fill="#272733" />
-      <rect x="643.1" y="388" width="2.87" height="7" fill="#6fc7d4" />
-      <text x="896.0" y="397" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">2/140</text>
-      <text x="954.0" y="397" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">1.4%</text>
+      <title>xcrdapi.dll · Frosty mounted both containers. A storage-queue replay decompressed two retail blocks and matched every byte against zlib.</title>
+      <rect x="18" y="275" width="936" height="1" fill="#272733" />
+      <text x="18" y="294" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Read packaged assets</text>
+      <text x="420" y="294" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">TuxBox storage</text>
+      <text x="954" y="294" fill="#2ecc71" font-size="14" text-anchor="end" font-weight="bold">Verified</text>
     </g>
     <g>
-      <title>mfhevcdec.dll · Partial · Verified TuxBox exports 0/5 (0%). TuxBox transform adapter around the supplied HEVC decoder. The adapter delivers synchronized D3D12 NV12 samples. Original intro and chase footage passed decoded-frame comparisons. No static PE import path found.</title>
-      <g transform="translate(498.0 421)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
-        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
-      </g>
-      <text x="512.0" y="426" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">mfhevcdec.dll</text>
-      <rect x="643.1" y="417" width="200.89999999999998" height="7" fill="#272733" />
-      <text x="896.0" y="426" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/5</text>
-      <text x="954.0" y="426" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
+      <title>GameInput.dll · Keyboard and controller navigated Frosty's retail menu and settings. A mouse click activated Start Chase.</title>
+      <rect x="18" y="304" width="936" height="1" fill="#272733" />
+      <text x="18" y="323" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Handle player input</text>
+      <text x="420" y="323" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">TuxBox GameInput</text>
+      <text x="954" y="323" fill="#2ecc71" font-size="14" text-anchor="end" font-weight="bold">Verified</text>
     </g>
     <g>
-      <title>mfh264dec.dll · Partial · Verified TuxBox exports 1/1 (100%). TuxBox transform adapter around the supplied H.264 decoder. The registered H.264 transform returns D3D12 samples for both 1024 × 512 menu previews. No static PE import path found.</title>
-      <g transform="translate(498.0 450)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
-        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
-      </g>
-      <text x="512.0" y="455" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">mfh264dec.dll</text>
-      <rect x="643.1" y="446" width="200.89999999999998" height="7" fill="#272733" />
-      <rect x="643.1" y="446" width="200.9" height="7" fill="#6fc7d4" />
-      <text x="896.0" y="455" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">1/1</text>
-      <text x="954.0" y="455" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">100%</text>
+      <title>mfplat.dll, mfreadwrite.dll, mfh264dec.dll, mfhevcdec.dll · The moving preview and Wake Up movie rendered. TuxBox bridges Xbox video surfaces, Proton supplies the source reader and the packaged H.264 and HEVC decoders produce the frames.</title>
+      <rect x="18" y="333" width="936" height="1" fill="#272733" />
+      <text x="18" y="352" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Play previews and movies</text>
+      <text x="420" y="352" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">TuxBox, Proton and packaged codecs</text>
+      <text x="954" y="352" fill="#2ecc71" font-size="14" text-anchor="end" font-weight="bold">Verified</text>
+    </g>
+    <g>
+      <title>AcpHal.dll, XAudio2_9.dll, MSAudDecMFT.dll · The retail menu submitted an XAudio2 buffer and the AAC control decoded soundtrack samples. Audible, synchronized chase playback remains unverified.</title>
+      <rect x="18" y="362" width="936" height="1" fill="#272733" />
+      <text x="18" y="381" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Play game audio</text>
+      <text x="420" y="381" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">TuxBox ACP, Proton and packaged AAC</text>
+      <text x="954" y="381" fill="#e2bc8c" font-size="14" text-anchor="end" font-weight="bold">Partial</text>
     </g>
   </g>
-  <g transform="translate(14 1006)">
+  <g transform="translate(14 924)">
     <title>Frosty retail test</title>
-    <rect x="0" y="0" width="972" height="117" fill="#14141d" stroke="#272733" />
+    <rect x="0" y="0" width="972" height="147" fill="#14141d" stroke="#272733" />
     <text x="18" y="32" fill="#e2bc8c" font-size="23" text-anchor="start" font-weight="bold">Frosty retail test</text>
-    <text x="954" y="32" fill="#a0a0b1" font-size="15" text-anchor="end" font-weight="normal">Packaged graphics settings</text>
-    <text x="18" y="61" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">World loaded · Frame submitted</text>
-    <text x="18" y="102" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">Blocked at global shader 219 · LumenSceneDirectLightingHardwareRayTracingCS</text>
+    <text x="18" y="61" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Packaged settings · World loaded · Frame submitted</text>
+    <text x="18" y="91" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">Blocked at global shader 219 · LumenSceneDirectLightingHardwareRayTracingCS</text>
+    <text x="18" y="134" fill="#2ecc71" font-size="15" text-anchor="start" font-weight="normal">Reduced settings · Wake Up reached the bullet-time scene</text>
   </g>
-  <g transform="translate(14 1135)">
+  <g transform="translate(14 1083)">
     <title>Guest regression checks</title>
     <text x="0" y="21" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Guest regression checks</text>
     <text x="972" y="21" fill="#a0a0b1" font-size="15" text-anchor="end" font-weight="normal">47 of 52 passed across 4 host configurations</text>
