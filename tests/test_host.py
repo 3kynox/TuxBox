@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -29,6 +30,7 @@ class SelectProton(unittest.TestCase):
             with patch.dict(os.environ, {"STEAM_COMPAT_CLIENT_INSTALL_PATH": str(root)}), patch.object(Path, "home", return_value=root):
                 self.assertEqual(proton_installation(None), install)
 
+    @unittest.skipUnless(sys.platform == "linux", "Wine prefix drive links and POSIX modes require Linux")
     def test_linux_title_drive_uses_prefix_and_preserves_existing_assignment(self):
         with tempfile.TemporaryDirectory() as tmp:
             prefix = Path(tmp)
@@ -82,15 +84,16 @@ class ConsoleConstantBuffers(unittest.TestCase):
                     "VK_ADD_LAYER_PATH": "/user/extra", "VK_INSTANCE_LAYERS": "overlay",
                     "VKD3D_CONFIG": "force_static_cbv", "VKD3D_DISABLE_EXTENSIONS": "first;second",
                     "PRESSURE_VESSEL_FILESYSTEMS_RO": "/user/mount", "TUXBOX_RUNTIME_SHADERS": "0"}
-        with patch("project_tuxbox.console_cbv.console_cbv_layer", return_value=self.layer):
+        layer = "/tuxbox/build/frosty-cbv-layer"
+        with patch("project_tuxbox.console_cbv.console_cbv_layer", return_value=layer):
             host.run_game(self.exe, [], self.log)
             env = self.log.run.call_args.kwargs["env"]
-            self.assertEqual(env["VK_LAYER_PATH"], self.layer + ":/user/layers")
+            self.assertEqual(env["VK_LAYER_PATH"], layer + ":/user/layers")
             self.assertEqual(env["VK_ADD_LAYER_PATH"], "/user/extra")
             self.assertEqual(env["VK_INSTANCE_LAYERS"], "VK_LAYER_TUXBOX_console_cbv:overlay")
             self.assertEqual(env["VKD3D_DISABLE_EXTENSIONS"], "VK_EXT_descriptor_buffer,first;second")
             self.assertEqual(env["VKD3D_CONFIG"], "force_static_cbv")
-            self.assertEqual(env["PRESSURE_VESSEL_FILESYSTEMS_RO"], self.layer + ":/user/mount")
+            self.assertEqual(env["PRESSURE_VESSEL_FILESYSTEMS_RO"], layer + ":/user/mount")
             before = env.copy()
             configure_console_cbv("proton", env, self.exe, self.log.status)
             self.assertEqual(env, before)

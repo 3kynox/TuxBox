@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import struct
 import subprocess
+import sys
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -19,6 +20,7 @@ def portable_program(stage, body):
     return b"DXBC" + bytes(16) + struct.pack("<IIII", 1, 36 + len(chunk), 1, 36) + chunk
 
 
+@unittest.skipUnless(sys.platform == "linux", "The runtime shader worker belongs to Proton on Linux")
 class RuntimeShaderLinks(unittest.TestCase):
     def setUp(self):
         temporary = TemporaryDirectory()
