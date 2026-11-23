@@ -23,7 +23,7 @@ int main() {
     ComPtr<ID3D12Device> guest;
     check(create(nullptr, profile.data(), IID_PPV_ARGS(&guest)),
           "guest device");
-    const bool single = true;
+    const bool linked = GetFileAttributesW(L"linked-list") != INVALID_FILE_ATTRIBUTES;
     auto rootbytes = load("retail.dxbc");
     ComPtr<ID3D12RootSignature> root;
     check(guest->CreateRootSignature(0, rootbytes.data(), rootbytes.size(),
@@ -79,12 +79,12 @@ int main() {
     D3D12_CONSTANT_BUFFER_VIEW_DESC cv{cb->GetGPUVirtualAddress(), 256};
     dev->CreateConstantBufferView(&cv, cpu(64));
     std::array<ComPtr<ID3D12Resource>, 8> in, staging;
-    for (UINT i = 0; i < 6; ++i) {
+    for (UINT i = 0; i < (linked ? 1u : 6u); ++i) {
       const auto bytes =
           load((std::string("t") + std::to_string(i) + ".bin").c_str());
-      const bool scalar = i == 0 || i == 5 || (single && (i == 2 || i == 3));
+      const bool scalar = i == 0 || i == 5 || i == 2 || i == 3;
       const DXGI_FORMAT fmt =
-          scalar ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_R32G32_UINT;
+          linked ? DXGI_FORMAT_R32_UINT : scalar ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_R32G32_UINT;
       const UINT row = scalar ? 32 : 64;
       std::vector<char> padded(2048);
       for (UINT y = 0; y < 8; y++)
@@ -113,7 +113,17 @@ int main() {
                  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
       dev->CreateShaderResourceView(in[i].Get(), nullptr, cpu(i));
     }
-    for (UINT i = 6; i < 8; i++) {
+    if (linked) {
+      const auto nodes = load("t1.bin");
+      in[1] = input(nodes);
+      D3D12_SHADER_RESOURCE_VIEW_DESC v{};
+      v.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+      v.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+      v.Buffer.StructureByteStride = 28;
+      v.Buffer.NumElements = UINT(nodes.size() / v.Buffer.StructureByteStride);
+      dev->CreateShaderResourceView(in[1].Get(), &v, cpu(1));
+    }
+    for (UINT i = 6; !linked && i < 8; i++) {
       in[i] =
           input(load((std::string("t") + std::to_string(i) + ".bin").c_str()));
       D3D12_SHADER_RESOURCE_VIEW_DESC v{};
@@ -123,19 +133,23 @@ int main() {
       v.Buffer.NumElements = 1;
       dev->CreateShaderResourceView(in[i].Get(), &v, cpu(i));
     }
-    std::array<ComPtr<ID3D12Resource>, 5> out, seed, read;
-    for (UINT i = 0; i < 5; i++) {
+    std::array<ComPtr<ID3D12Resource>, 6> out, seed, read;
+    const UINT outputs = GetFileAttributesW(L"u5.bin") == INVALID_FILE_ATTRIBUTES ? 5 : 6;
+    auto format = [](UINT slot) {
+      if (slot == 5) return DXGI_FORMAT_R32G32_FLOAT;
+      return slot == 4 ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_R32_UINT;
+    };
+    for (UINT i = 0; i < outputs; i++) {
       auto bytes =
           load((std::string("u") + std::to_string(i) + ".bin").c_str());
-      const bool texture = i == 0 || i == 1 || i == 4;
+      const bool texture = i == 0 || i == 1 || i >= 4;
       if (texture) {
-        const DXGI_FORMAT fmt =
-            i == 4 ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_R32_UINT;
+        const DXGI_FORMAT fmt = format(i);
         const UINT side = i == 0 ? 1 : 8;
         std::vector<char> padded(256 * side);
+        const UINT row = side * (i == 5 ? 8 : 4);
         for (UINT y = 0; y < side; y++)
-          std::memcpy(padded.data() + 256 * y, bytes.data() + side * 4 * y,
-                      side * 4);
+          std::memcpy(padded.data() + 256 * y, bytes.data() + row * y, row);
         seed[i] = input(padded);
         read[i] = buffer(dev, UINT(padded.size()), D3D12_HEAP_TYPE_READBACK,
                          D3D12_RESOURCE_STATE_COPY_DEST);
@@ -176,9 +190,10 @@ int main() {
       else {
         D3D12_UNORDERED_ACCESS_VIEW_DESC u{};
         u.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-        u.Buffer.NumElements = UINT(bytes.size() / 8);
+        const UINT stride = i == 2 && linked ? 20 : 8;
+        u.Buffer.NumElements = UINT(bytes.size() / stride);
         if (i == 2)
-          u.Buffer.StructureByteStride = 8;
+          u.Buffer.StructureByteStride = stride;
         else
           u.Format = DXGI_FORMAT_R32G32_UINT;
         dev->CreateUnorderedAccessView(out[i].Get(), nullptr, &u, cpu(80 + i));
@@ -198,12 +213,12 @@ int main() {
     table(l.Get(), 1, gpu(64));
     table(l.Get(), 3, gpu(80));
     l->Dispatch(1, 1, 1);
-    for (UINT i = 0; i < 5; i++) {
+    for (UINT i = 0; i < outputs; i++) {
       transition(l.Get(), out[i].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                  D3D12_RESOURCE_STATE_COPY_SOURCE);
-      if (i == 0 || i == 1 || i == 4) {
+      if (i == 0 || i == 1 || i >= 4) {
         UINT side = i == 0 ? 1 : 8;
-        DXGI_FORMAT fmt = i == 4 ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_R32_UINT;
+        DXGI_FORMAT fmt = format(i);
         D3D12_TEXTURE_COPY_LOCATION src{}, dst{};
         src.pResource = out[i].Get();
         dst.pResource = read[i].Get();
@@ -218,10 +233,10 @@ int main() {
                 .size());
     }
     submit_and_wait(dev, queue.Get(), l.Get());
-    for (UINT i = 0; i < 5; i++) {
+    for (UINT i = 0; i < outputs; i++) {
       SIZE_T n =
           (i == 0 ? 256
-                  : (i == 1 || i == 4
+                  : (i == 1 || i >= 4
                          ? 2048
                          : load((std::string("u") + std::to_string(i) + ".bin")
                                     .c_str())

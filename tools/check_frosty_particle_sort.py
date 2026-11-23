@@ -20,6 +20,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("mount", "provider", "proton", "prefix", "compiler-dir", "work", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
+    fingerprints = {
+        3333: "1bb75d7eee96ddae9c7a19fa5dd91c551a894120999daa71218c254705850a33",
+        3335: "5201c5a3f6c6c556de14ec9036c4bcb4c21ea5b6fb0236340273d7735a838eaf",
+    }
+    parser.add_argument("--entry", type=int, choices=fingerprints, default=3333)
     args = parser.parse_args()
     work, proton = args.work.resolve(), args.proton.resolve()
     work.mkdir(parents=True, exist_ok=True)
@@ -28,10 +33,12 @@ def main():
     lz4.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
     with TemporaryDirectory(dir=work) as temp:
         trial = Path(temp)
-        ((_, native, _),) = containers(decompress(archive, entries[3333], lz4))
+        ((_, native, _),) = containers(decompress(archive, entries[args.entry], lz4))
         fingerprint = hashlib.sha256(native).hexdigest()
-        if fingerprint != "1bb75d7eee96ddae9c7a19fa5dd91c551a894120999daa71218c254705850a33":
+        if fingerprint != fingerprints[args.entry]:
             raise ValueError("Unexpected cooked particle sort shader")
+        if args.entry == 3335:
+            (trial / "full-width").touch()
         (trial / "retail.dxbc").write_bytes(native)
         exe, status, actual = run_gpu_guest(ROOT / "tools/reference/particle-sort/guest.cpp", "particles.exe", trial,
                                             work, proton, args.prefix, args.provider, args.compiler_dir)
@@ -41,9 +48,10 @@ def main():
             raise ValueError(f"Particle sort GPU control returned {status}: {actual}. See {work / 'gpu.log'}")
         adapters = sorted({line.split("Found device: ", 1)[1] for line in (work / "gpu.log").read_text().splitlines()
                            if "Found device: " in line})
-        result = dict(shader="GenerateParticleSortKeys", global_archive_entry=3333, cooked_sha256=fingerprint,
+        result = dict(shader="GenerateParticleSortKeys", global_archive_entry=args.entry, cooked_sha256=fingerprint,
                       global_archive_sha256=GLOBAL_SHA, group=[64, 1, 1], groups_dispatched=2, guest_slot=62,
-                      scope="Three dispatches using genuine particle attribute, indirect count and visibility tag SRVs. Ascending and descending half-float keys including negative and zero values; batch bits, destination offset, 103 capacity, two particle groups, sparse visibility across lanes 31/32 and 63/64, non-zero initial count, empty input, guard words.",
+                      key_bits=32 if args.entry == 3335 else 16,
+                      scope="Three dispatches using genuine particle attribute, indirect count and visibility tag SRVs. Ascending and descending keys including negative, zero and fractional values that round to duplicate half-precision keys. Destination offset, 103 capacity, two particle groups, sparse visibility across lanes 31/32 and 63/64, non-zero initial count, empty input, guard words.",
                       words_per_case=384, adapters=adapters, readback=actual, guest_sha256=digest(exe),
                       provider_sha256=digest(args.provider), proton=(proton / "version").read_text().strip())
     args.output.parent.mkdir(parents=True, exist_ok=True)

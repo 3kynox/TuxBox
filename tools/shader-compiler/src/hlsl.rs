@@ -21,6 +21,7 @@ use std::fmt::Write as _;
 
 mod compare;
 mod uniform_texel;
+mod mubuf_offsets;
 mod fssm_bindings;
 mod micropoly;
 mod mesh;
@@ -45,12 +46,14 @@ mod lds_order;
 mod ps09_classify;
 mod subsurface_setup;
 mod hair_compact;
+mod hair_multisample;
 mod hair_visibility_single;
 mod hair_visibility_indirect;
 mod packed_root;
 mod light_grid;
 mod page_waves;
 mod wave_cull;
+mod singleton_wave;
 mod wave_sum;
 mod reflection_compact;
 mod wave_scan;
@@ -339,6 +342,7 @@ struct Emitter<'a> {
     insns: Vec<Insn>,
     res: HashMap<usize, Vec<Res>>, // per-instruction resolved resources
     cb_size: BTreeMap<u32, u32>,   // slot -> dwords
+    zero_buffer_offsets: std::cell::OnceCell<BTreeSet<(usize, u8)>>,
     tex: BTreeMap<u32, u32>,       // slot -> dim
     samp: BTreeSet<u32>,
     samp_cmp: BTreeSet<u32>,
@@ -400,6 +404,7 @@ struct Emitter<'a> {
     /// Pixel shader needs its position within the 2x2 quad (ds_swizzle).
     uses_quad: bool,
     compute_swizzle: bool,
+    hoisted_swizzle: Option<usize>,
     indexed_lane: bool,
     /// Complete 32-thread wave using independent one-word vector comparison masks.
     single_wave32: bool,
@@ -407,6 +412,8 @@ struct Emitter<'a> {
     light_grid: bool,
     page_waves: bool,
     wave_cull: bool,
+    hair_multisample: bool,
+    hoist_wave_exchanges: bool,
     regs: BTreeSet<String>,
     body: String,
     tmp: usize,
@@ -452,7 +459,7 @@ fn is_quad_add(i: &Insn) -> bool {
 /// SOP1 0x29 as nand-saveexec are taken from the public GFX10 encoding and are consistent
 /// with this shader's instruction stream.
 /// Anything in the region that does not fit this shape is refused.
-fn lower_wave_reductions(insns: &mut [Insn], reflection: bool) -> Result<Option<u32>, String> {
+fn lower_wave_reductions(insns: &mut [Insn]) -> Result<Option<u32>, String> {
     let mut width = None;
     let is_dpp = |i: &Insn| i.enc == Enc::Vop2 && matches!(i.src.first(), Some(Opnd::Raw(233 | 234 | 250)));
     let mut at = 0;
@@ -472,9 +479,9 @@ fn lower_wave_reductions(insns: &mut [Insn], reflection: bool) -> Result<Option<
             at = first + 1;
             continue;
         }
-        let wave32_extrema = matches!(red.as_str(), "v_min_f32" | "v_max_f32")
-            && first.checked_sub(3).is_some_and(|p| insns[p].mnemonic == "s_or_saveexec_b32");
-        if red == "v_add_nc_u32" || (reflection && red == "v_add_f32" && insns[first].src.first() == Some(&Opnd::Raw(233))) || wave32_extrema {
+        let saved_extrema = matches!(red.as_str(), "v_min_f32" | "v_max_f32")
+            && first.checked_sub(3).is_some_and(|p| matches!(insns[p].mnemonic.as_str(), "s_or_saveexec_b32" | "s_or_saveexec_b64"));
+        if matches!(red.as_str(), "v_add_nc_u32" | "v_max_u32" | "v_add_f32") || saved_extrema {
             let (required, next) = wave_sum::lower(insns, first).map_err(bad)?;
             if width.replace(required).is_some_and(|w| w != required) {
                 return Err(bad("conflicting integer sum wave widths"));
@@ -560,6 +567,11 @@ fn lower_wave_reductions(insns: &mut [Insn], reflection: bool) -> Result<Option<
     Ok(width)
 }
 
+// Scalar bit counts and searches read a pair, but only overwrite one SGPR.
+fn wide_bit_result(mnemonic: &str) -> bool {
+    mnemonic.ends_with("_b64") && !mnemonic.ends_with("_i32_b64")
+}
+
 fn writes_scalar(op: &Insn, register: u8) -> bool {
     let m = op.mnemonic.as_str();
     let width = if m.ends_with("dwordx16") {
@@ -569,10 +581,11 @@ fn writes_scalar(op: &Insn, register: u8) -> bool {
     } else if m.ends_with("dwordx4") {
         4
     } else if m.ends_with("dwordx2")
-        || m.ends_with("_b64")
-        || m.ends_with("_i64")
+        || wide_bit_result(m)
+        || (m.ends_with("_i64") && !m.ends_with("_i32_i64"))
         || m.ends_with("_u64")
         || m.starts_with("v_cmp")
+        || matches!(m, "s_bitreplicate_b64_b32" | "s_memtime" | "s_memrealtime")
     {
         2
     } else {
@@ -870,11 +883,13 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     let subsurface_setup = subsurface_setup::prepare(ex, &mut insns);
     let material_classify = ps09_classify::prepare(ex, &mut insns);
     let classify_tiles = classify_materials::prepare(ex, &mut insns);
-    let wave_cull = wave_cull::recognize(ex);
+    singleton_wave::prepare(ex, &mut insns);
+    let hair_multisample = hair_multisample::recognize(ex);
+    let wave_cull = hair_multisample || wave_cull::recognize(ex);
     let page_waves = page_waves::recognize(ex);
     let allocation_wave64 = !wave_cull && !page_waves && mark_wave_allocations(&mut insns)?;
     let reflection = reflection_compact::prepare(ex, &mut insns);
-    let required_wave_size = if wave_cull { None } else { lower_wave_reductions(&mut insns, reflection)? };
+    let required_wave_size = if wave_cull { None } else { lower_wave_reductions(&mut insns)? };
     let uses_bpermute = insns.iter().any(|ins| ins.mnemonic == "ds_bpermute_b32");
     if uses_bpermute && insns.iter().any(|ins| ins.enc == Enc::Sopp && Emitter::branch_cond(ins.op).is_some()) {
         return Err("backward permute with scalar branches needs verified convergent control flow".into());
@@ -890,6 +905,12 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     let mut em = Emitter::new(ex, insns);
     em.page_waves = page_waves;
     em.wave_cull = wave_cull;
+    em.hair_multisample = hair_multisample;
+    em.hoist_wave_exchanges = wave_cull && (compute_group(ex) == [16, 16, 1]
+        || ex.entry.as_deref() == Some("GenerateReflectionRaysCS")
+        || (ex.entry.as_deref() == Some("MainCS") && [
+            (2356, 0xe4995b0e2291e61e), (2884, 0x1c9821104747da89),
+        ].into_iter().any(|(size, hash)| packed_root::matches_program(&ex.isa, size, hash))));
     em.indexed_lane = indexed_lane;
     em.single_wave32 = single_wave32;
     em.reflection_mask32 = reflection && matches!(ex.isa.len(), 1024 | 1028);
@@ -958,11 +979,16 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
             return Err("compute swizzle following an early exit".into());
         }
         // The generic LDS declaration already reserves the full SM5 shared budget.
-        if em.insns.iter().any(|i| i.enc == Enc::Ds && i.mnemonic != "ds_swizzle_b32") {
+        if wave_cull::lds_words(&em).is_none() && em.insns.iter().any(|i| i.enc == Enc::Ds && i.mnemonic != "ds_swizzle_b32") {
             return Err("compute swizzle with additional LDS operations".into());
         }
-        if em.insns.iter().any(|i| i.enc == Enc::Sopp && Emitter::branch_cond(i.op).is_some() && i.aux.imm < 0) {
-            return Err("compute swizzle inside a program with backward branches".into());
+        // Moving a shared exchange out of a forward guest branch is safe once every
+        // invocation rejoins. A backward branch could execute it different numbers of times.
+        for branch in em.insns.iter().filter(|i| i.enc == Enc::Sopp && Emitter::branch_cond(i.op).is_some() && i.aux.imm < 0) {
+            let head = branch.offset as i64 + 4 + 4 * branch.aux.imm;
+            if em.insns.iter().any(|i| i.mnemonic == "ds_swizzle_b32" && (head..=branch.offset as i64).contains(&(i.offset as i64))) {
+                return Err("compute swizzle inside a loop".into());
+            }
         }
     }
     if let Some(width) = required_wave_size {
@@ -977,6 +1003,10 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
         em.classify_interpolation();
     }
     em.infer_tbuf_types();
+    if wave_cull && ex.entry.as_deref() == Some("WaterTileCatergorisationCS") {
+        // Both the dispatch count and the packed XY tile list use R32_UINT.
+        em.tbuf_uint.extend([0, 1]);
+    }
     if particle_sort {
         // R32_UINT particle count, sort keys and particle indices.
         em.tbuf_ty.extend([((false, 3), 1), ((true, 0), 1), ((true, 1), 1)]);
@@ -992,11 +1022,17 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
             em.tbuf_ty.insert(binding, 1);
         }
     }
-    if subsurface_setup {
+    if subsurface_setup || (wave_cull && ex.entry.as_deref() == Some("SetupIndirectCS")) {
         // These two R32_UINT UAVs hold both the atomic head and the XY rows.
         em.tbuf_uint.extend([0, 1]);
     }
-    if let Some(indirect) = hair_compact { hair_compact::resources(&mut em, indirect)?; }
+    if wave_cull && ex.entry.as_deref() == Some("MarkValid_PrepareCS") {
+        // t2 contains the integer page-grid dimensions and base. u2 receives
+        // pairs of packed coordinates for the deferred page-marking pass.
+        em.tbuf_ty.extend([((false, 2), 1), ((true, 2), 1)]);
+    }
+    if hair_multisample { hair_multisample::resources(&mut em)?; }
+    if let Some(layout) = hair_compact { hair_compact::resources(&mut em, layout)?; }
     if hair_visibility_single { hair_visibility_single::resources(&mut em)?; }
     if hair_visibility_indirect { hair_visibility_indirect::resources(&mut em)?; }
     if material_classify { ps09_classify::resources(&mut em)?; }
@@ -1070,7 +1106,14 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
         hlsl.insert_str(0, instance_cull_hzb::HIDDEN_DECLARATIONS);
     }
     if light_grid { hlsl.insert_str(0, light_grid::DECLARATIONS); }
-    if page_waves || wave_cull { hlsl.insert_str(0, page_waves::DECLARATIONS); }
+    if page_waves || wave_cull {
+        if compute_group(ex) == [1024, 1, 1] {
+            hlsl.insert_str(0, &page_waves::DECLARATIONS.replace("page_bits[8]", "page_bits[32]")
+                .replace("page_lane_values[256]", "page_lane_values[1024]").replace("tid < 8u", "tid < 32u"));
+        } else {
+            hlsl.insert_str(0, page_waves::DECLARATIONS);
+        }
+    }
     if particle_sort { hlsl.insert_str(0, particle_sort::DECLARATIONS); }
     if hair_cluster { hlsl.insert_str(0, hair_cluster::DECLARATIONS); }
     if hair_cluster_export { hlsl.insert_str(0, hair_cluster_export::DECLARATIONS); }
@@ -1347,6 +1390,7 @@ impl<'a> Emitter<'a> {
             insns,
             res: HashMap::new(),
             cb_size: BTreeMap::new(),
+            zero_buffer_offsets: Default::default(),
             tex: BTreeMap::new(),
             samp: BTreeSet::new(),
             samp_cmp: BTreeSet::new(),
@@ -1381,12 +1425,15 @@ impl<'a> Emitter<'a> {
             live: Vec::new(),
             uses_quad: false,
             compute_swizzle: false,
+            hoisted_swizzle: None,
             indexed_lane: false,
             single_wave32: false,
             reflection_mask32: false,
             light_grid: false,
             page_waves: false,
             wave_cull: false,
+            hair_multisample: false,
+            hoist_wave_exchanges: false,
             regs: if has_mode { BTreeSet::from(["tb_fp_mode".into()]) } else { BTreeSet::new() },
             body: String::new(),
             tmp: 0,
@@ -1572,6 +1619,8 @@ impl<'a> Emitter<'a> {
             })
             .collect();
 
+        // Both passes read the same decoded program. Snapshot it once for all blocks.
+        let program = self.insns.clone();
         // Fixpoint (analysis only: recordings are rolled back afterwards).
         let saved = (
             self.res.clone(),
@@ -1595,7 +1644,7 @@ impl<'a> Emitter<'a> {
             }
             budget -= 1;
             let (mut sym, mut written) = states[b].clone().unwrap();
-            if let Err(e) = self.res_block(&mut sym, &mut written, ranges[b].clone()) {
+            if let Err(e) = self.res_block(&program, &mut sym, &mut written, ranges[b].clone()) {
                 // Unknown effect: forget everything and treat every SGPR as written. Keep
                 // the first failure — it is the root cause if the recording pass fails too.
                 first_err.get_or_insert(e);
@@ -1669,7 +1718,7 @@ impl<'a> Emitter<'a> {
         // Recording pass with the converged entry states.
         for (b, r) in ranges.iter().enumerate() {
             if let Some((mut sym, mut written)) = states[b].clone() {
-                self.res_block(&mut sym, &mut written, r.clone()).map_err(|e| first_err.clone().unwrap_or(e))?;
+                self.res_block(&program, &mut sym, &mut written, r.clone()).map_err(|e| first_err.clone().unwrap_or(e))?;
             }
         }
         Ok(())
@@ -2102,11 +2151,11 @@ impl<'a> Emitter<'a> {
     /// Transfer function for one basic block (also records resources / reports errors).
     fn res_block(
         &mut self,
+        insns: &[Insn],
         sym: &mut HashMap<u16, Sym>,
         written: &mut BTreeSet<u16>,
         range: std::ops::Range<usize>,
     ) -> Result<(), String> {
-        let insns = self.insns.clone();
         let dbg_reg = std::env::var("TB_DFDEBUG").ok().and_then(|v| v.parse::<u16>().ok());
         let mut dbg_prev: Option<Sym> = dbg_reg.and_then(|r| sym.get(&r).copied());
         for idx in range {
@@ -2390,7 +2439,7 @@ impl<'a> Emitter<'a> {
                         if let Some(n) = sg(d) {
                             sym.remove(&n);
                             written.insert(n);
-                            if ins.mnemonic.ends_with("_b64") {
+                            if wide_bit_result(&ins.mnemonic) {
                                 sym.remove(&(n + 1));
                                 written.insert(n + 1);
                             }
@@ -2478,7 +2527,7 @@ impl<'a> Emitter<'a> {
             let extra = match ins.enc {
                 Enc::Smem => (1u32 << (ins.op & 7)) - 1,
                 Enc::Mimg => u32::from(image_data_registers(ins)).saturating_sub(1),
-                _ if ins.mnemonic.ends_with("_b64") => 1,
+                _ if wide_bit_result(&ins.mnemonic) => 1,
                 _ => 0,
             };
             for o in &ins.dst {
@@ -2741,8 +2790,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             let mut active: Vec<usize> =
                 labels.iter().copied().filter(|&t| t > i && target.iter().any(|(&b, &bt)| bt == t && b < i)).collect();
-            if self.page_waves {
-                if let Some(code) = page_waves::rendezvous(i, ins)? {
+            if self.page_waves || self.hoist_wave_exchanges {
+                let exchange = if self.page_waves { page_waves::rendezvous(i, ins)? } else { wave_cull::exchange(i, ins)? };
+                if let Some(code) = exchange {
                     if open { self.line("}"); open = false; }
                     cur.clear();
                     self.line(&code);
@@ -2758,7 +2808,10 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 active.clear();
             }
             if self.compute_swizzle && ins.mnemonic == "ds_swizzle_b32" && !active.is_empty() {
-                return Err(format!("compute swizzle in divergent control flow at {:#x}", ins.offset));
+                if open { self.line("}"); open = false; }
+                cur.clear();
+                self.emit_compute_swizzle(i, ins, &active)?;
+                self.hoisted_swizzle = Some(i);
             }
             if self.micropoly_vote == Some(i) {
                 // Retired triangles contribute zero and still participate in both
@@ -2814,7 +2867,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             if back.contains_key(&i) {
                 // Evaluate the back-edge condition inside the guard (a skipped branch is not taken).
-                let cond = Self::branch_cond(ins.op).unwrap_or("false");
+                let cond = wave_cull::branch_condition(self, ins, Self::branch_cond(ins.op).unwrap_or("false"));
                 self.line(&format!("tb_c{i} = ({cond});"));
                 if labels.contains(&i) {
                     // A `continue` jumped here: iterate again regardless of the condition.
@@ -2920,6 +2973,8 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 if last.enc == Enc::Sopp { Self::branch_cond(last.op) } else { None },
                 tgt.get(&(end - 1)),
             ) {
+                if self.wave_cull { wave_cull::prepare_insn(self, end - 1, last)?; }
+                let c = wave_cull::branch_condition(self, last, c);
                 if last.op == 2 { format!("{t}u") } else { format!("({c}) ? {t}u : {end}u") }
             } else {
                 format!("{end}u")
@@ -3026,11 +3081,8 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         let d = ins.dst.first().cloned();
         self.line(&format!("// {:#06x} {m}", ins.offset));
         self.cur_idx = idx;
-        if self.wave_cull && self.ex.entry.as_deref() == Some("CullPerPageDrawCommandsCs")
-            && ins.enc == Enc::Ds && matches!(m, "ds_read_b32" | "ds_read2st64_b32" | "ds_write_b32" | "ds_write2st64_b32")
-        {
-            // The native wave64 shares one PC across its LDS prefix scan.
-            // Host wave32 halves must finish each access before the next one.
+        if ins.enc == Enc::Ds && m != "ds_swizzle_b32" && !self.hoist_wave_exchanges && wave_cull::lds_words(self).is_some() {
+            // Publish writes and finish reads before the next guest LDS access.
             self.line("GroupMemoryBarrierWithGroupSync();");
         }
         if self.wave_cull {
@@ -3821,7 +3873,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 self.tmp += 1;
                 match m {
                     "ds_read_b32" => {
-                        if self.wave_cull && self.ex.entry.as_deref() == Some("CullPerPageDrawCommandsCs") {
+                        if self.wave_cull && matches!(self.ex.entry.as_deref(), Some("CullPerPageDrawCommandsCs" | "VirtualSmInvalidateInstancePagesCS" | "GenerateReflectionRaysCS")) {
                             self.line(&format!("uint t{t} = 0u; if (exec_lo & 1u) t{t} = {};", at(off & 0xffff)));
                         } else {
                             self.line(&format!("uint t{t} = {};", at(off & 0xffff)));
@@ -3829,7 +3881,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                         self.wv(&Opnd::Vgpr(vd), &format!("t{t}"))
                     }
                     "ds_read2_b32" | "ds_read2st64_b32" => {
-                        if self.wave_cull && self.ex.entry.as_deref() == Some("CullPerPageDrawCommandsCs") {
+                        if self.wave_cull && matches!(self.ex.entry.as_deref(), Some("CullPerPageDrawCommandsCs" | "VirtualSmInvalidateInstancePagesCS" | "GenerateReflectionRaysCS")) {
                             self.line(&format!("uint t{t}a = 0u, t{t}b = 0u; if (exec_lo & 1u) {{ t{t}a = {}; t{t}b = {}; }}", at(off0 * 4), at(off1 * 4)));
                         } else {
                             self.line(&format!("uint t{t}a = {}; uint t{t}b = {};", at(off0 * 4), at(off1 * 4)));
@@ -3953,20 +4005,8 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                     return self.wv(&d.ok_or("no swizzle destination")?, &format!("t{t}value"));
                 }
                 if self.compute_swizzle {
-                    let mode = ins.aux.imm as u32;
-                    if ins.raw[0] & 0x3_8000 != 0 {
-                        return Err("unsupported compute DS swizzle encoding".into());
-                    }
-                    let t = self.tmp;
-                    self.tmp += 1;
-                    let value = r(&s[0])?;
-                    self.line(&format!("tb_swizzle[tb_lane] = (exec_lo & 1u) ? {value} : 0u;"));
-                    self.line("GroupMemoryBarrierWithGroupSync();");
-                    self.line(&format!("uint t{t} = tb_swizzle[(tb_lane & ~31u) | (((tb_lane & {}u) | {}u) ^ {}u)];",
-                        mode & 31, (mode >> 5) & 31, (mode >> 10) & 31));
-                    // Every thread must finish reading before the next exchange publishes.
-                    self.line("GroupMemoryBarrierWithGroupSync();");
-                    return self.wv(&d.ok_or("no swizzle destination")?, &format!("t{t}"));
+                    if self.hoisted_swizzle != Some(idx) { self.emit_compute_swizzle(idx, ins, &[])?; }
+                    return self.wv(&d.ok_or("no swizzle destination")?, &format!("swizzle{idx}"));
                 }
                 if !is_ps { return Err("ds_swizzle outside a pixel shader".into()); }
                 let off = ins.aux.imm as u32;
@@ -4052,6 +4092,26 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         }
     }
 
+    fn emit_compute_swizzle(&mut self, idx: usize, ins: &Insn, active: &[usize]) -> Result<(), String> {
+        if ins.raw[0] & 0x3_8000 != 0 {
+            return Err("unsupported compute DS swizzle encoding".into());
+        }
+        // Skipped and EXEC-masked lanes contribute zero. Rendezvous before
+        // reapplying the guest branch guard to the destination write.
+        let mut predicate = String::from("(exec_lo & 1u) != 0u");
+        for label in active { write!(predicate, " && !j{label}").unwrap(); }
+        let value = r(&ins.src[0])?;
+        self.line(&format!("tb_swizzle[tb_lane] = ({predicate}) ? {value} : 0u;"));
+        self.line("GroupMemoryBarrierWithGroupSync();");
+        let mode = ins.aux.imm as u32;
+        self.line(&format!("uint swizzle{idx} = tb_swizzle[(tb_lane & ~31u) | (((tb_lane & {}u) | {}u) ^ {}u)];",
+            mode & 31, (mode >> 5) & 31, (mode >> 10) & 31));
+        self.line("GroupMemoryBarrierWithGroupSync();");
+        Ok(())
+    }
+
+
+
     fn emit_vec(&mut self, ins: &Insn) -> Result<(), String> {
         let mut m = ins.mnemonic.clone();
         let s = &ins.src;
@@ -4080,6 +4140,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             let partner = format!("WaveReadLaneAt({acc}, {lane})");
             let combined = match m.as_str() {
                 "v_add_nc_u32" => format!("{partner} + {acc}"),
+                "v_max_u32" => format!("max({partner}, {acc})"),
                 "v_add_f32" => format!("asuint(asfloat({partner}) + asfloat({acc}))"),
                 "v_min_f32" => format!("asuint(min(asfloat({partner}), asfloat({acc})))"),
                 "v_max_f32" => format!("asuint(max(asfloat({partner}), asfloat({acc})))"),
@@ -4956,6 +5017,16 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         Ok(())
     }
 
+    fn zero_buffer_offset(&self, ins: &Insn) -> bool {
+        match ins.src.get(2) {
+            Some(Opnd::ConstInt(0)) => true,
+            Some(Opnd::Sgpr(reg)) => self.zero_buffer_offsets
+                .get_or_init(|| mubuf_offsets::proven_zero(&disassemble(&self.ex.isa)))
+                .contains(&(ins.offset, *reg)),
+            _ => false,
+        }
+    }
+
     /// MUBUF on a structured buffer: `vaddr` is the element index (IDXEN), the 12-bit
     /// immediate the byte offset inside the element. Dynamic offsets (OFFEN / SOFFSET
     /// register) are not handled yet and fail explicitly.
@@ -4971,7 +5042,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         }
         if let Some(Res::CbDyn(slot)) = self.res.get(&idx).and_then(|v| v.first()).copied() {
             let (offen, idxen) = (ins.aux.mask & 1 != 0, ins.aux.mask & 2 != 0);
-            if (idxen && offen) || !matches!(ins.src[2], Opnd::ConstInt(0)) || !ins.mnemonic.starts_with("buffer_load_dword") {
+            if (idxen && offen) || !self.zero_buffer_offset(ins) || !ins.mnemonic.starts_with("buffer_load_dword") {
                 return Err("constant-buffer MUBUF form unsupported".into());
             }
             let n = Self::mubuf_dwords(&ins.mnemonic).ok_or("unsupported MUBUF op")?;
@@ -5012,7 +5083,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             let (offen, idxen, glc) = (ins.aux.mask & 1 != 0, ins.aux.mask & 2 != 0, ins.aux.mask & 4 != 0);
             let raw = matches!(resolved, Some(Res::Raw(_, true)));
             let scalar_only = !offen && !idxen && matches!(resolved, Some(Res::Buf(_, true))) && matches!(ins.src[2], Opnd::Sgpr(_));
-            if (offen && idxen) || !(raw || scalar_only || matches!(ins.src[2], Opnd::ConstInt(0))) {
+            if (offen && idxen) || !(raw || scalar_only || self.zero_buffer_offset(ins)) {
                 return Err("atomic MUBUF addressing unsupported".into());
             }
             // IDXEN selects an element. OFFEN and SOFFSET add byte offsets.
@@ -5091,7 +5162,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             let Some(Res::TBuf(slot, true)) = self.res.get(&idx).and_then(|v| v.first()).copied() else {
                 return Err("D16 store needs a typed UAV".into());
             };
-            if self.tbuf_uint.contains(&slot) || ins.aux.mask & 1 != 0 || ins.aux.imm != 0 || !matches!(ins.src[2], Opnd::ConstInt(0)) {
+            if self.tbuf_uint.contains(&slot) || ins.aux.mask & 1 != 0 || ins.aux.imm != 0 || !self.zero_buffer_offset(ins) {
                 return Err("D16 store with atomic view or offset addressing unsupported".into());
             }
             let index = if ins.aux.mask & 2 != 0 { r(&ins.src[0])? } else { "0u".to_string() };
@@ -5149,7 +5220,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             // Typed buffer. The element type is declared float4: the view format is not
             // visible in the shader, so integer-format buffers are a known gap (TECHNICAL_DEBT).
             let (offen, idxen) = (ins.aux.mask & 1 != 0, ins.aux.mask & 2 != 0);
-            if offen || ins.aux.imm != 0 || !matches!(ins.src[2], Opnd::ConstInt(0)) {
+            if offen || ins.aux.imm != 0 || !self.zero_buffer_offset(ins) {
                 return Err("typed-buffer MUBUF with offset addressing unsupported".into());
             }
             let n = match ins.mnemonic.rsplit('_').next() {
@@ -5219,7 +5290,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         // Address = element index (IDXEN: first address register) * stride + byte offset
         // (OFFEN: the next address register, or the first when there is no index) + imm.
         let (offen, idxen) = (ins.aux.mask & 1 != 0, ins.aux.mask & 2 != 0);
-        if !matches!(ins.src[2], Opnd::ConstInt(0)) {
+        if !self.zero_buffer_offset(ins) {
             return Err("MUBUF with a dynamic SOFFSET is unsupported".into());
         }
         let n = Self::mubuf_dwords(&ins.mnemonic).ok_or("unsupported MUBUF op")?;
@@ -5839,9 +5910,20 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         }
         if gather {
             // gather4: dmask picks the channel; the four texels fill vdata..vdata+3.
+            // These hierarchical depth passes convert their chosen integer mip to
+            // f32 before issuing four red gathers on the same texture and sampler.
+            let depth_gather = match (self.ex.entry.as_deref(), tslot) {
+                (Some("VirtualSmInvalidateInstancePagesCS"), 4) => {
+                    self.wave_cull || packed_root::matches_program(&self.ex.isa, 7304, 0x8a6c22fd0266c12c)
+                }
+                (Some("GenerateConservativeDepthBufferCS"), 0) => {
+                    packed_root::matches_program(&self.ex.isa, 812, 0xe3633db262ecebf9)
+                }
+                _ => false,
+            };
             if modi == 4 && dim == 1 && !cmp && !has_off && !d16 && !a16 && !unorm
                 && ins.aux.mask == 1 && sslot == 0
-                && ((self.is_cs && (matches!((self.ex.entry.as_deref(), tslot), (Some("InstanceCull" | "InstanceCullVSM"), 3) | (Some("PersistentClusterCull"), 3 | 5)) || (self.wave_cull && self.ex.entry.as_deref() == Some("CullPerPageDrawCommandsCs") && tslot == 0) || (self.ex.entry.as_deref() == Some("VirtualSmInvalidateInstancePagesCS") && tslot == 4 && packed_root::matches_program(&self.ex.isa, 4604, 0x3a8e759a33ecc608))
+                && ((self.is_cs && (matches!((self.ex.entry.as_deref(), tslot), (Some("InstanceCull" | "InstanceCullVSM"), 3) | (Some("PersistentClusterCull"), 3 | 5)) || (self.wave_cull && self.ex.entry.as_deref() == Some("CullPerPageDrawCommandsCs") && tslot == 0) || depth_gather
                     || (self.ex.entry.as_deref() == Some("InstanceCullBuildInstanceIdBufferCS") && tslot == 4
                         && [
                             (7072, 0x1fe3061314fe6030), (9944, 0x41f68c7d6b4a40ec),
@@ -6311,7 +6393,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         if self.micropoly_vote.is_some() {
             writeln!(h, "groupshared uint tb_lds[784];\ngroupshared uint tb_raster_votes[2];").unwrap();
         } else if self.is_cs && self.uses_lds {
-            let words = if self.wave_cull && self.ex.entry.as_deref() == Some("CullPerPageDrawCommandsCs") { 320 } else { 8192 };
+            let words = wave_cull::lds_words(self).unwrap_or(8192);
             let _ = writeln!(h, "groupshared uint tb_lds[{words}];");
         }
         Ok(h)
@@ -6338,9 +6420,14 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 writeln!(h, "groupshared uint tb_swizzle[{}];", tx * ty_ * tz).unwrap();
             }
             if let Some(width) = self.required_wave_size { writeln!(h, "[WaveSize({width})]").unwrap(); }
-            let _ = writeln!(h, "[numthreads({tx}, {ty_}, {tz})]
+            // These kernels enable all 64 lanes for a reduction. Start the extra
+            // rows inactive so they never participate in the guest's memory work.
+            let padded = self.wave_cull && matches!([tx, ty_, tz], [4, 4, 1] | [32, 1, 1]);
+            let host_y = if padded { 64 / tx } else { ty_ };
+            let _ = writeln!(h, "[numthreads({tx}, {host_y}, {tz})]
 void main(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {{");
-            let _ = writeln!(h, "    uint exec_lo = 1u, exec_hi = 0u, vcc_lo = 0u, vcc_hi = 0u, scc = 0u, m0 = 0u, nul = 0u;");
+            let active = if padded { format!("uint(gtid.y < {ty_}u)") } else { "1u".to_owned() };
+            let _ = writeln!(h, "    uint exec_lo = {active}, exec_hi = 0u, vcc_lo = 0u, vcc_hi = 0u, scc = 0u, m0 = 0u, nul = 0u;");
             for r in ["v0", "v1", "v2"] {
                 self.regs.insert(r.to_string());
             }

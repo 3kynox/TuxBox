@@ -1,4 +1,4 @@
-//! Fixed-width BVH integer sums and wave32 floating extrema. Keep intermediate
+//! Fixed-width DPP sums, extrema and prefix scans. Keep intermediate
 //! register writes and the restored EXEC observable after each reduction.
 use super::{Emitter, Enc, Insn, Opnd};
 
@@ -20,7 +20,6 @@ pub(super) fn lower(insns: &mut [Insn], first: usize) -> Result<(u32, usize), &'
         "s_or_saveexec_b64" => 64,
         _ => return Err("unrecognized DPP reduction prologue"),
     };
-    if (floating || operation == "v_add_f32") && width != 32 { return Err("unsupported floating reduction width"); }
     let last_read = if width == 32 { 8 } else { 10 };
     let block = tail.get(..last_read + 2).ok_or("truncated wave reduction")?;
     let [Opnd::Sgpr(saved)] = save.dst[..] else {
@@ -87,7 +86,7 @@ pub(super) fn lower(insns: &mut [Insn], first: usize) -> Result<(u32, usize), &'
     };
     if width == 64 {
         let high = lane_read(&block[8], 32)?;
-        if block[9].mnemonic != "v_add_nc_u32" || block[9].dst != [vr] || block[9].src != [Opnd::Sgpr(high), vr] {
+        if &block[9].mnemonic != operation || block[9].dst != [vr] || block[9].src != [Opnd::Sgpr(high), vr] {
             return Err("missing upper-half add");
         }
     }
@@ -127,7 +126,7 @@ pub(super) fn check_control_flow(insns: &[Insn], width: u32) -> Result<(), Strin
         if ins.op != DPP_REDUCE || ins.aux.imm != 0 {
             continue;
         }
-        let prologue_len = if matches!(ins.mnemonic.as_str(), "v_add_nc_u32" | "v_add_f32") { 2 } else { 3 };
+        let prologue_len = if matches!(ins.mnemonic.as_str(), "v_min_f32" | "v_max_f32") { 3 } else { 2 };
         let start = insns[first - prologue_len].offset as i64;
         let end = insns[first + if width == 32 { 7 } else { 9 }].offset as i64;
         for branch in insns.iter().filter(|i| i.enc == Enc::Sopp) {

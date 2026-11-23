@@ -3,7 +3,7 @@
   "archives": {
     "global": {
       "archive_sha256": "afab84fa891e491d64f1c2a9bdf26a66afc2054aef2cd9110e358402473b4fb2",
-      "compiler_sha256": "6b7622ee4827b4c3f506c2571eb6c743fbd0e96ae322d5dbcc1483715d797942",
+      "compiler_sha256": "778a109782be7eeb094fe499bcd88dfc17a928ad5a4affcec7600fa25fcb075e",
       "stages": {
         "vertex": {
           "entries": 199,
@@ -21,11 +21,11 @@
           "failed": 0
         }
       },
-      "full_survey_sha256": "0c094c2707560325518db1edb98d5b2ccb76e4288d304801786ce2278a19f347"
+      "full_survey_sha256": "fa0e2adea0fedfb1d1d6b7aecb30b86266042492e4ed27e5a6a852763b68d548"
     },
     "material": {
       "archive_sha256": "9de0439f815138c89fd414e69f4f5f3497fd523ac4dd2321c5207f7fd67eb2e1",
-      "compiler_sha256": "2204da685854522c272493d84b31d83c9db04f700514dde554140509f6a0e883",
+      "compiler_sha256": "778a109782be7eeb094fe499bcd88dfc17a928ad5a4affcec7600fa25fcb075e",
       "stages": {
         "vertex": {
           "entries": 21031,
@@ -43,7 +43,7 @@
           "failed": 0
         }
       },
-      "full_survey_sha256": "bef5042409ffd53a5dda545ae8e412d408c82c3f03028532ee9e86986ef3d57d"
+      "full_survey_sha256": "f6f629c81e6187b7e94a045afbb5a684293b325d77b99b981d5b63d38852731b"
     }
   }
 }

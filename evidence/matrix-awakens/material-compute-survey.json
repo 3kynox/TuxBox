@@ -1,19 +1,13 @@
 {
   "scope": "Packaged material compute archive entries translated to HLSL.",
   "archive_sha256": "9de0439f815138c89fd414e69f4f5f3497fd523ac4dd2321c5207f7fd67eb2e1",
-  "compiler_sha256": "8b09d1d99add1425c99c5d1f98df509dab1c663835f4d1388745aaee1b2ea5ba",
+  "compiler_sha256": "778a109782be7eeb094fe499bcd88dfc17a928ad5a4affcec7600fa25fcb075e",
   "stage": {
     "entries": 734,
-    "translated": 733,
-    "failed": 1
+    "translated": 734,
+    "failed": 0
   },
-  "failures": [
-    {
-      "entry": 6308,
-      "source_sha256": "2c3684d0597613cb9830e67e2b47245eae26729f3fb384a72dd75920d96ea748",
-      "diagnostic": "unverified EXEC election at 0x1954"
-    }
-  ],
-  "full_survey_sha256": "8d30afeddc95e267768900010b9e4073cfed10d3dfad9f8446394c83b22e4352",
+  "failures": [],
+  "full_survey_sha256": "717d707c2cb84001406733cbf22c862e706e1867a6829c83af5c923fbf68736c",
   "reproduce": "python tools/survey_frosty_shaders.py /path/to/MA/Mount --archive material --stage compute --output build/material-compute-survey.json"
 }

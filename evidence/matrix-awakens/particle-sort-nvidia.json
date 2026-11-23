@@ -10,10 +10,11 @@
   ],
   "groups_dispatched": 2,
   "guest_slot": 62,
-  "scope": "Three dispatches using genuine particle attribute, indirect count and visibility tag SRVs. Ascending and descending half-float keys including negative and zero values; batch bits, destination offset, 103 capacity, two particle groups, sparse visibility across lanes 31/32 and 63/64, non-zero initial count, empty input, guard words.",
+  "key_bits": 16,
+  "scope": "Three dispatches using genuine particle attribute, indirect count and visibility tag SRVs. Ascending and descending keys including negative, zero and fractional values that round to duplicate half-precision keys. Destination offset, 103 capacity, two particle groups, sparse visibility across lanes 31/32 and 63/64, non-zero initial count, empty input, guard words.",
   "words_per_case": 384,
   "adapters": [
-    "NVIDIA GeForce RTX 4070 Ti SUPER (NVIDIA 620.70.6)"
+    "NVIDIA GeForce RTX 4070 Ti SUPER (NVIDIA 620.73.4)"
   ],
   "readback": {
     "live_67_matched": "384",
@@ -23,7 +24,7 @@
     "live_0_matched": "384",
     "live_0_count": "7"
   },
-  "guest_sha256": "9c09b340889fe80ce398530f3ed563da9d2b0cc9f003a346772a28fa13dc426c",
-  "provider_sha256": "cd44cac87ebf83e6a10edb5322dd9f331ae930d30179651af8eb758b6c38a439",
+  "guest_sha256": "6aea919a4fb19ac2ee1da5cf2faad661b4ac8be29a33e0691ffec04ec54663b4",
+  "provider_sha256": "08ffeb035220c40445858966448ea60c5746856de4a93c8de96d5f6fd6dc8ec9",
   "proton": "1793301796 experimental-11.0-20261027b-x86_64"
 }

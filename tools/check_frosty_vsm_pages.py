@@ -22,6 +22,44 @@ from project_tuxbox.shader_prep import compiler_tools
 GUARD = 0xdeadbeef
 
 
+def hair_pages(count, capacity, force_direct):
+    # The macro-group bounds cover 16 world units per axis on an 8³ grid.
+    # Each cluster box is in whole world units, while macro bounds use thousandths.
+    boxes = {0: (2, 2, 2, 3, 3, 3), 3: (1, 3, 1, 5, 5, 3),
+             9: (4, 8, 2, 6, 9, 3), 15: (0, 0, 0, 7, 5, 5),
+             31: (10, 2, 0, 15, 5, 3)}
+    clusters = [0] * (32 * 6)
+    for lane, bounds in boxes.items():
+        clusters[lane*6:(lane+1)*6] = bounds
+    cb = [count, 0, capacity, int(force_direct)] + [0] * 60
+    page_base = 3
+    inputs = [clusters, [0, 0, 0, 16000, 16000, 16000], [8, 8, 8, page_base]]
+    seed = [[0x30] * (page_base + 512 + 3), [2, GUARD], [GUARD] * 128]
+    pages, counter, records = (row.copy() for row in seed)
+    for lane, bounds in boxes.items():
+        if lane >= count:
+            continue
+        x, y, z, end_x, end_y, end_z = (v // 2 for v in bounds)
+        width, height, depth = end_x - x + 1, end_y - y + 1, end_z - z + 1
+        volume = width * height * depth
+        if volume <= 4 or force_direct:
+            for k in range(z, end_z + 1):
+                for j in range(y, end_y + 1):
+                    for i in range(x, end_x + 1):
+                        pages[page_base + i + 8 * (j + 8 * k)] |= 1
+        else:
+            start = counter[0]
+            counter[0] += (volume + 7) // 8
+            if counter[0] < capacity:
+                for tile, dst in enumerate(range(start, counter[0])):
+                    records[2*dst] = x | y << 8 | z << 16 | tile << 24
+                    records[2*dst + 1] = width | height << 8 | depth << 16
+    return cb, inputs, seed, [4, 4, 8], 4, 2, 1, [pages, counter, records], {
+        "clusters": count, "capacity": capacity, "force_direct": force_direct,
+        "marked_pages": pages.count(0x31), "counter": counter[0],
+    }
+
+
 def compact_feedback(active, count, capacity, valid_limit):
     # One guest wave reserves a contiguous range before checking the
     # referenced material index. Invalid indices still consume a slot.
@@ -360,7 +398,7 @@ def main():
     p.add_argument("--prefix", type=Path)
     p.add_argument("--proton", type=Path)
     p.add_argument("--xshader", type=Path)
-    p.add_argument("--entry", type=int, choices=(1865, 257, 728, 248, 249, 259, 507, 509, 512, 513, 517, 1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470, 3477),
+    p.add_argument("--entry", type=int, choices=(752, 1865, 257, 728, 248, 249, 259, 507, 509, 512, 513, 517, 1016, 1019, 1213, 1215, 1219, 1223, 1224, 1228, 1230, 1235, 1236, 1243, 1257, 1793, 2138, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470, 3477),
                    help="run the controls for one archive entry")
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
@@ -369,6 +407,11 @@ def main():
     compiler = args.xshader.resolve() if args.xshader else compiler
     data, entries = global_archive(args.mount)
     cases, libraries = {}, {}
+    for name, count, capacity, force_direct in (
+            ("mixed", 32, 64, False), ("partial", 14, 64, False),
+            ("bounded", 32, 5, False), ("all_direct", 32, 64, True),
+            ("empty", 0, 64, False)):
+        cases["hair_pages_" + name] = 752, hair_pages(count, capacity, force_direct)
     for name, count, points, groups, irregular in (("empty", 0, 0, 1, False), ("no_points", 128, 0, 1, False),
         ("one", 37, 1, 1, False), ("three", 128, 3, 1, False), ("seven", 128, 7, 1, False),
         ("two_groups", 193, 3, 2, False), ("irrational", 128, 3, 1, True)):
@@ -500,7 +543,7 @@ def main():
                     words(work / f"{name}.b{i}", constants)
             else:
                 words(work / (name+".cbv"), cb)
-            if entry in (1865, 728, 248, 249, 259, 507, 509, 512, 513, 517, 1016, 1243, 1257, 1793, 3477, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470):
+            if entry in (752, 1865, 728, 248, 249, 259, 507, 509, 512, 513, 517, 1016, 1243, 1257, 1793, 3477, 3396, 3397, 3398, 3399, 3403, 3412, 3413, 3416, 3426, 3433, 3437, 3440, 3468, 3474, 3422, 3430, 3432, 3438, 3449, 3451, 3454, 3456, 3457, 3458, 3470):
                 for i, records in enumerate(srv):
                     words(work / f"{name}.t{i}", records)
             else:

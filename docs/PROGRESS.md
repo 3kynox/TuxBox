@@ -17,9 +17,9 @@ No other retail title is currently claimed playable. Record the build, settings,
 
 ## Current priorities
 
-1. Make Frosty's original graphics profile progress past the inline Lumen ray-traversal shader, by supplying the Xbox-format scene nodes that shader 219 reads. Check its shadow mask on an empty tile, a hit and a miss before rerunning Frosty. [Shader 219 comparison](SHADERS.md#inline-lumen-ray-tracing)
-2. Check the menu, characters, hair, vehicles and city for rendering errors in the actual game. Record known defects and test input and audio.
-3. Measure cold and warm frame times and address hitches without changing the game's graphics settings.
+1. Finish the surveyed raster, mesh and compute shaders that do not require ray traversal. Check newly translated programs with DXIL validation and use GPU readbacks for changes to memory addressing and wave operations. [Shader survey](SHADERS.md#measured-on-the-matrix-awakens)
+2. Return to ray tracing, starting with the Xbox-format scene nodes that Lumen shader 219 reads. Check its shadow mask for an empty tile, a hit and a miss, then rerun Frosty with the original settings. [Shader 219 comparison](SHADERS.md#inline-lumen-ray-tracing)
+3. Check the menu, characters, hair, vehicles and city in the game. Test input and audio, then measure cold and warm frame times.
 4. Repeat title and provider checks on additional hardware and games as their executables become available.
 
 The default compiler still contains a TomBox-derived HLSL emitter. TuxBox's independent emitter is growing, but it does not yet replace the legacy path for all supported shaders. [Source attribution](REFERENCES.md#shader-compiler-attribution)

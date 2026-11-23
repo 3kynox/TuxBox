@@ -25,8 +25,8 @@ from project_tuxbox.shader_inventory import ARCHIVES, ENTRY as ARCHIVE_ENTRY, de
 from project_tuxbox.shader_prep import shader_compiler
 
 
-STAGES = {0: "vertex", 3: "pixel", 4: "geometry", 5: "compute"}
-REQUEST = re.compile(r"shader request (?:vertex|pixel|geometry|compute) ([0-9a-f]{64})")
+STAGES = {0: "vertex", 1: "mesh", 3: "pixel", 4: "geometry", 5: "compute"}
+REQUEST = re.compile(r"shader request (?:vertex|mesh|pixel|geometry|compute) ([0-9a-f]{64})")
 ENTRY = re.compile(r'entry=Some\("([^"]+)"\)')
 
 
@@ -46,9 +46,9 @@ def main():
     if args.workers < 1:
         parser.error("--workers must be positive")
 
-    selected = {args.stage} if args.stage else set(STAGES.values())
-    if not args.stage and not args.include_compute:
-        selected.remove("compute")
+    selected = {args.stage} if args.stage else {"vertex", "pixel", "geometry"}
+    if args.include_compute:
+        selected.add("compute")
     observed = set()
     for log in args.trace_log:
         observed.update(REQUEST.findall(log.read_text(errors="replace")))

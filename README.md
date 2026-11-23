@@ -2,10 +2,16 @@
 
 TuxBox is an experimental project for running Xbox Series X|S games on PC. On Linux it runs with Valve’s stock Proton Experimental. Windows support is also in development.
 
+## Why so few Xbox libraries?
+
+Many calls an Xbox Series game makes already work through standard Windows APIs. Windows handles those calls natively, and Proton provides the same APIs on Linux. Games can also use compatible DLLs they ship, such as video decoders. TuxBox only needs to translate the Xbox-specific behavior a game actually uses, such as graphics commands and texture layouts. That’s why we track working game features instead of counting every function in every Xbox DLL. [Xbox library coverage](docs/LIBRARIES.md)
+
 ## What runs today?
 
 - **Lanes** is a small game that uses TuxBox’s Xbox graphics, memory and input libraries. Collect coins and dodge barriers using a keyboard, mouse or Xbox controller.
 - **The Matrix Awakens (Frosty)** reaches the Wake Up chase cinematic on Linux with TuxBox XG and reduced graphics settings. Earlier reduced-settings runs reached the highway chase and open city. With the original Xbox settings it loads the Construct map and presents a black frame before stopping while creating a compute shader during scene setup. You supply the game, its matching Xbox system files and Proton. [Setup and test results](docs/MATRIX_AWAKENS.md)
+
+**GTA VI is a launch target.** TuxBox reads the supplied ProjectScarlett package manifest, and all 16 bundled DLLs loaded individually under Proton. The package is missing `game_scarlett_master.exe`, so startup, graphics and shader rendering are still untested. [Package inventory](evidence/package-inventory.json) · [DLL load results](evidence/scarlett-all-library-load.json)
 
 ## Try Lanes
 
