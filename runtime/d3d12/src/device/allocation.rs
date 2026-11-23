@@ -17,12 +17,12 @@ const _: () = assert!(
 pub(super) const DCC_FLAGS: i32 = 0x00c0_0000;
 
 fn host_description(desc: &D3D12_RESOURCE_DESC) -> Option<D3D12_RESOURCE_DESC> {
+    use super::format::HOST_FLAGS;
+    // Console-only flag bits (including DCC) are dropped; the host driver
+    // chooses its own compression for the image it creates.
     super::depth::primary(desc).or_else(|| {
-        (desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && desc.Flags.0 & DCC_FLAGS != 0)
-            .then(|| D3D12_RESOURCE_DESC {
-                Flags: D3D12_RESOURCE_FLAGS(desc.Flags.0 & !DCC_FLAGS),
-                ..*desc
-            })
+        (desc.Flags.0 & !HOST_FLAGS != 0)
+            .then(|| D3D12_RESOURCE_DESC { Flags: D3D12_RESOURCE_FLAGS(desc.Flags.0 & HOST_FLAGS), ..*desc })
     })
 }
 
@@ -81,7 +81,7 @@ pub(super) unsafe extern "system" fn info(
         return out;
     }
     let descs = unsafe { slice::from_raw_parts(descs, count as usize) };
-    if descs.iter().any(|d| matches!(d.Layout.0, 0x100..=0x102 | 0x105)
+    if descs.iter().any(|d| matches!(d.Layout.0, 0x100..=0x102 | 0x105 | 0x109)
         || !packed_uav_formats(d.Format, d.Flags).is_empty()) {
         // The guest will allocate these bytes itself and pass the address to
         // CreatePlacedResourceX. Account for the Xbox planes and batch padding.
@@ -91,7 +91,7 @@ pub(super) unsafe extern "system" fn info(
             let layout = if let Some(pitch) = super::placement::nv12_pitch(desc) {
                 let y = pitch * u64::from(desc.Height);
                 D3D12_RESOURCE_ALLOCATION_INFO { SizeInBytes: y + y / 2, Alignment: 256 }
-            } else if matches!(desc.Layout.0, 0x100..=0x102 | 0x105) {
+            } else if matches!(desc.Layout.0, 0x100..=0x102 | 0x105 | 0x109) {
                 match super::placement::color_plane(desc) {
                     Ok(plane) => D3D12_RESOURCE_ALLOCATION_INFO {
                         SizeInBytes: plane.size,
@@ -205,6 +205,15 @@ pub(super) unsafe extern "system" fn info2(
             let mut native = *d;
             if d.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D {
                 native.Flags.0 &= !DCC_FLAGS;
+            }
+            let guest = D3D12_RESOURCE_DESC {
+                Dimension: d.Dimension, Alignment: d.Alignment, Width: d.Width, Height: d.Height,
+                DepthOrArraySize: d.DepthOrArraySize, MipLevels: d.MipLevels, Format: d.Format,
+                SampleDesc: d.SampleDesc, Layout: d.Layout, Flags: d.Flags,
+            };
+            if let Some(primary) = super::depth::primary(&guest) {
+                native.Format = primary.Format;
+                native.Flags = primary.Flags;
             }
             unsafe { host.GetResourceAllocationInfo2(visible, 1, &native, None) }
         } else { return out };

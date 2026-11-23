@@ -43,6 +43,7 @@ pub(super) unsafe extern "system" fn pipeline(list: &List, guest: *mut c_void) {
     match unsafe { crate::device::compute::pipeline(guest, parent(&list.parent)) } {
         Ok(Some(host)) => {
             state.stencil_slot = host.state.stencil_slot;
+            state.null_pipeline = crate::diagnostics::display::is_null_pipeline(host.native.as_raw());
             state.bindings.pipeline = Some(host.into());
             state.bindings.draw_trace = host.state.draw_trace.clone();
             unsafe { list.native.SetPipelineState(&host.native) };
@@ -100,7 +101,24 @@ pub(super) unsafe extern "system" fn targets(
         state.error = E_INVALIDARG;
         return;
     }
+    // CPU RTV descriptors are consumed by OMSetRenderTargets immediately.
+    // Capture their resources now even if the guest overwrites a slot before drawing.
+    if let Err(error) = unsafe {
+        crate::device::placement::render_targets(
+            parent(&list.parent), count, rtvs, contiguous.as_bool(), &mut state.bound_placed_targets,
+        )
+    } {
+        state.error = error.code();
+        return;
+    }
     state.dsv_bound = !dsv.is_null();
+    if crate::diagnostics::display::enabled() {
+        // Contiguous ranges: the display target is bound alone in practice.
+        let handles: Vec<usize> = (0..count as usize)
+            .map(|i| unsafe { (*rtvs.add(if contiguous.as_bool() { 0 } else { i })).ptr })
+            .collect();
+        state.display_bound = crate::diagnostics::display::bound(&handles);
+    }
     let binding = unsafe { dsv.as_ref() }
         .and_then(|h| unsafe { crate::device::stencil::binding(parent(&list.parent), h.ptr) });
     if let Some((native, surface)) = binding {
@@ -141,7 +159,7 @@ pub(super) unsafe extern "system" fn draw(
 ) {
     let mut state = recording(list);
     if state.can_record(&list.native) {
-        state.draw(list, || unsafe {
+        state.draw(list, vertices != 0 && instances != 0, || unsafe {
             list.native
                 .DrawInstanced(vertices, instances, start_vertex, start_instance);
             static FIRST: std::sync::Once = std::sync::Once::new();
@@ -227,7 +245,7 @@ pub(super) unsafe extern "system" fn dispatch_mesh(list: &List, x: u32, y: u32, 
         state.error = windows::Win32::Foundation::E_NOINTERFACE;
         return;
     };
-    state.draw(list, || unsafe { native.DispatchMesh(x, y, z) });
+    state.draw(list, x != 0 && y != 0 && z != 0, || unsafe { native.DispatchMesh(x, y, z) });
     static FIRST_MESH: std::sync::Once = std::sync::Once::new();
     crate::diagnostics::log_once(&FIRST_MESH, || {
         format!("recorded Xbox slot 127 DispatchMesh ({x}, {y}, {z})")
@@ -294,7 +312,7 @@ pub(super) unsafe extern "system" fn draw_indexed(
 ) {
     let mut state = recording(list);
     if state.can_record(&list.native) {
-        state.draw(list, || unsafe {
+        state.draw(list, indices != 0 && instances != 0, || unsafe {
             list.native
                 .DrawIndexedInstanced(indices, instances, first, base_vertex, first_instance);
             static FIRST: std::sync::Once = std::sync::Once::new();

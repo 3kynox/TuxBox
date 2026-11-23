@@ -62,3 +62,31 @@ unsafe extern "system" fn dump(out: *mut c_char, capacity: usize) {
         }
     }
 }
+
+/// `TUXBOX_WATCH_ADDRESS=<hex>[,<hex radius>]` (shared with the D3D12
+/// provider): log each XMem allocation or mapping whose range comes within the
+/// radius of that address, with the title return address.
+pub(crate) fn watch(kind: &str, start: usize, len: usize, detail: impl FnOnce() -> String) {
+    use std::sync::LazyLock;
+    use windows_sys::Win32::System::Diagnostics::Debug::{OutputDebugStringA, RtlCaptureStackBackTrace};
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    static ADDRESS: LazyLock<Option<(usize, usize)>> = LazyLock::new(|| {
+        let text = std::env::var("TUXBOX_WATCH_ADDRESS").ok()?;
+        let (at, radius) = text.split_once(',').unwrap_or((&text, "0"));
+        let hex = |t: &str| usize::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok();
+        Some((hex(at)?, hex(radius)?))
+    });
+    let Some((address, radius)) = *ADDRESS else { return };
+    if start == 0 || !(start <= address.saturating_add(radius) && address.saturating_sub(radius) < start.saturating_add(len)) {
+        return;
+    }
+    let image = unsafe { GetModuleHandleW(core::ptr::null()) } as usize;
+    let mut frames = [core::ptr::null_mut(); 24];
+    let count = unsafe { RtlCaptureStackBackTrace(0, 24, frames.as_mut_ptr(), core::ptr::null_mut()) } as usize;
+    // The executable's image is the first module above its base in practice;
+    // report the first frame within 512 MiB of it.
+    let rva = frames[..count].iter().map(|&pc| pc as usize)
+        .find(|&pc| pc >= image && pc - image < 0x2000_0000).map_or(0, |pc| pc - image);
+    let line = format!("TuxBox xmem: watch {address:#x}: {kind} {start:#x}+{len:#x} {} from title RVA {rva:#x}\n\0", detail());
+    unsafe { OutputDebugStringA(line.as_ptr()) };
+}

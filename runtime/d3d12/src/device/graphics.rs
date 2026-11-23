@@ -41,6 +41,7 @@ pub(super) unsafe extern "system" fn create_pipeline(
     // reference on the guest object. Release only the new native reference.
     let mut native_desc = unsafe { core::ptr::read(desc) };
     native_desc.pRootSignature = ManuallyDrop::new(root.cloned());
+    super::format::host_targets(&mut native_desc.RTVFormats, &mut native_desc.DSVFormat);
     let native = if native_desc.PrimitiveTopologyType.0 == rectangle::PIPELINE_TYPE {
         unsafe { rectangle::create_pipeline(&this.native, &mut native_desc) }
     } else {

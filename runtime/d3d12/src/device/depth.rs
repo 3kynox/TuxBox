@@ -5,7 +5,17 @@ use windows::Win32::Foundation::{E_INVALIDARG, E_POINTER};
 use windows::Win32::Graphics::{Direct3D12::*, Dxgi::Common::*};
 use windows::core::{HRESULT, Result};
 
+/// The float depth plane needs an R32 companion image for unordered access.
+pub(super) fn paired(guest: &D3D12_RESOURCE_DESC) -> bool {
+    pair_primary(guest).is_some()
+}
+
+/// Host description for a guest image the desktop cannot create as described.
 pub(super) fn primary(desc: &D3D12_RESOURCE_DESC) -> Option<D3D12_RESOURCE_DESC> {
+    pair_primary(desc).or_else(|| super::format::substitute(desc))
+}
+
+fn pair_primary(desc: &D3D12_RESOURCE_DESC) -> Option<D3D12_RESOURCE_DESC> {
     (desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D
         && desc.Format == DXGI_FORMAT_R32G8X24_TYPELESS
         && matches!(desc.Flags.0 as u32, 0x0100_0006 | 0x8030_0006)
@@ -132,6 +142,7 @@ pub(super) unsafe fn wrap<const CONSOLE_LAYOUT: bool>(
     let backing = match primary {
         None if CONSOLE_LAYOUT => Backing::ConsoleLayout(guest.Layout, guest.Flags),
         None => Backing::Native,
+        Some(_) if !paired(guest) => Backing::Translated(*guest),
         Some(host_desc) => match Pair::new(&device.native, heap, guest, host_desc) {
             Ok(pair) => Backing::Depth(Box::new(pair)),
             Err(error) => return error.code(),

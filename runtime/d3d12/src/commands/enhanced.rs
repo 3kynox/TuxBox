@@ -118,6 +118,13 @@ unsafe fn record(
                     }
                     let mut item = unsafe { ptr::read(item) };
                     borrow_resource(&mut item.pResource, &resource.native);
+                    if resource.state.unbacked_uav() {
+                        // The host depth image has no unordered access; see unbacked_uav.
+                        item.LayoutBefore = device::format::host_layout(item.LayoutBefore);
+                        item.LayoutAfter = device::format::host_layout(item.LayoutAfter);
+                        item.AccessBefore &= !D3D12_BARRIER_ACCESS_UNORDERED_ACCESS;
+                        item.AccessAfter &= !D3D12_BARRIER_ACCESS_UNORDERED_ACCESS;
+                    }
                     if resource.state.placed().is_some() {
                         // Simultaneous-access textures share COMMON across all uses.
                         if item.LayoutBefore != D3D12_BARRIER_LAYOUT_UNDEFINED {

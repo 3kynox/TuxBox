@@ -55,12 +55,22 @@ pub(crate) fn fail_call(reason: std::fmt::Arguments<'_>) -> ! {
     std::process::abort()
 }
 
-unsafe extern "system" fn unsupported_slot<const NUMBER: usize>() {
+// In survey mode the slot logs and returns E_NOTIMPL in RAX. The real
+// signature is unknown, so the title may still misbehave afterwards.
+unsafe extern "system" fn unsupported_slot<const NUMBER: usize>() -> i32 {
+    if crate::survey::enabled() {
+        crate::survey::unsupported_slot(NUMBER);
+        return windows::Win32::Foundation::E_NOTIMPL.0;
+    }
     fail_call(format_args!("unsupported D3D12.x vtable slot {NUMBER}"));
 }
 
 macro_rules! missing_slots {
-    ($($n:literal),* $(,)?) => { [$(unsupported_slot::<$n> as Slot),*] };
+    ($($n:literal),* $(,)?) => {
+        // SAFETY: both are system-ABI functions without parameters; callers
+        // that expect no return value ignore RAX.
+        [$(unsafe { core::mem::transmute::<unsafe extern "system" fn() -> i32, Slot>(unsupported_slot::<$n>) }),*]
+    };
 }
 
 const MISSING: [Slot; 160] = missing_slots![

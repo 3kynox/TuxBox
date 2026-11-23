@@ -127,7 +127,46 @@ unsafe extern "system" fn completed(this: &Fence) -> u64 {
 
 unsafe extern "system" fn on_completion(this: &Fence, value: u64, event: HANDLE) -> HRESULT {
     let host = &this.native;
+    stalls::register(host, value);
     unsafe { (host.vtable().SetEventOnCompletion)(host.as_raw(), value, event) }
+}
+
+/// Survey mode: report fence event registrations that stay incomplete, so a
+/// title thread blocked on one can be traced to the fence and value it needs.
+mod stalls {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    use windows::Win32::Graphics::Direct3D12::ID3D12Fence;
+    use windows::core::Interface;
+
+    struct Pending { fence: ID3D12Fence, value: u64, since: Instant, rva: usize, reported: bool }
+    static PENDING: Mutex<Vec<Pending>> = Mutex::new(Vec::new());
+
+    pub(super) fn register(fence: &ID3D12Fence, value: u64) {
+        if !crate::survey::enabled() { return; }
+        static START: std::sync::Once = std::sync::Once::new();
+        START.call_once(|| { let _ = std::thread::Builder::new().name("TuxBox fence stalls".into()).spawn(scan); });
+        let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+        if pending.len() < 4096 {
+            let rva = crate::survey::title_rva().unwrap_or(0);
+            pending.push(Pending { fence: fence.clone(), value, since: Instant::now(), rva, reported: false });
+        }
+    }
+
+    fn scan() {
+        loop {
+            std::thread::sleep(Duration::from_secs(5));
+            let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+            pending.retain(|p| unsafe { p.fence.GetCompletedValue() } < p.value);
+            for p in pending.iter_mut().filter(|p| !p.reported && p.since.elapsed() > Duration::from_secs(10)) {
+                p.reported = true;
+                let completed = unsafe { p.fence.GetCompletedValue() };
+                let line = format!("survey: fence {:p} event for value {} still pending after {:?} (completed {completed}), registered from title RVA {:#x}",
+                    p.fence.as_raw(), p.value, p.since.elapsed(), p.rva);
+                crate::diagnostics::log_once(&std::sync::Once::new(), || line);
+            }
+        }
+    }
 }
 
 unsafe extern "system" fn signal(this: &Fence, value: u64) -> HRESULT {

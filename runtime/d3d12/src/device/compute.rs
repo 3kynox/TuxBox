@@ -189,7 +189,8 @@ pub(super) unsafe extern "system" fn create_pipeline_x(
         Some(TableLayout::Reflected(table)) => {
             let Some(code) = super::shader_cache::compute_with_root(bytes, table.layout.payload()) else {
                 super::compute_table::capture_stage_root(bytes, &table.original);
-                return E_NOTIMPL;
+                crate::diagnostics::compute_failure(bytes, E_NOTIMPL.0);
+                return unsafe { null_compute(this, root.map(|p| &p.native), desc, out) }.unwrap_or(E_NOTIMPL);
             };
             (Some(code), Some(table))
         }
@@ -249,6 +250,9 @@ pub(super) unsafe extern "system" fn create_pipeline_x(
     if let Err(error) = &native {
         if let Some(root) = root { super::compute_table::capture_stage_root(bytes, &root.state); }
         crate::diagnostics::compute_failure(bytes, error.code().0);
+        if let Some(status) = unsafe { null_compute(this, root.map(|p| &p.native), desc, out) } {
+            return status;
+        }
     } else if let Some(table) = &reflected {
         static FIRST: std::sync::Once = std::sync::Once::new();
         crate::diagnostics::log_once(&FIRST, || format!(
@@ -268,4 +272,24 @@ pub(super) unsafe extern "system" fn create_pipeline_x(
             out,
         )
     }
+}
+
+/// Create a resource-free compute pipeline on the guest root (see `fallback`).
+unsafe fn null_compute(
+    this: &Device, root: Option<&ID3D12RootSignature>, desc: &D3D12_COMPUTE_PIPELINE_STATE_DESC, out: Out,
+) -> Option<HRESULT> {
+    use super::fallback::{Stage, bytecode, enabled, shader, substituted};
+    if !enabled() { return None; }
+    let mut host = D3D12_COMPUTE_PIPELINE_STATE_DESC {
+        pRootSignature: ManuallyDrop::new(root.cloned()),
+        CS: bytecode(shader(Stage::Compute)?),
+        NodeMask: desc.NodeMask,
+        Flags: desc.Flags,
+        ..Default::default()
+    };
+    let native = unsafe { this.native.CreateComputePipelineState::<ID3D12PipelineState>(&host) };
+    unsafe { ManuallyDrop::drop(&mut host.pRootSignature) };
+    if native.is_err() { return None; }
+    substituted("compute");
+    Some(unsafe { wrap_pageable(native, &PIPELINE, this, PipelineData::default(), out) })
 }

@@ -605,6 +605,8 @@ pub unsafe extern "system" fn map(
     if count == 0 {
         return address;
     }
+    super::diagnostics::watch("XMemMapPhysicalPages", at, count.saturating_mul(PAGE), || format!(
+        "{}", if tokens.is_null() { "unmap" } else { "map" }));
     let Some(bytes) = count
         .checked_mul(PAGE)
         .filter(|&n| at.checked_add(n).is_some())
@@ -661,6 +663,10 @@ pub unsafe extern "system" fn map_scatter(
     }
     // SAFETY: The caller supplies separate, initialized arrays of count items.
     let input = unsafe { slice::from_raw_parts(addresses, count) };
+    for &page in input {
+        super::diagnostics::watch("XMemMapPhysicalPagesScatter", page as usize, PAGE, || format!(
+            "{}", if tokens.is_null() { "unmap" } else { "map" }));
+    }
     let failed_entry = |at: usize, old: Option<u64>, new: Option<u64>, error| {
         static FIRST: std::sync::Once = std::sync::Once::new();
         FIRST.call_once(|| {

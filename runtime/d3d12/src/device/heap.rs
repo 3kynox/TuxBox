@@ -153,6 +153,7 @@ pub(super) unsafe extern "system" fn place(
         return E_NOTIMPL;
     }
     // A guest byte offset has to fit the host allocation, including padding.
+    let initial = super::format::host_initial_state(desc, initial);
     let primary = super::depth::primary(desc);
     if primary.is_some()
         && (heap.state.Properties.Type != D3D12_HEAP_TYPE_DEFAULT
@@ -161,6 +162,7 @@ pub(super) unsafe extern "system" fn place(
         return E_NOTIMPL;
     }
     let mut host = primary.unwrap_or(*desc);
+    host.Flags.0 &= super::format::HOST_FLAGS;
     let allocation = |host: &D3D12_RESOURCE_DESC| unsafe {
         device
             .native
@@ -218,6 +220,7 @@ pub(super) unsafe extern "system" fn place(
     if !fits(&info) {
         return report("range", E_INVALIDARG);
     }
+    let host_clear = super::format::host_clear(clear);
     let mut native = None;
     if let Err(error) = unsafe {
         device.native.CreatePlacedResource::<_, ID3D12Resource>(
@@ -225,7 +228,7 @@ pub(super) unsafe extern "system" fn place(
             offset,
             &host,
             super::host_state(initial, desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER),
-            Some(clear),
+            Some(host_clear.as_ref().map_or(clear, core::ptr::from_ref)),
             &mut native,
         )
     } {
@@ -278,6 +281,8 @@ pub(super) fn import_buffer_with_heap(
     }
     let size = offset.checked_add(info.SizeInBytes)
         .and_then(|end| end.checked_next_multiple_of(granularity)).ok_or(E_INVALIDARG)?;
+    crate::diagnostics::watch("imported buffer", address, info.SizeInBytes, || format!(
+        "width={:#x} flags={:#x} state={:#x}", desc.Width, desc.Flags.0, state.0));
     let pin = GPU_APERTURE.pin(base, size)?;
     validate_shared_range(base, base.checked_add(size).ok_or(E_INVALIDARG)?)?;
     // A guest can place thousands of tiny resources in one multi-GiB XMem
@@ -408,14 +413,23 @@ pub(super) unsafe extern "system" fn place_virtual_layout(
     let Some(desc) = (unsafe { desc.as_ref() }) else { return E_INVALIDARG };
     if let Err(error) = GPU_APERTURE.wait(address, 1) { return error.code(); }
     if address != 0 && desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER
-        && matches!(desc.Layout.0, 0x100..=0x102 | 0x105) {
+        && matches!(desc.Layout.0, 0x100..=0x102 | 0x105 | 0x109) {
         // Placed CPU-visible images promote from COMMON. The uploader handles
         // the guest's pitch or swizzle before a queue reads the texture.
         let state = match layout {
-            D3D12_BARRIER_LAYOUT_COMMON | D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS => D3D12_RESOURCE_STATE_COMMON,
-            D3D12_BARRIER_LAYOUT_SHADER_RESOURCE => D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
-            D3D12_BARRIER_LAYOUT_COPY_SOURCE => D3D12_RESOURCE_STATE_COPY_SOURCE,
-            D3D12_BARRIER_LAYOUT_COPY_DEST => D3D12_RESOURCE_STATE_COPY_DEST,
+            // UNDEFINED contents need no particular starting layout.
+            D3D12_BARRIER_LAYOUT_UNDEFINED | D3D12_BARRIER_LAYOUT_COMMON | D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS
+            | D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_COMMON | D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_UNORDERED_ACCESS
+            | D3D12_BARRIER_LAYOUT_COMPUTE_QUEUE_COMMON | D3D12_BARRIER_LAYOUT_COMPUTE_QUEUE_UNORDERED_ACCESS => D3D12_RESOURCE_STATE_COMMON,
+            D3D12_BARRIER_LAYOUT_SHADER_RESOURCE | D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_SHADER_RESOURCE
+            | D3D12_BARRIER_LAYOUT_COMPUTE_QUEUE_SHADER_RESOURCE => D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE,
+            D3D12_BARRIER_LAYOUT_GENERIC_READ | D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_GENERIC_READ
+            | D3D12_BARRIER_LAYOUT_COMPUTE_QUEUE_GENERIC_READ => D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_BARRIER_LAYOUT_RENDER_TARGET => D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_BARRIER_LAYOUT_COPY_SOURCE | D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_COPY_SOURCE
+            | D3D12_BARRIER_LAYOUT_COMPUTE_QUEUE_COPY_SOURCE => D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_BARRIER_LAYOUT_COPY_DEST | D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_COPY_DEST
+            | D3D12_BARRIER_LAYOUT_COMPUTE_QUEUE_COPY_DEST => D3D12_RESOURCE_STATE_COPY_DEST,
             _ => return E_NOTIMPL,
         };
         let texture = match device.state.placements.texture(&device.native, address, desc, state, unsafe { clear.as_ref() }) {
@@ -425,7 +439,7 @@ pub(super) unsafe extern "system" fn place_virtual_layout(
         return unsafe { wrap_pageable(Ok(texture.native.clone()), &RESOURCE, device,
             super::ResourceState::from(super::Backing::Placed(texture)), out) };
     }
-    if address != 0 && desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && desc.Layout == D3D12_TEXTURE_LAYOUT_UNKNOWN {
+    if address != 0 && desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER && desc.Layout == D3D12_TEXTURE_LAYOUT_UNKNOWN {
         return unsafe { place_gpu_target(device, address, desc, layout, clear, out) };
     }
     if desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER || !clear.is_null()
@@ -474,33 +488,69 @@ pub(super) struct RenderHeap {
     end: u64,
 }
 
+// Device-local heaps for images placed at guest addresses whose texels the
+// guest only reaches through the GPU. Keyed by guest address so later images
+// at the same address alias, as they do in console memory.
 #[derive(Default)]
-pub(super) struct RenderHeaps(std::sync::Mutex<std::collections::BTreeMap<u64, std::sync::Weak<RenderHeap>>>);
+pub(super) struct RenderHeaps(
+    std::sync::Mutex<std::collections::BTreeMap<u64, std::sync::Weak<RenderHeap>>>,
+    std::sync::OnceLock<bool>,
+);
 
 impl RenderHeaps {
-    fn acquire(&self, device: &ID3D12Device, address: u64, end: u64, alignment: u64)
+    /// Resource heap tier 2 lets one heap hold every image category, so a
+    /// render target and a sampled texture can alias the same guest range.
+    fn mixed(&self, device: &ID3D12Device) -> bool {
+        *self.1.get_or_init(|| {
+            let mut options = D3D12_FEATURE_DATA_D3D12_OPTIONS::default();
+            unsafe { device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, (&raw mut options).cast(),
+                size_of_val(&options) as u32) }.is_ok()
+                && options.ResourceHeapTier.0 >= D3D12_RESOURCE_HEAP_TIER_2.0
+        })
+    }
+
+    fn acquire(&self, device: &ID3D12Device, address: u64, end: u64, alignment: u64, renderable: bool)
         -> windows::core::Result<(std::sync::Arc<RenderHeap>, u64)> {
         use std::sync::Arc;
+        let mixed = self.mixed(device);
+        if !renderable && !mixed {
+            return Err(E_NOTIMPL.into());
+        }
         let mut heaps = self.0.lock().unwrap_or_else(|e| e.into_inner());
         heaps.retain(|_, entry| entry.strong_count() != 0);
         if let Some((&base, entry)) = heaps.range(..end).next_back()
             && let Some(heap) = entry.upgrade()
-            && heap.end > address {
-            if base <= address && end <= heap.end && (address - base).is_multiple_of(alignment) {
-                return Ok((heap, address - base));
+            && heap.end > address
+            && base <= address && end <= heap.end && (address - base).is_multiple_of(alignment) {
+            return Ok((heap, address - base));
+        }
+        // The title reuses guest memory for a larger or differently placed
+        // image. Cover every overlapping heap's range with a new heap so later
+        // placements here alias each other. Earlier images keep their heap.
+        let (mut start, mut stop) = (address, end);
+        for (&base, entry) in heaps.range(..end) {
+            if let Some(heap) = entry.upgrade() && heap.end > address {
+                start = start.min(base);
+                stop = stop.max(heap.end);
             }
-            return Err(E_NOTIMPL.into());
+        }
+        if !(address - start).is_multiple_of(alignment) {
+            start = address;
+        }
+        let overlapped: Vec<u64> = heaps.range(start..stop).map(|(&base, _)| base).collect();
+        for base in overlapped {
+            heaps.remove(&base);
         }
         let desc = D3D12_HEAP_DESC {
-            SizeInBytes: end - address, Alignment: alignment.max(65536),
+            SizeInBytes: stop - start, Alignment: alignment.max(65536),
             Properties: D3D12_HEAP_PROPERTIES { Type: D3D12_HEAP_TYPE_DEFAULT, CreationNodeMask: 1, VisibleNodeMask: 1, ..Default::default() },
-            Flags: D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES,
+            Flags: if mixed { D3D12_HEAP_FLAG_ALLOW_ALL_BUFFERS_AND_TEXTURES } else { D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES },
         };
         let mut native = None;
         unsafe { device.CreateHeap(&desc, &mut native)? };
-        let heap = Arc::new(RenderHeap { native: native.ok_or(E_POINTER)?, end });
-        heaps.insert(address, Arc::downgrade(&heap));
-        Ok((heap, 0))
+        let heap = Arc::new(RenderHeap { native: native.ok_or(E_POINTER)?, end: stop });
+        heaps.insert(start, Arc::downgrade(&heap));
+        Ok((heap, address - start))
     }
 }
 
@@ -508,6 +558,7 @@ unsafe fn place_gpu_target(
     device: &Device, address: u64, desc: &D3D12_RESOURCE_DESC,
     initial: D3D12_BARRIER_LAYOUT, clear: *const D3D12_CLEAR_VALUE, out: Out,
 ) -> HRESULT {
+    let initial = super::format::host_initial_layout(desc, initial);
     let primary = super::depth::primary(desc);
     if primary.is_some() && initial == D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS {
         return E_NOTIMPL;
@@ -519,8 +570,11 @@ unsafe fn place_gpu_target(
         ..Default::default()
     };
     if let Some(primary) = &primary {
+        host.Format = primary.Format;
         host.Flags = primary.Flags;
     }
+    let host_clear = super::format::host_clear(clear);
+    let clear = host_clear.as_ref().map_or(clear, core::ptr::from_ref);
     let mut step = "alignment";
     let mut render_heap = None;
     let result = (|| -> windows::core::Result<ID3D12Resource> {
@@ -542,28 +596,29 @@ unsafe fn place_gpu_target(
             return Err(E_INVALIDARG.into());
         }
         let renderable = (host.Flags & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)).0 != 0;
-        let pin = (!renderable).then(|| GPU_APERTURE.pin(address, allocation.SizeInBytes)).transpose()?;
         step = "guest memory";
+        crate::diagnostics::watch("device-memory image", address, allocation.SizeInBytes, || format!(
+            "{}x{}x{} format={} flags={:#x}", desc.Width, desc.Height, desc.DepthOrArraySize, desc.Format.0, desc.Flags.0));
         validate_shared_range(address, address.checked_add(allocation.SizeInBytes).ok_or(E_INVALIDARG)?)?;
+        // A heap opened from guest memory holds only buffers. Driver-tiled
+        // images live in device memory; the guest reaches their texels through
+        // GPU copies and views, not through its CPU mapping of this range.
         step = "host heap";
-        let (heap, offset): (ID3D12Heap, u64) = if renderable {
-            let (entry, offset) = device.state.render_heaps.acquire(&device.native, address,
-                address + allocation.SizeInBytes, allocation.Alignment)?;
-            let native = entry.native.clone();
-            render_heap = Some(entry);
-            (native, offset)
-        } else {
-            (unsafe { api.OpenExistingHeapFromAddress1(address as _, allocation.SizeInBytes as usize)? }, 0)
-        };
+        let (entry, offset) = device.state.render_heaps.acquire(&device.native, address,
+            address + allocation.SizeInBytes, allocation.Alignment, renderable)?;
+        let heap = entry.native.clone();
+        render_heap = Some(entry);
         step = "host placement";
         let mut resource = None;
         unsafe { api.CreatePlacedResource2(&heap, offset, &host, initial, clear.as_ref().map(core::ptr::from_ref),
             (!formats.is_empty()).then_some(formats), &mut resource)? };
         let resource: ID3D12Resource = resource.ok_or(E_POINTER)?;
-        if let Some(pin) = pin {
-            attach_import(&resource, &Arc::new(ImportedHeap { native: heap, _pin: pin }))?;
-        } else {
-            unsafe { resource.SetPrivateDataInterface(&IMPORTED_HEAP, &heap)? };
+        unsafe { resource.SetPrivateDataInterface(&IMPORTED_HEAP, &heap)? };
+        if !renderable {
+            static SAMPLED: std::sync::Once = std::sync::Once::new();
+            crate::diagnostics::log_once(&SAMPLED, || format!(
+                "driver-tiled sampled image in device memory at {address:#x}: {}x{} format={} (guest CPU writes to this range are not uploaded)",
+                desc.Width, desc.Height, desc.Format.0));
         }
         Ok(resource)
     })();
@@ -575,7 +630,7 @@ unsafe fn place_gpu_target(
             return e.code();
         }
     };
-    let depth = if let Some(primary) = &primary {
+    let depth = if let Some(primary) = primary.as_ref().filter(|_| super::depth::paired(desc)) {
         let heap = D3D12_HEAP_PROPERTIES { Type: D3D12_HEAP_TYPE_DEFAULT,
             CreationNodeMask: 1, VisibleNodeMask: 1, ..Default::default() };
         match super::depth::Pair::new(&device.native, &heap, desc, primary) {
@@ -601,13 +656,20 @@ pub(super) unsafe extern "system" fn committed_layout(
     let packed = super::allocation::packed_uav_formats(desc.Format, desc.Flags);
     let castable = if count == 0 { (!packed.is_empty()).then_some(packed) }
         else { Some(unsafe { std::slice::from_raw_parts(formats, count as usize) }) };
+    // Only the format translation applies here; a float depth plane with a
+    // writable companion is not created through this entry point.
+    let translated = super::depth::primary(desc).filter(|_| !super::depth::paired(desc));
+    let initial = super::format::host_initial_layout(desc, initial);
+    let host_clear = super::format::host_clear(clear);
+    let clear = host_clear.as_ref().map_or(clear, core::ptr::from_ref);
     let host = D3D12_RESOURCE_DESC1 {
         Dimension: desc.Dimension, Alignment: desc.Alignment, Width: desc.Width, Height: desc.Height,
-        DepthOrArraySize: desc.DepthOrArraySize, MipLevels: desc.MipLevels, Format: desc.Format,
+        DepthOrArraySize: desc.DepthOrArraySize, MipLevels: desc.MipLevels,
+        Format: translated.map_or(desc.Format, |t| t.Format),
         SampleDesc: desc.SampleDesc, Layout: if desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER && desc.Layout.0 >= 0x100 {
             D3D12_TEXTURE_LAYOUT_UNKNOWN
         } else { desc.Layout },
-        Flags: D3D12_RESOURCE_FLAGS(desc.Flags.0 & 0x1ff), ..Default::default()
+        Flags: translated.map_or(D3D12_RESOURCE_FLAGS(desc.Flags.0 & 0x1ff), |t| t.Flags), ..Default::default()
     };
     static FIRST_DISPLAY: std::sync::Once = std::sync::Once::new();
     if flags.contains(D3D12_HEAP_FLAG_ALLOW_DISPLAY) {
@@ -620,6 +682,9 @@ pub(super) unsafe extern "system" fn committed_layout(
         return error.code();
     }
     let Some(native) = native else { return E_POINTER; };
+    if flags.contains(D3D12_HEAP_FLAG_ALLOW_DISPLAY) {
+        crate::diagnostics::display::mark_resource(native.as_raw());
+    }
     let backing = if flags.contains(D3D12_HEAP_FLAG_ALLOW_DISPLAY) {
         // Scanout allocations go through the title's D3D large-page allocator.
         // Keep the tiled guest extent and its native render target paired.
@@ -631,6 +696,8 @@ pub(super) unsafe extern "system" fn committed_layout(
         };
         let address = super::views::TextureAddress::at(device, &native, memory.address, false, Some(memory));
         super::Backing::Addressed(address, *desc)
+    } else if translated.is_some() {
+        super::Backing::Translated(*desc)
     } else {
         super::Backing::ConsoleLayout(desc.Layout, desc.Flags)
     };

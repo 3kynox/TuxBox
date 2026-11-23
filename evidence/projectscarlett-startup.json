@@ -10,17 +10,17 @@
     "version": "1793301796 experimental-11.0-20261027b-x86_64"
   },
   "run": {
-    "utc": "18:03:20",
-    "log_sha256": "8d900f0589e0c74b0b73bb4c1bfb3ad3475bb833588818f02deb86af1d5d35d4",
+    "utc": "18:33:55",
+    "log_sha256": "0aaa2e74232472ec4183175c1466337640821929af2b3e8dd64caf7eaedce183",
     "window": "Americas",
     "present_dimensions": [
       3840,
       2160
     ],
     "swapchain_sources": 2,
-    "startup_presents_recorded_by_mangohud": 3273,
+    "startup_presents_recorded_by_mangohud": 4618,
     "desktop_image": "black with MangoHud after presentation began",
-    "desktop_sample_sha256": "59acdc95a75317dd1dc6b07f41e0f6be7f6a7f7fdb48817e57022f350107495e",
+    "desktop_sample_sha256": "fa7074921af97926947b6cbbdcf006952fb03678843ec4429a8da1378b05be9b",
     "recorded_raster_draw": {
       "vertex": "VS_Clear",
       "pixel": "PS_Clear",
@@ -35,10 +35,20 @@
     "game_report": {
       "state": "Game Init",
       "gameplay_frame": 0,
-      "sha256": "58a01c32f0a9bad539210110b8db657598629ebff8b3a8795a778d2227c66bb4"
+      "sha256": "575a47a947e489c541d522b4a496869505efc3a2462230b507e9f0870db6e041"
     },
     "logo_seen": false,
-    "menu_seen": false
+    "menu_seen": false,
+    "blocking_call": {
+      "device_slot": 25,
+      "operation": "GetResourceAllocationInfo",
+      "width": 2560,
+      "height": 1440,
+      "format": 118,
+      "flags": "0x80300006",
+      "result_size": "UINT64_MAX",
+      "title_breakpoint_rva": "0x344196"
+    }
   },
   "startup_observations": {
     "audio_connections": [
@@ -51,6 +61,20 @@
       "textures.rpf",
       "script.rpf",
       "audio.rpf"
-    ]
+    ],
+    "movie_metadata_check": {
+      "utc": "18:33:55",
+      "log_sha256": "0aaa2e74232472ec4183175c1466337640821929af2b3e8dd64caf7eaedce183",
+      "phase_trace_sha256": "88d8131efeac1475db32dfd7847958b4576c19aab2c8b978e8fe7c6d3651342f",
+      "method": "Per-thread Linux hardware execution counters at the two title movie-open call sites, the metadata success branch and the frame-buffer registration call site.",
+      "threads_observed": 113,
+      "call_counts": {
+        "metadata_open": 1,
+        "metadata_handle_returned": 1,
+        "playback_open": 0,
+        "register_planes": 0
+      },
+      "desktop_image": "black after presentation began"
+    }
   }
 }

@@ -108,9 +108,9 @@ pub(crate) fn device_vm_created() {
 
 pub(crate) fn placement_fits(address: u64, size: u64) -> bool {
     let limit = VM_LIMIT.load(Ordering::Acquire);
-    address.checked_add(size).is_some_and(|end| {
-        limit <= 1 || (address >= VM_START && end <= limit)
-    })
+    // The console window starts at VM_START, but TuxBox's XMem backs graphics
+    // heaps (e.g. GTA's startup heap) at host-chosen addresses below it.
+    address.checked_add(size).is_some_and(|end| limit <= 1 || end <= limit)
 }
 
 /// The requested preservation size is recorded before the driver call, even
