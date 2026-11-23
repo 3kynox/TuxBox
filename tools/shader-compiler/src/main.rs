@@ -5,6 +5,22 @@ use std::{
 };
 use tuxbox_xshader::{extract, ShaderExtract, Stage};
 
+// Used only for deterministic refusals by the HLSL emitter.
+const UNSUPPORTED_HLSL: u8 = 65;
+
+enum Error {
+    Other(String),
+    Unsupported(String),
+}
+
+impl From<String> for Error {
+    fn from(message: String) -> Self { Self::Other(message) }
+}
+
+impl From<&str> for Error {
+    fn from(message: &str) -> Self { Self::Other(message.into()) }
+}
+
 fn read(path: &Path) -> Result<Vec<u8>, String> {
     fs::read(path).map_err(|e| format!("{}: {e}", path.display()))
 }
@@ -15,7 +31,7 @@ fn translate(
     consumer: Option<&Path>,
     pixel_order: Option<&Path>,
     stencil_target: Option<u32>,
-) -> Result<(String, &'static str), String> {
+) -> Result<(String, &'static str), Error> {
     use tuxbox_xshader::{hlsl, meta};
 
     let translated = if let Some(path) = consumer {
@@ -23,19 +39,19 @@ fn translate(
         if !matches!(shader.stage, Stage::Vertex | Stage::Geometry) || pixel.stage != Stage::Pixel {
             return Err("expected a vertex or geometry producer and a pixel consumer".into());
         }
-        let pixel = hlsl::translate(&pixel)?;
+        let pixel = hlsl::translate(&pixel).map_err(Error::Unsupported)?;
         let order = pixel_order
             .map(read)
             .transpose()?
             .map(|dxil| meta::pixel_input_order(&dxil))
             .unwrap_or_default();
-        hlsl::translate_ordered(shader, Some(&pixel.ps_input_interp), &order)?
+        hlsl::translate_ordered(shader, Some(&pixel.ps_input_interp), &order)
     } else if let Some(target) = stencil_target {
-        hlsl::translate_stencil_target(shader, target)?
+        hlsl::translate_stencil_target(shader, target)
     } else {
-        hlsl::translate(shader)?
-    };
-    let model = if translated.required_wave_size.is_some() || translated.typed_int64_atomics {
+        hlsl::translate(shader)
+    }.map_err(Error::Unsupported)?;
+    let model = if translated.required_wave_size.is_some() || translated.typed_int64_atomics || translated.profile == "ps_6_6" {
         "6_6"
     } else if shader.stage == Stage::Mesh || translated.profile == "cs_6_5" {
         "6_5"
@@ -55,23 +71,23 @@ fn translate(
     consumer: Option<&Path>,
     _pixel_order: Option<&Path>,
     stencil_target: Option<u32>,
-) -> Result<(String, &'static str), String> {
+) -> Result<(String, &'static str), Error> {
     if consumer.is_some() {
-        return Err("independent HLSL emitter does not support linked shaders".into());
+        return Err(Error::Unsupported("independent HLSL emitter does not support linked shaders".into()));
     }
     if stencil_target.is_some() {
-        return Err("independent HLSL emitter does not support stencil exports".into());
+        return Err(Error::Unsupported("independent HLSL emitter does not support stencil exports".into()));
     }
     let hlsl = tuxbox_xshader::independent_hlsl(shader).ok_or_else(|| {
         format!(
             "unsupported {:?} program for the independent HLSL emitter",
             shader.stage
         )
-    })?;
+    }).map_err(Error::Unsupported)?;
     Ok((hlsl, if tuxbox_xshader::requires_inline_ray_query(shader) { "6_5" } else { "6_0" }))
 }
 
-fn run() -> Result<(), String> {
+fn run() -> Result<(), Error> {
     let mut args = env::args_os().skip(1);
     let source = args.next().ok_or("expected a cooked shader path")?;
     if source == "--list-emitters" {
@@ -104,13 +120,13 @@ fn run() -> Result<(), String> {
             Some("--profile-out") => &mut profile_output,
             Some("--link-pixel") => &mut consumer,
             Some("--pixel-order") => &mut pixel_order,
-            _ => return Err(format!("unknown option {argument:?}")),
+            _ => return Err(format!("unknown option {argument:?}").into()),
         };
         if slot
             .replace(PathBuf::from(args.next().ok_or("missing path")?))
             .is_some()
         {
-            return Err(format!("duplicate option {argument:?}"));
+            return Err(format!("duplicate option {argument:?}").into());
         }
     }
     let output = output.ok_or("--hlsl-out is required")?;
@@ -165,15 +181,20 @@ fn run() -> Result<(), String> {
         "decode: {instructions} instrs, consumed {consumed}/{} bytes, terminated_on_s_endpgm={ended}",
         shader.isa.len()
     );
-    fs::write(&output, hlsl).map_err(|e| format!("{}: {e}", output.display()))
+    fs::write(&output, hlsl).map_err(|e| format!("{}: {e}", output.display()))?;
+    Ok(())
 }
 
 fn main() -> std::process::ExitCode {
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
-        Err(error) => {
+        Err(Error::Other(error)) => {
             eprintln!("{error}");
             std::process::ExitCode::FAILURE
+        }
+        Err(Error::Unsupported(error)) => {
+            eprintln!("{error}");
+            std::process::ExitCode::from(UNSUPPORTED_HLSL)
         }
     }
 }

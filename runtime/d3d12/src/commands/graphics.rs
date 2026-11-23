@@ -1,5 +1,5 @@
 use super::{List, parent, recording};
-use crate::device::compute::root_signature;
+use crate::device::compute::root_proxy;
 use core::ffi::c_void;
 use windows::Win32::Foundation::{E_INVALIDARG, RECT};
 use windows::Win32::Graphics::Direct3D::{
@@ -13,10 +13,11 @@ pub(super) unsafe extern "system" fn root(list: &List, signature: *mut c_void) {
     if !state.can_record(&list.native) {
         return;
     }
-    match unsafe { root_signature(signature, parent(&list.parent)) } {
+    match unsafe { root_proxy(signature, parent(&list.parent)) } {
         Ok(root) => {
-            state.bindings.graphics_root(root);
-            unsafe { list.native.SetGraphicsRootSignature(root) };
+            let native = root.map(|r| &r.native);
+            state.bindings.graphics_root(native, root.map(|r| &r.state));
+            unsafe { list.native.SetGraphicsRootSignature(native) };
         }
         Err(error) => state.error = error,
     }
@@ -43,6 +44,7 @@ pub(super) unsafe extern "system" fn pipeline(list: &List, guest: *mut c_void) {
         Ok(Some(host)) => {
             state.stencil_slot = host.state.stencil_slot;
             state.bindings.pipeline = Some(host.into());
+            state.bindings.draw_trace = host.state.draw_trace.clone();
             unsafe { list.native.SetPipelineState(&host.native) };
         }
         _ => state.error = E_INVALIDARG,
@@ -139,10 +141,68 @@ pub(super) unsafe extern "system" fn draw(
 ) {
     let mut state = recording(list);
     if state.can_record(&list.native) {
-        state.draw(&list.native, || unsafe {
+        state.draw(list, || unsafe {
             list.native
-                .DrawInstanced(vertices, instances, start_vertex, start_instance)
+                .DrawInstanced(vertices, instances, start_vertex, start_instance);
+            static FIRST: std::sync::Once = std::sync::Once::new();
+            crate::diagnostics::log_once(&FIRST, || format!("recorded DrawInstanced list={list:p} vertices={vertices} instances={instances}"));
         });
+    }
+}
+
+// Series slot 126 takes a base rate and two D3D12_SHADING_RATE_COMBINERs.
+pub(super) unsafe extern "system" fn shading_rate(
+    list: &List,
+    rate: D3D12_SHADING_RATE,
+    combiners: *const D3D12_SHADING_RATE_COMBINER,
+) {
+    let mut state = recording(list);
+    if !state.can_record(&list.native) {
+        return;
+    }
+    if !matches!(rate, D3D12_SHADING_RATE_1X1 | D3D12_SHADING_RATE_1X2 | D3D12_SHADING_RATE_2X1 |
+        D3D12_SHADING_RATE_2X2 | D3D12_SHADING_RATE_2X4 | D3D12_SHADING_RATE_4X2 | D3D12_SHADING_RATE_4X4)
+        || (!combiners.is_null() && unsafe { std::slice::from_raw_parts(combiners, 2) }.iter()
+            .any(|op| !(0..=4).contains(&op.0))) {
+        state.error = E_INVALIDARG;
+        return;
+    }
+    let native = match list.native.cast::<ID3D12GraphicsCommandList5>() {
+        Ok(native) => native,
+        Err(error) => { state.error = error.code(); return; }
+    };
+    unsafe { native.RSSetShadingRate(rate, (!combiners.is_null()).then_some(combiners)) };
+}
+
+// SET_CONTEXT_REG DB_RENDER_OVERRIDE.FORCE_SHADER_Z_ORDER tells the DB to
+// obey the bound shader's Z_ORDER. The translated PS carries the observable
+// ordering in DXIL, including earlydepthstencil for early-depth color shaders.
+// Desktop D3D12 always honors this shader contract; it has no dynamic override.
+pub(super) unsafe extern "system" fn force_shader_depth_order(list: &List, enable: u32) {
+    let mut state = recording(list);
+    if !state.can_record(&list.native) {
+        return;
+    }
+    if enable > 1 || unsafe { list.native.GetType() } != D3D12_COMMAND_LIST_TYPE_DIRECT {
+        state.error = E_INVALIDARG;
+        return;
+    }
+    static MODES: [std::sync::Once; 2] = [const { std::sync::Once::new() }; 2];
+    crate::diagnostics::log_once(&MODES[enable as usize], || {
+        format!("SetPixelShaderDepthForceZOrderX({enable}): bound pixel shader controls depth ordering")
+    });
+}
+
+// SetSampleMaskX programs an additional 16-bit coverage mask per pixel in a
+// 2x2 quad. Enabling every sample preserves the coverage of the bound PSO.
+pub(super) unsafe extern "system" fn sample_mask(list: &List, mask: u64) {
+    let mut state = recording(list);
+    if !state.can_record(&list.native) {
+        return;
+    }
+    if mask != u64::MAX {
+        crate::diagnostics::recording_error(format_args!("SetSampleMaskX quad mask {mask:#018x}"));
+        state.error = windows::Win32::Foundation::E_NOTIMPL;
     }
 }
 
@@ -167,7 +227,7 @@ pub(super) unsafe extern "system" fn dispatch_mesh(list: &List, x: u32, y: u32, 
         state.error = windows::Win32::Foundation::E_NOINTERFACE;
         return;
     };
-    state.draw(&list.native, || unsafe { native.DispatchMesh(x, y, z) });
+    state.draw(list, || unsafe { native.DispatchMesh(x, y, z) });
     static FIRST_MESH: std::sync::Once = std::sync::Once::new();
     crate::diagnostics::log_once(&FIRST_MESH, || {
         format!("recorded Xbox slot 127 DispatchMesh ({x}, {y}, {z})")
@@ -182,7 +242,13 @@ pub(super) unsafe extern "system" fn index_buffer(
 ) {
     let mut state = recording(list);
     if state.can_record(&list.native) {
-        unsafe { (list.native.vtable().IASetIndexBuffer)(list.native.as_raw(), view) };
+        let mut host = unsafe { view.as_ref() }.copied();
+        if let Some(v) = &mut host {
+            let Some(address) = super::compute::address(list, &mut state, v.BufferLocation, v.SizeInBytes.into()) else { return; };
+            v.BufferLocation = address;
+        }
+        unsafe { list.native.IASetIndexBuffer(host.as_ref().map(core::ptr::from_ref)) };
+
     }
 }
 
@@ -202,9 +268,19 @@ pub(super) unsafe extern "system" fn vertex_buffers(
         state.error = E_INVALIDARG;
         return;
     }
-    // The views already contain GPU addresses from the native buffers. A null
-    // view array clears the requested vertex slots.
-    unsafe { (list.native.vtable().IASetVertexBuffers)(list.native.as_raw(), start, count, views) };
+    if views.is_null() || count == 0 {
+        unsafe { (list.native.vtable().IASetVertexBuffers)(list.native.as_raw(), start, count, views) };
+        return;
+    }
+    let mut translated = [D3D12_VERTEX_BUFFER_VIEW::default(); D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT as usize];
+    let host = &mut translated[..count as usize];
+    host.copy_from_slice(unsafe { core::slice::from_raw_parts(views, count as usize) });
+    for v in host.iter_mut() {
+        let Some(address) = super::compute::address(list, &mut state, v.BufferLocation, v.SizeInBytes.into()) else { return; };
+        v.BufferLocation = address;
+    }
+    unsafe { list.native.IASetVertexBuffers(start, Some(host)) };
+
 }
 
 // Slot 13 at Frosty RVA 0x578ecf6 uses the desktop five-argument ordering.
@@ -218,9 +294,11 @@ pub(super) unsafe extern "system" fn draw_indexed(
 ) {
     let mut state = recording(list);
     if state.can_record(&list.native) {
-        state.draw(&list.native, || unsafe {
+        state.draw(list, || unsafe {
             list.native
-                .DrawIndexedInstanced(indices, instances, first, base_vertex, first_instance)
+                .DrawIndexedInstanced(indices, instances, first, base_vertex, first_instance);
+            static FIRST: std::sync::Once = std::sync::Once::new();
+            crate::diagnostics::log_once(&FIRST, || format!("recorded DrawIndexedInstanced list={list:p} indices={indices} instances={instances}"));
         });
     }
 }

@@ -92,6 +92,10 @@ def main():
         for mode in ("cpu", "gpu"):
             run_host(host, work / f"verify_{codec}.exe", trial, mode, codec, str(width), str(height),
                      str(rate.numerator), str(rate.denominator), *(str(n) for n in frame_ids), report=mode + ".txt")
+            if mode == "gpu":
+                if "retained_first_texture=match" not in (trial / "gpu.txt").read_text().splitlines():
+                    raise ValueError("Missing native texture lifetime check")
+                result["retained_texture_after_decoder_release"] = frame_ids[0]
             for n in frame_ids:
                 frame = trial / f"{mode}-frame-{n:02d}.nv12"
                 reference = oracle[n]

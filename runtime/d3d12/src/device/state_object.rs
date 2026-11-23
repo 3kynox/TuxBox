@@ -1,8 +1,8 @@
 //! Xbox Device8::DeserializeStateObjectX consumes serialized native GPU programs.
-use super::{Device, Out, compute::root_signature, identity, shader_cache};
+use super::{Device, Out, compute::root_proxy, identity, shader_cache};
 use crate::proxy::{self, Proxy, Slots};
 use core::{ffi::c_void, ptr, slice};
-use std::sync::Once;
+use std::sync::{LazyLock, Once};
 use tuxbox_dxbc::ray::State;
 use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL, E_POINTER, S_OK};
 use windows::Win32::Graphics::Direct3D12::*;
@@ -201,7 +201,7 @@ pub(super) unsafe extern "system" fn deserialize(
             !guest_root.is_null()
         )
     });
-    let root = match unsafe { root_signature(guest_root, identity(device).as_raw()) } {
+    let root = match unsafe { root_proxy(guest_root, identity(device).as_raw()) } {
         Ok(root) => root,
         Err(error) => return error,
     };
@@ -209,10 +209,30 @@ pub(super) unsafe extern "system" fn deserialize(
     if flags != 0 || digest.is_empty() {
         return E_NOTIMPL;
     }
+    static TRACE: LazyLock<bool> =
+        LazyLock::new(|| std::env::var("TUXBOX_TRACE_RAYTRACING").as_deref() == Ok("1"));
+    if *TRACE && let Some(root) = root {
+        crate::diagnostics::log_once(&Once::new(), || {
+            let bytes = root.state.serialized();
+            let hash = shader_cache::source_digest(bytes).unwrap_or_default();
+            // A researcher can replay the same host collection in a separate
+            // process using the title's actual global root. Normal launches
+            // do not write any diagnostic files.
+            if let Some(dir) = std::env::var_os("TUXBOX_CAPTURE_RAY_ROOTS")
+                && !hash.is_empty()
+            {
+                let path = std::path::Path::new(&dir).join(format!("{hash}.dxbc"));
+                if !path.exists() {
+                    let _ = std::fs::write(path, bytes);
+                }
+            }
+            format!("ray collection root {hash} bytes={} shader={digest}", bytes.len())
+        });
+    }
     let Some(dxil) = shader_cache::ray_library(bytes, &digest) else {
         return E_NOTIMPL;
     };
-    let result = match collection(device, &state, root, &dxil) {
+    let result = match collection(device, &state, root.map(|r| &r.native), &dxil) {
         Ok(native) => {
             let info = Inspection::from_state(&native, &state);
             unsafe { wrap(device, native, info, out) }

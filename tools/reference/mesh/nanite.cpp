@@ -135,7 +135,7 @@ std::string run(const wchar_t* adapter, bool cacheCheck, bool alternate, bool su
     instance[6] = 0x80018001;
     instance[7] = 0x008e8001;
     const std::array<UINT, 4> visibleCluster{0, 0, 0, 1u << 23}; // cluster zero, then cluster one
-    std::array<UINT, 192> view{};
+    std::array<UINT, 200> view{};
     // Identity XY projection, constant depth .75 and W=1.
     view[0xc0 / 4] = view[0xc0 / 4 + 5] = view[0xc0 / 4 + 15] = 0x3f800000;
     view[0xc0 / 4 + 14] = 0x3f400000;
@@ -190,7 +190,7 @@ std::string run(const wchar_t* adapter, bool cacheCheck, bool alternate, bool su
         srv(ctx, first + 1, t0.Get(), sizeof(instance), 16);
         srv(ctx, first + 2, pages[pass].Get(), sizeof(page), 0);
         srv(ctx, first + 3, t2.Get(), sizeof(visibleCluster), 0);
-        srv(ctx, first + 4, t3.Get(), sizeof(view), 16);
+        srv(ctx, first + 4, t3.Get(), sizeof(view), sizeof(view));
         device->CreateUnorderedAccessView(target.Get(), nullptr, nullptr, ctx.cpu(first + 5));
         if (pass) transition(list, target.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
         linear.pResource = source.Get();

@@ -5,13 +5,46 @@ use super::{Emitter, Enc, Insn, Opnd};
 pub(super) const DPP_REDUCE: u32 = 0x7ff1;
 pub(super) const READ_LANE: u32 = 0x7ff2;
 
+// OR reductions may have a completed vector load and a second predicate.
+// The scalar AND intersects that predicate with the saved EXEC before the
+// CNDMASK sets excluded lanes to zero. Retain all three instructions.
+fn or_prologue(insns: &[Insn], first: usize) -> Option<(usize, Opnd)> {
+    let select = insns.get(first.checked_sub(1)?)?;
+    let [Opnd::ConstInt(0), Opnd::Vgpr(_), mask @ Opnd::Sgpr(_)] = select.src[..] else { return None };
+    let mut mask_sources = None;
+    for (index, op) in insns[..first - 1].iter().enumerate().rev() {
+        match op.mnemonic.as_str() {
+            "s_waitcnt" | "v_nop" => (),
+            "s_and_b32" | "s_and_b64" if mask_sources.is_none() && op.dst == [mask] => {
+                mask_sources = Some((op.mnemonic.as_str(), &op.src));
+            }
+            save @ ("s_or_saveexec_b32" | "s_or_saveexec_b64") => {
+                let [saved @ Opnd::Sgpr(_)] = op.dst[..] else { return None };
+                let matches = match mask_sources {
+                    Some((and, sources)) => (save.ends_with("32") == and.ends_with("32"))
+                        && sources.contains(&saved),
+                    None => saved == mask,
+                };
+                return matches.then_some((index, mask));
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
 pub(super) fn lower(insns: &mut [Insn], first: usize) -> Result<(u32, usize), &'static str> {
     let start = first.checked_sub(2).ok_or("missing reduction prologue")?;
     let tail = &insns[start..];
     let operation = &insns[first].mnemonic;
     let floating = matches!(operation.as_str(), "v_min_f32" | "v_max_f32");
     // The floating form inserts the neutral value between SAVEEXEC and CNDMASK.
-    let save = if floating {
+    let or = if operation == "v_or_b32" {
+        Some(or_prologue(insns, first).ok_or("unrecognized DPP OR prologue")?)
+    } else { None };
+    let save = if let Some((index, _)) = or {
+        &insns[index]
+    } else if floating {
         let prologue = start.checked_sub(1).ok_or("missing extrema prologue")?;
         &insns[prologue]
     } else { &tail[0] };
@@ -38,7 +71,7 @@ pub(super) fn lower(insns: &mut [Insn], first: usize) -> Result<(u32, usize), &'
     } else { Opnd::ConstInt(0) };
     if save.src != [Opnd::ConstInt(-1)]
         || block[1].mnemonic != "v_cndmask_b32"
-        || !matches!(block[1].src[..], [identity, Opnd::Vgpr(_), Opnd::Sgpr(n)] if n == saved && identity == neutral)
+        || !matches!(block[1].src[..], [identity, Opnd::Vgpr(_), mask] if mask == or.map_or(Opnd::Sgpr(saved), |(_, mask)| mask) && identity == neutral)
     {
         return Err("invalid masked reduction input");
     }
@@ -127,7 +160,10 @@ pub(super) fn check_control_flow(insns: &[Insn], width: u32) -> Result<(), Strin
             continue;
         }
         let prologue_len = if matches!(ins.mnemonic.as_str(), "v_min_f32" | "v_max_f32") { 3 } else { 2 };
-        let start = insns[first - prologue_len].offset as i64;
+        let start = if ins.mnemonic == "v_or_b32" {
+            or_prologue(insns, first).ok_or("unrecognized DPP OR prologue")?.0
+        } else { first - prologue_len };
+        let start = insns[start].offset as i64;
         let end = insns[first + if width == 32 { 7 } else { 9 }].offset as i64;
         for branch in insns.iter().filter(|i| i.enc == Enc::Sopp) {
             let pc = branch.offset as i64;

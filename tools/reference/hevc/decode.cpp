@@ -102,6 +102,8 @@ int main(int argc, char** argv) {
         UINT pk = 0;
         UINT64 pos{};
         DWORD frames = 0;
+        ComPtr<ID3D12Resource> first_texture;
+        std::vector<BYTE> first_pixels;
         for (UINT i = 0;; ++i) {
             const int fields = fscanf_s(index, "%u,%llu", &pk, &pos);
             if (fields == EOF) {
@@ -145,9 +147,12 @@ int main(int argc, char** argv) {
                     throw std::runtime_error("no output sample");
                 if (std::binary_search(selected.begin(), selected.end(), frames)) {
                     std::vector<BYTE> data;
-                    if (gpu)
-                        data = readback(got.Get(),width,height);
-                    else {
+                    if (gpu) {
+                        const bool first = frames == selected.front();
+                        data = readback(got.Get(), width, height, first ? &first_texture : nullptr);
+                        if (first)
+                            first_pixels = data;
+                    } else {
                         ComPtr<IMFMediaBuffer> b;
                         check(got->ConvertToContiguousBuffer(&b), "contiguous");
                         BYTE* ptr{};
@@ -165,6 +170,15 @@ int main(int argc, char** argv) {
                     fprintf(f, "frame%lu=%zu\n", frames, data.size());
                 }
                 if (frames++ == selected.back()) {
+                    if (gpu) {
+                        // Drop the decoder and its current sample. Keep only the first native texture.
+                        got.Reset();
+                        provided.Reset();
+                        decoder.Reset();
+                        if (readback_texture(first_texture.Get(), nullptr, width, height) != first_pixels)
+                            throw std::runtime_error("retained native texture changed");
+                        fprintf(f, "retained_first_texture=match\n");
+                    }
                     fclose(bits);
                     fclose(index);
                     fclose(f);

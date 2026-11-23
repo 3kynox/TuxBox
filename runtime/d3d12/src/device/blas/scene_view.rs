@@ -103,9 +103,7 @@ fn resolve_backing(pool: &Buffer, address: u64) -> Result<(ID3D12Resource, u64)>
     // must remain stable, including if a later AS copy would need larger storage.
     let mut targets = lock(&pool.targets);
     match targets.entry(address).or_insert(None) {
-        Some(backing) => Ok((backing.resource.clone(), unsafe {
-            backing.resource.GetGPUVirtualAddress()
-        })),
+        Some(backing) => Ok((backing.clone(), unsafe { backing.GetGPUVirtualAddress() })),
         None => Ok((pool.native.clone(), address)),
     }
 }

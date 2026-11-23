@@ -24,6 +24,8 @@ pub(super) fn stride_words(
         (Stage::Compute, false) => (5, 0x300, 0x404),
         (Stage::Compute, true) => (8, 0x303, 0x30704),
         (Stage::Pixel, false) => (5, 0x300, 0x804),
+        (Stage::Vertex, false) => (5, 0x300, 0x30b04),
+        (Stage::Mesh, false) => (5, 0x300, 0x91104),
         _ => return None,
     };
     // Raw buffers and images carry a size here as well. The independent PSV
@@ -171,5 +173,18 @@ mod tests {
             None
         );
         assert_eq!(stride_words(&data, &resources, Stage::Pixel, 0, true), None);
+    }
+
+    #[test]
+    fn vertex_and_mesh_views_keep_the_complete_record() {
+        let resource = [PsvResource { res_type: 5, space: 0, lower: 3, upper: 3 }];
+        for (stage, tag, other) in [
+            (Stage::Vertex, 0x30b04, Stage::Mesh),
+            (Stage::Mesh, 0x91104, Stage::Vertex),
+        ] {
+            let table = fixture(&[[0x300, 24, 3, 800, tag]]);
+            assert_eq!(stride_words(&table, &resource, stage, 3, false), Some(200));
+            assert_eq!(stride_words(&table, &resource, other, 3, false), None);
+        }
     }
 }

@@ -6,7 +6,7 @@
 
 use core::ffi::c_void;
 use core::ptr::NonNull;
-use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL, E_POINTER, HANDLE, LUID};
+use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL, E_POINTER, LUID};
 use windows::Win32::Graphics::{Direct3D::D3D_FEATURE_LEVEL_12_0, Direct3D12::*};
 use windows::core::{GUID, HRESULT, IUnknown, Interface, InterfaceRef, Result};
 
@@ -17,11 +17,14 @@ mod allocation;
 pub(crate) mod blas;
 pub(crate) mod compute;
 mod compute_scene;
+mod compute_table;
 pub(crate) mod depth;
 mod descriptor_copy;
+pub(crate) mod descriptor_paging;
 mod dxgi;
 mod features;
 pub(crate) mod frame_events;
+mod fence;
 mod graphics;
 mod heap;
 pub(crate) mod indirect;
@@ -36,12 +39,15 @@ mod shader_cache;
 mod state_object;
 pub(crate) mod stencil;
 mod stream;
+mod title_memory;
 mod views;
+pub(crate) use views::{clear_buffer_alias, command_buffer_address, is_constant_buffer};
 
 type Device = Proxy<ID3D12Device, dxgi::DxgiDevice>;
 pub(crate) enum Backing {
     Native,
     ConsoleLayout(D3D12_TEXTURE_LAYOUT, D3D12_RESOURCE_FLAGS),
+    Addressed(std::sync::Arc<views::TextureAddress>, D3D12_RESOURCE_DESC),
     Placed(std::sync::Arc<placement::Texture>),
     Depth(Box<depth::Pair>),
 }
@@ -55,19 +61,33 @@ impl Backing {
     pub(crate) fn depth(&self) -> Option<&depth::Pair> {
         match self {
             Self::Depth(pair) => Some(pair),
+            Self::Addressed(address, _) => address.depth.as_deref(),
             _ => None,
         }
     }
 }
 pub(crate) struct ResourceState {
     backing: Backing,
+    texture_address: std::sync::OnceLock<std::sync::Arc<views::TextureAddress>>,
     blas_buffer: Option<blas::Registration>,
     stencil: std::sync::OnceLock<std::sync::Arc<stencil::Surface>>,
+}
+impl ResourceState {
+    pub(crate) fn buffer_window(&self) -> Option<(u64, u64)> {
+        if let Backing::Addressed(address, desc) = &self.backing
+            && address.buffer_offset != 0
+        {
+            Some((address.buffer_offset, desc.Width))
+        } else {
+            None
+        }
+    }
 }
 impl From<Backing> for ResourceState {
     fn from(backing: Backing) -> Self {
         Self {
             backing,
+            texture_address: Default::default(),
             blas_buffer: None,
             stencil: Default::default(),
         }
@@ -79,7 +99,8 @@ impl core::ops::Deref for ResourceState {
         &self.backing
     }
 }
-type Resource = Proxy<ID3D12Resource, ResourceState>;
+
+pub(crate) type Resource = Proxy<ID3D12Resource, ResourceState>;
 type Out = *mut *mut c_void;
 
 pub(crate) unsafe fn ray_state<'a>(
@@ -117,7 +138,7 @@ unsafe fn wrap_pageable<N: Interface, S>(
     }
 }
 
-pub(crate) type MediaResources = std::sync::Arc<std::sync::Mutex<Vec<ID3D12Resource>>>;
+pub(crate) type MediaResources = std::sync::Arc<std::sync::Mutex<Vec<ID3D12Pageable>>>;
 pub(crate) type Allocator = Proxy<ID3D12CommandAllocator, MediaResources>;
 
 unsafe extern "system" fn reset_allocator(this: &Allocator) -> HRESULT {
@@ -130,9 +151,15 @@ unsafe extern "system" fn reset_allocator(this: &Allocator) -> HRESULT {
     status
 }
 
+// The Xbox callback supplies additional command-buffer pages on demand.
+// Native D3D12 allocators obtain their own storage, so recording translated
+// commands never requests a guest page.
+extern "system" fn set_allocator_callback(_: &Allocator, _: *const c_void, _: *mut c_void) {}
+
 static ALLOCATOR: Slots<16> = {
     let mut slots = child_slots::<ID3D12CommandAllocator, MediaResources, 16>();
     slots[8] = crate::slot!(reset_allocator);
+    slots[9] = crate::slot!(set_allocator_callback);
     slots
 };
 
@@ -143,7 +170,17 @@ unsafe extern "system" fn map_resource(
     data: Out,
 ) -> HRESULT {
     let host = &this.native;
-    unsafe { (host.vtable().Map)(host.as_raw(), subresource, read, data) }
+    let Some((offset, width)) = this.state.buffer_window() else {
+        return unsafe { (host.vtable().Map)(host.as_raw(), subresource, read, data) };
+    };
+    let Some(range) = buffer_map_range(offset, width, unsafe { read.as_ref() }) else {
+        return E_INVALIDARG;
+    };
+    let hr = unsafe { (host.vtable().Map)(host.as_raw(), subresource, &range, data) };
+    if hr.is_ok() && !data.is_null() {
+        unsafe { data.write((*data).byte_add(offset as usize)) };
+    }
+    hr
 }
 
 unsafe extern "system" fn unmap_resource(
@@ -152,7 +189,24 @@ unsafe extern "system" fn unmap_resource(
     written: *const D3D12_RANGE,
 ) {
     let host = &this.native;
+    let window;
+    let written = if let Some((offset, width)) = this.state.buffer_window() {
+        window = buffer_map_range(offset, width, unsafe { written.as_ref() })
+            .unwrap_or_else(|| crate::proxy::fail_call(format_args!("placed buffer Unmap range outside the resource")));
+        &window
+    } else { written };
     unsafe { (host.vtable().Unmap)(host.as_raw(), subresource, written) }
+}
+
+fn buffer_map_range(offset: u64, width: u64, range: Option<&D3D12_RANGE>) -> Option<D3D12_RANGE> {
+    let (begin, end) = range.map_or((0, width), |r| (r.Begin as u64, r.End as u64));
+    if begin >= end {
+        return Some(D3D12_RANGE::default());
+    }
+    if end > width {
+        return None;
+    }
+    Some(D3D12_RANGE { Begin: (offset + begin) as usize, End: (offset + end) as usize })
 }
 
 static RESOURCE: Slots<32> = {
@@ -172,6 +226,7 @@ unsafe extern "system" fn resource_desc(
     unsafe {
         out.write(match &this.state.backing {
             Backing::Depth(pair) => pair.guest,
+            Backing::Addressed(_, guest) => *guest,
             Backing::Placed(texture) => texture.desc,
             Backing::Native => this.native.GetDesc(),
             Backing::ConsoleLayout(layout, flags) => D3D12_RESOURCE_DESC {
@@ -194,55 +249,42 @@ unsafe extern "system" fn heap_properties(
 }
 
 unsafe extern "system" fn gpu_address(this: &Resource) -> u64 {
-    // SAFETY: The guest resource holds its native interface until Release.
-    this.state.placed().map_or_else(
-        || unsafe { this.native.GetGPUVirtualAddress() },
-        |p| p.address,
-    )
+    if let Backing::Addressed(buffer, _) = &this.state.backing { return buffer.base as u64; }
+    if let Some(placed) = this.state.placed() {
+        return placed.address;
+    }
+    let desc = unsafe { this.native.GetDesc() };
+    this.state.texture_address.get_or_init(|| {
+        let owner = this.parent.as_ref().expect("resource belongs to a device");
+        let device = unsafe { &*owner.as_raw().cast::<Device>() };
+        if desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER {
+            let address = unsafe { this.native.GetGPUVirtualAddress() } as usize;
+            views::TextureAddress::at(device, &this.native, address, false, None)
+        } else {
+            views::TextureAddress::register(device, &this.native, &desc)
+        }
+    }).base as u64
 }
-
-unsafe extern "system" fn completed(this: &Proxy<ID3D12Fence>) -> u64 {
-    unsafe { this.native.GetCompletedValue() }
-}
-
-unsafe extern "system" fn event_on_completion(
-    this: &Proxy<ID3D12Fence>,
-    value: u64,
-    event: HANDLE,
-) -> HRESULT {
-    let host = &this.native;
-    unsafe { (host.vtable().SetEventOnCompletion)(host.as_raw(), value, event) }
-}
-
-unsafe extern "system" fn signal_fence(this: &Proxy<ID3D12Fence>, value: u64) -> HRESULT {
-    let host = &this.native;
-    unsafe { (host.vtable().Signal)(host.as_raw(), value) }
-}
-
-static FENCE: Slots<16> = {
-    let mut slots = child_slots::<ID3D12Fence, (), 16>();
-    slots[8] = crate::slot!(completed);
-    slots[9] = crate::slot!(event_on_completion);
-    slots[10] = crate::slot!(signal_fence);
-    slots
-};
 
 // Scarlett returns the address directly in RAX. The native method writes a
 // D3D12_CPU_DESCRIPTOR_HANDLE to a hidden return buffer.
 pub(crate) struct DescriptorHeapState {
+    cpu_start: usize,
+    pub(crate) arena: Option<std::sync::Arc<descriptor_paging::Arena>>,
     pub(crate) desc: D3D12_DESCRIPTOR_HEAP_DESC,
-    pub(crate) placed_views: Option<placement::HeapViews<placement::Texture>>,
+    pub(crate) placed_views: Option<placement::DescriptorRange<placement::PlacedView>>,
     _depth_views: Option<placement::HeapViews<stencil::Surface>>,
+    _imported_views: Option<placement::DescriptorRange<views::DescriptorBacking>>,
     _scene_views: Option<placement::DescriptorRange<blas::SceneView>>,
 }
 type DescriptorHeap = Proxy<ID3D12DescriptorHeap, DescriptorHeapState>;
 
 unsafe extern "system" fn cpu_handle(this: &DescriptorHeap) -> usize {
-    unsafe { this.native.GetCPUDescriptorHandleForHeapStart().ptr }
+    this.state.cpu_start
 }
 
 unsafe extern "system" fn gpu_handle(this: &DescriptorHeap) -> u64 {
-    unsafe { this.native.GetGPUDescriptorHandleForHeapStart().ptr }
+    this.state.arena.as_ref().map_or_else(|| unsafe { this.native.GetGPUDescriptorHandleForHeapStart().ptr }, |arena| arena.base() as u64)
 }
 
 // FD3D12SubAllocatedOnlineHeap::AllocateBlock passes writable storage in RDX.
@@ -293,7 +335,7 @@ pub(crate) unsafe fn fence<'a>(
     object: *mut c_void,
     device: *mut c_void,
 ) -> Option<&'a ID3D12Fence> {
-    unsafe { unwrap::<ID3D12Fence, ()>(object, device, &FENCE) }.map(|proxy| &proxy.native)
+    unsafe { fence::native(object, device) }
 }
 
 /// Borrows a native allocator under the same ownership contract as [`resource`].
@@ -366,29 +408,45 @@ unsafe extern "system" fn create_heap(
     {
         return E_INVALIDARG;
     }
-    let native = match unsafe {
-        this.native
-            .CreateDescriptorHeap::<ID3D12DescriptorHeap>(desc)
-    } {
-        Ok(native) => native,
-        Err(error) => return error.code(),
+    let limit = if desc.Type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
+        && desc.Flags == D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE
+        && desc.NumDescriptors > 1_000_000 {
+        let mut options = D3D12_FEATURE_DATA_D3D12_OPTIONS19::default();
+        unsafe { this.native.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS19,
+            (&raw mut options).cast(), size_of_val(&options) as u32) }
+            .map_or(1_000_000, |_| options.MaxViewDescriptorHeapSize.max(1_000_000))
+    } else { desc.NumDescriptors };
+    let (native, arena) = if desc.NumDescriptors > limit {
+        match descriptor_paging::Arena::create(this, desc, limit) {
+            Ok(arena) => (arena.visible().clone(), Some(arena)),
+            Err(error) => return error.code(),
+        }
+    } else {
+        match unsafe { this.native.CreateDescriptorHeap::<ID3D12DescriptorHeap>(desc) } {
+            Ok(native) => (native, None),
+            Err(error) => return error.code(),
+        }
     };
+    let resident_desc = D3D12_DESCRIPTOR_HEAP_DESC { NumDescriptors: limit, ..*desc };
     let placed_views = this.state.placements.views.heap(
         &this.native,
         &native,
-        desc,
+        &resident_desc,
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
     );
     let state = DescriptorHeapState {
         desc: *desc,
+        cpu_start: arena.as_ref().map_or_else(|| unsafe { native.GetCPUDescriptorHandleForHeapStart().ptr }, |arena| arena.base()),
+        arena,
         placed_views,
+        _imported_views: this.state.imported_views.heap(&this.native, &native, &resident_desc, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV),
         _scene_views: this.state.blas.views.heap(
-            &this.native, &native, desc, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+            &this.native, &native, &resident_desc, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
         ),
         _depth_views: this.state.depth_views.heap(
             &this.native,
             &native,
-            desc,
+            &resident_desc,
             D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
         ),
     };
@@ -455,6 +513,22 @@ unsafe extern "system" fn create_resource<const EXTENDED: bool>(
         return E_INVALIDARG;
     }
     let mut host_desc = *desc;
+    let mut host_heap = *heap;
+    let linear_readback = heap.Type == D3D12_HEAP_TYPE_READBACK
+        && desc.Layout.0 == 0x100
+        && desc.Flags.0 == 0x300001
+        && desc.MipLevels == 1
+        && desc.DepthOrArraySize == 1
+        && placement::color_plane(desc).is_ok();
+    if linear_readback {
+        // Desktop READBACK heaps accept only buffers. A custom L0 heap can
+        // host a CPU-readable color image while retaining its render-target view.
+        host_heap.Type = D3D12_HEAP_TYPE_CUSTOM;
+        host_heap.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_WRITE_BACK;
+        host_heap.MemoryPoolPreference = D3D12_MEMORY_POOL_L0;
+        host_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        host_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    }
     if EXTENDED {
         // Slot 76 extends the resource description at byte 52 (desktop padding).
         // The Scarlett upscaler writes DCC options there and a zero qword at 56.
@@ -469,7 +543,7 @@ unsafe extern "system" fn create_resource<const EXTENDED: bool>(
         if !matches!(dcc, 0 | 1 | 3) || extension != 0 {
             return E_NOTIMPL;
         }
-        const DCC_FLAGS: i32 = 0x00c0_0000;
+        use allocation::DCC_FLAGS;
         if desc.Layout.0 == 0x101 || desc.Flags.0 & DCC_FLAGS != 0 {
             // A private committed texture exposes its logical contents through
             // D3D12. The host driver chooses its tiling and compression.
@@ -497,7 +571,7 @@ unsafe extern "system" fn create_resource<const EXTENDED: bool>(
     let mut native = None;
     if let Err(error) = unsafe {
         this.native.CreateCommittedResource::<ID3D12Resource>(
-            heap,
+            &host_heap,
             flags,
             primary.as_ref().unwrap_or(&host_desc),
             host_state(initial, desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER),
@@ -506,6 +580,9 @@ unsafe extern "system" fn create_resource<const EXTENDED: bool>(
         )
     } {
         return error.code();
+    }
+    if linear_readback {
+        return unsafe { depth::wrap::<true>(this, heap, desc, None, initial, native, out) };
     }
     unsafe { depth::wrap::<EXTENDED>(this, heap, desc, primary.as_ref(), initial, native, out) }
 }
@@ -521,15 +598,12 @@ unsafe extern "system" fn create_fence(
     if status.is_err() {
         return status;
     }
-    if flags != D3D12_FENCE_FLAG_NONE {
-        return E_NOTIMPL;
-    }
     unsafe {
         wrap_pageable(
             this.native.CreateFence::<ID3D12Fence>(initial, flags),
-            &FENCE,
+            &fence::TABLE,
             this,
-            (),
+            fence::State::new(),
             out,
         )
     }
@@ -543,7 +617,7 @@ unsafe extern "system" fn adapter_luid(this: &Device, result: *mut LUID) -> *mut
 
 unsafe fn make_queue(this: &Device, desc: &D3D12_COMMAND_QUEUE_DESC, out: Out) -> HRESULT {
     match unsafe { this.native.CreateCommandQueue(desc) } {
-        Ok(native) => unsafe { wrap_command_queue(native, &identity(this), out) },
+        Ok(native) => unsafe { wrap_command_queue(native, &identity(this), this.state.device11_queue, out) },
         Err(error) => error.code(),
     }
 }
@@ -611,8 +685,8 @@ unsafe extern "system" fn create_queue(
 struct ComputeQueueDesc {
     kind: D3D12_COMMAND_LIST_TYPE,
     options: u32,
-    priority_flag: u32,
-    reserved: u32,
+    queue_index: u32,
+    engine_index: u32,
 }
 
 unsafe extern "system" fn create_queue_x(
@@ -630,21 +704,22 @@ unsafe extern "system" fn create_queue_x(
     };
     if desc.kind != D3D12_COMMAND_LIST_TYPE_COMPUTE
         || desc.options != 0
-        || desc.priority_flag != 0
-        || desc.reserved != 0
+        || desc.queue_index > 3
     {
         return unsupported_queue(
             48,
             [
                 desc.kind.0 as u32,
                 desc.options,
-                desc.priority_flag,
-                desc.reserved,
+                desc.queue_index,
+                desc.engine_index,
             ],
         );
     }
     let native = D3D12_COMMAND_QUEUE_DESC {
         Type: D3D12_COMMAND_LIST_TYPE_COMPUTE,
+        // The guest selects a logical compute queue on this adapter. Each
+        // creation already returns a separate host command queue.
         ..Default::default()
     };
     unsafe { make_queue(this, &native, out) }
@@ -669,9 +744,10 @@ unsafe extern "system" fn create_list_x(
     out: Out,
 ) -> HRESULT {
     let compact = unsafe { iid.as_ref() } == Some(&media::DMA_IID);
+    let extended = unsafe { iid.as_ref() } == Some(&crate::commands::LIST6);
     let host_iid = ID3D12GraphicsCommandList::IID;
     let status = unsafe {
-        check_output::<ID3D12GraphicsCommandList>(if compact { &host_iid } else { iid }, out)
+        check_output::<ID3D12GraphicsCommandList>(if compact || extended { &host_iid } else { iid }, out)
     };
     if status.is_err() {
         return status;
@@ -690,7 +766,11 @@ unsafe extern "system" fn create_list_x(
     // Electra's compact DMA list at RVA 0x19849c3 selects the default node
     // with {COPY,0,0,0}. Both default and explicit node one target node zero.
     let valid_node = desc.node_mask == 1 || (compact && desc.node_mask == 0);
-    if !supported_queue_kind(desc.kind) || desc.reserved1 != 0 || !valid_node || desc.reserved3 != 0
+    // GTA creates standard graphics lists with the console recording flags
+    // 0x6. The host owns the command stream storage in either mode.
+    let supported_flags = desc.reserved1 == 0 || (!compact && desc.reserved1 == 6)
+        || (extended && desc.reserved1 == 2);
+    if !supported_queue_kind(desc.kind) || !supported_flags || !valid_node || desc.reserved3 != 0
     {
         return E_NOTIMPL;
     }
@@ -722,6 +802,8 @@ unsafe extern "system" fn create_list_x(
             initial,
             &parent,
             compact,
+            extended,
+            this.state.device11_queue,
             out,
         )
     }
@@ -742,6 +824,10 @@ pub(crate) unsafe fn set_dispose_callback(
         callback.map(|callback| (callback, context.expose_provenance()));
     HRESULT(0)
 }
+
+// The desktop driver manages its own hardware policy. Console tuning hints
+// have no required result or output object.
+extern "system" fn set_driver_hint(_: &Device, _: u32, _: u32) {}
 
 unsafe extern "system" fn release_device(this: *mut Device) -> u32 {
     unsafe { crate::proxy::release_with(this, || {
@@ -771,6 +857,7 @@ static DEVICE: Slots<160> = {
     slots[23] = crate::slot!(descriptor_copy::ranges);
     slots[24] = crate::slot!(descriptor_copy::simple);
     slots[25] = crate::slot!(allocation::info);
+    slots[26] = crate::slot!(allocation::custom_heap_properties);
     slots[27] = crate::slot!(create_resource::<false>);
     slots[28] = crate::slot!(heap::create);
     slots[29] = crate::slot!(heap::place);
@@ -781,10 +868,17 @@ static DEVICE: Slots<160> = {
     slots[43] = crate::slot!(adapter_luid);
     slots[44] = crate::slot!(heap::place_virtual);
     slots[48] = crate::slot!(create_queue_x);
+    // Precompiled graphics PSO with separate driver metadata and GPU shader addresses.
+    slots[57] = crate::slot!(compute::deserialize_pipeline_x);
     slots[60] = crate::slot!(graphics::create_pipeline);
+    slots[61] = crate::slot!(views::sampler_x);
     slots[62] = crate::slot!(compute::create_pipeline_x);
     slots[67] = crate::slot!(compute::deserialize_pipeline_x);
+    slots[69] = crate::slot!(set_driver_hint);
+    slots[70] = crate::slot!(views::address_srv);
     slots[73] = crate::slot!(create_list_x);
+    slots[74] = crate::slot!(heap::register_pages);
+    slots[75] = crate::slot!(heap::unregister_pages);
     slots[76] = crate::slot!(create_resource::<true>);
     slots[78] = crate::slot!(frame_events::interval);
     slots[79] = crate::slot!(frame_events::schedule);
@@ -795,7 +889,10 @@ static DEVICE: Slots<160> = {
     slots[101] = crate::slot!(ray_pipeline::create);
     slots[102] = crate::slot!(ray_build::prebuild);
     slots[106] = crate::slot!(ray_pipeline::add);
+    slots[108] = crate::slot!(allocation::info2);
     slots[115] = crate::slot!(state_object::deserialize);
+    slots[127] = crate::slot!(heap::committed_layout);
+    slots[133] = crate::slot!(heap::place_virtual_layout);
     slots
 };
 
@@ -809,6 +906,9 @@ pub(crate) const DEVICE_INTERFACES: &[GUID] = &[
     ID3D12Device6::IID,
     ID3D12Device7::IID,
     state_object::DEVICE8,
+    ID3D12Device9::IID,
+    ID3D12Device10::IID,
+    ID3D12Device11::IID,
 ];
 
 /// # Safety
@@ -833,8 +933,14 @@ pub(crate) unsafe fn create(adapter: *mut c_void, requested: GUID, out: Out) -> 
     crate::diagnostics::device_created(&native);
     // SAFETY: the caller holds the selected adapter through factory return.
     let pipeline_device = native.cast::<ID3D12Device2>().ok();
-    let interfaces: &'static [GUID] = if native.cast::<ID3D12Device8>().is_ok() {
+    let interfaces: &'static [GUID] = if native.cast::<ID3D12Device11>().is_ok() {
         DEVICE_INTERFACES
+    } else if native.cast::<ID3D12Device10>().is_ok() {
+        &DEVICE_INTERFACES[..11]
+    } else if native.cast::<ID3D12Device9>().is_ok() {
+        &DEVICE_INTERFACES[..10]
+    } else if native.cast::<ID3D12Device8>().is_ok() {
+        &DEVICE_INTERFACES[..9]
     } else if native.cast::<ID3D12Device7>().is_ok() {
         &DEVICE_INTERFACES[..8]
     } else if native.cast::<ID3D12Device6>().is_ok() {
@@ -852,6 +958,7 @@ pub(crate) unsafe fn create(adapter: *mut c_void, requested: GUID, out: Out) -> 
     let state = match dxgi::DxgiDevice::new(
         unsafe { IUnknown::from_raw_borrowed(&adapter) },
         pipeline_device,
+        requested == ID3D12Device11::IID,
     ) {
         Ok(state) => state,
         Err(err) => return err.code(),

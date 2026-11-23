@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure bright squares and green trails in Frosty main-menu PNGs. Requires Pillow."""
+"""Measure bright squares, green trails and background color in Frosty main-menu captures."""
 import argparse
 import hashlib
 import json
@@ -62,11 +62,13 @@ def measure(path):
         # The desktop can clip a narrow strip from the bottom of a 16:9 window.
         # Preserve pixel aspect ratio and only sample the part shared by all captures.
         height = round(source.height * SIZE[0] / source.width)
-        if source.format != "PNG" or not 690 <= height <= SIZE[1]:
-            raise ValueError(f"{path} must show at least the top 690/720 of a 16:9 game-window PNG")
+        if source.format not in {"PNG", "JPEG", "WEBP"} or not 690 <= height <= SIZE[1]:
+            raise ValueError(f"{path} must show at least the top 690/720 of a 16:9 game-window capture")
         image = source.convert("RGB").resize((SIZE[0], height), Image.Resampling.BOX)
     digest = hashlib.sha256()
     largest = boxes = green = pixels = 0
+    chromatic = green_dominant = blue_dominant = 0
+    red_sum = green_sum = blue_sum = 0
     for region in REGIONS:
         crop = image.crop(region)
         rgb = crop.tobytes()
@@ -75,13 +77,25 @@ def measure(path):
         for i, (r, g, b) in enumerate(zip(rgb[::3], rgb[1::3], rgb[2::3])):
             mask[i] = min(r, g, b) >= 230
             green += g > 40 and 10 * g > 13 * r and 25 * g > 24 * b
+            # Exclude dark noise and nearly gray highlights. Keep teal samples
+            # in the means even when the green and blue channels are tied.
+            if max(r, g, b) >= 50 and max(r, g, b) - min(r, g, b) >= 30:
+                chromatic += 1
+                green_dominant += g > max(r, b)
+                blue_dominant += b > max(r, g)
+                red_sum += r
+                green_sum += g
+                blue_sum += b
         side, count = bright_shapes(mask, crop.width, crop.height)
         largest = max(largest, side)
         boxes += count
         pixels += len(mask)
     return dict(image=path.name, background_rgb_sha256=digest.hexdigest(),
                 largest_solid_square_side_px=largest, bright_boxes=boxes,
-                green_pixels=green, sampled_pixels=pixels)
+                green_pixels=green, sampled_pixels=pixels, chromatic_pixels=chromatic,
+                green_dominant_pixels=green_dominant, blue_dominant_pixels=blue_dominant,
+                chromatic_mean_rgb=[round(channel / chromatic, 2) for channel in (red_sum, green_sum, blue_sum)]
+                if chromatic else None)
 
 
 def main():

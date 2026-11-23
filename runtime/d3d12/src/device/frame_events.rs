@@ -29,6 +29,7 @@ struct State {
     issued: VecDeque<u64>,
     displayed: VecDeque<(u64, i64)>,
     flip: Vec<OwnedHandle>,
+    flip_scheduled: bool,
 }
 
 pub(super) unsafe extern "system" fn interval(
@@ -71,6 +72,7 @@ pub(super) unsafe extern "system" fn interval(
         state.issued.clear();
         state.displayed.clear();
         state.flip.clear();
+        state.flip_scheduled = false;
     }
     state.interval = interval;
     state.period = period as usize;
@@ -153,6 +155,7 @@ pub(super) unsafe extern "system" fn schedule(
                 Ok(handles) => handles,
                 Err(error) => return error,
             };
+            state.flip_scheduled = flags == 0;
         }
         _ => return E_NOTIMPL,
     }
@@ -171,7 +174,7 @@ pub(super) unsafe extern "system" fn wait(
     if token.is_null() {
         return E_INVALIDARG;
     }
-    if kind != 0 || !objects.is_null() || !matches!(flags, 0 | 2) {
+    if !matches!(kind, 0 | 2) || !objects.is_null() || !matches!(flags, 0 | 2) {
         return E_NOTIMPL;
     }
     let input = unsafe { token.read_unaligned() };
@@ -180,6 +183,22 @@ pub(super) unsafe extern "system" fn wait(
     let timeout =
         (timeout_ms != u32::MAX).then(|| Instant::now() + Duration::from_millis(timeout_ms.into()));
     loop {
+        if kind == 2 {
+            if input == 0 || flags != 0 || !state.flip_scheduled {
+                return E_INVALIDARG;
+            }
+            if state.displayed.iter().any(|&(id, _)| id == input) {
+                return S_OK;
+            }
+            if state.pending != Some(input) && !state.issued.contains(&input) {
+                return E_INVALIDARG;
+            }
+            if timeout.is_some_and(|deadline| deadline <= Instant::now()) {
+                return S_FALSE;
+            }
+            state = frames.wait_change(state, timeout);
+            continue;
+        }
         let Some(origin) = state.next_origin else {
             return E_INVALIDARG;
         };
@@ -217,19 +236,25 @@ pub(super) unsafe extern "system" fn wait(
             (true, None) => Some(origin),
             (false, deadline) => deadline,
         };
-        state = match wake {
+        state = frames.wait_change(state, wake);
+    }
+}
+
+impl FrameEvents {
+    fn wait_change<'a>(
+        &self,
+        state: std::sync::MutexGuard<'a, State>,
+        wake: Option<Instant>,
+    ) -> std::sync::MutexGuard<'a, State> {
+        match wake {
             Some(deadline) => {
-                frames
-                    .changed
-                    .wait_timeout(state, deadline.saturating_duration_since(now))
+                self.changed
+                    .wait_timeout(state, deadline.saturating_duration_since(Instant::now()))
                     .unwrap_or_else(|e| e.into_inner())
                     .0
             }
-            None => frames
-                .changed
-                .wait(state)
-                .unwrap_or_else(|e| e.into_inner()),
-        };
+            None => self.changed.wait(state).unwrap_or_else(|e| e.into_inner()),
+        }
     }
 }
 

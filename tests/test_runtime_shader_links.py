@@ -7,7 +7,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from project_tuxbox.runtime_shaders import compile_request, serve
+from project_tuxbox.runtime_shaders import ShaderRefused, compile_request, serve, snapshot_compiler_cache
+from project_tuxbox.shader_prep import ToolFailure
 
 
 def portable_program(stage, body):
@@ -91,6 +92,47 @@ class RuntimeShaderLinks(unittest.TestCase):
         path.symlink_to(source / "producer.dxbc")
         with self.assertRaises(OSError):
             compile_request(source, key, self.tools, self.cache, self.session)
+
+    def test_refusal_requires_exact_inputs_and_compiler_build(self):
+        release, dxc, snapshot = (self.cache / name for name in ("release", "dxc", "snapshot"))
+        dxc.write_text("#!/bin/sh\necho version\n")
+        dxc.chmod(0o700)
+        release.write_text("#!/bin/sh\nexit 65\n")
+        key, source = self.request(portable_program(0, b"r0.z"))
+        with patch("project_tuxbox.runtime_shaders.compiler_tools", return_value=(release, dxc, dxc)):
+            tools, cache = snapshot_compiler_cache(snapshot, self.cache)
+            for cached in (False, True):
+                with self.assertRaises(ShaderRefused) as result:
+                    compile_request(source, key, tools, cache, self.session)
+                self.assertEqual(result.exception.cached, cached)
+            path = source / "pixel.dxbc"
+            path.write_bytes(b"changed consumer")
+            with self.assertRaisesRegex(ValueError, "digest"):
+                compile_request(source, key, tools, cache, self.session)
+            path.write_bytes(b"Xbox pixel shader")
+            variant, changed = self.request(portable_program(0, b"r0.z"), pixel=b"pixel with a different root")
+            with self.assertRaises(ShaderRefused) as result:
+                compile_request(changed, variant, tools, cache, self.session)
+            self.assertFalse(result.exception.cached)
+            release.write_text("#!/bin/sh\nexit 1\n")
+            tools, rebuilt = snapshot_compiler_cache(snapshot, self.cache)
+            self.assertNotEqual(cache, rebuilt)
+            for _ in range(2):
+                with self.assertRaises(ToolFailure):
+                    compile_request(source, key, tools, rebuilt, self.session)
+            self.assertFalse((rebuilt / (key + ".unsupported")).exists())
+
+    def test_other_tool_failures_do_not_poison_shader_cache(self):
+        key, source = self.request(portable_program(0, b"r0.z"))
+        for tool, error in (("xshader", FileNotFoundError()), ("xshader", subprocess.TimeoutExpired("xshader", 30)),
+                            ("xshader", ToolFailure("xshader", -11, "crash")), ("dxv", ToolFailure("dxv", 65, "bad DXIL"))):
+            def run(args, *, timeout):
+                if args[0] == tool:
+                    raise error
+            with self.subTest(error=error), patch("project_tuxbox.runtime_shaders.run_tool", side_effect=run):
+                with self.assertRaises(type(error)):
+                    compile_request(source, key, self.tools, self.cache, self.session)
+                self.assertFalse((self.cache / (key + ".unsupported")).exists())
 
     def test_worker_removes_failed_link_and_leaves_unpublished_directories_alone(self):
         from threading import Event

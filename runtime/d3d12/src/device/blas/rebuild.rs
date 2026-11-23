@@ -58,7 +58,7 @@ pub(super) fn as_buffer(device: &ID3D12Device, bytes: u64) -> Result<ID3D12Resou
     )
 }
 
-pub(super) fn upload_buffer(device: &ID3D12Device, bytes: u64) -> Result<ID3D12Resource> {
+pub(in crate::device) fn upload_buffer(device: &ID3D12Device, bytes: u64) -> Result<ID3D12Resource> {
     buffer(
         device,
         bytes,

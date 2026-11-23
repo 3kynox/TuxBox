@@ -245,6 +245,44 @@ pub(super) fn prepared(shader: &[u8]) -> Option<Vec<u8>> {
     translate(shader, stage)
 }
 
+/// A shader may receive its root signature only at pipeline creation. Include
+/// the actual signature in the compiler request and cache key for that variant.
+pub(super) fn compute_with_root(shader: &[u8], root: &[u8]) -> Option<Vec<u8>> {
+    let (Stage::Compute, ShaderCode::Xbox) = shader_code(shader)? else { return None };
+    translate(&with_root(shader, root)?, Stage::Compute)
+}
+
+pub(super) fn raster_with_root(shader: &[u8], root: &[u8]) -> Option<Vec<u8>> {
+    let (Stage::Pixel | Stage::Vertex, ShaderCode::Xbox) = shader_code(shader)? else { return None };
+    with_root(shader, root)
+}
+
+fn with_root(shader: &[u8], root: &[u8]) -> Option<Vec<u8>> {
+    use tuxbox_dxbc::Dxbc;
+    let dxbc = Dxbc::parse(shader).ok()?;
+    if dxbc.chunk(b"RTS0").is_some() || root.is_empty() { return None; }
+    let count = dxbc.chunks.len();
+    let end = 32 + count * 4;
+    let root_offset = (shader.len() + 4).next_multiple_of(4);
+    let size = root_offset.checked_add(8)?.checked_add(root.len())?;
+    if size > MAX_BYTES { return None; }
+    let mut input = Vec::with_capacity(size);
+    input.extend_from_slice(&shader[..24]);
+    input[4..20].fill(0);
+    input.extend_from_slice(&(size as u32).to_le_bytes());
+    input.extend_from_slice(&((count + 1) as u32).to_le_bytes());
+    for part in &dxbc.chunks {
+        input.extend_from_slice(&((part.offset - 8 + 4) as u32).to_le_bytes());
+    }
+    input.extend_from_slice(&(root_offset as u32).to_le_bytes());
+    input.extend_from_slice(&shader[end..]);
+    input.resize(root_offset, 0);
+    input.extend_from_slice(b"RTS0");
+    input.extend_from_slice(&(root.len() as u32).to_le_bytes());
+    input.extend_from_slice(root);
+    Some(input)
+}
+
 /// Console mesh stages always use a DXIL container. Resolve stripped programs
 /// before the host call and require portable replacements to match the stage.
 pub(super) fn mesh_stage(shader: &[u8], expected: Stage) -> Result<Option<Vec<u8>>, HRESULT> {

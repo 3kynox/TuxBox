@@ -158,6 +158,7 @@ impl Upload {
             D3D12_HEAP_TYPE_UPLOAD,
             &desc,
             D3D12_RESOURCE_STATE_GENERIC_READ,
+            None,
         )?;
         let allocator = unsafe { device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COPY)? };
         let list: ID3D12GraphicsCommandList =
@@ -242,8 +243,28 @@ impl Texture {
         mut visit: impl FnMut(std::ops::Range<usize>, std::ops::Range<usize>) -> Result<()>,
     ) -> Result<()> {
         let mip = &self.mips[level];
-        let element = self.plane.element_bytes() as usize;
+        let element = mip.element_bytes as usize;
         let pitch = mip.footprint.Footprint.RowPitch as usize;
+        let Some(plane) = &self.plane else {
+            let source_pitch = ((mip.source.end - mip.source.start) / u64::from(mip.rows)) as usize;
+            let row = mip.elements as usize * element;
+            for y in 0..mip.rows as usize {
+                visit(y * source_pitch..y * source_pitch + row, y * pitch..y * pitch + row)?;
+            }
+            return Ok(());
+        };
+        if self.desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D {
+            for z in 0..mip.footprint.Footprint.Depth {
+                for y in 0..mip.rows {
+                    for x in 0..mip.elements {
+                        let tiled = plane.element_offset_in_volume(z, mip.level, u64::from(x), y).ok_or(E_INVALIDARG)? as usize;
+                        let linear = (z as usize * mip.rows as usize + y as usize) * pitch + x as usize * element;
+                        visit(tiled..tiled + element, linear..linear + element)?;
+                    }
+                }
+            }
+            return Ok(());
+        }
         // In layout 0x105, X occupies the low address bits through byte 15.
         let run = if self.desc.Layout.0 == 0x100 {
             mip.elements as usize
@@ -253,8 +274,7 @@ impl Texture {
         for y in 0..mip.rows {
             for x in (0..mip.elements).step_by(run) {
                 let count = (mip.elements - x).min(run as u32) as usize * element;
-                let tiled = self
-                    .plane
+                let tiled = plane
                     .element_offset_in_slice(mip.slice, mip.level, x.into(), y)
                     .and_then(|a| a.checked_sub(mip.source.start))
                     .ok_or(E_INVALIDARG)? as usize;

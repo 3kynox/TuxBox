@@ -24,6 +24,28 @@ pub(crate) fn log_once(site: &Once, detail: impl FnOnce() -> String) {
     });
 }
 
+pub(crate) struct RasterDraw {
+    first: Once,
+    vertex: String,
+    pixel: String,
+}
+
+impl RasterDraw {
+    pub(crate) fn trace(vertex: Option<&[u8]>, pixel: Option<&[u8]>, digest: impl Fn(&[u8]) -> Option<String>) -> Option<std::sync::Arc<Self>> {
+        static ENABLED: std::sync::LazyLock<bool> = std::sync::LazyLock::new(||
+            std::env::var_os("TUXBOX_TRACE_RASTER_DRAWS").as_deref() == Some(OsStr::new("1")));
+        if !*ENABLED { return None; }
+        Some(std::sync::Arc::new(Self {
+            first: Once::new(),
+            vertex: digest(vertex?)?,
+            pixel: digest(pixel?)?,
+        }))
+    }
+    pub(crate) fn recorded(&self) {
+        log_once(&self.first, || format!("recorded raster draw VS={} PS={}", self.vertex, self.pixel));
+    }
+}
+
 pub(super) fn device_created(device: &ID3D12Device) {
     static FIRST_DEVICE: Once = Once::new();
     log_once(&FIRST_DEVICE, || {

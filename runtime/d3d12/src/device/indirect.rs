@@ -8,7 +8,7 @@ use windows::core::{GUID, HRESULT, Interface};
 
 pub(crate) struct Action {
     pub(crate) stride: u32,
-    pub(crate) compute: bool,
+    pub(crate) kind: D3D12_INDIRECT_ARGUMENT_TYPE,
 }
 pub(crate) type Signature = Proxy<ID3D12CommandSignature, Action>;
 static SIGNATURE: Slots<8> = child_slots::<ID3D12CommandSignature, Action, 8>();
@@ -55,6 +55,7 @@ pub(super) unsafe extern "system" fn create_signature(
             D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH,
             size_of::<D3D12_DISPATCH_ARGUMENTS>(),
         ),
+        (D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH, _) => (guest_kind, size_of::<D3D12_DISPATCH_MESH_ARGUMENTS>()),
         (D3D12_INDIRECT_ARGUMENT_TYPE(107), 16) => (D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH, 16),
         (D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_RAYS, _) => {
             (guest_kind, size_of::<D3D12_DISPATCH_RAYS_DESC>())
@@ -103,7 +104,7 @@ pub(super) unsafe extern "system" fn create_signature(
             Some(&parent),
             Action {
                 stride: desc.ByteStride,
-                compute: kind == D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH,
+                kind,
             },
             out,
         )

@@ -10,7 +10,7 @@ mod shared_pages;
 mod virtual_memory;
 
 use core::{ffi::c_void, mem::size_of, ptr};
-use std::sync::RwLock;
+use std::sync::{LazyLock, RwLock};
 
 use windows_sys::Win32::Foundation::{ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, SetLastError};
 use windows_sys::Win32::System::Memory::{
@@ -22,6 +22,9 @@ use windows_sys::Win32::System::ProcessStatus::{
 use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
+// Series audio working memory uses 64 KiB aligned, CPU-writable pages.
+const AUDIO_PLACEMENT: u64 = 0xf081_4000;
+const DISPLAY_PLACEMENT: u64 = 0x3080_8000;
 const PLACEMENT: u64 = 0x3080_4000;
 
 type AllocateHook = unsafe extern "system" fn(usize, u64) -> *mut c_void;
@@ -35,7 +38,20 @@ struct AllocationHooks {
 
 // Publish the pair together and release the read lock before invoking a guest
 // callback, so a callback can replace hooks without deadlocking.
-static ALLOCATION_HOOKS: RwLock<Option<AllocationHooks>> = RwLock::new(None);
+static ALLOCATION_HOOKS: LazyLock<RwLock<Option<AllocationHooks>>> = LazyLock::new(|| {
+    use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+    let module = unsafe { GetModuleHandleW(ptr::null()) };
+    let exported = unsafe { GetProcAddress(module, c"__XMemAllocationHooks__".as_ptr().cast()) };
+    // The optional PE data export is a pair of function pointers, valid for
+    // the process lifetime. A title can replace or clear it with SetAllocationHooks.
+    let hooks = exported.and_then(|symbol| {
+        #[repr(C)]
+        struct TitleHooks { allocate: Option<AllocateHook>, release: Option<FreeHook> }
+        let pair = unsafe { (symbol as *const TitleHooks).read_unaligned() };
+        Some(AllocationHooks { allocate: pair.allocate?, release: Some(pair.release?) })
+    });
+    RwLock::new(hooks)
+});
 
 /// Return this provider's host-backed title heap handle.
 #[unsafe(export_name = "XMemGetTitleHeap")]
@@ -148,8 +164,22 @@ pub extern "system" fn alloc_default(bytes: usize, attributes: u64) -> *mut c_vo
     match attributes {
         // SAFETY: The process heap is valid for this process; HeapAlloc checks the requested size.
         attr if process_heap_attributes(attr) => heap::allocate(unsafe { GetProcessHeap() }, bytes),
-        PLACEMENT => virtual_memory::allocate_placement(bytes),
+        PLACEMENT | AUDIO_PLACEMENT => virtual_memory::allocate_placement(bytes, 0x10000),
+        DISPLAY_PLACEMENT => virtual_memory::allocate_placement(bytes, 0x200000),
         attr if pools::cpu_attributes(attr) && bytes <= 0x20000 => pools::allocate(bytes, attr),
+        attr if pools::cpu_attributes(attr) && attr & 0xc000 == 0x4000 => {
+            // Page-size selector 1 uses 64 KiB extents. A fresh host virtual
+            // reservation already satisfies the requested (at most 64 KiB) alignment.
+            if !options::can_demote_pages() {
+                unsafe { SetLastError(ERROR_NOT_SUPPORTED) };
+                return ptr::null_mut();
+            }
+            let Some(extent) = bytes.checked_next_multiple_of(0x10000) else {
+                unsafe { SetLastError(windows_sys::Win32::Foundation::ERROR_NOT_ENOUGH_MEMORY) };
+                return ptr::null_mut();
+            };
+            virtual_memory::allocate_direct(extent)
+        }
         attr if pools::cpu_attributes(attr) && attr & 0xc000 == 0 => virtual_memory::allocate_direct(bytes),
         _ => {
             // SAFETY: SetLastError accepts this Windows error code and only updates thread-local state.
@@ -175,7 +205,7 @@ pub unsafe extern "system" fn free_default(memory: *mut c_void, attributes: u64)
             // SAFETY: The caller supplies a live allocation from this process heap.
             unsafe { heap::free(GetProcessHeap(), memory) };
         }
-        PLACEMENT => {
+        PLACEMENT | DISPLAY_PLACEMENT | AUDIO_PLACEMENT => {
             // SAFETY: The caller supplies the reservation base; MEM_RELEASE requires size zero.
             unsafe { virtual_memory::free_placement(memory) };
         }

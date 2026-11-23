@@ -19,13 +19,7 @@ pub(crate) use inline_geometry::{
 pub(super) use scene_view::SceneView;
 pub(crate) use scene_view::{inline_scene, inline_scene_address};
 mod rebuild;
-
-#[derive(Clone)]
-pub(crate) struct NativeAs {
-    pub(crate) resource: ID3D12Resource,
-    pub(crate) bytes: u64,
-    guest_bytes: u64,
-}
+pub(super) use rebuild::upload_buffer;
 
 type Index = Mutex<BTreeMap<(Kind, u64), Vec<Arc<Buffer>>>>;
 
@@ -47,7 +41,9 @@ struct Buffer {
     kind: Kind,
     // Recording chooses a backing for new commands. Submission publishes the
     // address captured by each write in guest execution order.
-    targets: Mutex<BTreeMap<u64, Option<NativeAs>>>,
+    targets: Mutex<BTreeMap<u64, Option<ID3D12Resource>>>,
+    // Upper bounds for the most recently submitted writes to each suballocation.
+    sizes: Mutex<BTreeMap<u64, u64>>,
     mappings: Arc<Mutex<Mappings>>,
 }
 
@@ -56,6 +52,7 @@ struct Mappings {
     addresses: BTreeMap<u64, u64>,
     // Only addresses changed while preparing the current queue batch.
     previous: BTreeMap<u64, Option<u64>>,
+    previous_sizes: Vec<(Weak<Buffer>, u64, Option<u64>)>,
     snapshot: Option<Arc<[(u64, u64)]>>,
     table: Option<instance_fixup::Table>,
 }
@@ -158,6 +155,7 @@ impl Buffers {
             bytes: desc.Width,
             kind,
             targets: Mutex::default(),
+            sizes: Mutex::default(),
             mappings: self.mappings.clone(),
         });
         lock(&self.index)
@@ -234,7 +232,10 @@ pub(crate) unsafe fn relocated(owner: &IUnknown) -> Arc<[(u64, u64)]> {
 /// The owner must be the controlling guest device.
 pub(crate) unsafe fn submitted_address(owner: &IUnknown, address: u64) -> u64 {
     lock(&unsafe { guest(owner) }.state.blas.mappings)
-        .addresses.get(&address).copied().unwrap_or(address)
+        .addresses
+        .get(&address)
+        .copied()
+        .unwrap_or(address)
 }
 
 pub(crate) struct MappingSubmission<'a> {
@@ -246,18 +247,33 @@ pub(crate) struct MappingSubmission<'a> {
 /// The owner must remain the controlling guest device for the guard's lifetime.
 pub(crate) unsafe fn begin_submission(owner: &IUnknown) -> MappingSubmission<'_> {
     let registry = &unsafe { guest(owner) }.state.blas;
-    MappingSubmission { mappings: &registry.mappings, _submission: lock(&registry.submission) }
+    MappingSubmission {
+        mappings: &registry.mappings,
+        _submission: lock(&registry.submission),
+    }
 }
 
 impl MappingSubmission<'_> {
     pub(crate) fn commit(self) {
-        lock(self.mappings).previous.clear();
+        let mut maps = lock(self.mappings);
+        maps.previous.clear();
+        maps.previous_sizes.clear();
     }
 }
 
 impl Drop for MappingSubmission<'_> {
     fn drop(&mut self) {
         let mut maps = lock(self.mappings);
+        for (pool, address, old) in maps.previous_sizes.drain(..).rev() {
+            if let Some(pool) = pool.upgrade() {
+                let mut sizes = lock(&pool.sizes);
+                if let Some(bytes) = old {
+                    sizes.insert(address, bytes);
+                } else {
+                    sizes.remove(&address);
+                }
+            }
+        }
         if !maps.previous.is_empty() {
             for (address, old) in std::mem::take(&mut maps.previous) {
                 if let Some(native) = old {
@@ -274,8 +290,29 @@ impl Drop for MappingSubmission<'_> {
 /// Publish the address written by a recorded AS command, including an older
 /// list replayed after the same guest location was promoted to private storage.
 /// The owner must be the controlling guest device.
-pub(crate) unsafe fn publish_destination(owner: &IUnknown, address: u64, native: u64) {
-    let mut mappings = lock(&unsafe { guest(owner) }.state.blas.mappings);
+pub(crate) unsafe fn publish_destination(
+    owner: &IUnknown,
+    address: u64,
+    native: u64,
+    bytes: Option<u64>,
+) {
+    let registry = &unsafe { guest(owner) }.state.blas;
+    let pool = registry.find(address, Kind::Structure).ok();
+    let mut mappings = lock(&registry.mappings);
+    if let Some(pool) = pool {
+        let mut sizes = lock(&pool.sizes);
+        let old = sizes.get(&address).copied();
+        if old != bytes {
+            mappings
+                .previous_sizes
+                .push((Arc::downgrade(&pool), address, old));
+            if let Some(bytes) = bytes {
+                sizes.insert(address, bytes);
+            } else {
+                sizes.remove(&address);
+            }
+        }
+    }
     let old = mappings.addresses.get(&address).copied();
     if old.unwrap_or(address) == native {
         return;
@@ -291,7 +328,7 @@ pub(crate) unsafe fn publish_destination(owner: &IUnknown, address: u64, native:
 
 /// # Safety
 /// The owner must identify the list's controlling TuxBox device.
-pub(crate) unsafe fn resolve(owner: &IUnknown, address: u64) -> Result<Option<NativeAs>> {
+pub(crate) unsafe fn resolve(owner: &IUnknown, address: u64) -> Result<Option<ID3D12Resource>> {
     let buffer = match unsafe { guest(owner) }
         .state
         .blas
@@ -372,7 +409,7 @@ impl Upload {
 
 pub(crate) struct Input {
     upload: Upload,
-    snapshot: Mutex<(Vec<u8>, inline_geometry::Normals)>,
+    snapshot: Mutex<(Vec<u8>, inline_geometry::Normals, u64)>,
     source: ID3D12Resource,
     guest_destination: u64,
     native_destination: u64,
@@ -391,7 +428,14 @@ impl Input {
         let registry = &unsafe { guest(owner) }.state.blas;
         let pool = registry.find(self.guest_destination, Kind::Structure)?;
         if previous.0 == bytes {
-            unsafe { publish_destination(owner, self.guest_destination, self.native_destination) };
+            unsafe {
+                publish_destination(
+                    owner,
+                    self.guest_destination,
+                    self.native_destination,
+                    Some(previous.2),
+                )
+            };
             inline_geometry::set_decoded(registry, &pool, self.native_destination, &previous.1);
             return Ok(());
         }
@@ -428,9 +472,16 @@ impl Input {
         })?;
         drop(builder_guard);
         let normals = Arc::new(inline_geometry::decoded(&triangles));
-        unsafe { publish_destination(owner, self.guest_destination, self.native_destination) };
+        unsafe {
+            publish_destination(
+                owner,
+                self.guest_destination,
+                self.native_destination,
+                Some(compacted),
+            )
+        };
         inline_geometry::set_decoded(registry, &pool, self.native_destination, &normals);
-        *previous = (bytes, normals);
+        *previous = (bytes, normals, compacted);
         Ok(())
     }
 }
@@ -529,7 +580,7 @@ pub(crate) unsafe fn deserialize(owner: &IUnknown, src: u64, dst: u64) -> Result
     Ok(Rebuilt {
         input: Input {
             upload,
-            snapshot: Mutex::new((snapshot, normals)),
+            snapshot: Mutex::new((snapshot, normals, compacted)),
             source: source.clone(),
             guest_destination: dst,
             native_destination: destination_address,
@@ -550,8 +601,8 @@ fn target(
     bytes: u64,
 ) -> Result<(ID3D12Resource, u64)> {
     let mut targets = lock(&buffer.targets);
-    if let Some(Some(existing)) = targets.get_mut(&address) {
-        let capacity = unsafe { existing.resource.GetDesc() }.Width;
+    if let Some(Some(existing)) = targets.get(&address) {
+        let capacity = unsafe { existing.GetDesc() }.Width;
         if bytes > capacity {
             crate::diagnostics::recording_error(format_args!(
                 "reused BLAS at {address:#x} needs {bytes} host bytes, backing holds {capacity}"
@@ -559,13 +610,8 @@ fn target(
             return Err(E_NOTIMPL.into());
         }
         // A pool address can be repopulated with a different cooked mesh.
-        // Keep its native address stable and describe the current contents
-        // to subsequent clone and compact operations.
-        existing.bytes = bytes;
-        existing.guest_bytes = guest_bytes;
-        return Ok((existing.resource.clone(), unsafe {
-            existing.resource.GetGPUVirtualAddress()
-        }));
+        // Keep its native address stable for previously recorded consumers.
+        return Ok((existing.clone(), unsafe { existing.GetGPUVirtualAddress() }));
     }
     if bytes <= guest_bytes {
         targets.insert(address, None);
@@ -578,14 +624,7 @@ fn target(
         .ok_or(E_INVALIDARG)?;
     let resource = rebuild::as_buffer(device, capacity)?;
     let host = unsafe { resource.GetGPUVirtualAddress() };
-    targets.insert(
-        address,
-        Some(NativeAs {
-            resource: resource.clone(),
-            bytes,
-            guest_bytes,
-        }),
-    );
+    targets.insert(address, Some(resource.clone()));
     Ok((resource, host))
 }
 
@@ -594,20 +633,45 @@ fn target(
 pub(crate) unsafe fn copy_dest(
     owner: &IUnknown,
     dst: u64,
-    source: &NativeAs,
+    source: &ID3D12Resource,
 ) -> Result<(ID3D12Resource, u64)> {
     let device = unsafe { guest(owner) };
     let buffer = device.state.blas.find(dst, Kind::Structure)?;
-    if source.guest_bytes > buffer.bytes - (dst - buffer.start) {
-        return Err(E_INVALIDARG.into());
+    // A previously relocated address must keep serving recorded consumers.
+    // New copies receive backing as large as the source backing, so replayed
+    // builds at the source can safely change its contents.
+    if let Some(backing) = lock(&buffer.targets).get(&dst).and_then(Clone::clone) {
+        return Ok((backing.clone(), unsafe { backing.GetGPUVirtualAddress() }));
     }
     target(
         &device.native,
         &buffer,
         dst,
-        source.guest_bytes,
-        source.bytes,
+        0,
+        unsafe { source.GetDesc() }.Width,
     )
+}
+
+/// Retain a direct source while a recorded copy references it. Unregistered
+/// addresses give us neither a lifetime nor a safe bound for private storage.
+pub(crate) unsafe fn direct_source(owner: &IUnknown, address: u64) -> Result<ID3D12Resource> {
+    let pool = unsafe { guest(owner) }
+        .state
+        .blas
+        .find(address, Kind::Structure)?;
+    Ok(pool.native.clone())
+}
+
+/// Bound the copy against the submitted source. A registered native pool also
+/// bounds an external writer even if this provider did not record its build.
+pub(crate) unsafe fn submitted_size(owner: &IUnknown, address: u64, native: u64) -> Option<u64> {
+    let pool = unsafe { guest(owner) }
+        .state
+        .blas
+        .find(address, Kind::Structure)
+        .ok()?;
+    let size = lock(&pool.sizes).get(&address).copied();
+    size.or_else(|| (address == native).then(|| pool.bytes - (address - pool.start)))
 }
 
 /// # Safety

@@ -18,6 +18,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "opus-pure"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2da6dcc20af557d030b6f206e75c764bcda8c28a5bd03c73935c7e8fcf5f4f4a"
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -54,6 +60,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "tuxbox-bvh"
+version = "0.1.0"
+dependencies = [
+ "windows",
+]
+
+[[package]]
 name = "tuxbox-d3d12"
 version = "0.1.0"
 dependencies = [
@@ -65,6 +78,9 @@ dependencies = [
 [[package]]
 name = "tuxbox-dxbc"
 version = "0.1.0"
+dependencies = [
+ "miniz_oxide",
+]
 
 [[package]]
 name = "tuxbox-dxc"
@@ -85,6 +101,14 @@ name = "tuxbox-pipeline-prep"
 version = "0.1.0"
 dependencies = [
  "windows",
+]
+
+[[package]]
+name = "tuxbox-xapu"
+version = "0.1.0"
+dependencies = [
+ "opus-pure",
+ "windows-sys",
 ]
 
 [[package]]

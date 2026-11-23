@@ -11,7 +11,7 @@ use std::time::Instant;
 use windows::Win32::Foundation::{E_POINTER, HMODULE};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW, SetDllDirectoryW};
-use windows::core::{GUID, HRESULT, Interface, Owned, PCWSTR, s};
+use windows::core::{GUID, HRESULT, IUnknown, Interface, Owned, PCWSTR, s};
 
 type CreateDevice =
     unsafe extern "system" fn(*mut c_void, *const u32, *const GUID, *mut *mut c_void) -> HRESULT;
@@ -66,7 +66,14 @@ fn create_guest_device(module: HMODULE) -> Result<ID3D12Device, String> {
     }
 }
 
-fn compute_root(guest: &ID3D12Device, version_1_0: bool) -> Result<ID3D12RootSignature, String> {
+#[derive(Clone, Copy, PartialEq)]
+enum Layout {
+    ReferenceCompute,
+    Compute,
+    Ray,
+}
+
+fn profiled_root(guest: &ID3D12Device, layout: Layout) -> Result<ID3D12RootSignature, String> {
     // Frosty uses one descriptor table per range. On the TuxBox device the
     // game requests root signature 1.0. The historical comparison used 1.1.
     let descriptors = D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
@@ -82,6 +89,7 @@ fn compute_root(guest: &ID3D12Device, version_1_0: bool) -> Result<ID3D12RootSig
         RangeType: kind,
         NumDescriptors: count,
         Flags: flags,
+        RegisterSpace: u32::from(layout == Layout::Ray),
         OffsetInDescriptorsFromTableStart: D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND,
         ..Default::default()
     });
@@ -101,6 +109,12 @@ fn compute_root(guest: &ID3D12Device, version_1_0: bool) -> Result<ID3D12RootSig
             Desc_1_1: D3D12_ROOT_SIGNATURE_DESC1 {
                 NumParameters: parameters.len() as u32,
                 pParameters: parameters.as_ptr(),
+                // Xbox's four-table global DXR signature includes this flag.
+                Flags: D3D12_ROOT_SIGNATURE_FLAGS(if layout == Layout::Ray {
+                    0x0100_0000
+                } else {
+                    0
+                }),
                 ..Default::default()
             },
         },
@@ -117,7 +131,7 @@ fn compute_root(guest: &ID3D12Device, version_1_0: bool) -> Result<ID3D12RootSig
             "SerializeVersionedRootSignature",
             bytes.ok_or_else(|| E_POINTER.into()),
         )?;
-        if version_1_0 {
+        if layout != Layout::ReferenceCompute {
             let mut reader: Option<ID3D12VersionedRootSignatureDeserializer> = None;
             checked(
                 "ReadRootSignature",
@@ -180,6 +194,75 @@ fn guest_pipeline(
     state.ok_or_else(|| E_POINTER.into())
 }
 
+fn ray_collections(
+    guest: &ID3D12Device,
+    state_dir: &Path,
+    report_path: &Path,
+) -> Result<(), String> {
+    let root = profiled_root(guest, Layout::Ray)?;
+    let iid = GUID::from_u128(0x728f1fa2_ea11_4a9f_9b52_9b42a484d5c9);
+    let mut device8: Option<IUnknown> = None;
+    // SAFETY: query writes an owned guest device reference on success.
+    checked("Xbox Device8", unsafe {
+        guest.query(&iid, (&raw mut device8).cast()).ok()
+    })?;
+    let device8 = device8.ok_or("missing Xbox Device8")?;
+    type Deserialize = unsafe extern "system" fn(
+        *mut c_void,
+        *const u8,
+        u32,
+        *mut c_void,
+        u32,
+        *const GUID,
+        *mut *mut c_void,
+    ) -> HRESULT;
+    // SAFETY: slot 115 on this Xbox Device8 IID is DeserializeStateObjectX.
+    let deserialize: Deserialize = unsafe {
+        let slots = *device8.as_raw().cast::<*const *const c_void>();
+        std::mem::transmute(*slots.add(115))
+    };
+    let mut report = File::create(report_path).map_err(|error| error.to_string())?;
+    let mut paths: Vec<PathBuf> = fs::read_dir(state_dir)
+        .map_err(|e| e.to_string())?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<io::Result<_>>()
+        .map_err(|e| e.to_string())?;
+    paths.sort();
+    for path in paths
+        .iter()
+        .filter(|path| path.extension() == Some(OsStr::new("sptr")))
+    {
+        let state = fs::read(path).map_err(|error| error.to_string())?;
+        let size = u32::try_from(state.len()).map_err(|_| "ray state too large")?;
+        let mut collection: Option<ID3D12StateObject> = None;
+        let start = Instant::now();
+        // SAFETY: the input and global root remain live until the synchronous
+        // host creation returns. The output receives an owned reference.
+        checked("DeserializeStateObjectX", unsafe {
+            deserialize(
+                device8.as_raw(),
+                state.as_ptr(),
+                size,
+                root.as_raw(),
+                0,
+                &ID3D12StateObject::IID,
+                (&raw mut collection).cast(),
+            )
+            .ok()
+        })?;
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let _collection = collection.ok_or("missing ray collection")?;
+        let key = path
+            .file_stem()
+            .ok_or("missing ray-state key")?
+            .to_string_lossy();
+        writeln!(report, "{key} {elapsed_ms}")
+            .and_then(|()| report.flush())
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 fn prepare(
     title_dir: &Path,
     report_path: &Path,
@@ -199,7 +282,20 @@ fn prepare(
         )
     };
     let guest = create_guest_device(*module)?;
-    let root = compute_root(&guest, standalone)?;
+    if let [flag, state_dir] = shaders
+        && standalone
+        && flag == Path::new("--ray-collections")
+    {
+        return ray_collections(&guest, state_dir, report_path);
+    }
+    let root = profiled_root(
+        &guest,
+        if standalone {
+            Layout::Compute
+        } else {
+            Layout::ReferenceCompute
+        },
+    )?;
 
     // The reference renderer returns native root objects, whereas TuxBox
     // returns guest objects which must go through the Xbox pipeline slot.

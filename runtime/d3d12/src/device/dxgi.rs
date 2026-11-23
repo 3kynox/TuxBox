@@ -17,8 +17,14 @@ pub(super) struct DxgiDevice {
     // Xbox inline descriptor helpers read this byte before choosing slot 24.
     // A desktop CPU descriptor handle is opaque, so request the device API.
     use_descriptor_api: u8,
+    pub(super) device11_queue: bool,
     adapter: OnceLock<IDXGIAdapter>,
+    pub(crate) descriptor_arenas: std::sync::Arc<super::descriptor_paging::Registry>,
     pub(super) pipeline_device: Option<ID3D12Device2>,
+    pub(super) render_heaps: super::heap::RenderHeaps,
+    pub(super) page_pools: super::heap::PagePools,
+    pub(super) imported_views: std::sync::Arc<super::placement::DescriptorMap<super::views::DescriptorBacking>>,
+    pub(super) texture_addresses: std::sync::Arc<super::placement::Views<super::views::TextureAddress>>,
     pub(super) blas: super::blas::Buffers,
     pub(super) media: super::media::Sources,
     pub(super) placements: super::placement::Placements,
@@ -35,6 +41,7 @@ impl DxgiDevice {
     pub(super) fn new(
         selected: Option<&IUnknown>,
         pipeline_device: Option<ID3D12Device2>,
+        device11_queue: bool,
     ) -> Result<Self> {
         let adapter = match selected {
             Some(selected) => OnceLock::from(selected.cast::<IDXGIAdapter>()?),
@@ -44,8 +51,14 @@ impl DxgiDevice {
             vtable: &TABLE,
             reserved: 0,
             use_descriptor_api: 1,
+            device11_queue,
             adapter,
+            descriptor_arenas: Default::default(),
             pipeline_device,
+            render_heaps: Default::default(),
+            page_pools: Default::default(),
+            imported_views: Default::default(),
+            texture_addresses: Default::default(),
             emulate_stencil: Default::default(),
             depth_views: Default::default(),
             frames: Default::default(),

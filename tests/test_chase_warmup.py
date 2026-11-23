@@ -56,11 +56,15 @@ class ChaseWarmupTests(unittest.TestCase):
             key, pixel_key = sha(source), sha(pixel)
             tools = ("xshader", "dxc", "dxv")
             pair_orders = []
+            stencil_slots = []
             fail_pair = True
 
             def tool(args, *, timeout):
                 if args[0] == "xshader":
                     cooked = args[1].read_bytes()
+                    if "--stencil-target" in args:
+                        self.assertEqual(cooked, pixel)
+                        stencil_slots.append(args[args.index("--stencil-target") + 1])
                     if "--link-pixel" in args:
                         self.assertEqual(args[args.index("--link-pixel") + 1].read_bytes(), pixel)
                         order = args[args.index("--pixel-order") + 1].read_bytes()
@@ -81,7 +85,9 @@ class ChaseWarmupTests(unittest.TestCase):
             updates = []
 
             def prepare():
-                return prepare_chase(pak, by_source, profile, "title", set(), updates.append)
+                def progress(message, completed, total):
+                    updates.append((message, completed, total))
+                return prepare_chase(pak, by_source, profile, "title", set(), progress)
 
             with patch.dict("project_tuxbox.chase_warmup.ARCHIVES", archives, clear=True), \
                  patch("project_tuxbox.chase_warmup.decoder"), \
@@ -97,7 +103,8 @@ class ChaseWarmupTests(unittest.TestCase):
                 self.assertTrue(updates)
                 updates.clear()
                 self.assertEqual(prepare(), (0, 4))
-                self.assertFalse(updates)
+                self.assertIn(("Ray-tracing libraries · 1/1 ready · 0 compiled · 1 reused", 1, 1), updates)
+                self.assertIn(("Linked chase shaders · 1/1 ready · 0 compiled · 1 reused", 1, 1), updates)
                 # A pre-staged pixel takes precedence, including when an older
                 # runtime DXIL and its previously linked producer both exist.
                 staged = program(0, b"DIFF")
@@ -105,6 +112,11 @@ class ChaseWarmupTests(unittest.TestCase):
                 self.assertEqual(prepare(), (1, 3))
                 self.assertEqual(pair_orders, [pixel, pixel, staged])
                 self.assertTrue((cache / (f"{key}_{pixel_key}_{sha(staged)}.cso")).is_file())
+                profile["stencil_targets"] = [["material/0", 2]]
+                self.assertEqual(prepare(), (1, 4))
+                self.assertEqual(prepare(), (0, 5))
+                self.assertEqual(stencil_slots, ["2"])
+                self.assertTrue((cache / f"{pixel_key}_rt2.cso").is_file())
                 pak.write_bytes(global_member + material[:-1] + b"!")
                 with self.assertRaisesRegex(ValueError, "archive fingerprint"):
                     prepare()

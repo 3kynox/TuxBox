@@ -1,0 +1,56 @@
+{
+  "date_utc": "2026-11-23",
+  "title": "ProjectScarlett",
+  "package_version": "1.0.2.1",
+  "executable": "game_scarlett_master.exe",
+  "executable_sha256": "e95020b2fa4a721db3df59fdecf75621730ac559d8835252f6c3b658d5a08993",
+  "host": {
+    "gpu": "GeForce RTX 4070 Ti SUPER",
+    "backend": "stock Proton Experimental",
+    "version": "1793301796 experimental-11.0-20261027b-x86_64"
+  },
+  "run": {
+    "utc": "18:03:20",
+    "log_sha256": "8d900f0589e0c74b0b73bb4c1bfb3ad3475bb833588818f02deb86af1d5d35d4",
+    "window": "Americas",
+    "present_dimensions": [
+      3840,
+      2160
+    ],
+    "swapchain_sources": 2,
+    "startup_presents_recorded_by_mangohud": 3273,
+    "desktop_image": "black with MangoHud after presentation began",
+    "desktop_sample_sha256": "59acdc95a75317dd1dc6b07f41e0f6be7f6a7f7fdb48817e57022f350107495e",
+    "recorded_raster_draw": {
+      "vertex": "VS_Clear",
+      "pixel": "PS_Clear",
+      "vertex_sha256": "8574a817bd2754b2603987e45c8451ddc2ec1564a04e7e547f68a5c634a46bd9",
+      "pixel_sha256": "c9f99cce129603afe795042cced590b5f25eb664150abff191f1498539aab819"
+    },
+    "first_compute_dispatch": [
+      5,
+      5,
+      33
+    ],
+    "game_report": {
+      "state": "Game Init",
+      "gameplay_frame": 0,
+      "sha256": "58a01c32f0a9bad539210110b8db657598629ebff8b3a8795a778d2227c66bb4"
+    },
+    "logo_seen": false,
+    "menu_seen": false
+  },
+  "startup_observations": {
+    "audio_connections": [
+      "Opus decoder",
+      "convolution working memory"
+    ],
+    "archive_handle_sample": [
+      "movies.rpf",
+      "levels.rpf",
+      "textures.rpf",
+      "script.rpf",
+      "audio.rpf"
+    ]
+  }
+}

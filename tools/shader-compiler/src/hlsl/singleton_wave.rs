@@ -9,8 +9,10 @@ pub(super) fn prepare(ex: &ShaderExtract, code: &mut [Insn]) {
         || !code
             .iter()
             .any(|i| i.mnemonic == "s_ff1_i32_b64" && i.src == [Opnd::ExecLo])
-        || !only_lane_zero(code)
     {
+        return;
+    }
+    if !only_lane_zero(code) && !reduce_singleton_sum(code) {
         return;
     }
     for i in code {
@@ -26,6 +28,79 @@ pub(super) fn prepare(ex: &ShaderExtract, code: &mut [Insn]) {
             _ => {}
         }
     }
+}
+
+/// A compiler can temporarily unmask the other 63 lanes for a reduction.
+/// For an unsigned sum, CNDMASK supplies zero in each one. Keep lane zero's
+/// accumulator, the scalar broadcast, and the intermediate cross-row register.
+fn reduce_singleton_sum(code: &mut [Insn]) -> bool {
+    let Some(first) = code
+        .iter()
+        .position(|op| op.mnemonic == "v_add_nc_u32" && op.src.first() == Some(&Opnd::Raw(233)))
+    else {
+        return false;
+    };
+    let Some(start) = first.checked_sub(2) else {
+        return false;
+    };
+    if code[..start].iter().any(|op| {
+        op.mnemonic.contains("exec")
+            || op.mnemonic.starts_with("v_cmpx")
+            || op
+                .dst
+                .iter()
+                .any(|r| matches!(r, Opnd::ExecLo | Opnd::ExecHi))
+    }) {
+        return false;
+    }
+    let mut trial = code.to_vec();
+    // The general reduction decoder verifies every permute and lane read.
+    let Ok((64, end)) = super::wave_sum::lower(&mut trial, first) else {
+        return false;
+    };
+    if super::wave_sum::check_control_flow(&trial, 64).is_err() {
+        return false;
+    }
+    trial[start].mnemonic = "s_mov_b64".into();
+    trial[start].src = vec![Opnd::ExecLo];
+    if !only_lane_zero(&trial) {
+        return false;
+    }
+    // Retain the native SAVEEXEC and restore. Its temporary all-ones EXEC
+    // affects only this verified sequence, including its original SCC write.
+    for (i, op) in code[first..end - 1].iter_mut().enumerate() {
+        match i {
+            0..=3 => {
+                op.enc = Enc::Sopp;
+                op.mnemonic = "s_nop".into();
+                op.op = 0;
+                op.dst.clear();
+                op.src.clear();
+            }
+            4 => {
+                op.enc = Enc::Vop1;
+                op.op = 1;
+                op.mnemonic = "v_mov_b32".into();
+                op.src = vec![Opnd::ConstInt(0)];
+            }
+            6 => {
+                op.enc = Enc::Sop1;
+                op.op = 3;
+                op.mnemonic = "s_mov_b32".into();
+                op.dst = trial[first + i].dst.clone();
+                op.src = vec![Opnd::ConstInt(0)];
+            }
+            8 => {
+                op.enc = Enc::Vop1;
+                op.op = 2;
+                op.mnemonic = "v_readfirstlane_b32".into();
+                op.dst = trial[first + i].dst.clone();
+                op.src.truncate(1);
+            }
+            _ => (),
+        }
+    }
+    true
 }
 
 fn only_lane_zero(code: &[Insn]) -> bool {

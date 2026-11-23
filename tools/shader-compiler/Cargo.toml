@@ -14,7 +14,6 @@ name = "xshader"
 path = "src/main.rs"
 
 [dependencies]
-miniz_oxide = "0.8"
-tuxbox-dxbc = { path = "../../runtime/dxbc" }
+tuxbox-dxbc = { path = "../../runtime/dxbc", features = ["native-bindings"] }
 
 [workspace]

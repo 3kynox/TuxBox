@@ -7,19 +7,21 @@ use std::thread::{self, JoinHandle};
 use windows::Win32::Graphics::Direct3D12::ID3D12Fence;
 use windows::Win32::System::Threading::{CreateEventW, ResetEvent, SetEvent};
 
-#[implement(IQueue)]
+#[implement(IQueue2)]
 struct Queue {
     shared: Arc<Shared>,
     worker: Mutex<Option<JoinHandle<()>>>,
     name: Option<CString>,
     source_type: u64,
     priority: i8,
+    manual: bool,
 }
 
 struct Shared {
     state: Mutex<State>,
     changed: Condvar,
     capacity: usize,
+    priority: usize,
     error_event: OwnedHandle,
 }
 
@@ -36,6 +38,7 @@ enum Entry {
     Read(Read),
     Status(Arc<[AtomicI32]>, usize),
     Signal(ID3D12Fence, u64),
+    Event(OwnedHandle),
     Invalid(HRESULT, u32),
 }
 
@@ -116,7 +119,17 @@ impl Read {
         if self.cancelled {
             return Ok(());
         }
-        let mut compressed = Vec::new();
+        let mut local = Vec::new();
+        let mut staging = (self.options & 1 != 0 && matches!(self.source, Source::File(..)))
+            .then(|| lock(&STAGING));
+        let compressed = match staging.as_deref_mut().and_then(Option::as_mut) {
+            Some((limit, _)) if self.size > *limit => return Err(E_OUTOFMEMORY),
+            Some((_, bytes)) => {
+                bytes.clear();
+                bytes
+            }
+            None => &mut local,
+        };
         let target = if self.options & 1 != 0 {
             compressed
                 .try_reserve_exact(self.size)
@@ -134,7 +147,12 @@ impl Read {
                     ..Default::default()
                 };
                 let mut got = 0;
-                if unsafe {
+                {
+                    let mut stats = storage_stats();
+                    stats.pending_reads += 1;
+                    stats.total_reads = stats.total_reads.saturating_add(1);
+                }
+                let success = unsafe {
                     ReadFile(
                         file.file.as_raw_handle(),
                         target,
@@ -142,22 +160,39 @@ impl Read {
                         &mut got,
                         &mut ov,
                     )
-                } == 0
-                {
-                    return Err(HRESULT::from_win32(unsafe { GetLastError() }.0));
-                }
-                if got as usize != self.size {
-                    return Err(HRESULT::from_win32(ERROR_HANDLE_EOF.0));
-                }
+                };
+                let result = if success == 0 {
+                    Err(HRESULT::from_win32(unsafe { GetLastError() }.0))
+                } else if got as usize != self.size {
+                    Err(HRESULT::from_win32(ERROR_HANDLE_EOF.0))
+                } else {
+                    Ok(())
+                };
+                let mut stats = storage_stats();
+                stats.pending_reads -= 1;
+                stats.read_errors = stats.read_errors.saturating_add(u32::from(result.is_err()));
+                result?;
             }
             Source::Memory(p) => unsafe { core::ptr::copy(*p as *const u8, target, self.size) },
         }
         if self.options & 1 != 0 {
             // ReadFile or the copy above initialized every reported input byte.
             unsafe { compressed.set_len(self.size) };
+            {
+                let mut stats = storage_stats();
+                stats.pending_decodes += 1;
+                stats.total_decodes = stats.total_decodes.saturating_add(1);
+            }
             let output =
-                miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&compressed, self.capacity)
-                    .map_err(|_| HRESULT::from_win32(ERROR_INVALID_DATA.0))?;
+                miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(compressed, self.capacity);
+            {
+                let mut stats = storage_stats();
+                stats.pending_decodes -= 1;
+                stats.decode_errors = stats
+                    .decode_errors
+                    .saturating_add(u32::from(output.is_err()));
+            }
+            let output = output.map_err(|_| HRESULT::from_win32(ERROR_INVALID_DATA.0))?;
             unsafe {
                 core::ptr::copy_nonoverlapping(output.as_ptr(), self.dest as *mut u8, output.len())
             };
@@ -188,6 +223,7 @@ fn signal_error(shared: &Shared, entry: &Entry, hr: HRESULT) {
             }
             Entry::Invalid(_, kind) => r.kind = *kind,
             Entry::Status(..) => r.kind = 1,
+            Entry::Event(_) => r.kind = 3,
             Entry::Signal(fence, value) => {
                 r.kind = 2;
                 r.options = fence.as_raw() as u64;
@@ -216,18 +252,47 @@ fn consume(shared: &Shared) {
         state.processing = true;
         drop(state);
         let result = match &entry {
-            Entry::Read(req) => req.execute(),
+            Entry::Read(req) => {
+                {
+                    let mut stats = storage_stats();
+                    let p = &mut stats.priorities[shared.priority];
+                    p.pending += 1;
+                    p.requests = p.requests.saturating_add(1);
+                    p.source_bytes = p.source_bytes.saturating_add(req.size as u64);
+                    p.destination_bytes = p.destination_bytes.saturating_add(req.capacity as u64);
+                }
+                let result = req.execute();
+                storage_stats().priorities[shared.priority].pending -= 1;
+                result
+            }
             Entry::Status(values, i) => {
+                let mut stats = storage_stats();
+                let p = &mut stats.priorities[shared.priority];
+                p.statuses = p.statuses.saturating_add(1);
                 values[*i].store(last_error.0, Ordering::Release);
                 last_error = S_OK;
                 Ok(())
             }
-            Entry::Signal(fence, value) => unsafe { fence.Signal(*value) }.map_err(|e| e.code()),
+            Entry::Signal(fence, value) => {
+                {
+                    let mut stats = storage_stats();
+                    let p = &mut stats.priorities[shared.priority];
+                    p.fences = p.fences.saturating_add(1);
+                }
+                unsafe { fence.Signal(*value) }.map_err(|e| e.code())
+            }
             Entry::Invalid(hr, _) => Err(*hr),
+            Entry::Event(event) => {
+                unsafe { SetEvent(HANDLE(event.as_raw_handle())) }.map_err(|e| e.code())
+            }
         };
         if let Err(hr) = result {
             if last_error.is_ok() {
                 last_error = hr;
+            }
+            {
+                let mut stats = storage_stats();
+                stats.errors = stats.errors.saturating_add(1);
             }
             signal_error(shared, &entry, hr);
         }
@@ -236,7 +301,7 @@ fn consume(shared: &Shared) {
     }
 }
 
-pub(super) unsafe fn create(desc: &QueueDesc) -> Result<IQueue, HRESULT> {
+pub(super) unsafe fn create(desc: &QueueDesc, manual: bool) -> Result<IQueue2, HRESULT> {
     if desc.source_type > 1
         || (desc.source_type == 1 && desc.priority != 2)
         || !(-1..=2).contains(&desc.priority)
@@ -256,6 +321,7 @@ pub(super) unsafe fn create(desc: &QueueDesc) -> Result<IQueue, HRESULT> {
         }),
         changed: Condvar::new(),
         capacity: desc.capacity as usize,
+        priority: (desc.priority + 1) as usize,
         error_event: unsafe { OwnedHandle::from_raw_handle(handle.0) },
     });
     let run = Arc::clone(&shared);
@@ -268,7 +334,15 @@ pub(super) unsafe fn create(desc: &QueueDesc) -> Result<IQueue, HRESULT> {
     } else {
         Some(unsafe { CStr::from_ptr(desc.name) }.to_owned())
     };
+    {
+        let mut stats = storage_stats();
+        let p = &mut stats.priorities[(desc.priority + 1) as usize];
+        p.queues += 1;
+        p.peak_queues = p.peak_queues.max(p.queues);
+        p.total_queues = p.total_queues.saturating_add(1);
+    }
     Ok(Queue {
+        manual,
         shared,
         worker: Mutex::new(Some(worker)),
         name,
@@ -284,8 +358,10 @@ impl Queue {
         while !state.closed
             && state.entries.len() + usize::from(state.processing) >= self.shared.capacity - 1
         {
-            state.ready = state.entries.len();
-            self.shared.changed.notify_all();
+            if !self.manual {
+                state.ready = state.entries.len();
+                self.shared.changed.notify_all();
+            }
             state = self
                 .shared
                 .changed
@@ -299,7 +375,7 @@ impl Queue {
             v[*i].store(E_PENDING.0, Ordering::Release);
         }
         state.entries.push_back(entry);
-        if state.entries.len() - state.ready >= self.shared.capacity / 2 {
+        if !self.manual && state.entries.len() - state.ready >= self.shared.capacity / 2 {
             state.ready = state.entries.len();
             self.shared.changed.notify_all();
         }
@@ -320,6 +396,7 @@ impl Queue {
 impl Drop for Queue {
     fn drop(&mut self) {
         self.close();
+        storage_stats().priorities[(self.priority + 1) as usize].queues -= 1;
     }
 }
 
@@ -401,8 +478,49 @@ impl IQueue_Impl for Queue_Impl {
                 desc,
                 empty: (self.shared.capacity - 1 - s.entries.len() - usize::from(s.processing))
                     as u16,
-                until_submit: (self.shared.capacity / 2 - (s.entries.len() - s.ready)) as u16,
+                until_submit: if self.manual {
+                    u16::MAX
+                } else {
+                    (self.shared.capacity / 2 - (s.entries.len() - s.ready)) as u16
+                },
             })
         };
+    }
+}
+
+impl IQueue2_Impl for Queue_Impl {
+    unsafe fn EnqueueSetEvent(&self, event: *mut c_void) {
+        use std::os::windows::io::BorrowedHandle;
+        let entry = if event.is_null() || event as isize == -1 {
+            Entry::Invalid(E_INVALIDARG, 3)
+        } else {
+            unsafe { BorrowedHandle::borrow_raw(event) }
+                .try_clone_to_owned()
+                .map_or_else(
+                    |e| {
+                        Entry::Invalid(HRESULT::from_win32(e.raw_os_error().unwrap_or(1) as u32), 3)
+                    },
+                    Entry::Event,
+                )
+        };
+        self.enqueue(entry);
+    }
+    unsafe fn Query1(&self, info: *mut QueueInfo1) {
+        if info.is_null() {
+            return;
+        }
+        let mut base = std::mem::MaybeUninit::uninit();
+        unsafe {
+            self.Query(base.as_mut_ptr());
+            let base: QueueInfo = base.assume_init();
+            info.write(QueueInfo1 {
+                desc: QueueDesc1 {
+                    desc: base.desc,
+                    options: self.manual as u64,
+                },
+                empty: base.empty,
+                until_submit: base.until_submit,
+            });
+        }
     }
 }

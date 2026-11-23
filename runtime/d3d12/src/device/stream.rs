@@ -151,6 +151,7 @@ unsafe fn create(
                             shader_cache::mesh_stage(code, shader_cache::Stage::Amplification)?
                         }
                         MESH_X => shader_cache::mesh_stage(code, shader_cache::Stage::Mesh)?,
+                        1 | 2 => None, // Resolve these together after reading the root subobject.
                         _ => shader_cache::prepared(code),
                     };
                     original[index] = Some((code, compiled.as_ref().map(|_| stages.len())));
@@ -197,6 +198,44 @@ unsafe fn create(
         at += bytes;
     }
 
+    let guest_pixel = original[1].map(|(pixel, _)| pixel);
+    pipeline.draw_trace = crate::diagnostics::RasterDraw::trace(original[0].map(|(vertex, _)| vertex), guest_pixel, shader_cache::source_digest);
+    let mut rooted = [None, None];
+    if let (Some(root), Some((vertex, _)), Some((pixel, _)), Some(field)) =
+        (guest_root, original[0], original[1], root_record)
+        && original[2..].iter().all(Option::is_none)
+    {
+        use super::compute_table::{Program, TableLayout};
+        let layout = super::compute_table::reflected(
+            &device.native, root, Program::Raster { vertex, pixel }, node_mask,
+        )?;
+        let root = match layout {
+            TableLayout::Original => Some(root),
+            TableLayout::Reflected(table) => {
+                unsafe { field.write(table.native.as_raw()) };
+                Some(&pipeline.raster_table.insert(table).layout)
+            }
+            TableLayout::Unsupported => None,
+        };
+        // A native root table can combine descriptors from both raster stages.
+        if let Some(root) = root {
+            for (i, source) in [vertex, pixel].into_iter().enumerate() {
+                rooted[i] = shader_cache::raster_with_root(source, root.payload());
+            }
+        }
+    }
+    for (i, variant) in rooted.iter().enumerate() {
+        let Some((code, _)) = original[i] else { continue; };
+        let source = variant.as_deref().unwrap_or(code);
+        let Some(compiled) = shader_cache::prepared(source) else {
+            if variant.is_some() { return Err(E_NOTIMPL.into()); }
+            continue;
+        };
+        let target = fields[i].ok_or(E_INVALIDARG)?;
+        unsafe { target.write(rectangle::bytecode(&compiled)) };
+        original[i] = Some((source, Some(stages.len())));
+        stages.push(compiled);
+    }
     if let Some((code, Some(index))) = original[5]
         && let Some(root) =
             super::compute_scene::private_root(&device.native, code, &stages[index], guest_root, node_mask)?
@@ -274,6 +313,12 @@ unsafe fn create(
                 "created Xbox screen-rectangle pipeline with three-vertex input".into()
             });
         }
+        if let Some(table) = &pipeline.raster_table {
+            static FIRST: std::sync::Once = std::sync::Once::new();
+            crate::diagnostics::log_once(&FIRST, || format!(
+                "created raster pipeline with {} reflected FSSM descriptor slots", table.lengths.iter().map(|&v| u64::from(v)).sum::<u64>()
+            ));
+        }
         if fields[7].is_some() {
             static FIRST_MESH: std::sync::Once = std::sync::Once::new();
             crate::diagnostics::log_once(&FIRST_MESH, || {
@@ -287,6 +332,9 @@ unsafe fn create(
         return initial;
     };
     let status = error.code();
+    if let (Some(pixel), Some(root)) = (guest_pixel, guest_root) {
+        super::compute_table::capture_stage_root(pixel, root);
+    }
     // Do not hash normal successful submissions twice. The consumer layout
     // only matters when the desktop driver rejects the ordinary stage pair.
     let hashes = original.map(|stage| {

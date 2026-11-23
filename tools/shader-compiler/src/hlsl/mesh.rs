@@ -66,6 +66,7 @@ pub(super) fn translate(
         return Err(format!("unsupported mesh launch register {reg}"));
     }
     em.resolve_resources()?;
+    em.resolve_structured_strides();
     em.emit_body(false)?;
     em.touch(&exports.vertices);
     em.touch(&exports.primitives);

@@ -12,13 +12,20 @@ from tempfile import TemporaryDirectory
 from threading import Event, Thread
 
 from .inspect import digest
-from .shader_prep import SOURCE_CACHE, compiler_tools, has_dxil_container, run_tool
+from .shader_prep import SOURCE_CACHE, ToolFailure, compiler_tools, has_dxil_container, run_tool
 
 
 MAX_SHADER_BYTES = 64 << 20
+XSHADER_UNSUPPORTED_HLSL = 65
 SOURCE_KEY = r"[a-f0-9]{64}"
 STENCIL_KEY = SOURCE_KEY + r"_rt[0-7]"
 LINK_KEY = "_".join([SOURCE_KEY] * 3)
+
+
+class ShaderRefused(ValueError):
+    def __init__(self, message, *, cached):
+        super().__init__(message)
+        self.cached = cached
 
 
 def verified_input(path, expected):
@@ -79,6 +86,7 @@ def compile_request(source, key, tools, cache, session):
 
         dest = cache / (key + ".cso")
         checksum = dest.with_suffix(".sha256")
+        refusal = dest.with_suffix(".unsupported")
         reply = work / "reply"
         if (dest.is_file() and dest.stat().st_size <= MAX_SHADER_BYTES
                 and checksum.is_file() and checksum.stat().st_size == 64):
@@ -89,10 +97,23 @@ def compile_request(source, key, tools, cache, session):
                 os.replace(reply, session / dest.name)
                 return False
 
+        if refusal.is_file() and refusal.stat().st_size == len(key) and refusal.read_bytes() == key.encode("ascii"):
+            raise ShaderRefused("cached unsupported HLSL translation", cached=True)
+
         hlsl, output, profile = (work / name for name in ("shader.hlsl", "out.cso", "profile"))
         if linked:
             run_tool([dxv, order], timeout=10)
-        run_tool([xshader, cooked, *flags, "--hlsl-out", hlsl, "--profile-out", profile], timeout=30)
+        try:
+            run_tool([xshader, cooked, *flags, "--hlsl-out", hlsl, "--profile-out", profile], timeout=30)
+        except ToolFailure as error:
+            # xshader reserves this status for the in-process HLSL emitter. DXC, DXV,
+            # input parsing, tool startup and filesystem failures remain retryable.
+            if error.returncode != XSHADER_UNSUPPORTED_HLSL:
+                raise
+            marker = work / "unsupported"
+            marker.write_text(key, encoding="ascii")
+            os.replace(marker, refusal)
+            raise ShaderRefused(str(error), cached=False) from error
         target = profile.read_text()
         # Mesh and amplification stages start at shader model 6.5. Linked
         # requests currently repack the outputs of vertex and geometry shaders.
@@ -189,6 +210,7 @@ def _serve_requests(session, stop, report, xshader, wait):
             tools, cache = bind_cache()
         except (OSError, ValueError, subprocess.SubprocessError):
             pass  # Retry and report the error if this game needs a shader.
+    refused = cached_refusals = 0
     while not stop.is_set():
         directory = session / "requests"
         requests = [*directory.glob("*.dxbc"), *directory.glob("*.link"), *directory.glob("*.stencil")]
@@ -197,23 +219,35 @@ def _serve_requests(session, stop, report, xshader, wait):
             continue
         for source in requests:
             if stop.is_set():
-                return
+                break
             key = source.stem
             pattern = {".link": LINK_KEY, ".stencil": STENCIL_KEY, ".dxbc": SOURCE_KEY}[source.suffix]
             if not re.fullmatch(pattern, key):
                 remove_request(source)
                 continue
+            failed = False
             try:
                 if tools is None:
                     tools, cache = bind_cache()
                 compiled = compile_request(source, key, tools, cache, session)
                 if compiled:
                     report(f"Compiled Xbox shader {key}")
+            except ShaderRefused as exc:
+                failed = True
+                if exc.cached:
+                    cached_refusals += 1
+                else:
+                    refused += 1
+                    report(f"Xbox shader {key}: {exc}")
             except (OSError, ValueError, subprocess.SubprocessError) as exc:
-                (session / (key + ".failed")).touch()
+                failed = True
                 report(f"Xbox shader {key}: {exc}")
             finally:
                 remove_request(source)
+                if failed:
+                    (session / (key + ".failed")).touch()
+    if refused or cached_refusals:
+        report(f"Xbox shader worker: {refused} new unsupported translations, {cached_refusals} cached refusals")
 
 
 @contextmanager

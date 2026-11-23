@@ -80,7 +80,7 @@ pub unsafe extern "system" fn apu_alloc(
     size: u32,
     alignment: u32,
 ) -> i32 {
-    if block_out.is_null() || address_out.is_null() {
+    if block_out.is_null() {
         return E_INVALIDARG;
     }
     let alignment = (alignment as usize).max(DEFAULT_ALIGNMENT);
@@ -93,9 +93,41 @@ pub unsafe extern "system" fn apu_alloc(
     // SAFETY: The caller's output pointers are required writable by this function's contract.
     unsafe {
         ptr::write_unaligned(block_out, block as *mut c_void);
-        ptr::write_unaligned(address_out, address);
+        if !address_out.is_null() {
+            ptr::write_unaligned(address_out, address);
+        }
     }
     S_OK
+}
+
+fn apu_offset(block: *const c_void, size: usize) -> Option<u32> {
+    let heap = APU_HEAP.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let heap = heap.as_ref()?;
+    let offset = (block as usize).checked_sub(heap.base)?;
+    if offset >= heap.offset || size > heap.offset - offset {
+        return None;
+    }
+    u32::try_from(offset).ok()
+}
+
+#[unsafe(export_name = "ApuIsVirtualAddressValid")]
+pub extern "system" fn apu_is_virtual_address_valid(block: *const c_void, size: u32) -> bool {
+    apu_offset(block, size as usize).is_some()
+}
+
+#[unsafe(export_name = "ApuMapVirtualAddress")]
+pub extern "system" fn apu_map_virtual_address(block: *const c_void) -> u32 {
+    apu_offset(block, 1).unwrap_or(0)
+}
+
+#[unsafe(export_name = "ApuMapApuAddress")]
+pub extern "system" fn apu_map_apu_address(address: u32) -> *mut c_void {
+    let heap = APU_HEAP.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(heap) = heap.as_ref() else { return ptr::null_mut() };
+    if address as usize >= heap.offset {
+        return ptr::null_mut();
+    }
+    (heap.base + address as usize) as *mut c_void
 }
 
 /// Read the free and used byte counts for the single host-backed APU heap.

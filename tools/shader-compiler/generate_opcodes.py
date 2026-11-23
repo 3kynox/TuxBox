@@ -6,7 +6,7 @@ https://gpuopen.com/machine-readable-isa/, then run
     python3 generate_opcodes.py DIRECTORY_CONTAINING_XML
 
 The pinned inputs are the 2026-02-20, schema 1.1.1 specifications. All input
-files are read locally. Rust code is generated beside this script in src/rdna2.
+files are read locally. Rust code is generated in the shared native shader reader.
 """
 
 import argparse
@@ -102,7 +102,7 @@ def main():
         by_name[name].append(f"({family}, {opcode})")
     arms = [f'        {" | ".join(keys)} => "{name}",' for name, keys in by_name.items()]
     source = HEADER + "\n".join(arms) + "\n        _ => return None,\n    })\n}\n"
-    path = Path(__file__).resolve().parent / "src" / "rdna2" / "opcodes.rs"
+    path = Path(__file__).resolve().parents[2] / "runtime" / "dxbc" / "src" / "rdna2" / "opcodes.rs"
     path.write_text(source, encoding="utf-8")
 
 

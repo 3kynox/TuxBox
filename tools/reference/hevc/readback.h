@@ -3,19 +3,8 @@
 #include <cstring>
 #include <vector>
 using frame_abi::check;
-inline std::vector<BYTE> readback(IMFSample* sample, UINT width, UINT height) {
-    ComPtr<IMFMediaBuffer> buf;
-    check(sample->GetBufferByIndex(0, &buf), "frame buffer");
-    ComPtr<IMFDXGIBuffer> dxgi;
-    check(buf.As(&dxgi), "DXGI interface");
-    ComPtr<ID3D12Resource> tex;
-    check(dxgi->GetResource(IID_PPV_ARGS(&tex)), "get D3D12 texture");
-    UINT sub{};
-    check(dxgi->GetSubresourceIndex(&sub), "get subresource");
-    if (sub)
-        throw std::runtime_error("unexpected array subresource");
-    ComPtr<IMFD3D12SynchronizationObjectCommands> sync;
-    check(dxgi->GetUnknown(sync_key, IID_PPV_ARGS(&sync)), "sample synchronization");
+inline std::vector<BYTE> readback_texture(ID3D12Resource* tex, IMFD3D12SynchronizationObjectCommands* sync,
+                                          UINT width, UINT height) {
     auto desc = tex->GetDesc();
     if (desc.Format != DXGI_FORMAT_NV12 || desc.Width != width || desc.Height != height)
         throw std::runtime_error("unexpected texture");
@@ -24,7 +13,8 @@ inline std::vector<BYTE> readback(IMFSample* sample, UINT width, UINT height) {
     ComPtr<ID3D12CommandQueue> q;
     D3D12_COMMAND_QUEUE_DESC qdesc{};
     check(d->CreateCommandQueue(&qdesc, IID_PPV_ARGS(&q)), "consumer queue");
-    check(sync->EnqueueResourceReadyWait(q.Get()), "wait for decoder");
+    if (sync)
+        check(sync->EnqueueResourceReadyWait(q.Get()), "wait for decoder");
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint[2]{};
     UINT rows[2]{};
     UINT64 bytes[2]{}, capacity{};
@@ -48,7 +38,7 @@ inline std::vector<BYTE> readback(IMFSample* sample, UINT width, UINT height) {
     check(d->CreateCommandList(0, qdesc.Type, a.Get(), nullptr, IID_PPV_ARGS(&l)), "create list");
     for (UINT i = 0; i < 2; i++) {
         D3D12_TEXTURE_COPY_LOCATION dst{}, src{};
-        src.pResource = tex.Get();
+        src.pResource = tex;
         src.SubresourceIndex = i;
         dst.pResource = rb.Get();
         dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
@@ -58,7 +48,8 @@ inline std::vector<BYTE> readback(IMFSample* sample, UINT width, UINT height) {
     check(l->Close(), "close");
     ID3D12CommandList* ls[] = {l.Get()};
     q->ExecuteCommandLists(1, ls);
-    check(sync->EnqueueResourceRelease(q.Get()), "signal decoder after consumer");
+    if (sync)
+        check(sync->EnqueueResourceRelease(q.Get()), "signal decoder after consumer");
     ComPtr<ID3D12Fence> fence;
     check(d->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)), "readback fence");
     check(q->Signal(fence.Get(), 1), "signal");
@@ -76,4 +67,23 @@ inline std::vector<BYTE> readback(IMFSample* sample, UINT width, UINT height) {
     D3D12_RANGE none{};
     rb->Unmap(0, &none);
     return pixels;
+}
+
+inline std::vector<BYTE> readback(IMFSample* sample, UINT width, UINT height,
+                                  ComPtr<ID3D12Resource>* retain = nullptr) {
+    ComPtr<IMFMediaBuffer> buf;
+    check(sample->GetBufferByIndex(0, &buf), "frame buffer");
+    ComPtr<IMFDXGIBuffer> dxgi;
+    check(buf.As(&dxgi), "DXGI interface");
+    ComPtr<ID3D12Resource> tex;
+    check(dxgi->GetResource(IID_PPV_ARGS(&tex)), "get D3D12 texture");
+    UINT sub{};
+    check(dxgi->GetSubresourceIndex(&sub), "get subresource");
+    if (sub)
+        throw std::runtime_error("unexpected array subresource");
+    ComPtr<IMFD3D12SynchronizationObjectCommands> sync;
+    check(dxgi->GetUnknown(sync_key, IID_PPV_ARGS(&sync)), "sample synchronization");
+    if (retain)
+        *retain = tex;
+    return readback_texture(tex.Get(), sync.Get(), width, height);
 }

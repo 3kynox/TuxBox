@@ -14,7 +14,7 @@ from .inspect import digest, export_table, image, launch_target
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build"
-BASE_SUITES = ("cpu", "xmem", "xgameruntime", "xcrdapi", "graphics", "graphics-abi", "guest-frame", "present", "lanes",
+BASE_SUITES = ("cpu", "xmem", "xapu", "xgameruntime", "xcrdapi", "graphics", "graphics-abi", "guest-frame", "present", "lanes",
                "cpu-benchmark", "d3d12-exports", "d3d12-features", "d3d12-indirect", "d3d12-queries", "d3d12-queues", "d3d12-tables",
                "d3d12-heaps", "d3d12-placement", "d3d12-copy-resource", "d3d12-draw", "d3d12-stream", "d3d12-frame-events",
                "d3d12-guids", "d3d12-signatures", "xg-provider")
@@ -184,6 +184,10 @@ def verify(host, output, adapter, selected=None, samples=1):
                   r"xgameruntime PASS init=balanced interfaces=checked manual=ordered termination=canceled automatic=3 stale=rejected",
                   providers={"xgameruntime/xgameruntime.dll": ("InitializeApiImpl", "InitializeApiImplEx",
                                                                "UninitializeApiImpl", "QueryApiImpl")})
+        if "xapu" in selected:
+            check("xapu", "xapu/xapu-control.exe", [],
+                  r"xapu PASS Opus=960 pre-skip=312 output=648 queue=ordered",
+                  providers={"xapu/xapu.dll": ("XApuConnect", "XApuEnqueueCommand", "XApuDequeueResult")})
         if "xcrdapi" in selected:
             check("xcrdapi", "xcrdapi/xcrdapi-read.exe", [],
                   r"raw=16 zlib=16 guards=2 errors=2 cancellation=1 autosubmit=64 PASS",
@@ -341,6 +345,7 @@ def verify(host, output, adapter, selected=None, samples=1):
 
 
 GATE_LABELS = {
+    "xapu": "Opus PCM, decoder pre-skip and command completion",
     "xgameruntime": "Game Runtime initialization, task delivery and cancellation",
     "xcrdapi": "Xbox storage file reads, zlib and queue completion",
     "guest-factories": "Xbox 0x20004 and default factories, compute queues and process debug flags",

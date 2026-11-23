@@ -8,6 +8,7 @@ import sys
 from tempfile import TemporaryDirectory
 
 from .inspect import digest
+from .prep_progress import report_progress
 from .shader_prep import ROOT
 
 
@@ -140,12 +141,11 @@ def prepare_pipelines(executable, host, plan, cache, progress=None, *, standalon
                 and driver_cache_directories(env) == saved.get("driver_cache_dirs")
                 and isinstance(saved.get("archives"), list)
                 and still_cached(archive_files(paths), saved["archives"])):
-            print(f"Frosty compute pipelines ready: {len(records)} cached.", file=sys.stderr, flush=True)
+            report_progress(progress, f"Frosty compute pipelines ready: {len(records)} cached.",
+                            len(records), len(records))
             return
         message = f"Preparing {len(records)} Frosty compute pipelines on this GPU…"
-        if progress:
-            progress(message)
-        print(message, file=sys.stderr, flush=True)
+        report_progress(progress, message, 0, len(records))
         helper = helper_binary(work, executable.name, source)
         with TemporaryDirectory(dir=work) as temp:
             stage = Path(temp)
@@ -173,4 +173,5 @@ def prepare_pipelines(executable, host, plan, cache, progress=None, *, standalon
             pending = stage / "finished.json"
             pending.write_text(json.dumps(result, indent=2) + "\n")
             os.replace(pending, state)
-        print("Frosty chase pipelines ready.", file=sys.stderr, flush=True)
+        report_progress(progress, f"Frosty compute pipelines ready: {len(records)} created.",
+                        len(records), len(records))

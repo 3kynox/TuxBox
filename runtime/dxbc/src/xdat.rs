@@ -63,7 +63,7 @@ fn inflate_program(section: &[u8], remaining: usize) -> Result<Vec<u8>, String> 
 }
 
 /// Extract every FSSM program in directory order from the XDAT portion of a DXIL chunk.
-pub(crate) fn programs(xdat: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+pub fn programs(xdat: &[u8]) -> Result<Vec<Vec<u8>>, String> {
     if !xdat.starts_with(b"XDAT") {
         return Err("expected XDAT signature".into());
     }

@@ -125,7 +125,11 @@ pub unsafe extern "system" fn create_device(
             let mut record = unsafe { params.cast::<[u32; 18]>().read_unaligned() };
             let mode = record[9];
             record[9] = 0;
-            mode <= 1 && record == PROFILE_20004_DEFAULT
+            let retail = [
+                0x20004, 0, 0x100000, 0, 0, 0, 0, 0,
+                record[8], 0, 1, 0, 0, 0, 0, 0x20, 0, 0,
+            ];
+            mode <= 1 && (record == PROFILE_20004_DEFAULT || (record[8] <= 1 && record == retail))
         }
         _ => false,
     };

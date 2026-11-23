@@ -5,6 +5,7 @@ import csv
 import ctypes
 from ctypes.util import find_library
 from dataclasses import dataclass
+from functools import cache
 import hashlib
 import os
 from pathlib import Path
@@ -100,6 +101,7 @@ def serialized_state(program):
     return start, program[start:-tail]
 
 
+@cache
 def decoder():
     library = find_library("lz4")
     if not library:
@@ -109,7 +111,7 @@ def decoder():
     return decode
 
 
-def archive_entries(name, stream, decode, survey, map_keys):
+def archive_entries(name, stream, decode, survey, map_keys, *, include_ray_sources=False):
     offset, size, expected = ARCHIVES[name]
     stream.seek(offset)
     data = memoryview(stream.read(size))
@@ -121,14 +123,14 @@ def archive_entries(name, stream, decode, survey, map_keys):
         if frequency >= len(STAGES) or not 0 < stored <= length or start + stored > len(payload):
             raise ValueError(f"Invalid {name} shader descriptor {index}")
         source = None
-        if frequency < 6:
+        if frequency < 6 or include_ray_sources:
             program = bytes(payload[start:start + stored])
             if stored != length:
                 raw = ctypes.create_string_buffer(length)
                 if decode(program, raw, stored, length) != length:
                     raise ValueError(f"Unable to decompress {name} shader {index}")
                 program = raw.raw
-            native = dxbc(program)
+            native = dxbc(program) if frequency < 6 else serialized_state(program)[1]
             source = hashlib.sha256(native).hexdigest()
             if survey:
                 survey(source, native)

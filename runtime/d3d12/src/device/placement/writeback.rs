@@ -59,6 +59,7 @@ impl Readback {
             D3D12_HEAP_TYPE_READBACK,
             &desc,
             D3D12_RESOURCE_STATE_COPY_DEST,
+            None,
         )?;
         // SAFETY: the new allocator and command list belong to this device;
         // both, the buffer and the source textures are retained to completion.
@@ -120,7 +121,7 @@ impl Readback {
             for (level, &offset) in offsets.iter().enumerate() {
                 let mip = &texture.mips[level];
                 let size = (mip.source.end - mip.source.start) as usize;
-                let element = texture.plane.element_bytes() as usize;
+                let element = mip.element_bytes as usize;
                 tiled.clear();
                 tiled.try_reserve_exact(size).map_err(|_| E_OUTOFMEMORY)?;
                 tiled.resize(size, 0u8);

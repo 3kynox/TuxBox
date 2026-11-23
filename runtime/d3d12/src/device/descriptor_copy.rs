@@ -83,14 +83,6 @@ pub(super) unsafe extern "system" fn ranges(
             && let Some(count) = to.count(stride)
             && Some(count) == from.count(stride)
         {
-            if kind == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV {
-                device.state.blas.views.copy(stride, to.spans(), from.spans());
-                device
-                    .state
-                    .placements
-                    .views
-                    .copy(stride, to.spans(), from.spans());
-            }
             if kind == D3D12_DESCRIPTOR_HEAP_TYPE_DSV {
                 device
                     .state
@@ -98,11 +90,7 @@ pub(super) unsafe extern "system" fn ranges(
                     .copy(stride, to.spans(), from.spans());
             }
             for (destination, source) in to.handles(stride).zip(from.handles(stride)) {
-                unsafe {
-                    device
-                        .native
-                        .CopyDescriptorsSimple(1, destination, source, kind)
-                };
+                unsafe { copy_host_range(device, 1, destination, source, kind) };
             }
             return;
         }
@@ -128,19 +116,6 @@ pub(super) unsafe extern "system" fn simple(
     src: D3D12_CPU_DESCRIPTOR_HANDLE,
     kind: D3D12_DESCRIPTOR_HEAP_TYPE,
 ) {
-    if kind == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV {
-        let stride = unsafe { device.native.GetDescriptorHandleIncrementSize(kind) } as usize;
-        device.state.blas.views.copy(
-            stride,
-            std::iter::once((dst.ptr, count)),
-            std::iter::once((src.ptr, count)),
-        );
-        device.state.placements.views.copy(
-            stride,
-            std::iter::once((dst.ptr, count)),
-            std::iter::once((src.ptr, count)),
-        );
-    }
     if kind == D3D12_DESCRIPTOR_HEAP_TYPE_DSV {
         let stride = unsafe { device.native.GetDescriptorHandleIncrementSize(kind) } as usize;
         device.state.depth_views.copy(
@@ -149,5 +124,22 @@ pub(super) unsafe extern "system" fn simple(
             std::iter::once((src.ptr, count)),
         );
     }
-    unsafe { device.native.CopyDescriptorsSimple(count, dst, src, kind) };
+    unsafe { copy_host_range(device, count, dst, src, kind); }
+}
+
+unsafe fn copy_host_range(device: &Device, count: u32, dst: D3D12_CPU_DESCRIPTOR_HANDLE, src: D3D12_CPU_DESCRIPTOR_HANDLE, kind: D3D12_DESCRIPTOR_HEAP_TYPE) {
+    let registry = &device.state.descriptor_arenas;
+    let arena = registry.find(dst.ptr);
+    let translated = arena.as_ref().map_or(dst, |a| a.cpu(dst.ptr));
+    let from = registry.cpu(src);
+    if kind == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV {
+        let stride = unsafe { device.native.GetDescriptorHandleIncrementSize(kind) } as usize;
+        let to = std::iter::once((translated.ptr, count));
+        let source = std::iter::once((from.ptr, count));
+        device.state.imported_views.copy(stride, to.clone(), source.clone());
+        device.state.blas.views.copy(stride, to.clone(), source.clone());
+        device.state.placements.views.copy(stride, to, source);
+    }
+    unsafe { device.native.CopyDescriptorsSimple(count, translated, from, kind) };
+    if let Some(arena) = arena { arena.publish(dst.ptr, count); }
 }

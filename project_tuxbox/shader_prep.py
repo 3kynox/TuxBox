@@ -1,6 +1,5 @@
 """Prepare profiled retail shaders in the cache read by the staged graphics provider."""
 import ctypes
-from ctypes.util import find_library
 import hashlib
 import json
 import os
@@ -10,9 +9,11 @@ import struct
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+from time import monotonic
 
 from .inspect import digest
-from .prep_progress import desktop_progress
+from .prep_progress import PrepPhase, desktop_progress, report_progress
+from .shader_inventory import decoder
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,11 +33,7 @@ def cooked_shader(pak, record):
         raise ValueError(f"Truncated shader entry {record['entry']} in {pak}")
     size = record["unpacked_bytes"]
     if len(source) != size:
-        library = find_library("lz4")
-        if not library:
-            raise ValueError("liblz4 is required to prepare the packaged shaders")
-        decode = ctypes.CDLL(library).LZ4_decompress_safe
-        decode.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+        decode = decoder()
         target = ctypes.create_string_buffer(size)
         if decode(source, target, len(source), size) != size:
             raise ValueError(f"Cannot decompress shader entry {record['entry']}")
@@ -77,11 +74,17 @@ def compiler_tools():
     return xshader, dxc, dxv
 
 
+class ToolFailure(ValueError):
+    def __init__(self, tool, returncode, detail):
+        super().__init__(f"{Path(tool).name} failed ({returncode}): {detail}")
+        self.returncode = returncode
+
+
 def run_tool(command, *, timeout=None):
     result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                             text=True, errors="replace", timeout=timeout)
     if result.returncode:
-        raise ValueError(f"{Path(command[0]).name} failed ({result.returncode}): {result.stderr[-600:].strip()}")
+        raise ToolFailure(command[0], result.returncode, result.stderr[-600:].strip())
 
 
 def compile_shader(pak, record, tools, work):
@@ -194,11 +197,13 @@ def prepare_shaders(pak, plan, cache, progress=None, *, linked=False, exact_sour
             work = Path(directory)
             key_field = "pair_key" if linked else ("dxbc_sha256" if exact_sources else "cache_key")
             unique = {record[key_field]: record for record in plan["shaders"]}
+            label = "Linked menu shaders" if linked else "Startup and menu shaders"
+            phase = PrepPhase(progress, label, len(unique))
             # Inspect every file before looking for tools; one missing compiler
             # must not leave later truncated entries in the runtime cache.
             outputs = checked_entries(cache, unique, previous, exact_sources=exact_sources)
             published = {}
-            for key, record in unique.items():
+            for ordinal, (key, record) in enumerate(unique.items(), 1):
                 entry = cache / (key + ".cso")
                 translation = (record.get("hlsl_sha256"), record["profile"])
                 if exact_sources:
@@ -208,6 +213,7 @@ def prepare_shaders(pak, plan, cache, progress=None, *, linked=False, exact_sour
                         cooked_shader(pak, record["pixel_input"])
                 if key in outputs:
                     published[translation] = (entry, outputs[key])
+                    phase.update(ordinal, compiled)
                     continue
                 dxil = None
                 if exact_sources:
@@ -217,12 +223,6 @@ def prepare_shaders(pak, plan, cache, progress=None, *, linked=False, exact_sour
                 if dxil is None:
                     if tools is None:
                         tools = compiler_tools()
-                        print(f"Preparing {plan['title']} shaders for first use ({len(unique)} profiled programs)...",
-                              file=sys.stderr, flush=True)
-                    message = f"Compiling {record['archive']} shader {record['entry']} ({record['profile']})"
-                    if progress:
-                        progress(message)
-                    print(f"  {message}", file=sys.stderr, flush=True)
                     dxil = compile_shader(pak, record, tools, work)
                     compiled += 1
                 outputs[key] = digest(dxil)
@@ -232,6 +232,7 @@ def prepare_shaders(pak, plan, cache, progress=None, *, linked=False, exact_sour
                 pending = work / "receipt.json"
                 pending.write_text(json.dumps({"plan": version, "outputs": {**previous, **outputs}}) + "\n")
                 os.replace(pending, state)
+                phase.update(ordinal, compiled)
             if receipt != {"plan": version, "outputs": outputs}:
                 pending = work / "receipt.json"
                 pending.write_text(json.dumps({"plan": version, "outputs": outputs}) + "\n")
@@ -307,6 +308,7 @@ def prepare_for_launch(executable, host):
     pak = executable.parent / plan["shader_package"]
     prefix = Path(host.env["WINEPREFIX"])
     cache = prefix / SOURCE_CACHE
+    started = monotonic()
     with desktop_progress(plan["title"], host.env) as progress:
         compiled, reused = prepare_shaders(pak, plan, cache, progress=progress,
                                           exact_sources=True)
@@ -336,5 +338,7 @@ def prepare_for_launch(executable, host):
             compiled += built
             reused += found
             prepare_pipelines(executable, host, plan, cache, progress, standalone=True)
-        print(f"{plan['title']} shaders ready: {compiled} compiled, {reused} cached.", file=sys.stderr, flush=True)
+        elapsed = monotonic() - started
+        report_progress(progress, f"{plan['title']} shaders ready: {compiled} compiled, {reused} cached. "
+                        f"Preparation took {elapsed:.1f}s.", 1, 1)
     return True

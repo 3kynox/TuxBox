@@ -10,7 +10,7 @@ use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::System::{Diagnostics::Debug::ReadProcessMemory, Threading::GetCurrentProcess};
 use windows::core::{GUID, IUnknown, Result};
 
-pub(super) const LIST6: GUID = GUID::from_u128(0xc3827890_4024_474c_98cf_645b51dc4874);
+pub(crate) const LIST6: GUID = GUID::from_u128(0xc3827890_4024_474c_98cf_645b51dc4874);
 
 #[repr(C)]
 pub(super) struct Entry {
@@ -145,52 +145,55 @@ fn translate(
 ) -> Result<(
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC,
     Option<ID3D12Resource>,
+    u64,
 )> {
     let relocated = unsafe { blas::resolve(owner, desc.DestAccelerationStructureData) }?;
-    if relocated.is_some() || desc.ScratchAccelerationStructureData == 0 {
-        let mut device = None::<ID3D12Device5>;
-        unsafe { host.GetDevice(&mut device)? };
-        let mut info = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO::default();
-        unsafe {
-            device
-                .ok_or(E_NOTIMPL)?
-                .GetRaytracingAccelerationStructurePrebuildInfo(&desc.Inputs, &mut info)
-        };
-        let scratch = if desc
-            .Inputs
-            .Flags
-            .contains(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE)
-        {
-            info.UpdateScratchDataSizeInBytes
-        } else {
-            info.ScratchDataSizeInBytes
-        };
-        if info.ResultDataMaxSizeInBytes == 0
-            || (desc.ScratchAccelerationStructureData == 0 && scratch != 0)
-        {
-            return Err(E_INVALIDARG.into());
+    let mut info = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO::default();
+    let mut device = None::<ID3D12Device5>;
+    unsafe { host.GetDevice(&mut device)? };
+    unsafe {
+        device
+            .ok_or(E_NOTIMPL)?
+            .GetRaytracingAccelerationStructurePrebuildInfo(&desc.Inputs, &mut info)
+    };
+    let scratch = if desc
+        .Inputs
+        .Flags
+        .contains(D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE)
+    {
+        info.UpdateScratchDataSizeInBytes
+    } else {
+        info.ScratchDataSizeInBytes
+    };
+    if info.ResultDataMaxSizeInBytes == 0
+        || (desc.ScratchAccelerationStructureData == 0 && scratch != 0)
+    {
+        return Err(E_INVALIDARG.into());
+    }
+    if let Some(target) = relocated {
+        if info.ResultDataMaxSizeInBytes > unsafe { target.GetDesc() }.Width {
+            return Err(E_NOTIMPL.into());
         }
-        if let Some(target) = relocated {
-            if info.ResultDataMaxSizeInBytes > target.bytes {
-                return Err(E_NOTIMPL.into());
-            }
-            retain(state, &[&target.resource])?;
-            desc.DestAccelerationStructureData = unsafe { target.resource.GetGPUVirtualAddress() };
-        }
+        retain(state, &[&target])?;
+        desc.DestAccelerationStructureData = unsafe { target.GetGPUVirtualAddress() };
     }
     if desc.SourceAccelerationStructureData != 0
         && let Some(source) = unsafe { blas::resolve(owner, desc.SourceAccelerationStructureData) }?
     {
-        retain(state, &[&source.resource])?;
-        desc.SourceAccelerationStructureData = unsafe { source.resource.GetGPUVirtualAddress() };
+        retain(state, &[&source])?;
+        desc.SourceAccelerationStructureData = unsafe { source.GetGPUVirtualAddress() };
     }
     if desc.Inputs.Type != D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL {
-        return Ok((desc, None));
+        return Ok((desc, None, info.ResultDataMaxSizeInBytes));
     }
     if desc.Inputs.NumDescs == 0 {
         // Failure to allocate optional shader metadata cannot invalidate an
         // ordinary empty TLAS build. Inline traversal will report its absence.
-        return Ok((desc, unsafe { blas::empty_instance_buffer(owner) }.ok()));
+        return Ok((
+            desc,
+            unsafe { blas::empty_instance_buffer(owner) }.ok(),
+            info.ResultDataMaxSizeInBytes,
+        ));
     }
     let address = unsafe { desc.Inputs.Anonymous.InstanceDescs };
     if desc.Inputs.NumDescs > D3D12_RAYTRACING_MAX_INSTANCES_PER_TOP_LEVEL_ACCELERATION_STRUCTURE {
@@ -247,7 +250,7 @@ fn translate(
         Instances::Gpu(records) => Some(records.output().clone()),
     };
     state.scene_commands.push(SceneCommand::Fixup(instances));
-    Ok((desc, snapshot))
+    Ok((desc, snapshot, info.ResultDataMaxSizeInBytes))
 }
 
 // The scene builder passes one ordinary 48-byte description to List4, along
@@ -356,7 +359,7 @@ unsafe fn record_builds(
             state.error = E_OUTOFMEMORY;
             return;
         }
-        let (build, instances) = match translate(&mut state, owner, host, entry.build) {
+        let (build, instances, bytes) = match translate(&mut state, owner, host, entry.build) {
             Ok(build) => build,
             Err(err) => {
                 state.error = err.code();
@@ -380,11 +383,13 @@ unsafe fn record_builds(
                         guest: guest_va,
                         native: native_va,
                         records: instances,
+                        bytes,
                     }
                 } else {
                     SceneCommand::Native {
                         guest: guest_va,
                         native: native_va,
+                        bytes,
                         build: blas::NativeBuild::record(owner, guest_va, native_va, &build.Inputs),
                     }
                 };

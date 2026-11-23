@@ -1,6 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <cstdio>
+#include <cstring>
 #include <initializer_list>
 
 extern "C" {
@@ -11,6 +12,8 @@ __declspec(dllimport) HRESULT WINAPI QueryApiImpl(const GUID*, const GUID*, void
 }
 
 static const GUID threading{0x073b7dcb, 0x1fcf, 0x4030, {0x94, 0xbe, 0xe3, 0xc9, 0xeb, 0x62, 0x34, 0x28}};
+static const GUID system_api{0xe349bd1a, 0xfc20, 0x4e40, {0xb9, 0x9c, 0x41, 0x78, 0xcc, 0x6b, 0x40, 0x9f}};
+static const GUID system_revision{0x1861cf2e, 0xe18b, 0x4834, {0xa9, 0xf5, 0xb4, 0xa4, 0xe6, 0xef, 0xb4, 0xcf}};
 static const GUID unknown{};
 using Handle = UINT_PTR;
 using Action = void(WINAPI*)(void*, bool);
@@ -54,6 +57,18 @@ int main(int argc, char** argv) {
     UninitializeApiImpl();
     CHECK(QueryApiImpl(&unknown, &threading, &obj) == E_NOINTERFACE && !obj);
     CHECK(QueryApiImpl(&threading, &unknown, &obj) == E_NOINTERFACE && !obj);
+    void *system{};
+    CHECK(SUCCEEDED(QueryApiImpl(&system_api, &system_revision, &system)) && system);
+    using SandboxId = HRESULT(WINAPI*)(void*, size_t, char*, size_t*);
+    auto sandbox_id = method<SandboxId>(system, 4);
+    char id[17];
+    std::memset(id, 0x5a, sizeof(id));
+    size_t used = 0x5a;
+    CHECK(sandbox_id(system, 15, id, &used) == HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER));
+    CHECK(id[0] == 0x5a && used == 0x5a);
+    CHECK(sandbox_id(system, 16, id, &used) == S_OK && used == 7);
+    CHECK(std::strcmp(id, "RETAIL") == 0 && id[15] == 0 && id[16] == 0x5a);
+    method<Ref>(system, 2)(system);
     CHECK(SUCCEEDED(QueryApiImpl(&threading, &threading, &obj)) && obj);
     void* same{};
     CHECK(SUCCEEDED(method<ComQuery>(obj, 0)(obj, &threading, &same)) && same == obj);

@@ -3,7 +3,7 @@ mod descriptors;
 mod publication;
 mod upload;
 mod writeback;
-pub(crate) use descriptors::{DescriptorMap, DescriptorRange, HeapViews, Views};
+pub(crate) use descriptors::{DescriptorMap, DescriptorRange, HeapViews, PlacedView, Views};
 pub(crate) use publication::QueueAccess;
 
 use super::Device;
@@ -33,6 +33,7 @@ fn committed(
     kind: D3D12_HEAP_TYPE,
     desc: &D3D12_RESOURCE_DESC,
     initial: D3D12_RESOURCE_STATES,
+    clear: Option<&D3D12_CLEAR_VALUE>,
 ) -> Result<ID3D12Resource> {
     let heap = D3D12_HEAP_PROPERTIES {
         Type: kind,
@@ -48,7 +49,7 @@ fn committed(
             D3D12_HEAP_FLAG_NONE,
             desc,
             initial,
-            None,
+            clear.map(core::ptr::from_ref),
             &mut native,
         )?;
     }
@@ -61,6 +62,7 @@ struct Mip {
     source: Range<u64>,
     footprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
     elements: u32,
+    element_bytes: u32,
     rows: u32,
     bytes: u64,
 }
@@ -85,7 +87,8 @@ pub(crate) struct Texture {
     pub(super) native: ID3D12Resource,
     pub(super) desc: D3D12_RESOURCE_DESC,
     pub(super) address: u64,
-    plane: Plane,
+    plane: Option<Plane>,
+    size: u64,
     mips: Vec<Mip>,
     contents: Mutex<Contents>,
     images: Weak<Images>,
@@ -108,14 +111,29 @@ impl Drop for Texture {
     }
 }
 
-impl Texture {
-    fn new(
-        device: &ID3D12Device,
-        images: &Arc<Images>,
-        address: u64,
-        desc: &D3D12_RESOURCE_DESC,
-    ) -> Result<Arc<Self>> {
-        let plane = Plane::compute(&Desc {
+// XG's linear NV12 surface contains full-height luma followed by half-height
+// interleaved chroma. Both use the same 256-byte-aligned row pitch.
+pub(super) fn nv12_pitch(desc: &D3D12_RESOURCE_DESC) -> Option<u64> {
+    (desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D
+        && desc.Format == windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_NV12
+        && desc.Layout.0 == 0x100 && desc.Flags.0 == 0x300000
+        && desc.Width > 0 && desc.Width <= 16384 && desc.Width.is_multiple_of(2)
+        && desc.Height > 0 && desc.Height <= 16384 && desc.Height.is_multiple_of(2)
+        && desc.DepthOrArraySize == 1 && desc.MipLevels == 1
+        && desc.SampleDesc.Count == 1 && desc.SampleDesc.Quality == 0)
+        .then(|| desc.Width.next_multiple_of(256))
+}
+
+pub(super) fn color_plane(desc: &D3D12_RESOURCE_DESC) -> Result<Plane> {
+    let flags = if (desc.Layout.0 == 0x105 && desc.Flags.0 & !0x300004 == 0)
+        || (desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D && desc.Layout.0 == 0x105
+            && desc.Flags.0 & !0x300005 == 0 && !matches!(desc.Format.0, 70..=84 | 94..=99))
+    {
+        0
+    } else {
+        desc.Flags.0 as u32
+    };
+    let layout = Desc {
             dimension: desc.Dimension.0 as _,
             alignment: desc.Alignment,
             width: desc.Width,
@@ -126,20 +144,53 @@ impl Texture {
             samples: desc.SampleDesc.Count,
             quality: desc.SampleDesc.Quality,
             layout: desc.Layout.0 as _,
-            flags: desc.Flags.0 as _,
-        })
-        .map_err(HRESULT)?;
+            flags,
+        };
+    if matches!(layout.layout, 257 | 258) {
+        return Plane::compute_microtile(&layout).map_err(|status| HRESULT(status).into());
+    }
+    if desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE1D && desc.Layout.0 == 0x100
+        && desc.Height == 1 && matches!(desc.Alignment, 0 | 256 | 4096 | 65536) {
+        let linear = Desc { dimension: 3, alignment: 0, ..layout };
+        return Plane::compute(&linear).map_err(|status| HRESULT(status).into());
+    }
+    if desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D && desc.Layout.0 == 0x105
+        && matches!(desc.Alignment, 0 | 4096) && desc.Width <= 2048 && desc.Height <= 2048 {
+        // The XG volume tile calculator takes a 2D base plane and its physical depth.
+        let volume = Desc { dimension: 3, alignment: 0, ..layout };
+        return Plane::compute_4k_volume(&volume).map_err(|status| HRESULT(status).into());
+    }
+    Plane::compute(&layout).or_else(|_| Plane::compute_64k_color(&layout)).map_err(|status| HRESULT(status).into())
+}
+
+impl Texture {
+    fn new(
+        device: &ID3D12Device,
+        images: &Arc<Images>,
+        address: u64,
+        desc: &D3D12_RESOURCE_DESC,
+        clear: Option<&D3D12_CLEAR_VALUE>,
+    ) -> Result<Arc<Self>> {
+        let pitch = nv12_pitch(desc);
+        let plane = if pitch.is_some() { None } else { Some(color_plane(desc)?) };
+        let luma_bytes = pitch.unwrap_or_default() * u64::from(desc.Height);
+        let volume = desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D;
+        let (size, alignment, count) = plane.as_ref().map_or(
+            (luma_bytes + luma_bytes / 2, 256, 2),
+            |p| (p.size, p.alignment, if volume { p.mip_count() } else { p.mip_count() * p.array_size() }));
         if address == 0
-            || !address.is_multiple_of(plane.alignment)
-            || !crate::exports::placement_fits(address, plane.size)
+            || !address.is_multiple_of(alignment)
+            || !crate::exports::placement_fits(address, size)
         {
             return Err(E_INVALIDARG.into());
         }
         // A simultaneous-access texture implicitly promotes on first use and
         // decays to COMMON after ExecuteCommandLists, including copy-queue uploads.
         let host = D3D12_RESOURCE_DESC {
+            Alignment: 0,
             Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
-            Flags: D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS,
+            Flags: D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS
+                | (desc.Flags & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)),
             ..*desc
         };
         let native = committed(
@@ -147,12 +198,19 @@ impl Texture {
             D3D12_HEAP_TYPE_DEFAULT,
             &host,
             D3D12_RESOURCE_STATE_COMMON,
+            clear,
         )?;
-        let count = plane.mip_count() * plane.array_size();
         let mut mips = Vec::with_capacity(count as usize);
         for index in 0..count {
-            let slice = index / plane.mip_count();
-            let level = index % plane.mip_count();
+            let (slice, level, element_bytes, source) = if let Some(p) = &plane {
+                let slice = index / p.mip_count();
+                let level = index % p.mip_count();
+                (slice, level, p.element_bytes(), if volume { 0..p.size } else { p.mip_range_in_slice(slice, level).ok_or(E_INVALIDARG)? })
+            } else if index == 0 {
+                (0, 0, 1, 0..luma_bytes)
+            } else {
+                (0, 0, 2, luma_bytes..size)
+            };
             let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
             let (mut rows, mut row_bytes, mut bytes) = (0, 0, 0);
             unsafe {
@@ -167,22 +225,22 @@ impl Texture {
                     Some(&mut bytes),
                 );
             }
-            let elements = u32::try_from(row_bytes / u64::from(plane.element_bytes()))
+            let elements = u32::try_from(row_bytes / u64::from(element_bytes))
                 .map_err(|_| E_INVALIDARG)?;
             if rows == 0
                 || elements == 0
-                || !row_bytes.is_multiple_of(u64::from(plane.element_bytes()))
+                || !row_bytes.is_multiple_of(u64::from(element_bytes))
                 || bytes == u64::MAX
-                || plane
-                    .element_offset(level, u64::from(elements - 1), rows - 1)
-                    .is_none()
+                || !volume && plane.as_ref().is_some_and(|p| p.element_offset(level, u64::from(elements - 1), rows - 1).is_none())
+                || pitch.is_some_and(|p| row_bytes > p || p * u64::from(rows) != source.end - source.start)
             {
                 return Err(E_NOTIMPL.into());
             }
             mips.push(Mip {
                 slice,
                 level,
-                source: plane.mip_range_in_slice(slice, level).ok_or(E_INVALIDARG)?,
+                source,
+                element_bytes,
                 footprint,
                 elements,
                 rows,
@@ -198,6 +256,7 @@ impl Texture {
             desc: *desc,
             address,
             plane,
+            size,
             mips,
             contents,
             images: Arc::downgrade(images),
@@ -252,7 +311,7 @@ impl Texture {
 
 #[derive(Default)]
 pub(super) struct Placements {
-    pub(super) views: Arc<Views<Texture>>,
+    pub(super) views: Arc<DescriptorMap<PlacedView>>,
     memory: Arc<PlacementMemory>,
 }
 
@@ -319,27 +378,37 @@ impl PlacementMemory {
 }
 
 impl Placements {
+    fn find_texture(images: &BTreeMap<u64, Vec<Alias>>, address: u64, desc: &D3D12_RESOURCE_DESC) -> Option<Arc<Texture>> {
+        images.get(&address)?.iter().filter(|alias| alias.desc == *desc)
+            .find_map(|alias| alias.texture.upgrade())
+    }
+
     pub(super) fn texture(
         &self,
         device: &ID3D12Device,
         address: u64,
         desc: &D3D12_RESOURCE_DESC,
         initial: D3D12_RESOURCE_STATES,
-        clear: *const D3D12_CLEAR_VALUE,
+        clear: Option<&D3D12_CLEAR_VALUE>,
     ) -> Result<Arc<Texture>> {
-        if !supported_state(initial) || !clear.is_null() {
+        if !supported_state(initial) {
             return Err(E_NOTIMPL.into());
         }
+        if let Some(value) = clear {
+            if !desc.Flags.contains(D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) {
+                return Err(E_INVALIDARG.into());
+            }
+            if value.Format != desc.Format {
+                return Err(E_NOTIMPL.into());
+            }
+        }
         let mut images = lock(&self.memory.images.0);
-        if let Some(texture) = images.get(&address).and_then(|aliases| {
-            aliases
-                .iter()
-                .filter(|alias| alias.desc == *desc)
-                .find_map(|alias| alias.texture.upgrade())
-        }) {
+        // An optimized clear value is a creation hint. Reopening a placed
+        // texture with another hint must preserve its GPU and CPU contents.
+        if let Some(texture) = Self::find_texture(&images, address, desc) {
             return Ok(texture);
         }
-        let texture = Texture::new(device, &self.memory.images, address, desc)?;
+        let texture = Texture::new(device, &self.memory.images, address, desc, clear)?;
         self.memory.device.get_or_init(|| {
             let mut registry = lock(&FLUSH_DEVICES);
             registry.retain(|device| device.strong_count() != 0);
@@ -371,7 +440,7 @@ struct Submissions {
 impl Texture {
     fn range(&self) -> Range<u64> {
         // The entire range was checked during construction.
-        self.address..self.address + self.plane.size
+        self.address..self.address + self.size
     }
 }
 
@@ -397,7 +466,7 @@ pub(crate) unsafe fn submit(
 ) -> Result<()> {
     let device = unsafe { &*device.cast::<Device>() };
     let placements = &device.state.placements;
-    placements.views.gather(heaps, textures);
+    placements.views.gather(heaps, textures, writes);
     unique(writes);
     textures
         .try_reserve(writes.len())

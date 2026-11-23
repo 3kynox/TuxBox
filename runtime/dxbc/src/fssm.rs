@@ -5,7 +5,7 @@
 
 use super::rdna2::{Enc, instructions};
 
-pub(super) struct Program {
+pub struct Program {
     pub isa: Vec<u8>,
     pub isa_offset: usize,
     pub preamble: [u32; 4],
@@ -61,7 +61,7 @@ fn entry_name(image: &[u8], descriptor: &[u8], layout: u64) -> Result<Option<Str
 /// Follow direct control flow to distinguish executable words from lookup
 /// tables following an endpgm. A branch can lead to a block physically after
 /// an early endpgm, including a block that jumps backwards to rejoin the shader.
-pub(super) fn executable_extent(program: &[u8]) -> Result<usize, String> {
+pub fn executable_extent(program: &[u8]) -> Result<usize, String> {
     // Distinguish an instruction start from its extension words when different
     // control-flow paths meet. Each reachable instruction is decoded once.
     let mut visited = vec![0u8; program.len() / 4];
@@ -131,7 +131,29 @@ pub(super) fn executable_extent(program: &[u8]) -> Result<usize, String> {
     Ok(furthest)
 }
 
-pub(super) fn decode(fssm: &[u8]) -> Result<Program, String> {
+/// Native LDS allocation in bytes for the layout-6 compute stage (directory
+/// slot 11). Other stage descriptors have different layouts.
+pub fn compute_lds_bytes(program: &[u8]) -> Option<u32> {
+    if program.get(..8)? != b"FSSM\x01\x01\0\0" {
+        return None;
+    }
+    let image = program.get(16..)?;
+    if u64::from_le_bytes(field(program, 8).ok()?) != image.len() as u64
+        || u64::from_le_bytes(field(image, 0).ok()?) != 6
+    {
+        return None;
+    }
+    for slot in image.get(8..96)?.chunks_exact(8) {
+        if u64::from_le_bytes(slot.try_into().ok()?) != ABSENT {
+            return None;
+        }
+    }
+    let offset = usize::try_from(u64::from_le_bytes(field(image, 96).ok()?)).ok()?;
+    let size = u32::from_le_bytes(field(image, offset.checked_add(0x4c)?).ok()?);
+    (size <= 32768 && size % 4 == 0).then_some(size)
+}
+
+pub fn decode(fssm: &[u8]) -> Result<Program, String> {
     if field::<4>(fssm, 0)? != *b"FSSM" || u32::from_le_bytes(field(fssm, 4)?) != 0x101 {
         return Err("unrecognized FSSM header".into());
     }

@@ -174,12 +174,81 @@ fn parse_rts0_with_limit(body: &[u8], mut remaining: usize) -> Result<RootSig, S
     })
 }
 
+impl RootSig {
+    /// Finite ranges that can address textures from the CBV/SRV/UAV heap.
+    /// Unbounded tables and direct resource heap indexing require the full heap.
+    pub fn placed_texture_tables(&self) -> Option<Vec<(u32, std::ops::Range<u32>)>> {
+        const RESOURCE_HEAP_DIRECTLY_INDEXED: u32 = 0x400;
+        if self.flags & RESOURCE_HEAP_DIRECTLY_INDEXED != 0 {
+            return None;
+        }
+        let mut tables = Vec::new();
+        for (index, param) in self.params.iter().enumerate() {
+            let RootParamKind::Table(ranges) = &param.kind else {
+                continue;
+            };
+            let mut next = 0;
+            for range in ranges {
+                if range.num == u32::MAX {
+                    return None;
+                }
+                let start = if range.offset_in_table == u32::MAX {
+                    next
+                } else {
+                    range.offset_in_table
+                };
+                next = start.checked_add(range.num)?;
+                match range.range_type {
+                    0 | 1 if start < next => tables.push((index as u32, start..next)),
+                    0..=3 => {} // SRV, UAV, CBV, sampler.
+                    _ => return None,
+                }
+            }
+        }
+        Some(tables)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn serialize(words: &[u32]) -> Vec<u8> {
         words.iter().flat_map(|value| value.to_le_bytes()).collect()
+    }
+
+    #[test]
+    fn texture_spans_resolve_append_and_keep_bindless_conservative() {
+        let range = |range_type, num, offset_in_table| RootRange {
+            range_type,
+            num,
+            offset_in_table,
+            base_register: 0,
+            space: 0,
+        };
+        let table = |ranges| RootParam {
+            visibility: 0,
+            kind: RootParamKind::Table(ranges),
+        };
+        let mut root = RootSig {
+            version: 2,
+            flags: 0,
+            params: vec![
+                table(vec![range(3, 1, 0)]),
+                table(vec![range(2, 2, 4), range(0, 3, u32::MAX), range(1, 1, 16)]),
+            ],
+            num_static_samplers: 0,
+            static_samplers: vec![],
+        };
+        assert_eq!(
+            root.placed_texture_tables(),
+            Some(vec![(1, 6..9), (1, 16..17)])
+        );
+        root.flags = 0x400;
+        assert_eq!(root.placed_texture_tables(), None);
+        root.flags = 0;
+        root.params.push(table(vec![range(0, u32::MAX, 0)]));
+        assert_eq!(root.placed_texture_tables(), None);
     }
 
     #[test]

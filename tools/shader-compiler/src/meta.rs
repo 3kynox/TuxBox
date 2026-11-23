@@ -1,5 +1,25 @@
 //! Input registers and binding metadata consumed by the gameplay HLSL emitter.
 
+/// The depth block may run ordinary early tests speculatively. Only an explicit
+/// DEPTH_BEFORE_SHADER request allows those tests to suppress pixel UAV writes.
+pub(crate) fn pixel_depth_before_shader(fssm: &[u8]) -> bool {
+    // Colour-only early-Z, with optional KILL_ENABLE and EXEC_ON_NOOP.
+    pixel_depth_control(fssm).is_some_and(|bits| bits & !0x440 == 0x1010)
+}
+
+fn pixel_depth_control(fssm: &[u8]) -> Option<u32> {
+    if fssm.get(..8)? != b"FSSM\x01\x01\0\0" {
+        return None;
+    }
+    let image = fssm.get(16..)?;
+    if u64::from_le_bytes(*image.first_chunk()?) != 6 {
+        return None;
+    }
+    let offset = u64::from_le_bytes(*image.get(0x30..)?.first_chunk()?);
+    let descriptor = image.get(usize::try_from(offset).ok()?..)?;
+    Some(u32::from_le_bytes(*descriptor.get(0x18c..)?.first_chunk()?))
+}
+
 /// The PS configuration in FSSM 1.1 carries SPI_PS_INPUT_ENA at 0x248.
 /// RDNA2 packs the front-face and ancillary words after the barycentrics,
 /// line stipple and position components, skipping disabled inputs.
@@ -45,7 +65,22 @@ pub(crate) fn position_vgprs(fssm: &[u8], read: u8) -> Option<[Option<usize>; 4]
 
 #[cfg(test)]
 mod pixel_inputs {
-    use super::{pixel_system_vgpr, position_vgprs, PixelSystemInput};
+    use super::{pixel_depth_before_shader, pixel_system_vgpr, position_vgprs, PixelSystemInput};
+
+    #[test]
+    fn only_explicit_color_depth_order_suppresses_fragment_writes() {
+        let mut fssm = [0; 0x400];
+        fssm[..8].copy_from_slice(b"FSSM\x01\x01\0\0");
+        fssm[16..24].copy_from_slice(&6u64.to_le_bytes());
+        fssm[0x40..0x48].copy_from_slice(&0xc0u64.to_le_bytes());
+        for (control, expected) in [(0x10u32, false), (0x240, false),
+                                   (0x1010, true), (0x1410, true), (0x1450, true),
+                                   (0x1610, false), (0x1411, false)] {
+            fssm[0x25c..0x260].copy_from_slice(&control.to_le_bytes());
+            assert_eq!(pixel_depth_before_shader(&fssm), expected);
+        }
+        assert!(!pixel_depth_before_shader(&fssm[..0x25e]));
+    }
 
     #[test]
     fn sparse_fragment_position_follows_enabled_barycentrics() {

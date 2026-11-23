@@ -81,6 +81,22 @@ class Host:
     def run_game(self, executable, arguments, log, *, mangohud=False, profile_pipelines=False):
         env = self.env.copy()
         env.setdefault("TUXBOX_LOG", "stderr" if self.backend == "native" else "1")
+        env.pop("TUXBOX_WINE_TITLE_TEMP", None)
+        if self.backend in ("proton", "wine") and env.get("WINEPREFIX"):
+            prefix = Path(env["WINEPREFIX"])
+            drive = prefix / "dosdevices/t:"
+            # Proton can remove a user-configured T: during startup. Give the GDK
+            # provider its original target so it can reattach it after that point.
+            if drive.is_dir():
+                env["TUXBOX_WINE_TITLE_TEMP"] = str(drive.resolve())
+            elif not os.path.lexists(drive) and not os.path.lexists(drive.with_name("t::")):
+                storage = prefix / "drive_t"
+                try:
+                    storage.mkdir(mode=0o700, exist_ok=True)
+                except OSError as exc:
+                    log.status(f"Could not prepare the title scratch directory {storage}: {exc}")
+                else:
+                    env["TUXBOX_WINE_TITLE_TEMP"] = str(storage)
         if "-nullrhi" not in (arg.lower() for arg in arguments):
             configure_console_cbv(self.backend, env, executable, log.status)
         capture = performance_capture(self.backend, env, executable, log) if mangohud else nullcontext()

@@ -23,6 +23,12 @@ pub(crate) struct DescriptorRange<V> {
     pub(crate) range: Range<usize>,
 }
 
+impl<V: Clone> DescriptorRange<V> {
+    pub(crate) fn copy_to(&self, stride: usize, dst: usize, src: usize, count: u32) {
+        self.views.copy(stride, std::iter::once((dst, count)), std::iter::once((src, count)));
+    }
+}
+
 impl<V> Drop for DescriptorRange<V> {
     fn drop(&mut self) {
         lock(&self.views.0)
@@ -40,15 +46,38 @@ impl<T> Views<T> {
         self.store(handle, value.map(Arc::downgrade));
     }
 
-    pub(crate) fn gather(&self, heaps: &[Range<usize>], textures: &mut Vec<Arc<T>>) {
-        if !heaps.is_empty() {
-            let views = lock(&self.0);
-            for heap in heaps {
-                textures.extend(
-                    views
-                        .range(heap.clone())
-                        .filter_map(|(_, view)| view.upgrade()),
-                );
+    pub(crate) fn preceding(&self, address: usize) -> Option<Arc<T>> {
+        lock(&self.0).range(..=address).next_back()?.1.upgrade()
+    }
+
+    pub(crate) fn remove_if(&self, handle: usize, value: *const T) {
+        let mut entries = lock(&self.0);
+        if entries.get(&handle).is_some_and(|entry| entry.as_ptr() == value) {
+            entries.remove(&handle);
+        }
+    }
+
+}
+
+#[derive(Clone)]
+pub(crate) struct PlacedView {
+    texture: Weak<super::Texture>,
+    writable: bool,
+}
+
+impl DescriptorMap<PlacedView> {
+    pub(crate) fn set(&self, handle: usize, texture: Option<&Arc<super::Texture>>, writable: bool) {
+        self.store(handle, texture.map(|t| PlacedView { texture: Arc::downgrade(t), writable }));
+    }
+
+    pub(crate) fn gather(&self, heaps: &[Range<usize>], reads: &mut Vec<Arc<super::Texture>>, writes: &mut Vec<Arc<super::Texture>>) {
+        if heaps.is_empty() { return; }
+        let views = lock(&self.0);
+        for heap in heaps {
+            for (_, view) in views.range(heap.clone()) {
+                if let Some(texture) = view.texture.upgrade() {
+                    if view.writable { writes.push(texture); } else { reads.push(texture); }
+                }
             }
         }
     }

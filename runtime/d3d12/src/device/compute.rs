@@ -6,6 +6,7 @@ use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL, E_POINTER};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::{GUID, HRESULT, Interface};
 
+pub(crate) use super::compute_table::ComputeTable;
 pub(crate) use super::compute_scene::{RootSource, SceneRoot, SceneSource};
 
 static ROOT: Slots<8> = child_slots::<ID3D12RootSignature, RootSource, 8>();
@@ -20,7 +21,10 @@ pub(crate) struct PipelineData {
     reserved: usize,
     packets: [u8; 32],
     pub(crate) stencil_slot: Option<u32>,
+    pub(crate) draw_trace: Option<std::sync::Arc<crate::diagnostics::RasterDraw>>,
     pub(crate) scene_root: Option<SceneRoot>,
+    pub(crate) reflected: Option<std::sync::Arc<ComputeTable>>,
+    pub(crate) raster_table: Option<std::sync::Arc<ComputeTable>>,
 }
 
 const _: () = assert!(
@@ -174,7 +178,28 @@ pub(super) unsafe extern "system" fn create_pipeline_x(
     // SAFETY: the guest retains its shader bytes until this synchronous call returns.
     let bytes =
         unsafe { slice::from_raw_parts(desc.CS.pShaderBytecode.cast(), desc.CS.BytecodeLength) };
-    let translation = super::shader_cache::prepared(bytes);
+    use super::compute_table::{Program, TableLayout};
+    let layout = match root.map(|r| super::compute_table::reflected(
+        &this.native, &r.state, Program::Compute(bytes), desc.NodeMask,
+    )).transpose() {
+        Ok(layout) => layout,
+        Err(error) => return error.code(),
+    };
+    let (translation, reflected) = match layout {
+        Some(TableLayout::Reflected(table)) => {
+            let Some(code) = super::shader_cache::compute_with_root(bytes, table.layout.payload()) else {
+                super::compute_table::capture_stage_root(bytes, &table.original);
+                return E_NOTIMPL;
+            };
+            (Some(code), Some(table))
+        }
+        Some(TableLayout::Original) => (root.and_then(|r| {
+            super::shader_cache::compute_with_root(bytes, r.state.payload())
+        }), None),
+        _ => (super::shader_cache::prepared(bytes).or_else(|| {
+            super::shader_cache::compute_with_root(bytes, root?.state.payload())
+        }), None),
+    };
     let scene_root = if let Some(translated) = &translation {
         match super::compute_scene::private_root(
             &this.native,
@@ -195,6 +220,7 @@ pub(super) unsafe extern "system" fn create_pipeline_x(
             scene_root
                 .as_ref()
                 .map(|s| &s.native)
+                .or_else(|| reflected.as_ref().map(|t| &t.native))
                 .or(root.map(|p| &p.native))
                 .cloned(),
         ),
@@ -213,7 +239,7 @@ pub(super) unsafe extern "system" fn create_pipeline_x(
             .CreateComputePipelineState::<ID3D12PipelineState>(descriptor)
     };
     let mut native = create(&host);
-    if translation.is_some() && scene_root.is_none() && native.is_err() {
+    if translation.is_some() && reflected.is_none() && scene_root.is_none() && native.is_err() {
         // Structural checks cannot validate DXIL instructions or root bindings.
         // Let the adapter handle the original guest shader if it rejects the cache.
         host.CS = desc.CS;
@@ -221,7 +247,13 @@ pub(super) unsafe extern "system" fn create_pipeline_x(
     }
     unsafe { ManuallyDrop::drop(&mut host.pRootSignature) };
     if let Err(error) = &native {
+        if let Some(root) = root { super::compute_table::capture_stage_root(bytes, &root.state); }
         crate::diagnostics::compute_failure(bytes, error.code().0);
+    } else if let Some(table) = &reflected {
+        static FIRST: std::sync::Once = std::sync::Once::new();
+        crate::diagnostics::log_once(&FIRST, || format!(
+            "created compute pipeline with {} reflected FSSM descriptor slots", table.lengths.iter().map(|&v| u64::from(v)).sum::<u64>()
+        ));
     }
     unsafe {
         wrap_pageable(
@@ -230,6 +262,7 @@ pub(super) unsafe extern "system" fn create_pipeline_x(
             this,
             PipelineData {
                 scene_root,
+                reflected,
                 ..Default::default()
             },
             out,

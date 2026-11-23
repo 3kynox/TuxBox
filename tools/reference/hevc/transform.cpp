@@ -6,6 +6,7 @@ class Transform final : public Classic<IMFTransform> {
   public:
     ComPtr<IMFTransform> decoder;
     ComPtr<ID3D12CommandQueue> queue;
+    Nv12TextureBatch textures;
     HMODULE module{};
     unsigned long frame_count{};
     bool h264{};
@@ -107,6 +108,7 @@ class Transform final : public Classic<IMFTransform> {
         if (msg != MFT_MESSAGE_SET_D3D_MANAGER)
             return decoder->ProcessMessage(msg, arg);
         if (!arg) {
+            textures.reset();
             queue.Reset();
             return S_OK;
         }
@@ -114,6 +116,7 @@ class Transform final : public Classic<IMFTransform> {
         CHECK_MEDIA(reinterpret_cast<IUnknown*>(arg)->QueryInterface(IID_PPV_ARGS(&manager)));
         ComPtr<ID3D12CommandQueue> candidate;
         CHECK_MEDIA(decode_queue(manager.Get(), &candidate));
+        textures.reset();
         queue = std::move(candidate);
         return S_OK;
     }
@@ -145,7 +148,7 @@ class Transform final : public Classic<IMFTransform> {
         CHECK_MEDIA(decoder->GetOutputCurrentType(out->dwStreamID, &type));
         UINT w{}, h{};
         CHECK_MEDIA(MFGetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, &w, &h));
-        CHECK_MEDIA(upload_nv12(queue.Get(), w, h, cpu.Get()));
+        CHECK_MEDIA(upload_nv12(textures, queue.Get(), w, h, cpu.Get()));
         ++frame_count;
         if (frame_count <= 3 || frame_count % 60 == 0) {
             char message[144];

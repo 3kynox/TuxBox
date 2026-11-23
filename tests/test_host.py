@@ -29,6 +29,30 @@ class SelectProton(unittest.TestCase):
             with patch.dict(os.environ, {"STEAM_COMPAT_CLIENT_INSTALL_PATH": str(root)}), patch.object(Path, "home", return_value=root):
                 self.assertEqual(proton_installation(None), install)
 
+    def test_linux_title_drive_uses_prefix_and_preserves_existing_assignment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp)
+            drive = prefix / "dosdevices/t:"
+            drive.parent.mkdir()
+            host = Host.__new__(Host)
+            host.backend, host.command = "proton", ["umu-run"]
+            host.env = {"WINEPREFIX": tmp, "TUXBOX_RUNTIME_SHADERS": "0"}
+            log = Mock()
+
+            def configured_target():
+                host.run_game(prefix / "game.exe", ["-nullrhi"], log)
+                return log.run.call_args.kwargs["env"].get("TUXBOX_WINE_TITLE_TEMP")
+
+            scratch = prefix / "drive_t"
+            self.assertEqual(configured_target(), str(scratch))
+            self.assertEqual(scratch.stat().st_mode & 0o777, 0o700)
+            drive.symlink_to("../custom")
+            self.assertIsNone(configured_target())
+            (prefix / "custom").mkdir()
+            self.assertEqual(configured_target(), str(prefix / "custom"))
+            host.backend = "native"
+            self.assertIsNone(configured_target())
+
 
 class ConsoleConstantBuffers(unittest.TestCase):
     def setUp(self):

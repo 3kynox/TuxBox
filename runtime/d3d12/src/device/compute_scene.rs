@@ -86,6 +86,9 @@ fn inline_layout(guest: &[u8], host: &[u8]) -> Option<(u32, bool)> {
 pub(crate) struct RootSource {
     bytes: Arc<[u8]>,
     payload: Range<usize>,
+    pub(crate) direct_resources: bool,
+    pub(crate) paged_tables: Option<Arc<[Option<u32>]>>,
+    pub(crate) placed_tables: Option<Arc<[(u32, Range<u32>)]>>,
 }
 
 impl RootSource {
@@ -97,7 +100,27 @@ impl RootSource {
                 Some(part.offset..part.offset + part.size)
             })
             .unwrap_or(0..bytes.len());
+        use tuxbox_dxbc::rootsig::RootParamKind;
+        let root = tuxbox_dxbc::rootsig::parse_rts0(&bytes[payload.clone()]).ok();
+        let placed_tables = root.as_ref().and_then(|root| root.placed_texture_tables());
+        let direct_resources = root.as_ref().is_some_and(|root| root.flags & D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED.0 as u32 != 0);
+        let paged_tables = root
+            .map(|root| root.params.iter().map(|param| {
+                let RootParamKind::Table(ranges) = &param.kind else { return None };
+                let mut end = 0;
+                let mut extent = 0;
+                for r in ranges {
+                    if r.num == u32::MAX { return None; }
+                    let start = if r.offset_in_table == u32::MAX { end } else { r.offset_in_table };
+                    end = start.checked_add(r.num)?;
+                    extent = extent.max(end);
+                }
+                Some(extent)
+            }).collect::<Arc<[_]>>());
         Self {
+            direct_resources,
+            paged_tables,
+            placed_tables: placed_tables.map(Arc::from),
             bytes: Arc::from(bytes),
             payload,
         }
@@ -106,6 +129,14 @@ impl RootSource {
     pub(crate) fn matches(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.bytes, &other.bytes)
             || self.bytes[self.payload.clone()] == other.bytes[other.payload.clone()]
+    }
+
+    pub(super) fn payload(&self) -> &[u8] {
+        &self.bytes[self.payload.clone()]
+    }
+
+    pub(super) fn serialized(&self) -> &[u8] {
+        &self.bytes
     }
 }
 

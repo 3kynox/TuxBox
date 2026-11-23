@@ -8,4 +8,7 @@ publish.workspace = true
 crate-type = ["staticlib"]
 
 [dependencies]
-windows-sys = { workspace = true, features = ["Win32_System_Diagnostics_Debug"] }
+windows-sys = { workspace = true, features = [
+    "Win32_Storage_FileSystem", "Win32_System_Diagnostics_Debug", "Win32_System_IO",
+    "Win32_System_LibraryLoader", "Win32_System_WindowsProgramming",
+] }

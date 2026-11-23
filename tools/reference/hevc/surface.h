@@ -5,6 +5,7 @@
 #include <mfd3d12.h>
 #include <mferror.h>
 #include <mfidl.h>
+#include <mutex>
 #include <mftransform.h>
 #include <wrl/implements.h>
 using Microsoft::WRL::ComPtr;
@@ -21,4 +22,14 @@ inline constexpr GUID adapter_clsid{0x73f6991b, 0x5eb1, 0x4eb5, {0x91, 0x2a, 0x2
             return result;                                                                                        \
     } while (false)
 HRESULT decode_queue(IMFDXGIDeviceManager*, ID3D12CommandQueue**);
-HRESULT upload_nv12(ID3D12CommandQueue*, UINT, UINT, IMFSample*);
+class Nv12TextureBatch {
+    std::mutex mutex;
+    ComPtr<ID3D12Device> owner;
+    ComPtr<ID3D12Heap> heap;
+    UINT64 offset{}, remaining{};
+
+  public:
+    void reset();
+    HRESULT create(ID3D12Device*, const D3D12_HEAP_PROPERTIES&, const D3D12_RESOURCE_DESC&, ComPtr<ID3D12Resource>&);
+};
+HRESULT upload_nv12(Nv12TextureBatch&, ID3D12CommandQueue*, UINT, UINT, IMFSample*);

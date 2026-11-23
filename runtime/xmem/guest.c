@@ -634,11 +634,24 @@ static int physical_aliases(void)
     }
     b[34] = 99;
     REQUIRE(a[page + 34] == 99 && a[2 * page + 34] == 99);
-    // The second destination is occupied. The first view must roll back
-    // while all previous aliases and their contents remain usable.
-    void *mixed[] = {a, b};
-    REQUIRE(!XMemMapPhysicalPagesScatter(mixed, 2, tokens));
-    REQUIRE(page_state(a, MEM_RESERVE) && b[34] == 99);
+    // A zero entry unmaps only its own address; another entry can replace
+    // an occupied mapping in the same call. Other aliases retain their data.
+    void *mixed[] = {a + page, b};
+    UINT64 replace[] = {0, tokens[1]};
+    REQUIRE(XMemMapPhysicalPagesScatter(mixed, 2, replace));
+    REQUIRE(page_state(a + page, MEM_RESERVE) && a[2 * page + 34] == 99);
+    b[34] = 77;
+    REQUIRE(a[2 * page + 34] == 99);
+    UINT64 restore[] = {tokens[0], tokens[0]};
+    REQUIRE(XMemMapPhysicalPagesScatter(mixed, 2, restore));
+    REQUIRE(a[page + 34] == 99 && b[34] == 99);
+    // A failing replacement must restore an earlier detached page, including
+    // its former token and bytes, before returning to the title.
+    BYTE *foreign = VirtualAlloc(NULL, page, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    REQUIRE(foreign);
+    void *invalid[] = {b, foreign};
+    REQUIRE(!XMemMapPhysicalPagesScatter(invalid, 2, replace) && b[34] == 99);
+    REQUIRE(VirtualFree(foreign, 0, MEM_RELEASE));
     REQUIRE(XMemMapPhysicalPages(a + page, 2, NULL) == a + page);
     REQUIRE(page_state(a + page, MEM_RESERVE) && b[34] == 99);
     REQUIRE(XMemMapPhysicalPages(b, 1, NULL) == b);

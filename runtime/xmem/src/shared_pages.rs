@@ -29,6 +29,19 @@ pub(super) fn reserve(address: *const c_void, bytes: usize) -> *mut c_void {
     }
 }
 
+// Check that the entire range is an isolated placeholder. Keep a placeholder
+// as its portable AWE backing so individual pages can later be section views.
+pub(super) fn replace_aperture(address: *mut c_void, bytes: usize) -> *mut c_void {
+    let base = unsafe {
+        VirtualAlloc2(GetCurrentProcess(), address, bytes, MEM_RESERVE | MEM_REPLACE_PLACEHOLDER,
+            PAGE_NOACCESS, ptr::null_mut(), 0)
+    };
+    if !base.is_null() && unsafe { VirtualFree(base, bytes, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER) } == 0 {
+        return ptr::null_mut();
+    }
+    base
+}
+
 // One demand-committed pagefile section per batch of XMem physical tokens.
 pub(super) struct Section {
     bytes: u64,
@@ -67,13 +80,17 @@ impl Section {
     }
 
     pub(super) fn map(&self, offset: u64, address: usize) -> Result<(), u32> {
+        self.map_range(offset, address, PAGE)
+    }
+
+    pub(super) fn map_range(&self, offset: u64, address: usize, bytes: usize) -> Result<(), u32> {
         let view = unsafe {
             MapViewOfFile3(
                 self.handle()?,
                 GetCurrentProcess(),
                 address as _,
                 offset,
-                PAGE,
+                bytes,
                 MEM_REPLACE_PLACEHOLDER,
                 PAGE_READWRITE,
                 ptr::null_mut(),
@@ -83,7 +100,7 @@ impl Section {
         if view.Value.is_null() {
             return Err(unsafe { GetLastError() });
         }
-        if unsafe { VirtualAlloc(view.Value, PAGE, MEM_COMMIT, PAGE_READWRITE) }.is_null() {
+        if unsafe { VirtualAlloc(view.Value, bytes, MEM_COMMIT, PAGE_READWRITE) }.is_null() {
             let err = unsafe { GetLastError() };
             unmap(address)?;
             return Err(err);
@@ -139,14 +156,19 @@ pub(super) fn region(address: usize) -> Result<MEMORY_BASIC_INFORMATION, u32> {
 }
 
 pub(super) fn isolate_page(address: usize, info: &MEMORY_BASIC_INFORMATION) -> Result<(), u32> {
+    isolate_range(address, PAGE, info)
+}
+
+pub(super) fn isolate_range(address: usize, bytes: usize, info: &MEMORY_BASIC_INFORMATION) -> Result<(), u32> {
     if info.State != MEM_RESERVE
         || info.AllocationProtect != PAGE_NOACCESS
-        || info.RegionSize < PAGE
+        || address < info.BaseAddress.addr()
+        || address + bytes > info.BaseAddress.addr() + info.RegionSize
     {
         return Err(ERROR_INVALID_ADDRESS);
     }
-    if (info.AllocationBase.addr() != address || info.RegionSize != PAGE)
-        && unsafe { VirtualFree(address as _, PAGE, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER) } == 0
+    if (info.AllocationBase.addr() != address || info.RegionSize != bytes)
+        && unsafe { VirtualFree(address as _, bytes, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER) } == 0
     {
         return Err(unsafe { GetLastError() });
     }

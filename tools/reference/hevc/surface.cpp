@@ -77,7 +77,49 @@ HRESULT decode_queue(IMFDXGIDeviceManager* manager, ID3D12CommandQueue** out) {
     return owner->CreateCommandQueue(&desc, IID_PPV_ARGS(out));
 }
 
-HRESULT upload_nv12(ID3D12CommandQueue* queue, UINT width, UINT height, IMFSample* frame) {
+void Nv12TextureBatch::reset() {
+    const std::lock_guard<std::mutex> lock(mutex);
+    heap.Reset();
+    owner.Reset();
+}
+
+// Small frames share a heap, with a fresh range for every texture. A native
+// texture can outlive its media sample, so it retains its heap directly.
+HRESULT Nv12TextureBatch::create(ID3D12Device* device, const D3D12_HEAP_PROPERTIES& properties,
+                                 const D3D12_RESOURCE_DESC& desc, ComPtr<ID3D12Resource>& texture) {
+    constexpr UINT64 max_batch_bytes = 8 * 1024 * 1024;
+    constexpr UINT64 frames_per_heap = 8;
+    const auto info = device->GetResourceAllocationInfo(0, 1, &desc);
+    if (info.Alignment == D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT && info.SizeInBytes &&
+        info.SizeInBytes <= max_batch_bytes / frames_per_heap && !(info.SizeInBytes % info.Alignment)) {
+        const std::lock_guard<std::mutex> lock(mutex);
+        if (owner.Get() != device || !heap || info.SizeInBytes > remaining) {
+            D3D12_HEAP_DESC hd{};
+            hd.SizeInBytes = frames_per_heap * info.SizeInBytes;
+            hd.Properties = properties;
+            hd.Flags = D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES;
+            heap.Reset();
+            owner.Reset();
+            if (SUCCEEDED(device->CreateHeap(&hd, IID_PPV_ARGS(&heap)))) {
+                owner = device;
+                offset = 0;
+                remaining = hd.SizeInBytes;
+            }
+        }
+        if (heap && SUCCEEDED(device->CreatePlacedResource(heap.Get(), offset, &desc, D3D12_RESOURCE_STATE_COPY_DEST,
+                                                           nullptr, IID_PPV_ARGS(&texture)))) {
+            constexpr GUID frame_heap{0xe92a78a1, 0xf10c, 0x452f, {0xb7, 0xe6, 0x3b, 0x6a, 0xfa, 0xc1, 0x18, 0x1f}};
+            CHECK_MEDIA(texture->SetPrivateDataInterface(frame_heap, heap.Get()));
+            offset += info.SizeInBytes;
+            remaining -= info.SizeInBytes;
+            return S_OK;
+        }
+    }
+    return device->CreateCommittedResource(&properties, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST,
+                                           nullptr, IID_PPV_ARGS(&texture));
+}
+
+HRESULT upload_nv12(Nv12TextureBatch& textures, ID3D12CommandQueue* queue, UINT width, UINT height, IMFSample* frame) {
     if (!width || !height || width % 2 || height % 2)
         return MF_E_INVALIDMEDIATYPE;
     ComPtr<ID3D12Device> device;
@@ -96,8 +138,7 @@ HRESULT upload_nv12(ID3D12CommandQueue* queue, UINT width, UINT height, IMFSampl
     desc.Height = height;
     desc.Format = DXGI_FORMAT_NV12;
     desc.DepthOrArraySize = desc.MipLevels = desc.SampleDesc.Count = 1;
-    CHECK_MEDIA(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST,
-                                                nullptr, IID_PPV_ARGS(&surface->texture)));
+    CHECK_MEDIA(textures.create(device.Get(), hp, desc, surface->texture));
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprints[2]{};
     UINT rows[2]{};
     UINT64 rowBytes[2]{}, capacity{};

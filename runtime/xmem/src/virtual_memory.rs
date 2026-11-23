@@ -14,13 +14,27 @@ use windows_sys::Win32::System::SystemServices::{MEM_TOP_DOWN, MEM_WRITE_WATCH};
 // Guest graphics placements have the same host protection as ordinary heaps.
 static PLACEMENTS: LazyLock<Mutex<HashSet<usize>>> = LazyLock::new(Default::default);
 
-pub(super) fn allocate_placement(bytes: usize) -> *mut c_void {
+pub(super) fn allocate_placement(bytes: usize, alignment: usize) -> *mut c_void {
     let mut bases = PLACEMENTS.lock().unwrap_or_else(|e| e.into_inner());
     if bases.try_reserve(1).is_err() {
         unsafe { SetLastError(windows_sys::Win32::Foundation::ERROR_NOT_ENOUGH_MEMORY) };
         return ptr::null_mut();
     }
-    let base = unsafe { VirtualAlloc(ptr::null(), bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };
+    use windows_sys::Win32::System::Memory::{
+        MEM_ADDRESS_REQUIREMENTS, MEM_EXTENDED_PARAMETER, MEM_EXTENDED_PARAMETER_0,
+        MEM_EXTENDED_PARAMETER_1, MemExtendedParameterAddressRequirements, VirtualAlloc2,
+    };
+    let Some(extent) = bytes.checked_next_multiple_of(alignment) else {
+        unsafe { SetLastError(windows_sys::Win32::Foundation::ERROR_NOT_ENOUGH_MEMORY) };
+        return ptr::null_mut();
+    };
+    let mut requirements = MEM_ADDRESS_REQUIREMENTS { Alignment: alignment, ..Default::default() };
+    let mut param = MEM_EXTENDED_PARAMETER {
+        Anonymous1: MEM_EXTENDED_PARAMETER_0 { _bitfield: MemExtendedParameterAddressRequirements as u64 },
+        Anonymous2: MEM_EXTENDED_PARAMETER_1 { Pointer: (&raw mut requirements).cast() },
+    };
+    let base = unsafe { VirtualAlloc2(windows_sys::Win32::System::Threading::GetCurrentProcess(),
+        ptr::null(), extent, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE, &raw mut param, 1) };
     if !base.is_null() { bases.insert(base.addr()); }
     base
 }
@@ -240,25 +254,46 @@ pub unsafe extern "system" fn virtual_alloc(
     profile: u64,
     protect: u32,
 ) -> *mut c_void {
+    // GTA's startup heap requests a single committed read/write range with
+    // console page and cache attributes. Back its CPU accesses with ordinary
+    // host pages so the original base can also be released with VirtualFree.
+    if matches!((profile, allocation_type, protect),
+        (0x183 | 0x383, 0x2000_3000, 0x22004)
+            | (0x283, 0x2000_3000, 0x2004 | 0x2404)
+            | (0x181, 0x2040_3000, PAGE_READWRITE)
+            | (7, 0x2040_3000, 0x30004))
+    {
+        return unsafe { VirtualAlloc(address, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE) };
+    }
+    if (profile, allocation_type, protect) == (0x283, 0x2040_1000, 0x42404) {
+        return unsafe { VirtualAlloc(address, bytes, MEM_COMMIT, PAGE_READWRITE) };
+    }
     // Frosty's BinnedAllocFromOS passes protection in its fifth argument.
     // Large allocations in that routine also request top-down placement.
     // Frosty's physical-page pool reserves an aperture, then backs individual
     // 64 KiB pages as needed. The D3D12 placement uploader reads these CPU pages.
-    if profile == 0x23 && allocation_type == 0x2040_2000 && matches!(protect, 0x2404 | 0x10404) {
-        // Frosty's two XMem physical-page allocators explicitly request an
-        // AWE section aperture (profile bit 0x20) for later page mappings.
-        return super::shared_pages::reserve(address, bytes);
+    if allocation_type == 0x2040_2000
+        && matches!((profile, protect), (3, 0x801) | (0x21, PAGE_READWRITE) | (0x23, 0x2004 | 0x2404 | 0x10404 | 0x22004))
+    {
+        // CPU physical pages and the GPU-only NOACCESS aperture both
+        // acquire backing later. A Windows placeholder supports both.
+        let Some(extent) = bytes.checked_next_multiple_of(super::shared_pages::PAGE) else {
+            unsafe { SetLastError(windows_sys::Win32::Foundation::ERROR_NOT_ENOUGH_MEMORY) };
+            return ptr::null_mut();
+        };
+        return super::shared_pages::reserve(address, extent);
     }
     if profile == 3 {
         let host = match (allocation_type, protect) {
             (0x2040_2000, 0x2404 | 0x10404) => Some((MEM_RESERVE, PAGE_NOACCESS)),
+            (0x2040_3000, 0x2404 | 0x10404) => Some((MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)),
             (0x2040_1000, 0x2404 | 0x10404) if !address.is_null() => {
                 Some((MEM_COMMIT, PAGE_READWRITE))
             }
             _ => None,
         };
         if let Some((kind, protection)) = host {
-            let watch = kind == MEM_RESERVE && super::options::auto_watch_available();
+            let watch = kind & MEM_RESERVE != 0 && super::options::auto_watch_available();
             return unsafe { VirtualAlloc(address, bytes, if watch { kind | MEM_WRITE_WATCH } else { kind }, protection) };
         }
     }
@@ -270,6 +305,14 @@ pub unsafe extern "system" fn virtual_alloc(
         && (operation == MEM_RESERVE || operation == MEM_COMMIT || operation == MEM_RESERVE | MEM_COMMIT);
     let watched = (operation == MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH && protect == PAGE_READWRITE)
         || (operation == MEM_RESERVE | MEM_WRITE_WATCH && protect == PAGE_NOACCESS);
+    // Reserving the aperture does not map a CPU page. GPU/cache attributes
+    // take effect on the eventual backing, while its host VA stays inaccessible.
+    if profile == 0x27 && allocation_type == 0x2040_6000 && protect & 0x3ff == PAGE_READWRITE {
+        return super::shared_pages::replace_aperture(address, bytes);
+    }
+    if profile == 7 && allocation_type == (MEM_RESERVE | windows_sys::Win32::System::Memory::MEM_RESERVE_PLACEHOLDER) && protect == PAGE_NOACCESS {
+        return super::shared_pages::reserve(address, bytes);
+    }
     if profile != 1 || !(plain || watched) {
         let description = format!(
             "TuxBox: unsupported XMemVirtualAlloc address={address:p} bytes={bytes} type={allocation_type:#x} profile={profile:#x} protect={protect:#x}\0"

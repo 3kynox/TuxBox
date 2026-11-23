@@ -105,3 +105,70 @@ const _: () = {
     assert!(core::mem::offset_of!(Request, source) == 32);
     assert!(core::mem::offset_of!(Request, tag) == 56);
 };
+
+#[interface("62959d11-d45f-4884-a0a3-f7862ea243ae")]
+pub unsafe trait IFactory2: IFactory {
+    fn GetStats(&self, stats: *mut StorageStats);
+    fn CreateQueue1(
+        &self,
+        desc: *const QueueDesc1,
+        iid: *const GUID,
+        out: *mut *mut c_void,
+    ) -> HRESULT;
+}
+
+#[interface("3c02cb0c-c050-4195-99a1-a1ce94ba33c5")]
+pub unsafe trait IQueue2: IQueue {
+    fn EnqueueSetEvent(&self, event: *mut c_void);
+    fn Query1(&self, info: *mut QueueInfo1);
+}
+
+#[repr(C)]
+pub struct QueueDesc1 {
+    pub desc: QueueDesc,
+    pub options: u64,
+}
+
+#[repr(C)]
+pub struct QueueInfo1 {
+    pub desc: QueueDesc1,
+    pub empty: u16,
+    pub until_submit: u16,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct PriorityStats {
+    pub queues: u32,
+    pub peak_queues: u32,
+    pub total_queues: u32,
+    pub statuses: u32,
+    pub fences: u32,
+    pub pending: u32,
+    pub requests: u32,
+    pub source_bytes: u64,
+    pub destination_bytes: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct StorageStats {
+    pub priorities: [PriorityStats; 4],
+    pub disks: u8,
+    pub peak_disks: u8,
+    pub total_disks: u32,
+    pub pending_reads: u32,
+    pub total_reads: u32,
+    pub retries: u32,
+    pub read_errors: u32,
+    pub pending_decodes: u32,
+    pub total_decodes: u32,
+    pub decode_errors: u32,
+    pub stalls: u32,
+    pub files: u32,
+    pub peak_files: u32,
+    pub total_files: u32,
+    pub title_bytes: u32,
+    pub peak_title_bytes: u32,
+    pub errors: u32,
+}

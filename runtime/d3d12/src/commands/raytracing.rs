@@ -12,20 +12,26 @@ pub(super) enum SceneCommand {
         guest: u64,
         native: u64,
         build: blas::NativeBuild,
+        bytes: u64,
     },
     Fixup(super::build_raytracing::Instances),
-    Source { guest: u64, native: u64 },
+    Source {
+        guest: u64,
+        native: u64,
+    },
     Cooked(blas::Input),
     Instances {
         guest: u64,
         native: u64,
         records: Option<ID3D12Resource>,
+        bytes: u64,
     },
     Copy {
         guest: u64,
         native: u64,
         source_guest: u64,
         source_native: u64,
+        capacity: Option<u64>,
     },
     Check(super::compute_bindings::SceneCheck),
 }
@@ -35,21 +41,49 @@ impl SceneCommand {
         let owner = list.parent.as_ref().ok_or(E_INVALIDARG)?;
         unsafe {
             match self {
-                Self::Native { guest, native, build } => {
+                Self::Native {
+                    guest,
+                    native,
+                    build,
+                    bytes,
+                } => {
                     build.prepare(owner);
-                    blas::publish_destination(owner, *guest, *native);
+                    blas::publish_destination(owner, *guest, *native, Some(*bytes));
                 }
                 Self::Fixup(instances) => instances.prepare(owner)?,
                 Self::Cooked(input) => input.prepare(owner)?,
-                Self::Instances { guest, native, records } => {
+                Self::Instances {
+                    guest,
+                    native,
+                    records,
+                    bytes,
+                } => {
                     blas::set_inline_instances(owner, *guest, *native, records.clone());
-                    blas::publish_destination(owner, *guest, *native);
+                    blas::publish_destination(owner, *guest, *native, Some(*bytes));
                 }
                 Self::Source { guest, native } => validate_source(owner, *guest, *native)?,
-                Self::Copy { guest, native, source_guest, source_native } => {
+                Self::Copy {
+                    guest,
+                    native,
+                    source_guest,
+                    source_native,
+                    capacity,
+                } => {
                     validate_source(owner, *source_guest, *source_native)?;
+                    let bytes = blas::submitted_size(owner, *source_guest, *source_native);
+                    if let Some(capacity) = capacity
+                        && bytes.is_none_or(|needed| needed > *capacity)
+                    {
+                        static FIRST: std::sync::Once = std::sync::Once::new();
+                        crate::diagnostics::log_once(&FIRST, || {
+                            format!(
+                                "AS copy {source_guest:#x} ({source_native:#x}) to {guest:#x} ({native:#x}): submitted source bound {bytes:?}, private capacity {capacity}"
+                            )
+                        });
+                        return Err(E_NOTIMPL.into());
+                    }
                     blas::copy_geometry(owner, *guest, *native, *source_native);
-                    blas::publish_destination(owner, *guest, *native);
+                    blas::publish_destination(owner, *guest, *native, bytes);
                 }
                 Self::Check(check) => check.validate(list).inspect_err(|_| {
                     static FIRST: std::sync::Once = std::sync::Once::new();
@@ -82,7 +116,7 @@ pub(super) fn retain(recording: &Recording, resources: &[&ID3D12Resource]) -> Re
         .unwrap_or_else(|e| e.into_inner());
     held.try_reserve(resources.len())
         .map_err(|_| E_OUTOFMEMORY)?;
-    held.extend(resources.iter().map(|r| (*r).clone()));
+    held.extend(resources.iter().map(|r| ID3D12Pageable::from((*r).clone())));
     Ok(())
 }
 
@@ -106,15 +140,43 @@ fn record(
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_CLONE
         | D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT => {
             // SAFETY: owner is the controlling device retained by the list.
-            let source_as = unsafe { blas::resolve(owner, source) }?;
-            let (src, dst) = if let Some(backing) = source_as {
+            let resolve = |address, role| {
+                unsafe { blas::resolve(owner, address) }.inspect_err(|err| {
+                static FIRST: std::sync::Once = std::sync::Once::new();
+                crate::diagnostics::log_once(&FIRST, || format!(
+                    "AS copy {source:#x} to {destination:#x}: {role} registration at {address:#x}: {:?}", err.code()
+                ));
+            })
+            };
+            let source_as = resolve(source, "source")?;
+            let destination_as = resolve(destination, "destination")?;
+            if source == destination {
+                return Err(E_INVALIDARG.into());
+            }
+            let (src, dst, capacity) = if let Some(backing) = source_as {
                 let (dst, va) = unsafe { blas::copy_dest(owner, destination, &backing) }?;
-                retain(state, &[&backing.resource, &dst])?;
-                (unsafe { backing.resource.GetGPUVirtualAddress() }, va)
-            } else if unsafe { blas::resolve(owner, destination) }?.is_some() {
-                return Err(E_NOTIMPL.into()); // unknown native source size into a relocated destination
+                retain(state, &[&backing, &dst])?;
+                (
+                    unsafe { backing.GetGPUVirtualAddress() },
+                    va,
+                    Some(unsafe { dst.GetDesc() }.Width),
+                )
+            } else if let Some(backing) = destination_as {
+                let direct = unsafe { blas::direct_source(owner, source) }.map_err(|err| {
+                    static FIRST: std::sync::Once = std::sync::Once::new();
+                    crate::diagnostics::log_once(&FIRST, || format!(
+                        "AS copy {source:#x} to relocated {destination:#x}: no unique registered native source, {:?}", err.code()
+                    ));
+                    if err.code() == E_INVALIDARG { windows::core::Error::from(E_NOTIMPL) } else { err }
+                })?;
+                retain(state, &[&direct, &backing])?;
+                (
+                    source,
+                    unsafe { backing.GetGPUVirtualAddress() },
+                    Some(unsafe { backing.GetDesc() }.Width),
+                )
             } else {
-                (source, destination)
+                (source, destination, None)
             };
             state
                 .scene_commands
@@ -129,6 +191,7 @@ fn record(
                 native: dst,
                 source_guest: source,
                 source_native: src,
+                capacity,
             });
         }
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_DESERIALIZE => {
@@ -233,17 +296,24 @@ pub(super) unsafe extern "system" fn postbuild(
             return Err(E_INVALIDARG.into());
         }
         let mut patched = Vec::new();
-        patched.try_reserve_exact(sources.len()).map_err(|_| E_OUTOFMEMORY)?;
-        state.scene_commands.try_reserve(sources.len()).map_err(|_| E_OUTOFMEMORY)?;
+        patched
+            .try_reserve_exact(sources.len())
+            .map_err(|_| E_OUTOFMEMORY)?;
+        state
+            .scene_commands
+            .try_reserve(sources.len())
+            .map_err(|_| E_OUTOFMEMORY)?;
         for &guest in sources {
             let native = if let Some(target) = unsafe { blas::resolve(owner, guest) }? {
-                retain(&state, &[&target.resource])?;
-                unsafe { target.resource.GetGPUVirtualAddress() }
+                retain(&state, &[&target])?;
+                unsafe { target.GetGPUVirtualAddress() }
             } else {
                 guest
             };
             patched.push(native);
-            state.scene_commands.push(SceneCommand::Source { guest, native });
+            state
+                .scene_commands
+                .push(SceneCommand::Source { guest, native });
         }
         unsafe { host.EmitRaytracingAccelerationStructurePostbuildInfo(desc, &patched) };
         Ok(())

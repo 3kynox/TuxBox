@@ -1,9 +1,20 @@
 //! DirectX shader containers, signatures, and raster-stage linkage.
 
 mod container;
+#[cfg(feature = "native-bindings")]
+pub mod rdna2;
+#[cfg(feature = "native-bindings")]
+pub mod fssm;
 mod fspx;
+#[cfg(feature = "native-bindings")]
+pub mod xdat;
+#[cfg(feature = "native-bindings")]
+pub mod compute_table;
+#[cfg(feature = "native-bindings")]
+pub mod inline_sampler;
 mod raster;
 pub mod ray;
+pub mod rootsig;
 mod signature;
 
 pub use container::{Chunk, Dxbc};

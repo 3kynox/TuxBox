@@ -448,7 +448,9 @@ def main():
                 passed = False
             elif args.reuse_blas and mode == "xbox" and observation.get("blas_reuse_guest_bytes") != "192,704,192,704":
                 passed = False
-            elif args.promote_blas and mode == "xbox" and observation.get("promotion_first_primitive") != "1,0,1,0":
+            elif args.promote_blas and mode == "xbox" and (
+                    observation.get("promotion_first_primitive") != "1,0,1,0" or
+                    observation.get("direct_to_relocated_compact_rays") != "1,0,miss;0,1,miss"):
                 passed = False
             elif args.single_build and mode == "xbox" and observation.get("inline_postbuild_sizes_matched") != "4":
                 passed = False

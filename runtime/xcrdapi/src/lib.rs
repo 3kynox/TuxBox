@@ -22,7 +22,7 @@ use windows_core::{GUID, HRESULT, IUnknown, Interface, implement};
 
 const E_PENDING: HRESULT = HRESULT(0x8000000a_u32 as i32);
 
-#[implement(IFactory)]
+#[implement(IFactory2)]
 struct Factory;
 #[implement(IFile)]
 struct StorageFile {
@@ -67,8 +67,8 @@ struct Status {
 }
 
 // The singleton carries no mutable state. Its COM reference count is atomic.
-unsafe impl Send for IFactory {}
-unsafe impl Sync for IFactory {}
+unsafe impl Send for IFactory2 {}
+unsafe impl Sync for IFactory2 {}
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -95,14 +95,11 @@ pub unsafe extern "system" fn DStorageGetFactory(
     iid: *const GUID,
     out: *mut *mut c_void,
 ) -> HRESULT {
-    static FACTORY: OnceLock<IFactory> = OnceLock::new();
-    if let Err(hr) = unsafe { output::<IFactory>(iid, out) } {
-        return hr;
+    static FACTORY: OnceLock<IFactory2> = OnceLock::new();
+    if out.is_null() || iid.is_null() {
+        return E_POINTER;
     }
-    unsafe {
-        out.write(FACTORY.get_or_init(|| Factory.into()).clone().into_raw());
-    }
-    S_OK
+    unsafe { FACTORY.get_or_init(|| Factory.into()).query(iid, out) }
 }
 
 impl IFactory_Impl for Factory_Impl {
@@ -118,11 +115,8 @@ impl IFactory_Impl for Factory_Impl {
         let Some(desc) = (unsafe { desc.as_ref() }) else {
             return E_POINTER;
         };
-        match unsafe { queue::create(desc) } {
-            Ok(queue) => {
-                unsafe { out.write(queue.into_raw()) };
-                S_OK
-            }
+        match unsafe { queue::create(desc, false) } {
+            Ok(queue) => unsafe { queue.query(iid, out) },
             Err(hr) => hr,
         }
     }
@@ -147,6 +141,12 @@ impl IFactory_Impl for Factory_Impl {
             .open(path)
         {
             Ok(file) => {
+                {
+                    let mut s = storage_stats();
+                    s.files += 1;
+                    s.peak_files = s.peak_files.max(s.files);
+                    s.total_files = s.total_files.saturating_add(1);
+                }
                 let object: IFile = StorageFile {
                     backing: Arc::new(FileBacking {
                         state: Mutex::new(FileState {
@@ -192,8 +192,20 @@ impl IFactory_Impl for Factory_Impl {
         E_NOTIMPL
     }
     unsafe fn SetDebugFlags(&self, _: u32) {}
-    unsafe fn SetStagingBufferSize(&self, _: u32) -> HRESULT {
-        E_NOTIMPL
+    unsafe fn SetStagingBufferSize(&self, size: u32) -> HRESULT {
+        let mut scratch = lock(&STAGING);
+        let mut stats = storage_stats();
+        if stats.files != 0 || stats.priorities.iter().any(|p| p.queues != 0) {
+            return E_INVALIDARG;
+        }
+        let mut bytes = Vec::new();
+        if bytes.try_reserve_exact(size as usize).is_err() {
+            return E_OUTOFMEMORY;
+        }
+        *scratch = Some((size as usize, bytes));
+        stats.title_bytes = size;
+        stats.peak_title_bytes = stats.peak_title_bytes.max(size);
+        S_OK
     }
 }
 
@@ -226,5 +238,52 @@ impl IStatus_Impl for Status_Impl {
         self.values
             .get(index as usize)
             .map_or(E_INVALIDARG, |v| HRESULT(v.load(Ordering::Acquire)))
+    }
+}
+
+static STAGING: Mutex<Option<(usize, Vec<u8>)>> = Mutex::new(None);
+fn storage_stats() -> std::sync::MutexGuard<'static, StorageStats> {
+    static STATS: std::sync::LazyLock<Mutex<StorageStats>> =
+        std::sync::LazyLock::new(Default::default);
+    lock(&STATS)
+}
+impl Drop for FileBacking {
+    fn drop(&mut self) {
+        storage_stats().files -= 1;
+    }
+}
+impl IFactory2_Impl for Factory_Impl {
+    unsafe fn GetStats(&self, stats: *mut StorageStats) {
+        if !stats.is_null() {
+            unsafe {
+                stats.write(*storage_stats());
+            }
+        }
+    }
+    unsafe fn CreateQueue1(
+        &self,
+        desc: *const QueueDesc1,
+        iid: *const GUID,
+        out: *mut *mut c_void,
+    ) -> HRESULT {
+        if out.is_null() {
+            return E_POINTER;
+        }
+        unsafe {
+            out.write(core::ptr::null_mut());
+        }
+        let (Some(id), Some(desc)) = (unsafe { (iid.as_ref(), desc.as_ref()) }) else {
+            return E_POINTER;
+        };
+        if *id != IQueue2::IID && *id != IQueue::IID && *id != IUnknown::IID {
+            return E_NOINTERFACE;
+        }
+        if desc.options > 1 {
+            return E_INVALIDARG;
+        }
+        match unsafe { queue::create(&desc.desc, desc.options == 1) } {
+            Ok(queue) => unsafe { queue.query(iid, out) },
+            Err(e) => e,
+        }
     }
 }

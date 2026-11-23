@@ -8,7 +8,7 @@ use windows::core::{HRESULT, Result};
 pub(super) fn primary(desc: &D3D12_RESOURCE_DESC) -> Option<D3D12_RESOURCE_DESC> {
     (desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D
         && desc.Format == DXGI_FORMAT_R32G8X24_TYPELESS
-        && desc.Flags.0 == 0x0100_0006
+        && matches!(desc.Flags.0 as u32, 0x0100_0006 | 0x8030_0006)
         && desc.MipLevels == 1
         && desc.DepthOrArraySize == 1
         && desc.SampleDesc.Count == 1
@@ -61,7 +61,7 @@ fn footprint(
 }
 
 impl Pair {
-    fn new(
+    pub(super) fn new(
         device: &ID3D12Device,
         heap: &D3D12_HEAP_PROPERTIES,
         guest: &D3D12_RESOURCE_DESC,

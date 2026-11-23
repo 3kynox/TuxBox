@@ -110,6 +110,64 @@ static void check_blas_promotion(ID3D12Device* device, ID3D12CommandQueue* queue
         old_scene.expect(1);
         new_scene.expect(0);
     }
+    // Reuse a private destination for two different in-pool sources. Put both
+    // sources at nonzero offsets so accidentally copying the pool base is observable.
+    const UINT64 source_offset = 256;
+    auto source = buffer(device, direct_bytes + source_offset, D3D12_HEAP_TYPE_DEFAULT,
+                         D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, true);
+    const UINT64 source_va = source->GetGPUVirtualAddress() + source_offset;
+    CookedWrite cooked_source(device, allocator, source_va, padded);
+    submit_closed(device, queue, cooked_source.list.Get());
+
+    auto copy = [&](UINT64 src) {
+        auto list = guest_list(device, allocator);
+        using Copy = void(WINAPI*)(IUnknown*, UINT64, UINT64, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE);
+        method<Copy>(list.Get(), 119)(list.Get(), address, src, D3D12_RAYTRACING_ACCELERATION_STRUCTURE_COPY_MODE_COMPACT);
+        D3D12_RESOURCE_BARRIER ready{};
+        ready.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        list->ResourceBarrier(1, &ready);
+        check(list->Close(), "close direct to relocated COMPACT");
+        submit_closed(device, queue, list.Get());
+    };
+    copy(source_va);
+    submit_closed(device, queue, first.list.Get());
+    first.expect(1);
+
+    const float vertices[][3] = {{0,0,0},{1,0,0},{0,1,0},{1,1,0},{0,1,0},{1,0,0}};
+    auto mesh = upload(device, vertices, sizeof(vertices));
+    D3D12_RAYTRACING_GEOMETRY_DESC triangles{};
+    triangles.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+    triangles.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+    triangles.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
+    triangles.Triangles.VertexCount = ARRAYSIZE(vertices);
+    triangles.Triangles.VertexBuffer = {mesh->GetGPUVirtualAddress(), sizeof(vertices[0])};
+    Entry native{};
+    native.build.Inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+    native.build.Inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_COMPACTION;
+    native.build.Inputs.NumDescs = 1;
+    native.build.Inputs.pGeometryDescs = &triangles;
+    Sizes capacity{};
+    using Prebuild = void(WINAPI*)(IUnknown*, const Inputs*, Sizes*);
+    method<Prebuild>(device, 102)(device, &native.build.Inputs, &capacity);
+    if (!capacity.ResultDataMaxSizeInBytes) throw std::runtime_error("empty native sizing");
+    auto built = buffer(device, capacity.ResultDataMaxSizeInBytes + source_offset, D3D12_HEAP_TYPE_DEFAULT,
+                        D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, true);
+    auto scratch = buffer(device, capacity.ScratchDataSizeInBytes, D3D12_HEAP_TYPE_DEFAULT,
+                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS, true);
+    native.build.DestAccelerationStructureData = built->GetGPUVirtualAddress() + source_offset;
+    native.build.ScratchAccelerationStructureData = scratch->GetGPUVirtualAddress();
+    auto build = guest_list(device, allocator);
+    guest_batch(build.Get(), 1, &native);
+    D3D12_RESOURCE_BARRIER ready{};
+    ready.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    build->ResourceBarrier(1, &ready);
+    submit(device, queue, build.Get());
+    copy(native.build.DestAccelerationStructureData);
+    submit_closed(device, queue, first.list.Get());
+    first.expect(0);
+    submit_closed(device, queue, relocated.list.Get());
+    std::fprintf(receipt, "direct_to_relocated_compact_rays=1,0,miss;0,1,miss\n");
+
     const auto direct_compacted = direct.compacted.read();
     const auto relocated_compacted = relocated.compacted.read();
     if (!direct_compacted || direct_compacted > direct_bytes || relocated_compacted <= 704)

@@ -240,5 +240,456 @@
       }
     ],
     "method": "Replayed the captured menu draw. Correcting the work-item stride in the two compute shaders changed the visible-instance ID and produced finite clip positions. With those strides held fixed, replayed the same four vertices twice, once with zero vertex and instance IDs and once with the original inputs. Read TEXCOORD0.xy from the output of the vertex shader. The draw uses one instance, so only the vertex ID varies."
+  },
+  "material_instance": {
+    "asset": "Frosty/Content/Effect/UI/MatrixCodeUI/Materials/MI_MatrixCode_UI.uasset",
+    "asset_sha256": "695039c200a01872dc07f01828bdbe4f4187772df65e5d5f2d9fb36a90596222",
+    "chunk_index": 2137,
+    "chunk_id": "925fb1dd1cd18ccc00000001",
+    "chunk_bytes": 6201,
+    "vector_parameters": [
+      {
+        "name": "Glow Color",
+        "value_offset": 5685,
+        "linear_rgba": [
+          5.2,
+          26.0,
+          15.600025,
+          1.0
+        ]
+      },
+      {
+        "name": "Layer 3 Glow Color",
+        "value_offset": 5734,
+        "linear_rgba": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      {
+        "name": "Layer 3 Leading Char Color",
+        "value_offset": 5783,
+        "linear_rgba": [
+          0.0,
+          0.0,
+          0.0,
+          0.1
+        ]
+      },
+      {
+        "name": "Layer 4 Glow Color",
+        "value_offset": 5832,
+        "linear_rgba": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      {
+        "name": "Layer 4 Leading Char Color",
+        "value_offset": 5881,
+        "linear_rgba": [
+          0.0,
+          0.0,
+          0.0,
+          0.1
+        ]
+      },
+      {
+        "name": "Leading Char Color Layer 1",
+        "value_offset": 5930,
+        "linear_rgba": [
+          9.999999,
+          13.3333,
+          50.0,
+          0.1
+        ]
+      },
+      {
+        "name": "Leading Char Color Layer 2",
+        "value_offset": 5979,
+        "linear_rgba": [
+          0.0,
+          0.0,
+          0.0,
+          0.1
+        ]
+      },
+      {
+        "name": "Main Char Color",
+        "value_offset": 6028,
+        "linear_rgba": [
+          0.136719,
+          0.861836,
+          0.9,
+          1.0
+        ]
+      },
+      {
+        "name": "TrailFalloffs",
+        "value_offset": 6077,
+        "linear_rgba": [
+          8.199997,
+          60.0,
+          18.750238,
+          0.0
+        ]
+      }
+    ],
+    "method": "Decoded the nine global vector parameter overrides at offset 5664 in the material instance. Each 49-byte record contains a package name reference, parameter association and index, four little-endian floats and an expression GUID. The values are inputs to the shader before glow, blending and tone mapping."
+  },
+  "wake_up_transition_color": {
+    "screenshot_sha256": "b06817080c8b91ec48aee7d503ae95816a1df8f564b0425927c4b5ba91c5e754",
+    "screenshot_time_utc": "2026-11-23T10:05:00.496566545Z",
+    "wake_up_event_utc": "2026-11-23T10:04:56.088Z",
+    "source_movie": "Content/Movies/WakeUp/HEVC/WU_VID_0010_HEVC.mp4",
+    "movie_sha256": "c511dd82465e2875193b38d4d4d3c5dc4bcbae6fd680cc33230bde4a67bb2ebd",
+    "source_color_space": "BT.709 limited range, HEVC",
+    "method": "Cropped the 960x540 desktop capture to [0,69,960,461] and area-resampled to 240x100. Decoded the packaged opening movie with FFmpeg scale=240:100:flags=area, rgb24. Compared rows 3\u201399 and columns 50\u2013239 of each of its 445 frames using per-channel Pearson correlation. Ranked frames by mean RGB correlation. Medians use pixels of the matched source frame where at least one channel is >=50 and the RGB range is >=30 in this same region.",
+    "matched_source_frame_zero_based": 62,
+    "comparison_frames": 445,
+    "correlations_rgb": [
+      0.980889,
+      0.996824,
+      0.994168
+    ],
+    "runner_up_frame_zero_based": 61,
+    "runner_up_mean_correlation": 0.753334,
+    "chromatic_source_pixels": 512,
+    "source_median_rgb": [
+      24.0,
+      88.0,
+      73.0
+    ],
+    "capture_median_rgb": [
+      20.0,
+      88.0,
+      75.0
+    ]
+  },
+  "packaged_menu_background": {
+    "image": "packaged-settings-menu.webp",
+    "image_sha256": "933420ba4eab6fff1320533f117e4c8378d76780583a163c0e200d480a76e7c7",
+    "tool": "tools/measure_frosty_menu.py",
+    "method": "Area-resample the menu capture to a width of 1280 pixels and measure the four background regions defined by the tool. A bright chromatic pixel has a highest channel of at least 50 and a difference of at least 30 between its highest and lowest channel. Green and blue counts require a strict channel maximum.",
+    "sampled_pixels": 220590,
+    "chromatic_pixels": 210873,
+    "green_dominant_pixels": 210873,
+    "blue_dominant_pixels": 0,
+    "chromatic_mean_rgb": [
+      13.24,
+      127.95,
+      24.42
+    ]
+  },
+  "menu_background_before_lds_fix": {
+    "image": "menu-blue-code.jpg",
+    "image_sha256": "45de8dd15cd688be7ede8967da8cc5166a670be48b446b70e31470bf4a029491",
+    "scene": "Desktop menu with Start Chase and Settings visible, packaged graphics settings, NVIDIA GeForce RTX 4070 Ti SUPER.",
+    "observed_utc": "2026-11-23T10:29:52.903054+00:00",
+    "comparison_method": "Same bright chromatic pixel thresholds and background regions as packaged_menu_background above.",
+    "sampled_pixels": 220590,
+    "chromatic_pixels": 48283,
+    "green_dominant_pixels": 19,
+    "blue_dominant_pixels": 48261,
+    "chromatic_mean_rgb": [
+      14.98,
+      20.27,
+      132.1
+    ],
+    "runtime_comparison": {
+      "method": "Match vkd3d DXIL dumps by SHA-256 against prepared DXIL, then match the neighboring SPIR-V to VulkanProfiler pipeline events by its checksum and entry point. Both runs used packaged graphics settings. The comparison run changed two compute shaders in a private cache.",
+      "modules": [
+        {
+          "archive_entry": "material/3530",
+          "spirv_sha256": "46a5ded7bcd7bae1d9dcaac5f1b7a0f4ebaedf8e3000e6feda26e818e6974041",
+          "profiler_id": "73CC97A6"
+        },
+        {
+          "archive_entry": "material/1461",
+          "spirv_sha256": "7b313894f04b667bf6b9ddf94648e834b31126f0e4aa8e6bf2f3783cf5a2085a",
+          "profiler_id": "FAA7DC88"
+        },
+        {
+          "archive_entry": "global/3850",
+          "spirv_sha256": "42eb40e39613a1fb79b7cc7bc20eee8cf2e4f368c73ca10e7fc4d3b8539dc18d",
+          "profiler_id": "069BAAFB"
+        }
+      ],
+      "result": "Identical material, postfilter and grading shader modules ran in both sessions. The material and postfilter pipelines ran in each of 329 menu frames in the blue run and 344 in the second run, whose sampled background was black. The material shader also matches the previously measured HDR readback in pixel-exec-groups.json.",
+      "black_background": {
+        "image": "menu-black-background.jpg",
+        "image_sha256": "68aca3a4cb938fefca9efb426e38862d22a2646281ad56e185a1160df7af2556",
+        "observed_utc": "2026-11-23T10:36:35.978825+00:00",
+        "sampled_pixels": 220590,
+        "chromatic_pixels": 0,
+        "green_dominant_pixels": 0,
+        "blue_dominant_pixels": 0
+      }
+    },
+    "per_pass_gpu_samples": {
+      "method": "Read the original SPIR-V fragment output immediately before its return in vkd3d-proton\u2019s shader debug ring, sampling every 128 pixels in x and y at offset (31,31). Triangular control at (31,31) returned the expected RGBA (0.125000,0.750000,0.246094,1.000000). The retail shaders and render settings were otherwise unchanged.",
+      "scene": "Main menu, visible desktop, packaged graphics settings. The captures report pre-blend output. Different pass sizes give different sample counts.",
+      "log_sha256": "561c49efd476e31cbdfd5401c3f3585326db2bb196f2afc761833c045084093a",
+      "vkd3d_clock_seconds": [
+        87400.0,
+        87442.304
+      ],
+      "selection": "Finite samples with the largest RGB channel >0.002 and channel range >7% of that maximum are counted as chromatic.",
+      "outputs": [
+        {
+          "program": "material/3530",
+          "chromatic_samples": 25967,
+          "dominant_rgb_counts": [
+            0,
+            13768,
+            12199
+          ],
+          "mean_chromatic_rgb": [
+            0.085,
+            0.226,
+            0.451
+          ]
+        },
+        {
+          "program": "material/1461",
+          "chromatic_samples": 25642,
+          "dominant_rgb_counts": [
+            0,
+            22161,
+            3481
+          ],
+          "mean_chromatic_rgb": [
+            0.12,
+            0.343,
+            0.172
+          ]
+        },
+        {
+          "program": "global/4073",
+          "vkd3d_spirv_sha256": "b7560b5a43d356e3e5151b66672226e8eac966cb2e63501fcf47fe3828ee2605",
+          "chromatic_samples": 201450,
+          "dominant_rgb_counts": [
+            0,
+            0,
+            201450
+          ],
+          "mean_chromatic_rgb": [
+            0.002,
+            0.002,
+            0.285
+          ]
+        }
+      ],
+      "observation": "The material filter produced predominantly green light. Every sampled chromatic tonemap output was blue. The menu video and controls were composed afterward."
+    },
+    "tonemap_inputs": {
+      "program": "global/4073",
+      "log_sha256": "739649e79fd58e818b598ecda3fbb670c09b9e7bf2aa3dbe3360ac46b708a536",
+      "method": "Read the scene, bloom, grain normalization, convolution bloom constants and grading lookup coordinates from the same SPIR-V fragment invocations in the final three seconds of a blue main-menu session.",
+      "sample_count": 1904,
+      "dominant_rgb_counts": {
+        "scene_first_tap": [
+          0,
+          730,
+          173
+        ],
+        "bloom": [
+          0,
+          1904,
+          0
+        ],
+        "output": [
+          0,
+          0,
+          1904
+        ]
+      },
+      "scene_scale_rgb": [
+        0,
+        0,
+        0
+      ],
+      "bloom_scale_rgb": [
+        0,
+        0,
+        1
+      ],
+      "red_green_grading_coordinates": [
+        0.015625,
+        0.015625
+      ],
+      "blue_grading_coordinate_median": 0.362524,
+      "film_grain_scale_rgb": [
+        5.546179,
+        5.547984,
+        5.514707
+      ],
+      "observation": "The input scene and bloom retain green. The two RGB multipliers supplied to the tonemapper discard red and green before grading. Film grain normalization matched the writer, global/2552."
+    },
+    "lds_reduction_controls": {
+      "method": "Dispatched one 64-thread group for each translated retail compute program through D3D12 on stock Proton. Texel or element i contains (i+1) times (1,2,3,4), starting at i=0. Read back the RGBA32F result.",
+      "programs": {
+        "global/1301": "sum of 8 by 8 texels",
+        "global/2427": "maximum or sum of 64 structured buffer elements"
+      },
+      "expected_sum": [
+        2080,
+        4160,
+        6240,
+        8320
+      ],
+      "expected_maximum": [
+        64,
+        128,
+        192,
+        256
+      ],
+      "before": {
+        "nvidia_10de_2705": {
+          "1301_sum": [
+            528,
+            1056,
+            6240,
+            8320
+          ],
+          "2427_maximum": [
+            64,
+            64,
+            192,
+            256
+          ],
+          "2427_sum": [
+            2080,
+            1056,
+            6240,
+            8320
+          ]
+        },
+        "amd_1002_13c0": "All three readbacks matched."
+      },
+      "after": {
+        "nvidia_10de_2705": "All three readbacks matched.",
+        "amd_1002_13c0": "All three readbacks matched."
+      },
+      "change": "Translate convergent LGKM drains between different LDS access phases into a host workgroup barrier, including waits following reconverged forward branches. Both programs gained eleven workgroup barriers."
+    },
+    "convolution_kernel": {
+      "asset": "/Game/Effect/UI/MatrixCodeUI/Textures/T_BloomKernel_MatrixCode_Upward",
+      "container_chunk": 762,
+      "cooked_asset_sha256": "224e50ad95bc639ca68027f609e7a50c115d707d25b38d5f24a9679a35ee8243",
+      "width": 2048,
+      "height": 2048,
+      "format": "PF_BC6H / DXGI_FORMAT_BC6H_UF16",
+      "inline_mip_file_offset": 972,
+      "inline_mip_bytes": 4194304,
+      "method": "Decode all 262,144 BC6H blocks as unsigned HDR RGB with OpenImageIO and independently with the Wine BC6H decoder. Summing the entire texture is invariant to tile order.",
+      "maximum_rgb": [
+        65504,
+        65504,
+        65504
+      ],
+      "sum_rgb": [
+        68075.34,
+        70427.01,
+        70479.79
+      ]
+    }
+  },
+  "corrected_menu_background": {
+    "image": "menu-green-code.jpg",
+    "image_sha256": "145372ff72111847b84af93ed8dbe109303a6656e2a6325e75bb7ba2d9f6d279",
+    "scene": "Animated Start Chase menu, 1920x1080 XComposite capture of Frosty on stock Proton with MangoHud and packaged graphics settings, NVIDIA GeForce RTX 4070 Ti SUPER.",
+    "date_utc": "2026-11-23",
+    "method": "tools/measure_frosty_menu.py uses the same four background regions and chromatic threshold as the blue capture. JPEG is 4:4:4, quality 96.",
+    "sampled_pixels": 220590,
+    "chromatic_pixels": 22039,
+    "green_dominant_pixels": 20554,
+    "blue_dominant_pixels": 1303,
+    "chromatic_mean_rgb": [
+      13.02,
+      99.02,
+      54.24
+    ],
+    "bright_boxes": 0,
+    "sampled_animation_frames": [
+      {
+        "capture": "menu.jpg",
+        "green": 26335,
+        "blue": 716,
+        "bright_boxes": 0
+      },
+      {
+        "capture": "menu-native.png",
+        "green": 20580,
+        "blue": 1311,
+        "bright_boxes": 0
+      },
+      {
+        "capture": "frame-035.jpg",
+        "green": 27088,
+        "blue": 940,
+        "bright_boxes": 0
+      },
+      {
+        "capture": "frame-036.jpg",
+        "green": 20594,
+        "blue": 407,
+        "bright_boxes": 0
+      },
+      {
+        "capture": "frame-037.jpg",
+        "green": 20864,
+        "blue": 779,
+        "bright_boxes": 0
+      },
+      {
+        "capture": "frame-038.jpg",
+        "green": 21497,
+        "blue": 495,
+        "bright_boxes": 0
+      },
+      {
+        "capture": "frame-039.jpg",
+        "green": 26454,
+        "blue": 1120,
+        "bright_boxes": 1
+      }
+    ],
+    "runtime_log_sha256": "e1ff889b61654e44f29e6d455a0c813d14831509afa5948415e07ee5db524b5b",
+    "shader_readback": {
+      "method": "Read output of global/2223, corresponding inputs and outputs of global/1868, and the final three seconds of matching tonemap inputs and output from global/4073.",
+      "kernel_pixels": 4194304,
+      "kernel_center_energy_rgb": [
+        65501.546875,
+        65501.546875,
+        65501.546875
+      ],
+      "kernel_scatter_energy_rgb": [
+        2573.793457,
+        4925.46582,
+        4735.776855
+      ],
+      "scene_scale_rgb": [
+        0.930063,
+        0.930063,
+        0.930063
+      ],
+      "bloom_scale_rgb": [
+        0.036546,
+        0.069937,
+        0.067244
+      ],
+      "tonemapper_finite_samples": 1768,
+      "tonemapper_chromatic_dominant_rgb_counts": [
+        3,
+        1718,
+        44
+      ]
+    },
+    "change": "The retail test supplied the corrected global/1300, 1301, 2427 and 2633 compute programs along with the previously tested shader and media changes. The producer and consumer now agree on nonzero red, green and blue scaling. No game graphics setting was changed."
   }
 }

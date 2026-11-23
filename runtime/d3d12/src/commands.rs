@@ -15,12 +15,16 @@ use crate::present::Presentation;
 use crate::proxy::{Proxy, Slots, allocate, child_slots, unwrap};
 
 mod build_raytracing;
+pub(crate) use build_raytracing::LIST6;
 mod compute;
 mod compute_bindings;
 mod depth;
+mod enhanced;
 mod descriptors;
 mod graphics;
 mod media;
+mod memory_wait;
+pub(crate) mod page_mapping;
 mod queries;
 mod ray_dispatch;
 mod raytracing;
@@ -34,6 +38,8 @@ enum ListState {
 }
 
 struct Recording {
+    prefix: memory_wait::Prefix,
+    timestamp_page: Option<(ID3D12QueryHeap, u32)>,
     resources: device::MediaResources,
     scene_commands: Vec<raytracing::SceneCommand>,
     bindings: compute_bindings::Bindings,
@@ -43,7 +49,10 @@ struct Recording {
     media: Option<media::Recording>,
     placed_reads: Vec<Arc<Texture>>,
     placed_writes: Vec<Arc<Texture>>,
-    resource_heap: Option<Range<usize>>,
+    resource_heap: Option<descriptors::ResourceHeap>,
+    descriptor_arena: Option<Arc<device::descriptor_paging::Arena>>,
+    indexed_arenas: Vec<Arc<device::descriptor_paging::Arena>>,
+    scalar_descriptors: std::collections::HashSet<descriptors::ScalarDescriptor>,
     sampled_heaps: Vec<Range<usize>>,
     phase: ListState,
     error: HRESULT,
@@ -70,7 +79,20 @@ impl Recording {
     }
 
     fn compute_dispatch(&mut self, list: &List, dispatch: impl FnOnce()) {
-        self.sample_heap();
+        if let Some(table) = self.bindings.reflected_table::<true>() {
+            if let Err(error) = self.bindings.with_reflected_table::<true>(
+                table, list, self.descriptor_arena.as_deref(), self.resource_heap.as_ref(),
+                &mut self.sampled_heaps, &self.resources, dispatch,
+            ) {
+                self.error = error.code();
+            }
+            return;
+        }
+        if self.descriptor_arena.is_some() && !self.bindings.supports_paged_draw::<true>() {
+            self.error = E_NOTIMPL;
+            return;
+        }
+        self.sample_tables::<true>();
         let Some(root) = self.bindings.scene_root() else {
             dispatch();
             return;
@@ -107,8 +129,48 @@ impl Recording {
         }
     }
 
-    fn draw(&mut self, list: &ID3D12GraphicsCommandList, draw: impl FnOnce()) {
-        self.sample_heap();
+    fn draw(&mut self, list: &List, draw: impl FnOnce()) {
+        let trace = self.bindings.draw_trace.clone();
+        let draw = || {
+            draw();
+            if let Some(trace) = trace { trace.recorded(); }
+        };
+        if let Some(table) = self.bindings.reflected_table::<false>() {
+            if self.stencil_slot.is_some() { self.error = E_NOTIMPL; return; }
+            if let Some(binding) = table.index_map {
+                // These PSOs have one descriptor table followed by one root
+                // constants parameter. The native ISA selects its scalar
+                // buffer with a word (and optional mask) from that parameter.
+                let descriptor = self.bindings.graphics_constant(1, binding.scalar_word)
+                    .and_then(|word| self.resource_heap.as_ref()?.scalar_descriptor(
+                        word & binding.scalar_mask, self.descriptor_arena.as_deref(),
+                    ));
+                let Some(descriptor) = descriptor else { self.error = E_INVALIDARG; return };
+                if self.scalar_descriptors.try_reserve(1).is_err() {
+                    self.error = E_OUTOFMEMORY;
+                    return;
+                }
+                self.scalar_descriptors.insert(descriptor);
+                if let Some(arena) = &self.descriptor_arena
+                    && !self.indexed_arenas.iter().any(|used| Arc::ptr_eq(used, arena))
+                {
+                    if self.indexed_arenas.try_reserve(1).is_err() {
+                        self.error = E_OUTOFMEMORY;
+                        return;
+                    }
+                    self.indexed_arenas.push(arena.clone());
+                }
+            }
+            if let Err(error) = self.bindings.with_reflected_table::<false>(
+                table, list, self.descriptor_arena.as_deref(), self.resource_heap.as_ref(), &mut self.sampled_heaps, &self.resources, draw,
+            ) { self.error = error.code(); }
+            return;
+        }
+        if self.descriptor_arena.is_some() && !self.bindings.supports_paged_draw::<false>() {
+            self.error = E_NOTIMPL;
+            return;
+        }
+        self.sample_tables::<false>();
         if let Some(slot) = self.stencil_slot
             && self.dsv_bound
         {
@@ -116,7 +178,7 @@ impl Recording {
                 .stencil_targets
                 .as_ref()
                 .ok_or_else(|| windows::core::Error::from(E_NOTIMPL))
-                .and_then(|t| t.draw(list, slot, draw));
+                .and_then(|t| t.draw(&list.native, slot, draw));
             if let Err(e) = status {
                 self.error = e.code();
             }
@@ -124,15 +186,30 @@ impl Recording {
             draw();
         }
     }
-    fn sample_heap(&mut self) {
+    fn sample_tables<const COMPUTE: bool>(&mut self) {
         if let Some(heap) = &self.resource_heap
-            && !self.sampled_heaps.contains(heap)
+            && self.bindings.sample_tables::<COMPUTE>(heap, &mut self.sampled_heaps).is_none()
         {
-            self.sampled_heaps.push(heap.clone());
+            self.sample_heap();
+        }
+    }
+
+    fn sample_heap(&mut self) {
+        if let Some(heap) = &self.resource_heap {
+            descriptors::include_range(&mut self.sampled_heaps, heap.cpu.clone());
         }
     }
 
     fn can_record(&mut self, native: &ID3D12GraphicsCommandList) -> bool {
+        if !self.ensure_open(native) { return false; }
+        if let Err(error) = self.prefix.finish(native) {
+            self.error = error.code();
+            return false;
+        }
+        true
+    }
+
+    fn ensure_open(&mut self, native: &ID3D12GraphicsCommandList) -> bool {
         if self.error.is_err() {
             return false;
         }
@@ -196,7 +273,9 @@ struct QueueState {
     // ExecuteCommandLists is void. Report a rejected batch on the next fence
     // signal or present, and never signal completion for missing work.
     placement: placement::QueueAccess,
-    submission: Mutex<()>,
+    submission: Mutex<bool>, // Whether any native GPU operation has been submitted.
+    page_worker: OnceLock<page_mapping::Worker>,
+    wait_worker: OnceLock<memory_wait::Worker>,
     presentation: Presentation,
 }
 
@@ -212,7 +291,7 @@ fn parent(device: &Option<IUnknown>) -> *mut c_void {
 fn translate_batch<T: Default, G, C>(
     guest: &[G],
     mut context: C,
-    translate: impl Fn(&G, &mut C) -> Result<T, HRESULT>,
+    mut translate: impl FnMut(&G, &mut C) -> Result<T, HRESULT>,
     submit: impl FnOnce(&[T], C) -> Result<(), HRESULT>,
 ) -> Result<(), HRESULT> {
     let mut stack: [T; 8];
@@ -265,6 +344,8 @@ unsafe extern "system" fn reset(
     if hr.is_ok() {
         state.phase = ListState::Open;
         state.resources = allocator.state.clone();
+        state.timestamp_page = None;
+        state.prefix = memory_wait::Prefix::default();
         state.scene_commands.clear();
         state.bindings = compute_bindings::Bindings::new(initial);
         if state.media.is_some() {
@@ -278,6 +359,9 @@ unsafe extern "system" fn reset(
         state.placed_reads.clear();
         state.placed_writes.clear();
         state.resource_heap = None;
+        state.descriptor_arena = None;
+        state.indexed_arenas.clear();
+        state.scalar_descriptors.clear();
         state.sampled_heaps.clear();
         state.error = S_OK;
     }
@@ -290,6 +374,7 @@ unsafe extern "system" fn close(list: &List) -> HRESULT {
         ListState::Closed => return E_FAIL,
         ListState::Fresh(..) => {} // The initial empty recording is already closed on the host.
         ListState::Open => {
+            if let Err(error) = state.prefix.finish(&list.native) { state.error = error.code(); }
             if let Err(error) = unsafe { list.native.Close() } {
                 state.error = error.code();
             }
@@ -598,6 +683,26 @@ unsafe extern "system" fn flush_texture_cache(list: &List, mask: u32, address: u
             format!("texture cache range flush mask {mask:#x} address {address:#x} bytes {bytes:#x}")
         });
     }
+    global_cache_barrier(list, &mut state);
+}
+
+// The extended list accepts separate cache/engine masks before the VA range.
+// A host global barrier covers the full range and every participating stage.
+unsafe extern "system" fn extended_cache_barrier(
+    list: &List, _cache: u32, _engines: u32, address: u64, bytes: u64,
+) {
+    let mut state = recording(list);
+    if !state.can_record(&list.native) {
+        return;
+    }
+    if address.checked_add(bytes).is_none() {
+        state.error = E_INVALIDARG;
+        return;
+    }
+    global_cache_barrier(list, &mut state);
+}
+
+fn global_cache_barrier(list: &List, state: &mut Recording) {
     let Some(native) = list
         .state
         .enhanced_barriers
@@ -648,6 +753,10 @@ unsafe extern "system" fn clear_rtv(
             rects,
         )
     };
+    static FIRST: std::sync::Once = std::sync::Once::new();
+    crate::diagnostics::log_once(&FIRST, || format!(
+        "recorded render target clear list={list:p} rtv={:#x} rgba={:?}", handle.ptr, unsafe { &*color.cast::<[f32;4]>() }
+    ));
 }
 
 // HandleDiscardResources at Frosty RVA 0x5787b84 supplies the native region
@@ -671,7 +780,7 @@ unsafe extern "system" fn discard(
     }
     // CPU-backed read-only textures acquire their contents at submission.
     // Keeping the old bytes of a discarded read-only region is permitted.
-    if resource.state.placed().is_none() {
+    if resource.state.placed().is_none() && resource.state.buffer_window().is_none() {
         unsafe {
             (list.native.vtable().DiscardResource)(
                 list.native.as_raw(),
@@ -694,13 +803,30 @@ unsafe fn copy_location<'a>(
         return None;
     }
     let resource = unsafe { device::resource_proxy(location.resource, device) }?;
-    Some((
-        CopyLocation {
-            resource: resource.native.as_raw(),
-            ..*location
-        },
-        resource.state.placed(),
-    ))
+    let mut host = CopyLocation { resource: resource.native.as_raw(), ..*location };
+    if let Some((base, length)) = resource.state.buffer_window() {
+        if host.kind != D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT { return None; }
+        let placed = unsafe { &mut host.data.PlacedFootprint };
+        let f = &placed.Footprint;
+        let desc = D3D12_RESOURCE_DESC {
+            Dimension: if f.Depth > 1 { D3D12_RESOURCE_DIMENSION_TEXTURE3D } else { D3D12_RESOURCE_DIMENSION_TEXTURE2D },
+            Width: f.Width.into(), Height: f.Height, DepthOrArraySize: f.Depth.try_into().ok()?,
+            MipLevels: 1, Format: f.Format, SampleDesc: windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            ..Default::default()
+        };
+        let mut owner: Option<ID3D12Device> = None;
+        let (mut rows, mut row_bytes) = (0, 0);
+        unsafe {
+            resource.native.GetDevice(&mut owner).ok()?;
+            owner?.GetCopyableFootprints(&desc, 0, 1, 0, None, Some(&mut rows), Some(&mut row_bytes), None);
+        }
+        let pitch = u64::from(f.RowPitch);
+        let lines = u64::from(rows).checked_mul(u64::from(f.Depth))?;
+        let bytes = lines.checked_sub(1)?.checked_mul(pitch)?.checked_add(row_bytes)?;
+        if row_bytes > pitch || placed.Offset.checked_add(bytes)? > length { return None; }
+        placed.Offset = placed.Offset.checked_add(base)?;
+    }
+    Some((host, resource.state.placed()))
 }
 
 unsafe extern "system" fn copy_texture(
@@ -777,6 +903,17 @@ unsafe extern "system" fn copy_resource(
         return;
     };
     let (d, s) = unsafe { (dst.native.GetDesc(), src.native.GetDesc()) };
+    if dst.state.buffer_window().is_some() || src.state.buffer_window().is_some() {
+        let (to, size) = dst.state.buffer_window().unwrap_or((0, d.Width));
+        let (from, other) = src.state.buffer_window().unwrap_or((0, s.Width));
+        if d.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER || s.Dimension != d.Dimension || size != other
+            || (dst.native == src.native && to < from + size && from < to + size) {
+            state.error = E_INVALIDARG;
+            return;
+        }
+        unsafe { list.native.CopyBufferRegion(&dst.native, to, &src.native, from, size) };
+        return;
+    }
     if dst.native == src.native
         || d.Dimension != s.Dimension
         || d.DepthOrArraySize != s.DepthOrArraySize
@@ -823,44 +960,64 @@ unsafe extern "system" fn execute_indirect(
     // Each object is borrowed from a live guest reference for this call.
     let (Some(signature), Some(arguments)) = (
         unsafe { device::indirect::signature(signature, owner) },
-        unsafe { device::resource(arguments, owner) },
+        unsafe { device::resource_proxy(arguments, owner) },
     ) else {
         state.error = E_INVALIDARG;
         return;
     };
     let bytes = u64::from(signature.state.stride) * u64::from(max_count);
-    if !(argument_offset | count_offset).is_multiple_of(4)
-        || !compute::contains_range(arguments, argument_offset, bytes)
-    {
+    let Some(argument_offset) = compute::buffer_offset(arguments, argument_offset, bytes) else {
         state.error = E_INVALIDARG;
         return;
-    }
-    let count = if count_buffer.is_null() {
-        None
-    } else {
-        let Some(buffer) = (unsafe { device::resource(count_buffer, owner) })
-            .filter(|buffer| compute::contains_range(buffer, count_offset, 4))
-        else {
-            state.error = E_INVALIDARG;
-            return;
-        };
-        Some(buffer)
     };
+    let (count, count_offset) = if count_buffer.is_null() { (None, count_offset) } else {
+        let Some(buffer) = (unsafe { device::resource_proxy(count_buffer, owner) }) else { state.error = E_INVALIDARG; return; };
+        let Some(offset) = compute::buffer_offset(buffer, count_offset, 4) else { state.error = E_INVALIDARG; return; };
+        (Some(&buffer.native), offset)
+    };
+    if !(argument_offset | count_offset).is_multiple_of(4) { state.error = E_INVALIDARG; return; }
     let execute = || unsafe {
         list.native.ExecuteIndirect(
             &signature.native,
             max_count,
-            arguments,
+            &arguments.native,
             argument_offset,
             count,
             count_offset,
         );
+        static FIRST_DRAW: std::sync::Once = std::sync::Once::new();
+        static FIRST_COMPUTE: std::sync::Once = std::sync::Once::new();
+        let site = if signature.state.kind == D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH { &FIRST_COMPUTE } else { &FIRST_DRAW };
+        crate::diagnostics::log_once(site, || format!(
+            "recorded ExecuteIndirect list={list:p} kind={} max_count={max_count}", signature.state.kind.0
+        ));
     };
-    if signature.state.compute {
+    // Ray shader records can carry local descriptor tables.
+    if signature.state.kind == D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_RAYS {
+        state.sample_heap();
+    }
+    if signature.state.kind == D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH {
         state.compute_dispatch(list, execute);
     } else {
-        state.draw(&list.native, execute);
+        state.draw(list, execute);
     }
+}
+
+// Record the title's four-byte progress marker at the requested GPU address.
+unsafe extern "system" fn write_marker(list: &List, address: u64, value: u32, flags: u32, reserved: u32) {
+    let mut state = recording(list);
+    if !state.ensure_open(&list.native) { return; }
+    if address == 0 || !address.is_multiple_of(4) || flags != 0 || reserved != 0 {
+        state.error = E_INVALIDARG;
+        return;
+    }
+    let result = (|| -> windows::core::Result<()> {
+        let (resource, dest) = unsafe { device::command_buffer_address(parent(&list.parent), address, 4)? };
+        if let Some(buffer) = &resource { raytracing::retain(&state, &[buffer])?; }
+        let write = D3D12_WRITEBUFFERIMMEDIATE_PARAMETER { Dest: dest, Value: value };
+        state.prefix.push(&list.native, memory_wait::Packet::Marker(write))
+    })();
+    if let Err(error) = result { state.error = error.code(); }
 }
 
 static LIST_SLOTS: Slots<149> = {
@@ -888,10 +1045,16 @@ static LIST_SLOTS: Slots<149> = {
     slots[34] = crate::slot!(graphics::root);
     slots[35] = crate::slot!(descriptors::table::<true>);
     slots[36] = crate::slot!(descriptors::table::<false>);
-    slots[39] = crate::slot!(compute::constants);
-    slots[41] = crate::slot!(compute::constant_buffer);
-    slots[43] = crate::slot!(compute::shader_resource);
-    slots[45] = crate::slot!(compute::unordered_access);
+    slots[37] = crate::slot!(compute::one_constant::<true>);
+    slots[38] = crate::slot!(compute::one_constant::<false>);
+    slots[39] = crate::slot!(compute::constants::<true>);
+    slots[40] = crate::slot!(compute::constants::<false>);
+    slots[41] = crate::slot!(compute::constant_buffer::<true>);
+    slots[42] = crate::slot!(compute::constant_buffer::<false>);
+    slots[43] = crate::slot!(compute::shader_resource::<true>);
+    slots[44] = crate::slot!(compute::shader_resource::<false>);
+    slots[45] = crate::slot!(compute::unordered_access::<true>);
+    slots[46] = crate::slot!(compute::unordered_access::<false>);
     slots[47] = crate::slot!(graphics::index_buffer);
     slots[48] = crate::slot!(graphics::vertex_buffers);
     slots[50] = crate::slot!(graphics::targets);
@@ -903,16 +1066,47 @@ static LIST_SLOTS: Slots<149> = {
     slots[59] = crate::slot!(execute_indirect);
     slots[67] = crate::slot!(flush_texture_cache);
     slots[68] = crate::slot!(graphics::depth_bounds);
+    slots[71] = crate::slot!(write_marker);
+    slots[72] = crate::slot!(queries::timestamp_at);
+    slots[74] = crate::slot!(memory_wait::wait_value64);
     slots[83] = crate::slot!(copy_texture);
     slots[84] = crate::slot!(copy_resource);
+    // GTA's texture uploader uses this entry for a placed footprint to a
+    // subresource, with the same trailing box and copy flags as slot 83.
+    slots[85] = crate::slot!(copy_texture);
     slots[96] = crate::slot!(compute::async_compute_budget);
     slots[117] = crate::slot!(build_raytracing::single);
     slots[118] = crate::slot!(raytracing::postbuild);
     slots[119] = crate::slot!(raytracing::copy);
     slots[120] = crate::slot!(ray_dispatch::pipeline);
     slots[121] = crate::slot!(ray_dispatch::dispatch);
+    slots[126] = crate::slot!(graphics::shading_rate);
     slots[127] = crate::slot!(graphics::dispatch_mesh);
     slots[131] = crate::slot!(build_raytracing::batch);
+    slots[139] = crate::slot!(reset_extended);
+    slots[146] = crate::slot!(enhanced::barrier);
+    slots
+};
+
+unsafe extern "system" fn reset_extended(list: &List, allocator: *mut c_void, initial: *mut c_void, options: usize) -> HRESULT {
+    if options != 0 { return E_NOTIMPL; }
+    unsafe { reset(list, allocator, initial) }
+}
+
+// Device11 titles use the new raster-state slots even when requesting the
+// base graphics-list IID. The List6-only cache barriers remain separate.
+static DEVICE11_LIST_SLOTS: Slots<149> = {
+    let mut slots = LIST_SLOTS;
+    slots[70] = crate::slot!(graphics::depth_bounds);
+    slots[75] = crate::slot!(graphics::force_shader_depth_order);
+    slots[142] = crate::slot!(graphics::sample_mask);
+    slots
+};
+
+static EXTENDED_LIST_SLOTS: Slots<149> = {
+    let mut slots = DEVICE11_LIST_SLOTS;
+    slots[131] = crate::slot!(extended_cache_barrier);
+    slots[132] = crate::slot!(extended_cache_barrier);
     slots
 };
 
@@ -930,12 +1124,32 @@ fn reject(queue: &Queue, error: HRESULT) {
     };
 }
 
+unsafe extern "system" fn execute_frame(
+    queue: &Queue, count: u32, lists: *const *mut c_void, frame_token: u64, flags: u32,
+) {
+    // Both flags select how the console assembles its GPU packets. Bit 0
+    // suppresses a hardware buffer switch and bit 1 chains indirect buffers.
+    // The desktop queue owns its packet storage and takes the ordered list
+    // array in one submission. The frame token labels that submission.
+    if queue.state.kind != D3D12_COMMAND_LIST_TYPE_DIRECT || flags & !3 != 0 {
+        crate::diagnostics::recording_error(format_args!("extended command-list submission flags {flags:#x}"));
+        reject(queue, E_NOTIMPL);
+        return;
+    }
+    unsafe { execute_batch(queue, count, lists, Some((frame_token, flags))) };
+}
+
 unsafe extern "system" fn execute(queue: &Queue, count: u32, lists: *const *mut c_void) {
-    let _submission = queue
+    unsafe { execute_batch(queue, count, lists, None) };
+}
+
+unsafe fn execute_batch(queue: &Queue, count: u32, lists: *const *mut c_void, frame: Option<(u64,u32)>) {
+    let mut submitted = queue
         .state
         .submission
         .lock()
         .unwrap_or_else(|e| e.into_inner());
+    *submitted = true;
     if queue.state.placement.error.load(Ordering::Acquire) < 0 || count == 0 {
         return;
     }
@@ -944,12 +1158,15 @@ unsafe extern "system" fn execute(queue: &Queue, count: u32, lists: *const *mut 
         return;
     }
     let guest = unsafe { slice::from_raw_parts(lists, count as usize) };
+    let mut list_index = 0;
     let result = translate_batch(
         guest,
-        (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
-        |&item, (textures, writes, shader_views, scene_lists)| {
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), memory_wait::Splits::new()),
+        |&item, (textures, writes, shader_views, scene_lists, splits)| {
             let list: &List = unsafe {
                 unwrap(item, parent(&queue.parent), &LIST_SLOTS)
+                    .or_else(|| unwrap(item, parent(&queue.parent), &DEVICE11_LIST_SLOTS))
+                    .or_else(|| unwrap(item, parent(&queue.parent), &EXTENDED_LIST_SLOTS))
                     .or_else(|| unwrap(item, parent(&queue.parent), &media::SLOTS))
             }
             .ok_or(E_INVALIDARG)?;
@@ -960,6 +1177,23 @@ unsafe extern "system" fn execute(queue: &Queue, count: u32, lists: *const *mut 
             {
                 return Err(E_INVALIDARG);
             }
+            // A descriptor write after Close can exhaust the map's native
+            // heap. Never submit an indexed access with an unpublished entry.
+            for arena in &state.indexed_arenas {
+                arena.check_index_capacity().map_err(|e| e.code())?;
+            }
+            for descriptor in &state.scalar_descriptors {
+                let owner = list.parent.as_ref().ok_or(E_INVALIDARG)?;
+                if !unsafe { device::is_constant_buffer(owner, descriptor.cpu) } {
+                    crate::diagnostics::recording_error(format_args!(
+                        "indexed shader scalar load requires a CBV at logical resource descriptor {}", descriptor.index
+                    ));
+                    return Err(E_INVALIDARG);
+                }
+            }
+            splits.try_reserve(state.prefix.segments.len()).map_err(|_| E_OUTOFMEMORY)?;
+            splits.extend(state.prefix.segments.iter().map(|s| (list_index, s.clone())));
+            list_index += 1;
             if !state.scene_commands.is_empty() {
                 scene_lists.try_reserve(1).map_err(|_| E_OUTOFMEMORY)?;
                 scene_lists.push(list);
@@ -975,7 +1209,7 @@ unsafe extern "system" fn execute(queue: &Queue, count: u32, lists: *const *mut 
             shader_views.extend(state.sampled_heaps.iter().cloned());
             Ok(list.native.as_raw())
         },
-        |host, (mut textures, mut writes, shader_views, scene_lists)| {
+        |host, (mut textures, mut writes, shader_views, scene_lists, splits)| {
             unsafe {
                 placement::submit(
                     parent(&queue.parent),
@@ -999,11 +1233,7 @@ unsafe extern "system" fn execute(queue: &Queue, count: u32, lists: *const *mut 
                                 command.prepare(list)?;
                             }
                         }
-                        (queue.native.vtable().ExecuteCommandLists)(
-                            queue.native.as_raw(),
-                            count,
-                            host.as_ptr(),
-                        );
+                        memory_wait::submit(queue, host, splits)?;
                         if let Some(submission) = submission {
                             submission.commit();
                         }
@@ -1017,6 +1247,12 @@ unsafe extern "system" fn execute(queue: &Queue, count: u32, lists: *const *mut 
     );
     if let Err(error) = result {
         reject(queue, error);
+    } else if let Some((token, flags)) = frame {
+        static FIRST: [std::sync::Once;4] = [const { std::sync::Once::new() };4];
+        crate::diagnostics::log_once(&FIRST[flags as usize], || format!(
+            "submitted frame batch flags={flags:#x} token={token} count={count} first_lists={:?}",
+            &guest[..guest.len().min(4)]
+        ));
     }
 }
 
@@ -1025,11 +1261,12 @@ unsafe extern "system" fn queue_fence<const WAIT: bool>(
     fence: *mut c_void,
     value: u64,
 ) -> HRESULT {
-    let _submission = queue
+    let mut submitted = queue
         .state
         .submission
         .lock()
         .unwrap_or_else(|e| e.into_inner());
+    *submitted = true;
     let hr = HRESULT(queue.state.placement.error.load(Ordering::Acquire));
     if hr.is_err() {
         return hr;
@@ -1051,7 +1288,14 @@ unsafe extern "system" fn queue_fence<const WAIT: bool>(
     } else {
         queue.native.vtable().Signal
     };
-    unsafe { method(queue.native.as_raw(), fence.as_raw(), value) }
+    let status = unsafe { method(queue.native.as_raw(), fence.as_raw(), value) };
+    if !WAIT && status.is_ok() {
+        static FIRST: std::sync::Once = std::sync::Once::new();
+        crate::diagnostics::log_once(&FIRST, || format!(
+            "queued guest fence signal value={value} queue_type={} fence={:p}", queue.state.kind.0, fence.as_raw()
+        ));
+    }
+    status
 }
 
 // Frosty's direct/compute path requests its flush before the fence and the
@@ -1083,7 +1327,10 @@ const _: () = assert!(mem::offset_of!(PresentPlane, resources) == 16);
 #[repr(C)]
 struct RetailPresentPlane {
     prefix: PresentPlane,
-    options: [u32; 12],
+    source_rects: *const RECT,
+    destination: *const [f32; 4],
+    color_space: u32,
+    remaining: [u32; 7],
 }
 
 #[repr(C)]
@@ -1101,11 +1348,23 @@ unsafe extern "system" fn present(
     planes: *const PresentPlane,
     params: *const PresentParameters,
 ) -> HRESULT {
-    let _submission = queue
+    let result = unsafe { present_planes(queue, count, planes, params) };
+    if result.is_err() {
+        static FIRST: std::sync::Once = std::sync::Once::new();
+        crate::diagnostics::log_once(&FIRST, || format!("PresentX failed planes={count} HRESULT={:#010x}", result.0));
+    }
+    result
+}
+
+unsafe fn present_planes(
+    queue: &Queue, count: u32, planes: *const PresentPlane, params: *const PresentParameters,
+) -> HRESULT {
+    let mut submitted = queue
         .state
         .submission
         .lock()
         .unwrap_or_else(|e| e.into_inner());
+    *submitted = true;
     let hr = HRESULT(queue.state.placement.error.load(Ordering::Acquire));
     if hr.is_err() {
         return hr;
@@ -1119,19 +1378,6 @@ unsafe extern "system" fn present(
     if count != 1 {
         return E_NOTIMPL;
     }
-    if let Some(params) = unsafe { params.as_ref() } {
-        // The threshold limits when a late frame may tear. The synchronized
-        // swap chain always waits for VBlank and cannot exceed that limit.
-        if !(0.0..=100.0).contains(&params.immediate_threshold_percent) {
-            return E_INVALIDARG;
-        }
-        // SAFETY: A caller using present parameters supplies a complete SDK
-        // plane record. Null-parameter guests retain their 24-byte prefix ABI.
-        let full_plane = unsafe { &*planes.cast::<RetailPresentPlane>() };
-        if params.options != [0; 7] || full_plane.options != [0; 12] {
-            return E_NOTIMPL;
-        }
-    }
     let plane = unsafe { &*planes };
     if plane.resource_count == 0 || plane.resources.is_null() {
         return E_INVALIDARG;
@@ -1143,9 +1389,36 @@ unsafe extern "system" fn present(
     else {
         return E_INVALIDARG;
     };
+    if let Some(params) = unsafe { params.as_ref() } {
+        if !(0.0..=100.0).contains(&params.immediate_threshold_percent) {
+            return E_INVALIDARG;
+        }
+        let full = unsafe { &*planes.cast::<RetailPresentPlane>() };
+        let desc = unsafe { source.GetDesc() };
+        let rect = unsafe { full.source_rects.as_ref() };
+        let destination = unsafe { full.destination.as_ref() };
+        static FIRST: std::sync::Once = std::sync::Once::new();
+        crate::diagnostics::log_once(&FIRST, || format!(
+            "present plane {}x{} source {rect:?} destination {destination:?} color {} parameters {:?}",
+            desc.Width, desc.Height, full.color_space, params.options
+        ));
+        if rect.is_some_and(|r| r.left != 0 || r.top != 0 || r.right as u64 != desc.Width || r.bottom as u32 != desc.Height)
+            || destination.is_some_and(|r| *r != [0.0, 0.0, 1.0, 1.0])
+            || full.color_space != 0 || full.remaining != [0; 7] || params.options != [0; 7] {
+            return E_NOTIMPL;
+        }
+    }
     let result = queue.state.presentation.present(&queue.native, source);
     if result == S_OK {
         unsafe { device::frame_events::display_flip(parent(&queue.parent), plane.token) };
+        static COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        static EARLY: [std::sync::Once;4] = [const { std::sync::Once::new() };4];
+        if COUNT.load(Ordering::Relaxed) < EARLY.len() {
+            let index = COUNT.fetch_add(1, Ordering::Relaxed);
+            if let Some(site) = EARLY.get(index) {
+                crate::diagnostics::log_once(site, || format!("completed PresentX #{} token={} source={:p}",index+1,plane.token,unsafe { *plane.resources }));
+            }
+        }
     }
     result
 }
@@ -1162,12 +1435,28 @@ static QUEUE_SLOTS: Slots<64> = {
     slots
 };
 
+static DEVICE11_QUEUE_SLOTS: Slots<64> = {
+    let mut slots = child_slots::<ID3D12CommandQueue, QueueState, 64>();
+    slots[10] = crate::slot!(execute);
+    slots[16] = crate::slot!(queue_fence::<false>);
+    slots[17] = crate::slot!(queue_fence::<true>);
+    slots[18] = crate::slot!(queries::frequency);
+    slots[19] = crate::slot!(queries::calibrate);
+    slots[25] = crate::slot!(signal_x);
+    slots[31] = crate::slot!(page_mapping::copy);
+    slots[32] = crate::slot!(present);
+    slots[35] = crate::slot!(execute_frame);
+    slots
+};
+
 pub(crate) unsafe fn wrap_command_list(
     native: ID3D12GraphicsCommandList,
     allocator: &device::Allocator,
     initial: Option<&device::compute::Pipeline>,
     device: &IUnknown,
     compact: bool,
+    extended: bool,
+    device11: bool,
     out: *mut *mut c_void,
 ) -> HRESULT {
     let raytracing = if compact {
@@ -1177,6 +1466,9 @@ pub(crate) unsafe fn wrap_command_list(
     };
     let has_list4 = raytracing.is_some();
     let has_list6 = has_list4 && native.cast::<ID3D12GraphicsCommandList6>().is_ok();
+    if extended && !has_list6 {
+        return windows::Win32::Foundation::E_NOINTERFACE;
+    }
     let state = ListData {
         reserved0: [0; 2],
         write_cursor: 0,
@@ -1189,6 +1481,8 @@ pub(crate) unsafe fn wrap_command_list(
         mesh: OnceLock::new(),
         raytracing,
         recording: Mutex::new(Recording {
+            timestamp_page: None,
+            prefix: memory_wait::Prefix::default(),
             resources: allocator.state.clone(),
             scene_commands: Vec::new(),
             bindings: compute_bindings::Bindings::new(initial),
@@ -1198,6 +1492,9 @@ pub(crate) unsafe fn wrap_command_list(
             placed_reads: Vec::new(),
             placed_writes: Vec::new(),
             resource_heap: None,
+            descriptor_arena: None,
+            indexed_arenas: Vec::new(),
+            scalar_descriptors: Default::default(),
             sampled_heaps: Vec::new(),
             media: compact.then(|| media::Recording::new(allocator)),
             phase: ListState::Fresh(allocator.native.clone(), initial.map(|p| p.native.clone())),
@@ -1206,7 +1503,8 @@ pub(crate) unsafe fn wrap_command_list(
     };
     unsafe {
         allocate(
-            if compact { &media::SLOTS } else { &LIST_SLOTS },
+            if compact { &media::SLOTS } else if extended { &EXTENDED_LIST_SLOTS }
+            else if device11 { &DEVICE11_LIST_SLOTS } else { &LIST_SLOTS },
             if compact {
                 &[
                     ID3D12DeviceChild::IID,
@@ -1246,18 +1544,21 @@ pub(crate) unsafe fn wrap_command_list(
 pub(crate) unsafe fn wrap_command_queue(
     native: ID3D12CommandQueue,
     device: &IUnknown,
+    device11_queue: bool,
     out: *mut *mut c_void,
 ) -> HRESULT {
     let state = QueueState {
         reserved: 0,
         kind: unsafe { native.GetDesc() }.Type,
         placement: placement::QueueAccess::default(),
-        submission: Mutex::new(()),
+        submission: Mutex::new(false),
+        page_worker: OnceLock::new(),
+        wait_worker: OnceLock::new(),
         presentation: Presentation::default(),
     };
     unsafe {
         allocate(
-            &QUEUE_SLOTS,
+            if device11_queue { &DEVICE11_QUEUE_SLOTS } else { &QUEUE_SLOTS },
             &[
                 ID3D12DeviceChild::IID,
                 ID3D12Pageable::IID,

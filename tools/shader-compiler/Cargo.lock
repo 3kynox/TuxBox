@@ -20,11 +20,13 @@ dependencies = [
 [[package]]
 name = "tuxbox-dxbc"
 version = "0.1.0"
+dependencies = [
+ "miniz_oxide",
+]
 
 [[package]]
 name = "tuxbox-xshader"
 version = "0.1.0"
 dependencies = [
- "miniz_oxide",
  "tuxbox-dxbc",
 ]

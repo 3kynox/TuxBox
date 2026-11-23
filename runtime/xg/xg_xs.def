@@ -21,3 +21,5 @@ EXPORTS
     XGSetHardwareVersion @19
     XGTerminateLibrary @20
     XGValidateDepthStencilSwizzleMode @21
+    XGCreateBVHComputer2
+    XGSuggestSwizzleMode

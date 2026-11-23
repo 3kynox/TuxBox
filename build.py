@@ -9,7 +9,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT / "build"
-TARGETS = ("route", "graphics", "xmem", "acphal", "xgameruntime", "xcrdapi", "dxc-utils", "xg", "gameinput",
+TARGETS = ("bvh", "route", "graphics", "xmem", "acphal", "xapu", "xgameruntime", "xcrdapi", "dxc-utils", "xg", "gameinput",
            "d3d12", "lanes")
 # rustc --print native-static-libs for the Windows MSVC target with +crt-static.
 RUST_STD_LIBS = ("kernel32.lib", "ntdll.lib", "userenv.lib", "ws2_32.lib", "dbghelp.lib",
@@ -159,6 +159,20 @@ def build_target(tools, target, dxc, d3d12_reference=None):
         guest = tools.compile(src / "guest.cpp", out, "/W4", "/WX")
         binary = "runtime-control.exe" if target == "xgameruntime" else "xcrdapi-read.exe"
         tools.link(out / binary, guest, f"{target}.lib", "kernel32.lib")
+    elif target == "bvh":
+        out = OUTPUT / "bvh"
+        out.mkdir(parents=True, exist_ok=True)
+        tools.link(out / "XboxBvhBuilder.dll", tools.rust_library("tuxbox-bvh"),
+                   *RUST_STD_LIBS, exports=ROOT / "runtime/bvh/XboxBvhBuilder.def")
+    elif target == "xapu":
+        out = OUTPUT / "xapu"
+        out.mkdir(parents=True, exist_ok=True)
+        archive = tools.rust_library("tuxbox-xapu")
+        for provider in ("xapu", "chad"):
+            tools.link(out / f"{provider}.dll", archive, *RUST_STD_LIBS,
+                       exports=ROOT / "runtime/xapu" / f"{provider}.def")
+        control = tools.compile(ROOT / "runtime/xapu/guest.c", out, "/W4", "/WX")
+        tools.link(out / "xapu-control.exe", control, "xapu.lib", "kernel32.lib")
     elif target == "acphal":
         src, out = ROOT / "runtime/acphal", OUTPUT / "acphal"
         out.mkdir(parents=True, exist_ok=True)

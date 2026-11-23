@@ -26,9 +26,10 @@ impl Recording {
         // until its fence completes. It owns all decoder references until then.
         let mut held = self.allocator.lock().unwrap_or_else(|e| e.into_inner());
         for &r in resources {
-            if !held.contains(r) {
+            let item: ID3D12Pageable = r.clone().into();
+            if !held.contains(&item) {
                 held.try_reserve(1).map_err(|_| E_OUTOFMEMORY)?;
-                held.push(r.clone());
+                held.push(item);
             }
         }
         Ok(())

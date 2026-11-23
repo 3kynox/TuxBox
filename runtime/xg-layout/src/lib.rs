@@ -164,6 +164,10 @@ impl Plane {
         {
             return Err(E_NOTIMPL);
         }
+        Self::tiled_64k_mips(desc, 27)
+    }
+
+    fn tiled_64k_mips(desc: &Desc, swizzle: u32) -> Result<Self, i32> {
         let mut base = *desc;
         base.layout = LINEAR;
         base.flags = 0;
@@ -177,16 +181,20 @@ impl Plane {
             _ => return Err(E_NOTIMPL),
         };
         let levels = usize::from(desc.mips);
+        let block = if matches!(desc.format, 70..=84 | 94..=99) {
+            4
+        } else {
+            1
+        };
+        let width = (desc.width as u32).div_ceil(block);
+        let height = desc.height.div_ceil(block);
         let first_tail = (0..levels)
             .find(|i| {
-                (desc.width as u32).div_ceil(1 << i) <= tw / 2 && desc.height.div_ceil(1 << i) <= th
+                width.div_ceil(1 << i) <= tw / 2 && height.div_ceil(1 << i) <= th
             })
             .unwrap_or(levels);
-        let max_tail = match plane.element_bytes {
-            1 => 9,
-            2 | 4 => 8,
-            _ => 7,
-        };
+        // A BC mip chain continues down to one texel inside its last 4×4 block.
+        let max_tail = ((tw / 2).max(th) * block).ilog2() as usize + 1;
         if levels - first_tail > max_tail {
             return Err(E_NOTIMPL);
         }
@@ -200,24 +208,27 @@ impl Plane {
             let pitch = if tail {
                 (tw >> (idx + 1)).max(tw / 16)
             } else {
-                (desc.width as u32).div_ceil(1 << i).next_multiple_of(tw)
+                width.div_ceil(1 << i).next_multiple_of(tw)
             };
             let rows = if tail {
                 (th >> idx).max(th / 16)
             } else {
-                desc.height.div_ceil(1 << i).next_multiple_of(th)
+                height.div_ceil(1 << i).next_multiple_of(th)
             };
             mip.size = u64::from(pitch) * u64::from(rows) * u64::from(plane.element_bytes);
             mip.slice_bytes = mip.size;
-            mip.pitch_texels = pitch;
+            mip.pitch_texels = pitch * block;
             mip.pitch_bytes = pitch * plane.element_bytes;
             mip.pitch_elements = pitch;
             mip.padded_rows = rows;
             mip.alignment = if tail { 256 } else { 65536 };
-            mip.swizzle = if tail { 3 } else { 27 };
+            let tail_swizzle = if swizzle == 10 { 2 } else { 3 };
+            mip.swizzle = if tail { tail_swizzle } else { swizzle };
             mip.packed_tail = u32::from(tail);
-            mip.reserved[1] = if tail { 0 } else { 0x8000 };
-            mip.reserved[3] = if tail { 0 } else { 0x8000 };
+            if !tail && swizzle == 27 {
+                mip.reserved[1] = 0x8000;
+                mip.reserved[3] = 0x8000;
+            }
             if !tail {
                 plane.size += mip.size;
             }
@@ -238,6 +249,37 @@ impl Plane {
                 };
             }
         }
+        Ok(plane)
+    }
+
+    /// 256-byte standard and display tiles on Scarlett.
+    pub fn compute_microtile(desc: &Desc) -> Result<Self, i32> {
+        if !matches!(desc.layout, 257 | 258) || desc.flags & !0x0030_0004 != 0
+            || !matches!(desc.alignment, 0 | 256 | 4096) {
+            return Err(E_NOTIMPL);
+        }
+        if matches!(desc.format, 70..=84 | 94..=99) { return Err(E_NOTIMPL); }
+        let base = Desc { layout: LINEAR, flags: 0, alignment: 0, ..*desc };
+        let mut plane = Self::compute(&base)?;
+        let mode = desc.layout - 256;
+        let (xb, yb) = microtile_bits(plane.element_bytes, mode).ok_or(E_NOTIMPL)?;
+        let mut offset = 0;
+        for (level, mip) in plane.mips[..usize::from(desc.mips)].iter_mut().enumerate().rev() {
+            let scale = 1 << level;
+            let pitch = (desc.width as u32).div_ceil(scale).next_multiple_of(1 << xb.len());
+            let rows = desc.height.div_ceil(scale).next_multiple_of(1 << yb.len());
+            mip.size = u64::from(pitch) * u64::from(rows) * u64::from(plane.element_bytes);
+            mip.offset = offset;
+            mip.slice_bytes = mip.size;
+            mip.pitch_texels = pitch;
+            mip.pitch_elements = pitch;
+            mip.pitch_bytes = pitch * plane.element_bytes;
+            mip.padded_rows = rows;
+            mip.swizzle = mode;
+            offset += mip.size;
+        }
+        plane.slice_bytes = offset;
+        plane.size = offset * u64::from(desc.slices);
         Ok(plane)
     }
 
@@ -278,16 +320,19 @@ impl Plane {
             || desc.alignment != 0
             || desc.samples != 1
             || desc.quality != 0
-            || desc.mips != 1
-            || !(1..=8).contains(&desc.slices)
-            || !(1..=1024).contains(&desc.width)
-            || !(1..=1024).contains(&desc.height)
-            || !matches!(desc.flags, 0 | 4 | 0x0800_0000 | 0x0800_0004)
-            || !matches!(desc.format, 1..=4 | 9..=18 | 23..=39 | 41..=43 | 48..=54 | 56..=65 | 87 | 88 | 90..=93)
+            || (desc.mips != 1 && desc.layout != 266)
+            || !(1..=2048).contains(&desc.slices)
+            || !(1..=16384).contains(&desc.width)
+            || !(1..=16384).contains(&desc.height)
+            || !(desc.flags & !0x0030_0004 == 0 || matches!(desc.flags, 0x0800_0000 | 0x0800_0004))
         {
             return Err(E_NOTIMPL);
         }
-        Self::single_64k_plane(desc, desc.layout - 256)
+        if desc.mips == 1 {
+            Self::single_64k_plane(desc, desc.layout - 256)
+        } else {
+            Self::tiled_64k_mips(desc, 10)
+        }
     }
 
     fn single_64k_plane(desc: &Desc, swizzle: u32) -> Result<Self, i32> {
@@ -303,8 +348,10 @@ impl Plane {
             16 => (64, 64),
             _ => return Err(E_NOTIMPL),
         };
-        let pitch = (desc.width as u32).next_multiple_of(tw);
-        let rows = desc.height.next_multiple_of(th);
+        let compressed = matches!(desc.format, 70..=84 | 94..=99);
+        let block = if compressed { 4 } else { 1 };
+        let pitch = plane.mips[0].width_elements.next_multiple_of(tw);
+        let rows = plane.mips[0].height_elements.next_multiple_of(th);
         let bytes = u64::from(pitch) * u64::from(rows) * u64::from(plane.element_bytes);
         plane.size = bytes * u64::from(desc.slices);
         plane.slice_bytes = bytes;
@@ -312,7 +359,7 @@ impl Plane {
         let mip = &mut plane.mips[0];
         mip.size = bytes;
         mip.slice_bytes = bytes;
-        mip.pitch_texels = pitch;
+        mip.pitch_texels = pitch * block;
         mip.pitch_bytes = pitch * plane.element_bytes;
         mip.pitch_elements = pitch;
         mip.padded_rows = rows;
@@ -342,32 +389,25 @@ impl Plane {
         Ok(plane)
     }
 
-    /// Compute a bounded uncompressed 4 KiB-swizzled 3D plane.
+    /// Compute a 4 KiB-swizzled 3D plane in texels or BC blocks.
     pub fn compute_4k_volume(desc: &Desc) -> Result<Self, i32> {
-        if desc.layout != TILE_4K
-            || (70..=84).contains(&desc.format)
-            || (94..=99).contains(&desc.format)
-        {
+        if desc.layout != TILE_4K {
             return Err(E_NOTIMPL);
         }
+        let block = if matches!(desc.format, 70..=84 | 94..=99) { 4 } else { 1 };
         let mut linear = *desc;
         linear.layout = LINEAR;
         let mut plane = Self::compute(&linear)?;
         let (tw, th, td, _, _, _) = volume_tile(plane.element_bytes).ok_or(E_NOTIMPL)?;
         let levels = usize::from(desc.mips);
-        // Packed tails have only been verified for these bounded shapes.
-        let tail = if levels > 1
-            && (8..=128).contains(&desc.width)
-            && (desc.width as u32).is_power_of_two()
-            && desc.height <= 4
-        {
-            (0..levels).find(|level| ((desc.width as u32) >> level).max(1) <= tw)
-        } else {
-            None
-        };
-        if tail.is_some_and(|first| levels - first > 2) {
-            return Err(E_NOTIMPL);
-        }
+        // The packed region starts when a mip fits across a tile and in its
+        // lower half vertically. Depth groups repeat this entire mip chain.
+        let tail = (levels.saturating_sub(5)..levels).find(|&level| {
+            let scale = 1u32 << level;
+            levels > 1
+                && (desc.width as u32).div_ceil(block * scale) <= tw
+                && desc.height.div_ceil(block * scale) <= th / 2
+        });
         if let Some(first) = tail {
             plane.unpacked_mips = first as u32;
             plane.tail_mips = (levels - first) as u32;
@@ -375,22 +415,18 @@ impl Plane {
         let mut chain_bytes = 0u64;
         for (level, mip) in plane.mips[..levels].iter_mut().enumerate() {
             let scale = 1u32 << level;
-            let w = (desc.width as u32).div_ceil(scale);
-            let h = desc.height.div_ceil(scale);
+            let w = (desc.width as u32).div_ceil(block * scale);
+            let h = desc.height.div_ceil(block * scale);
             let d = u32::from(desc.slices).div_ceil(scale);
-            // Reject unverified packed-tail shapes.
             let in_tail = tail.is_some_and(|first| level >= first);
-            if levels > 1 && w <= tw && !in_tail {
-                return Err(E_NOTIMPL);
-            }
             let tail_index = level.saturating_sub(tail.unwrap_or(level));
             let pitch = if in_tail {
-                tw >> tail_index
+                if tail_index == 0 { tw } else { tw / 2 }
             } else {
                 w.next_multiple_of(tw)
             };
             let rows = if in_tail {
-                (th / 2) >> tail_index
+                if tail_index == 0 { th / 2 } else { th / 4 }
             } else {
                 h.next_multiple_of(th)
             };
@@ -402,7 +438,7 @@ impl Plane {
             };
             mip.size = slice_bytes * u64::from(depth);
             mip.slice_bytes = slice_bytes;
-            mip.pitch_texels = pitch;
+            mip.pitch_texels = pitch * block;
             mip.pitch_bytes = pitch * plane.element_bytes;
             mip.alignment = if in_tail { 256 } else { 4096 };
             mip.pitch_elements = pitch;
@@ -413,10 +449,12 @@ impl Plane {
             mip.samples = td;
             mip.packed_tail = u32::from(in_tail);
             if in_tail {
-                mip.padding[0] = if tail_index == 0 {
-                    (th / 2) << 11
-                } else {
-                    ((th / 4) << 11) | (tw / 2)
+                mip.padding[0] = match tail_index {
+                    0 => (th / 2) << 11,
+                    1 => ((th / 4) << 11) | (tw / 2),
+                    2 => tw / 2,
+                    3 => (th / 4) << 11,
+                    _ => 0,
                 };
             }
             if !in_tail {
@@ -449,19 +487,29 @@ impl Plane {
                 48..=54 | 56..=59 => (1, 2, 64, 32), // RG8 and color R16.
                 60..=65 => (1, 1, 64, 64),           // R8 and A8.
                 // Packed RGB, RGBA8, RG16, R32 (color), and BGR(A/X)8.
-                23..=39 | 41..=43 | 87 | 88 | 90..=93 => (1, 4, 32, 32),
+                23..=39 | 41..=43 | 67 | 87 | 88 | 90..=93 => (1, 4, 32, 32),
                 // BC1 and BC4 each store a 4x4 block in eight bytes.
                 70..=72 | 79..=81 => (4, 8, 32, 16),
                 // BC2/3/5/6H/7 each store a 4x4 block in 16 bytes.
                 73..=78 | 82..=84 | 94..=99 => (4, 16, 16, 16),
                 _ => return Err(E_NOTIMPL),
             };
+        let linear = desc.layout == LINEAR;
+        // A linear uncompressed render target with disabled color metadata
+        // uses the same pitch, mip offsets and array stride as a shader resource.
+        let placement_supported = if linear {
+            let disabled_metadata_target = block == 1
+                && desc.flags & 0x0030_0000 != 0
+                && desc.flags & !0x0030_0005 == 0;
+            (desc.flags & !0x0030_0004 == 0 || disabled_metadata_target)
+                && matches!(desc.alignment, 0 | 256 | 4096 | 65536)
+        } else {
+            desc.layout == TILE_4K && desc.flags == 0 && matches!(desc.alignment, 0 | 4096)
+        };
         if desc.dimension != 3
             || desc.samples != 1
             || desc.quality != 0
-            || desc.flags != 0
-            || desc.alignment != 0
-            || !matches!(desc.layout, LINEAR | TILE_4K)
+            || !placement_supported
         {
             return Err(E_NOTIMPL);
         }
@@ -476,7 +524,6 @@ impl Plane {
         if levels == 0 || levels > 1 + width.max(desc.height).ilog2() {
             return Err(E_INVALIDARG);
         }
-        let linear = desc.layout == LINEAR;
         let mut plane = Self {
             color_plane: 1,
             element_bytes,
@@ -581,7 +628,8 @@ impl Plane {
     pub fn image_extent(&self) -> (u32, u32, u32) {
         let mip = &self.mips[0];
         let swizzle = match mip.swizzle {
-            1 => 5,
+            1 if self.alignment != 256 => 5,
+            2 if self.alignment == 65536 => 10,
             3 => 27,
             other => other,
         };
@@ -654,6 +702,11 @@ impl Plane {
         self.element_bytes
     }
 
+    /// BC formats address 4×4 texel blocks. Other single-plane formats address texels.
+    pub fn texels_per_element_axis(&self) -> u32 {
+        self.mips[0].pitch_texels / self.mips[0].pitch_elements
+    }
+
     pub fn metadata_tile_shape(&self) -> (u32, u32) {
         match self.element_bytes {
             16 => (512, 256),
@@ -706,16 +759,9 @@ impl Plane {
             mip.offset
                 + u64::from(z / td) * self.slice_bytes
                 + u64::from(tile) * 4096
-                + if mip.packed_tail != 0 {
-                    if level == self.unpacked_mips {
-                        2048
-                    } else {
-                        768
-                    }
-                } else {
-                    0
-                }
-                + u64::from(scatter(x, xb) + scatter(y, yb) + scatter(z, zb)),
+                + u64::from(scatter(x + (mip.padding[0] & 0x7ff), xb)
+                    | scatter(y + (mip.padding[0] >> 11), yb)
+                    | scatter(z, zb)),
         )
     }
 
@@ -746,7 +792,12 @@ impl Plane {
         if mip.swizzle == 0 {
             return Some(origin + u64::from(y * mip.pitch_bytes + x * self.element_bytes));
         }
-        if matches!(mip.swizzle, 10 | 17 | 18) {
+        if self.alignment == 256 && matches!(mip.swizzle, 1 | 2) {
+            let (xb, yb) = microtile_bits(self.element_bytes, mip.swizzle)?;
+            let tile = (y >> yb.len()) * (mip.pitch_elements >> xb.len()) + (x >> xb.len());
+            return Some(origin + u64::from(tile) * 256 + u64::from(scatter(x, xb) | scatter(y, yb)));
+        }
+        if matches!(mip.swizzle, 10 | 17 | 18) || (mip.swizzle == 2 && self.alignment == 65536) {
             let (xb, yb): (&[u8], &[u8]) = match (self.element_bytes, mip.swizzle) {
                 (1, 17) => (&[0, 1, 2, 3, 9, 11, 13, 15], &[4, 5, 6, 7, 8, 10, 12, 14]),
                 (1, _) => (&[0, 1, 2, 6, 9, 11, 13, 15], &[4, 3, 5, 7, 8, 10, 12, 14]),
@@ -761,7 +812,7 @@ impl Plane {
             };
             let tile = (y >> yb.len()) * (mip.pitch_elements >> xb.len()) + (x >> xb.len());
             let mut inner = scatter(x, xb) | scatter(y, yb);
-            if mip.swizzle != 10 {
+            if matches!(mip.swizzle, 17 | 18) {
                 // T-swizzles fold three upper address bits into bank selection.
                 inner ^= if version_four {
                     ((inner & 0x0800) >> 1) | ((inner & 0x1000) >> 3) | ((inner & 0x2000) >> 5)
@@ -926,6 +977,21 @@ fn volume_tile(bytes: u32) -> Option<VolumeTile> {
         4 => (8, 16, 8, &[2, 6, 9], &[3, 5, 8, 11], &[4, 7, 10]),
         8 => (8, 8, 8, &[3, 6, 9], &[5, 8, 11], &[4, 7, 10]),
         16 => (4, 8, 8, &[6, 9], &[5, 8, 11], &[4, 7, 10]),
+        _ => return None,
+    })
+}
+
+fn microtile_bits(bytes: u32, mode: u32) -> Option<(&'static [u8], &'static [u8])> {
+    Some(match (bytes, mode) {
+        (1, 1) => (&[0, 1, 2, 3], &[4, 5, 6, 7]),
+        (1, 2) => (&[0, 1, 2, 6], &[4, 3, 5, 7]),
+        (2, 1 | 2) => (&[1, 2, 3, 7], &[4, 5, 6]),
+        (4, 1) => (&[2, 3, 7], &[4, 5, 6]),
+        (4, 2) => (&[2, 3, 6], &[4, 5, 7]),
+        (8, 1) => (&[3, 6, 7], &[4, 5]),
+        (8, 2) => (&[3, 5, 6], &[4, 7]),
+        (16, 1) => (&[6, 7], &[4, 5]),
+        (16, 2) => (&[4, 6], &[5, 7]),
         _ => return None,
     })
 }

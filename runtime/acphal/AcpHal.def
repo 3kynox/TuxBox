@@ -7,3 +7,6 @@ EXPORTS
     ApuCreateHeap @5
     ApuFree @6
     ApuHeapGetState @7
+    ApuIsVirtualAddressValid
+    ApuMapApuAddress
+    ApuMapVirtualAddress

@@ -90,6 +90,9 @@ std::string run(const wchar_t* requested, bool) {
                             0, FALSE, DUPLICATE_SAME_ACCESS) != 0, "borrowed signal event");
     SignalList signals{1, &borrowed};
     check(schedule(device.Get(), 2, 0, &signals, 0), "schedule display flip");
+    UINT64 display_token = first;
+    require(wait(device.Get(), 2, 0, nullptr, 0, &display_token) == S_FALSE &&
+            display_token == first, "pending display token");
     CloseHandle(borrowed);
     borrowed = nullptr; // The driver must have copied the list and duplicated the handle.
     require(WaitForSingleObject(observer, 0) == WAIT_TIMEOUT, "early flip notification");
@@ -98,6 +101,8 @@ std::string run(const wchar_t* requested, bool) {
     LARGE_INTEGER before{}, after{};
     require(QueryPerformanceCounter(&before), "clock before present");
     flip(first);
+    require(wait(device.Get(), 2, 0, nullptr, 0, &display_token) == S_OK &&
+            display_token == first, "completed display token");
     require(QueryPerformanceCounter(&after), "clock after present");
     std::memset(stat.data, 0xcc, sizeof(stat.data));
     count = 2;

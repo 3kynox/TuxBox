@@ -2,17 +2,17 @@
 
 mod compute_hlsl;
 mod constant_pixel;
-mod fssm;
+use tuxbox_dxbc::fssm;
 #[cfg(feature = "legacy-hlsl")]
 pub mod hlsl;
 #[cfg(feature = "legacy-hlsl")]
 pub mod meta;
 mod native_compute;
 mod psv;
-pub mod rdna2;
+pub use tuxbox_dxbc::rdna2;
 pub mod ray;
-mod rootsig;
-mod xdat;
+use tuxbox_dxbc::rootsig;
+use tuxbox_dxbc::xdat;
 
 use tuxbox_dxbc::{parse_signature_part, SigElement};
 pub use tuxbox_dxbc::{Chunk, Dxbc};

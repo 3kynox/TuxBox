@@ -81,6 +81,34 @@ fn has_stencil(format: u32) -> bool {
     matches!(format, 19 | 20 | 22 | 44 | 45 | 47 | 62 | 118 | 119 | 120)
 }
 
+/// Select an explicit Series resource layout. The destination may be the
+/// layout field in the input description itself.
+#[unsafe(export_name = "XGSuggestSwizzleMode")]
+unsafe extern "system" fn suggest_swizzle(
+    desc: *const Desc,
+    options: u32,
+    layout: *mut u32,
+) -> i32 {
+    if desc.is_null() || layout.is_null() {
+        return E_INVALIDARG;
+    }
+    let resource = unsafe { desc.read_unaligned() };
+    if options != 0 {
+        return E_NOTIMPL;
+    }
+    if !(1..=4).contains(&resource.dimension) || resource.width == 0 {
+        return E_INVALIDARG;
+    }
+    let bind_flags = (resource.flags & 3) << 5;
+    let swizzle = optimal_swizzle_mode(resource.dimension, resource.format, 0, 0, 0,
+        resource.samples, bind_flags, resource.flags);
+    if swizzle == u32::MAX {
+        return E_INVALIDARG;
+    }
+    unsafe { layout.write_unaligned(256 + swizzle) };
+    S_OK
+}
+
 /// A non-null output receives the same selection returned in EAX.
 #[unsafe(export_name = "XGComputeOptimalDepthStencilSwizzleMode")]
 unsafe extern "system" fn optimal_depth_swizzle(
@@ -572,8 +600,7 @@ fn texture_3d_plane(desc: &Texture3DDesc) -> Result<Plane, i32> {
         || desc.misc_flags != 0
         || desc.pitch != 0
         || desc.mips == 0
-        || (70..=84).contains(&desc.format)
-        || (94..=99).contains(&desc.format)
+        || (desc.swizzle == 0 && matches!(desc.format, 70..=84 | 94..=99))
     {
         return Err(E_NOTIMPL);
     }
@@ -961,8 +988,8 @@ unsafe fn create_inner(desc: *const Desc, out: *mut *mut Computer) -> i32 {
         return result;
     }
     let (plane, dimension) = match desc.dimension {
-        2 if desc.alignment == 0
-            && desc.flags == 0
+        2 if matches!(desc.alignment, 0 | 256 | 4096 | 65536)
+            && desc.flags & !0x300004 == 0
             && desc.samples == 1
             && desc.quality == 0
             && desc.height == 1
@@ -970,6 +997,8 @@ unsafe fn create_inner(desc: *const Desc, out: *mut *mut Computer) -> i32 {
         {
             let mut linear = *desc;
             linear.dimension = 3;
+            linear.alignment = 0;
+            linear.flags = 0;
             linear.layout = 256;
             if (70..=84).contains(&desc.format) || (94..=99).contains(&desc.format) {
                 return E_INVALIDARG;
@@ -980,7 +1009,11 @@ unsafe fn create_inner(desc: *const Desc, out: *mut *mut Computer) -> i32 {
             }
         }
         4 => {
-            if desc.alignment != 0 || desc.flags != 0 || desc.samples != 1 || desc.quality != 0 {
+            let allowed_flags = if desc.layout == 261 && !matches!(desc.format, 70..=84 | 94..=99) {
+                0x300005
+            } else { 0x300004 };
+            if !(desc.alignment == 0 || (desc.layout == 261 && desc.alignment == 4096))
+                || desc.flags & !allowed_flags != 0 || desc.samples != 1 || desc.quality != 0 {
                 return E_NOTIMPL;
             }
             let width = match u32::try_from(desc.width) {
@@ -1010,6 +1043,10 @@ unsafe fn create_inner(desc: *const Desc, out: *mut *mut Computer) -> i32 {
                 Err(hr) => return hr,
             }
         }
+        3 if matches!(desc.layout, 257 | 258) => match Plane::compute_microtile(desc) {
+            Ok(plane) => (plane, 3),
+            Err(hr) => return hr,
+        },
         3 if matches!(desc.layout, 266 | 273 | 274) => match Plane::compute_sparse_64k(desc) {
             Ok(plane) => (plane, 3),
             Err(hr) => return hr,
@@ -1045,7 +1082,7 @@ unsafe fn create_inner(desc: *const Desc, out: *mut *mut Computer) -> i32 {
                 Err(hr) => return hr,
             }
         }
-        3 if desc.layout == 0 => {
+        3 if matches!(desc.layout, 0 | 261) => {
             // Xbox's default 2D color layout is the supported 4 KiB swizzle.
             let mut tiled = *desc;
             tiled.layout = 261;
@@ -1080,4 +1117,20 @@ unsafe fn create_inner(desc: *const Desc, out: *mut *mut Computer) -> i32 {
             out,
         )
     }
+}
+
+/// Report the optional BVH computer as unavailable until its GPU kernels are supported.
+///
+/// # Safety
+/// A nonnull output must point to a writable interface pointer.
+#[unsafe(export_name = "XGCreateBVHComputer2")]
+pub unsafe extern "system" fn create_bvh_computer(
+    device: *mut core::ffi::c_void,
+    out: *mut *mut core::ffi::c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    unsafe { out.write(core::ptr::null_mut()) };
+    if device.is_null() { E_INVALIDARG } else { E_NOTIMPL }
 }

@@ -1,6 +1,7 @@
 //! Xbox Game Runtime entry points used by the statically linked GDK wrappers.
 //! The queue vtable is mapped in evidence/matrix-awakens/runtime-wrappers.csv.
 mod queue;
+mod title_temp;
 
 use std::ffi::{c_char, c_void};
 use std::ptr;
@@ -16,6 +17,9 @@ const NOT_IMPLEMENTED: i32 = 0x80004001u32 as i32;
 const ABORT: i32 = 0x80004004u32 as i32;
 const NOT_INITIALIZED: i32 = 0x89240100u32 as i32;
 const THREADING: GUID = GUID::from_u128(0x073b7dcb_1fcf_4030_94be_e3c9eb623428);
+const SYSTEM: GUID = GUID::from_u128(0xe349bd1a_fc20_4e40_b99c_4178cc6b409f);
+const SYSTEM_V1: GUID = GUID::from_u128(0x6fd71f09_7513_49f0_89bc_bfaf5df6f852);
+const SYSTEM_V2: GUID = GUID::from_u128(0x1861cf2e_e18b_4834_a9f5_b4a4e6efb4cf);
 const UNKNOWN: GUID = GUID::from_u128(0x00000000_0000_0000_c000_000000000046);
 static INITIALIZATIONS: AtomicU32 = AtomicU32::new(0);
 
@@ -30,6 +34,8 @@ extern "system" fn InitializeApiImpl(build: u32, revision: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 extern "system" fn InitializeApiImplEx(_build: u32, _revision: u32, _flags: u64) -> i32 {
+    static STORAGE: std::sync::Once = std::sync::Once::new();
+    STORAGE.call_once(title_temp::attach);
     if INITIALIZATIONS.fetch_add(1, Ordering::AcqRel) == 0 {
         unsafe { OutputDebugStringA(c"TuxBox xgameruntime: initialized\n".as_ptr().cast()) };
     }
@@ -67,6 +73,9 @@ unsafe extern "system" fn QueryApiImpl(
     if INITIALIZATIONS.load(Ordering::Acquire) == 0 {
         return NOT_INITIALIZED;
     }
+    if same(class, &SYSTEM) {
+        return unsafe { query(&SYSTEM_OBJECT, iid, out) };
+    }
     if !same(class, &THREADING) {
         return NO_INTERFACE;
     }
@@ -100,7 +109,12 @@ unsafe extern "system" fn query(this: &Object, iid: *const GUID, out: *mut *mut 
     let Some(iid) = (unsafe { iid.as_ref() }) else {
         return INVALID;
     };
-    if !same(iid, &THREADING) && !same(iid, &UNKNOWN) {
+    let supported = if ptr::eq(this, &SYSTEM_OBJECT) {
+        same(iid, &SYSTEM_V1) || same(iid, &SYSTEM_V2)
+    } else {
+        same(iid, &THREADING)
+    };
+    if !supported && !same(iid, &UNKNOWN) {
         return NO_INTERFACE;
     }
     add_ref(this);
@@ -140,5 +154,44 @@ static THREAD_TABLE: [Slot; 32] = {
 };
 static THREAD_OBJECT: Object = Object {
     vtable: &THREAD_TABLE,
+    references: AtomicU32::new(0),
+};
+
+// XSystemGetXboxLiveSandboxId on a host without a provisioned Xbox Live sandbox.
+unsafe extern "system" fn sandbox_id(
+    _: &Object,
+    size: usize,
+    buffer: *mut u8,
+    used: *mut usize,
+) -> i32 {
+    const CAPACITY: usize = 16;
+    const ID: &[u8] = b"RETAIL\0";
+    if size < CAPACITY {
+        return 0x8007007au32 as i32;
+    }
+    if buffer.is_null() {
+        return INVALID;
+    }
+    unsafe {
+        ptr::write_bytes(buffer, 0, CAPACITY);
+        ptr::copy_nonoverlapping(ID.as_ptr(), buffer, ID.len());
+    }
+    if !used.is_null() {
+        unsafe {
+            used.write_unaligned(ID.len());
+        }
+    }
+    OK
+}
+static SYSTEM_TABLE: [Slot; 32] = {
+    let mut slots = [slot!(unsupported); 32];
+    slots[0] = slot!(query);
+    slots[1] = slot!(add_ref);
+    slots[2] = slot!(release);
+    slots[4] = slot!(sandbox_id);
+    slots
+};
+static SYSTEM_OBJECT: Object = Object {
+    vtable: &SYSTEM_TABLE,
     references: AtomicU32::new(0),
 };

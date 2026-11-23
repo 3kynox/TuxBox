@@ -58,6 +58,32 @@ pub(super) fn skip_empty_wave_fallback(insns: &mut Vec<Insn>) -> bool {
     true
 }
 
+/// A constant read in a converged group observes another invocation's VGPR,
+/// including lane 32 on hosts with 32-lane subgroups. Keep SGPR spills separate.
+pub(super) fn constant_reads(group: [u32; 3], insns: &mut [Insn]) -> bool {
+    let count = group.into_iter().fold(1u32, u32::saturating_mul);
+    if count == 0 || count > 1024 || count % 64 != 0 { return false; }
+    let Some(last) = insns.iter().rposition(|op| op.mnemonic == "v_readlane_b32") else { return false };
+    let end = insns[last].offset as i64;
+    if insns.iter().any(|op| {
+        let name = op.mnemonic.as_str();
+        let branch = op.enc == Enc::Sopp && Emitter::branch_cond(op.op).is_some();
+        name == "v_writelane_b32" || matches!(name, "s_setpc_b64" | "s_swappc_b64" | "s_call_b64")
+            || (op.offset as i64 <= end && name == "s_endpgm")
+            || (name.contains("branch") && (!branch || op.aux.imm < 0))
+            || (name == "v_readlane_b32" && !matches!((&op.dst[..], &op.src[..]),
+                ([Opnd::Vgpr(_)], [Opnd::Vgpr(_), Opnd::ConstInt(0..=63), ..])))
+    }) { return false; }
+    for op in insns.iter_mut().filter(|op| op.mnemonic == "v_readlane_b32") {
+        let Opnd::Vgpr(dst) = op.dst[0] else { unreachable!() };
+        op.enc = Enc::Sop1;
+        op.mnemonic = "tb_indexed_readlane".into();
+        op.dst[0] = Opnd::Sgpr(dst);
+        op.src.truncate(2);
+    }
+    true
+}
+
 pub(super) fn prepare(group: [u32; 3], insns: &mut [Insn]) -> bool {
     if !insns
         .iter()

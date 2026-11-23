@@ -3,6 +3,7 @@ use super::{Stage, read_portable_file, source_digest};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -33,12 +34,12 @@ fn read_digest(path: &Path) -> Option<[u8; 64]> {
     Some(digest)
 }
 
-fn cached_translation(session: &Path, key: &str, stage: Stage) -> Option<Vec<u8>> {
+fn compiler_cache(session: &Path) -> Option<&'static PathBuf> {
     // The worker can publish the fingerprint after the first pipeline arrives.
     // Remember a successful binding for this process and retry an early miss.
     static CACHE: OnceLock<PathBuf> = OnceLock::new();
-    let cache = if let Some(cache) = CACHE.get() {
-        cache
+    if let Some(cache) = CACHE.get() {
+        Some(cache)
     } else {
         let id = read_digest(&session.join("compiler-id"))?;
         if !id
@@ -51,14 +52,36 @@ fn cached_translation(session: &Path, key: &str, stage: Stage) -> Option<Vec<u8>
             .parent()?
             .join("runtime")
             .join(str::from_utf8(&id).ok()?);
-        CACHE.get_or_init(|| directory)
-    };
+        Some(CACHE.get_or_init(|| directory))
+    }
+}
+
+fn cached_translation(cache: &Path, key: &str, stage: Stage) -> Option<Vec<u8>> {
     let file = cache.join(format!("{key}.cso"));
     let expected = read_digest(&file.with_extension("sha256"))?;
     let bytes = read_portable_file(&file, stage)?;
     // Host writers replace both files atomically, but can publish between
     // these two reads. Validate exactly what the pipeline will consume.
     (source_digest(&bytes)?.as_bytes() == expected).then_some(bytes)
+}
+
+fn cached_refusal(cache: &Path, key: &str) -> bool {
+    let Ok(file) = fs::File::open(cache.join(format!("{key}.unsupported"))) else {
+        return false;
+    };
+    // Source, linked pixel order, and stencil variants all use different full keys.
+    let mut marker = Vec::with_capacity(key.len());
+    if file.take(key.len() as u64 + 1).read_to_end(&mut marker).is_err() || marker != key.as_bytes() {
+        return false;
+    }
+    static HITS: AtomicUsize = AtomicUsize::new(0);
+    let hits = HITS.fetch_add(1, Ordering::Relaxed) + 1;
+    if hits.is_power_of_two() {
+        crate::diagnostics::log_once(&std::sync::Once::new(), || {
+            format!("shader cache skipped {hits} requests with known unsupported translations")
+        });
+    }
+    true
 }
 
 pub(super) fn on_demand(shader: &[u8], source: &str, stage: Stage) -> Option<Vec<u8>> {
@@ -121,20 +144,24 @@ fn request(
         return Some(bytes);
     }
     let failed = dir.join(format!("{key}.failed"));
-    if failed.exists() {
-        return None;
-    }
     let pending = dir.join(format!("{key}.{}.tmp", std::process::id()));
-    if let Some(bytes) = cached_translation(dir, key, stage) {
-        // Later PSOs in this session can use the verified reply directly.
-        if fs::write(&pending, &bytes)
-            .and_then(|()| fs::rename(&pending, &result))
-            .is_err()
-        {
-            let _ = fs::remove_file(&pending);
+    if let Some(cache) = compiler_cache(dir) {
+        if let Some(bytes) = cached_translation(cache, key, stage) {
+            // Later PSOs in this session can use the verified reply directly.
+            if fs::write(&pending, &bytes)
+                .and_then(|()| fs::rename(&pending, &result))
+                .is_err()
+            {
+                let _ = fs::remove_file(&pending);
+            }
+            return Some(bytes);
         }
-        return Some(bytes);
+        if cached_refusal(cache, key) {
+            return None;
+        }
     }
+    // An earlier temporary tool failure completed its request. A new pipeline may retry it.
+    let _ = fs::remove_file(&failed);
     if let Err(err) = submit(&pending, &dir.join("requests"))
         && err.kind() != io::ErrorKind::AlreadyExists
     {

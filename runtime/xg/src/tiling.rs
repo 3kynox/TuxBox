@@ -106,9 +106,10 @@ pub(super) unsafe extern "system" fn resource_tiling(
             });
         }
         if !shape.is_null() {
+            let block = plane.texels_per_element_axis();
             shape.write(TileShape {
-                width,
-                height,
+                width: width * block,
+                height: height * block,
                 depth: 1,
             });
         }
