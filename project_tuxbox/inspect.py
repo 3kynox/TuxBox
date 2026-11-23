@@ -139,6 +139,7 @@ def member(root, declared):
     name = PureWindowsPath(declared)
     if not name.parts or name.anchor or ".." in name.parts or ":" in declared:
         raise ValueError(f"Expected a package-relative Windows path, got {declared!r}")
+    root = Path(root).resolve()
     folder = root
     for part in name.parts:
         if not folder.is_dir():
