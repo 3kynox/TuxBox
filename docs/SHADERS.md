@@ -1,6 +1,10 @@
-# Frosty shader coverage
+# RDNA2 shader translation
 
-The progress map shows which shader stages TuxBox can translate and which programs Frosty requests while creating pipelines. The reviewed Xbox build contains 4,576 global entries and 38,831 material entries. A single native program can appear in several entries and material shader maps. [Progress map](progress.svg) · [Shader inventory](../evidence/matrix-awakens/shader-inventory.json)
+TuxBox translates the Xbox shader program a game supplies. Implementing an RDNA2 instruction or binding pattern helps every game that uses it. Compiled shaders are specific to their input bytes, stage and compiler configuration. On Linux the usual path is Xbox shader → HLSL → desktop DXIL → Vulkan SPIR-V. TuxBox and DXC produce the DXIL. Proton’s graphics backend handles the last step. [TuxBox shader worker](../project_tuxbox/runtime_shaders.py) · [vkd3d-proton shader cache](https://github.com/HansKristian-Work/vkd3d-proton#shader-cache)
+
+## Measured on The Matrix Awakens
+
+Frosty supplies a real collection of programs for testing the translator. Percentages here use the sampled archive entries as their denominator. A percentage of the RDNA2 instruction set would need a separate survey covering instructions, operand forms and execution modes. Frosty's reviewed archives contain 4,576 global entries and 38,831 material entries. Some refer to the same program. [Progress map](progress.svg) · [Shader inventory](../evidence/matrix-awakens/shader-inventory.json)
 
 Offline raster surveys cover 1,566 of 1,571 global entries and all 32,122 material entries. Each survey records its compiler hash in the evidence. These counts measure HLSL generation. DXIL validation and rendering are checked separately. The five remaining global pixel entries require cross-half wave64 behavior. [Archive survey](../evidence/matrix-awakens/raster-archive-survey.json)
 

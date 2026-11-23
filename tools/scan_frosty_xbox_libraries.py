@@ -36,64 +36,6 @@ KNOWN_XBOX_MODULES = {
 }
 XBOX_PLATFORM_METADATA = re.compile(r"\b(?:xbox|gamecore|durango|game os|pix|console)\b", re.IGNORECASE)
 
-GROUPS = {
-    "acphal.dll": "Input and audio",
-    "audiohalwrapper.dll": "Input and audio",
-    "gcxaudioext.dll": "Input and audio",
-    "gameinput.dll": "Input and audio",
-    "xapu.dll": "Input and audio",
-    "xvmaudioservice.dll": "Input and audio",
-    "d3d12_x.dll": "Graphics and memory",
-    "d3d12_xs.dll": "Graphics and memory",
-    "d3dcompiler_47.dll": "Graphics and memory",
-    "dxbc2dxil_xs.dll": "Graphics and memory",
-    "dxcompiler_x.dll": "Graphics and memory",
-    "dxcompiler_xs.dll": "Graphics and memory",
-    "newbe_xs.dll": "Graphics and memory",
-    "scdxil.dll": "Graphics and memory",
-    "xbsc_xs.dll": "Graphics and memory",
-    "xg_x.dll": "Graphics and memory",
-    "xg_xs.dll": "Graphics and memory",
-    "xgs12.dll": "Graphics and memory",
-    "xgs12_10.dll": "Graphics and memory",
-    "xgs12_10d.dll": "Graphics and memory",
-    "xgs12_10i.dll": "Graphics and memory",
-    "xgs12_d.dll": "Graphics and memory",
-    "xgs12_i.dll": "Graphics and memory",
-    "xmem.dll": "Graphics and memory",
-    "connectedstorageservice.proxystub.dll": "Platform and storage",
-    "gameconfighelper.dll": "Platform and storage",
-    "gamecoreclient.dll": "Platform and storage",
-    "gamecorecomproxy.dll": "Platform and storage",
-    "minappmodelx.dll": "Platform and storage",
-    "minuserx.dll": "Platform and storage",
-    "msave64xgs.dll": "Platform and storage",
-    "xbthunk.dll": "Platform and storage",
-    "xbtp.dll": "Platform and storage",
-    "xcrdapi.dll": "Platform and storage",
-    "xgameruntime.dll": "Platform and storage",
-    "werxboxgc.dll": "Diagnostics and tooling",
-    "hix_xs.dll": "Diagnostics and tooling",
-    "pixrt.dll": "Diagnostics and tooling",
-    "pixrt10.dll": "Diagnostics and tooling",
-    "pixevt.dll": "Diagnostics and tooling",
-    "pixlivemerge.dll": "Diagnostics and tooling",
-    "xtfbaseservices.dll": "Diagnostics and tooling",
-    "xtfconsolecontrol.dll": "Diagnostics and tooling",
-    "xtfdebugmonitor.dll": "Diagnostics and tooling",
-    "xtfdiaginfo.dll": "Diagnostics and tooling",
-    "xtfeventserver.dll": "Diagnostics and tooling",
-    "xtffileio.dll": "Diagnostics and tooling",
-    "xtfpix.dll": "Diagnostics and tooling",
-    "xtfremoterun.dll": "Diagnostics and tooling",
-    "xhit.dll": "Diagnostics and tooling",
-    "xhit_s.dll": "Diagnostics and tooling",
-    "xfp_gc.dll": "Other Xbox support",
-    "xfrontpaneldisplay.dll": "Other Xbox support",
-    "coniosrv.dll": "Other Xbox support",
-}
-
-
 def _key(value):
     if isinstance(value, bytes):
         return value.decode("ascii", "backslashreplace")
@@ -282,59 +224,23 @@ def sync_library_map(inventory, map_path):
         "title_delay_import_dlls": inventory["title"]["delay_import_dlls"],
         "title_delay_import_symbols": inventory["title"]["delay_import_symbols"],
     }
-    by_name = {row["name"].casefold(): row for row in data.get("libraries", [])}
-    for row in inventory["libraries"]:
-        name = row["name"]
-        exports = row["exports"]
-        relative = row["path"]
-        reference = relative
-        reachability = row["title_reachability"]
-        map_info = {
-            "source_path": relative,
+    reviewed = data["libraries"] + data.get("other_reviewed_libraries", [])
+    images = {row["name"].casefold(): row for row in inventory["libraries"]}
+    for library in reviewed:
+        name = library["name"]
+        row = images.get(name.casefold())
+        if row is None or row["sha256"] != library["export_coverage"]["binary_sha256"]:
+            raise ValueError(f"{name}: reviewed build differs from scanned package")
+        library["inventory"] = {
+            "source_path": row["path"],
             "source_sha256": row["sha256"],
             "file_description": row["metadata"].get("FileDescription", ""),
             "file_version": row["metadata"].get("FileVersion", row["metadata"].get("ProductVersion", "")),
-            "title_reachability": reachability,
+            "title_reachability": row["title_reachability"],
             "title_import_symbols": row.get("title_import_symbols", []),
             "static_import_chain": row.get("title_import_chain", []),
         }
-        existing = by_name.get(name.casefold())
-        if existing is not None:
-            existing["inventory"] = map_info
-            continue
-        description = row["metadata"].get("FileDescription", "")
-        group = GROUPS.get(name.casefold(), "Other Xbox support")
-        relationship = {
-            "direct": "directly imported by the title",
-            "transitive": "reached through the title's static DLL dependency graph",
-            "not statically reachable": (
-                "not present in the title's static DLL dependency graph; dynamic loads are not measured here"
-            ),
-        }[reachability]
-        role = f" {description}." if description else ""
-        note = (f"On-disk Xbox support module.{role} {exports['total']} exports catalogued; "
-                f"{relationship}. No TuxBox implementation has been verified.")
-        new = {
-            "name": name,
-            "group": group,
-            "status": "incomplete",
-            "provider": "No verified TuxBox provider for this library.",
-            "scope": note.strip(),
-            "remaining": "Confirm the required title behavior, then implement and verify its used exports and interfaces.",
-            "evidence": ["evidence/frosty-xbox-library-inventory.json"],
-            "export_coverage": {
-                "reference": reference,
-                "binary_sha256": row["sha256"],
-                "total": exports["total"],
-                "data_exports": exports["data_exports"],
-                "verified": [],
-                "notes": "Exports are catalogued in the local image. Zero exports currently have verified TuxBox coverage.",
-            },
-            "inventory": map_info,
-        }
-        data.setdefault("libraries", []).append(new)
-        by_name[name.casefold()] = new
-    map_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    map_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 def scan(package):
@@ -346,7 +252,7 @@ def scan(package):
         if not path.exists():
             raise ValueError(f"Expected Frosty package member is missing: {path.relative_to(package)}")
     reviewed = read_reviewed_map(ROOT / "evidence/library-status.json")
-    reviewed_names = {row["name"].casefold() for row in reviewed.get("libraries", [])}
+    reviewed_names = {row["name"].casefold() for row in reviewed["libraries"] + reviewed.get("other_reviewed_libraries", [])}
     all_dlls = [(path, "system image") for path in sorted(system.rglob("*.dll"), key=lambda p: p.as_posix().casefold())]
     all_dlls += [(path, "title mount") for path in sorted(mount.rglob("*.dll"), key=lambda p: p.as_posix().casefold())]
     all_modules = []
@@ -426,7 +332,7 @@ def main():
     parser.add_argument("--output", type=Path, default=ROOT / "evidence/frosty-xbox-library-inventory.json",
                         help="inventory JSON output path")
     parser.add_argument("--update-map", action="store_true",
-                        help="add newly discovered libraries to evidence/library-status.json as incomplete")
+                        help="refresh PE metadata for reviewed libraries in evidence/library-status.json")
     args = parser.parse_args()
     try:
         inventory = scan(args.package)
@@ -442,7 +348,7 @@ def main():
           f"{counts['scan_errors']} scan errors.")
     print(f"Wrote {args.output}")
     if args.update_map:
-        print("Updated evidence/library-status.json; new entries start at 0 verified exports.")
+        print("Refreshed inventory metadata for reviewed libraries.")
 
 
 if __name__ == "__main__":

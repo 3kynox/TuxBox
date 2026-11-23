@@ -35,6 +35,6 @@ Run `python tuxbox.py inspect /path/to/game` to see the executable TuxBox will l
 
 ## Compatibility
 
-[![TuxBox progress, including game tests, shader coverage and Xbox libraries](docs/progress.svg)](docs/progress.svg)
+[![TuxBox progress toward playable Frosty, with RDNA2 translation results and libraries used by the game](docs/progress.svg)](docs/progress.svg)
 
 [Current progress](docs/PROGRESS.md) · [Xbox libraries](docs/LIBRARIES.md) · [Shader coverage](docs/SHADERS.md) · [Test results](docs/RESULTS.md) · [Architecture](docs/ARCHITECTURE.md) · [Credits and references](docs/REFERENCES.md)

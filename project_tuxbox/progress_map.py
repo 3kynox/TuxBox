@@ -2,10 +2,8 @@
 from collections import Counter
 import json
 from pathlib import Path
-from textwrap import wrap
 from xml.etree import ElementTree as ET
 
-from .d3d12_status import interface_inventory
 from .verify import homebrew_matrix
 
 
@@ -65,213 +63,92 @@ def symbol(parent, x, y, level):
         element(group, "path", d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z", fill=color)
 
 
-def milestones(path):
-    rows = []
-    if path.is_file():
-        for line in path.read_text(encoding="utf-8").splitlines():
-            cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-            if len(cells) == 4:
-                number, sep, name = cells[0].partition(". ")
-                if number.isdigit() and sep:
-                    summary = cells[2].partition(". ")[0].rstrip(".")
-                    rows.append((name, cells[1], summary))
-    return rows
+# Each gate is worth one point on the current Frosty target. Evidence refers
+# to retail gameplay with the packaged graphics profile.
+FROSTY_GATES = {
+    "load_world": "Load game world",
+    "submit_frame": "Submit a frame",
+    "use_menu": "Use main menu",
+    "play_chase": "Play chase",
+    "explore_city": "Explore city",
+    "verify_visuals": "Verify visuals",
+    "verify_audio": "Verify audio",
+    "verify_frame_pacing": "Verify frame pacing",
+}
 
 
-def loader_notes(report, key):
-    trial = report["trials"][key]
-    missing = trial.get("missing_modules", [])
-    known = {name.casefold(): symbols for name, symbols in report.get("imports_from_missing_modules", {}).items()}
-    notes = [f"Trial {key}"]
-    if trial.get("stage") == "title-code":
-        notes.append("Title code reached")
-    notes.append("Frame verified" if trial.get("frame_verified") else "Frame unverified")
-    if missing:
-        notes.append("Missing DLLs: " + ", ".join(missing))
-        count = (sum(len(known[name.casefold()]) for name in missing)
-                 if all(name.casefold() in known for name in missing) else "unknown")
-        notes.append(f"Direct imports in missing DLLs: {count}")
-    unresolved = trial.get("unresolved_direct_symbols", [])
-    if unresolved:
-        notes.append(f"Unresolved imports in loaded DLLs: {len(unresolved)}")
-    failure = trial.get("observed_failure", {})
-    if failure:
-        if failure.get("title_diagnostic"):
-            notes.append(failure["title_diagnostic"])
-        details = {
-            "unimplemented-import": ("Unimplemented import", "symbol"),
-            "access-violation": ("Access violation", "exception_code"),
-            "title-fatal-error": ("Title fatal error", "exception_code"),
-            "graphics-device-lost": ("Graphics device lost", "hresult"),
-        }
-        label, field = details.get(failure["kind"], (failure["kind"], "exception_code"))
-        notes.append(f"{label} {failure.get(field, '')}".strip())
-        if "title_frame_rva" in failure:
-            notes.append(f"Title stack RVA {failure['title_frame_rva']}")
-    return notes
-
-
-def retail_summary(evidence, report):
-    trials = report.get("trials", {})
-    key = report.get("current_trial") or next(reversed(trials), None)
-    if key is None:
-        return "", ["No retail launch recorded."], []
-    if key not in trials:
-        raise ValueError(f"Unknown current retail trial {key!r}")
-    notes = loader_notes(report, key)
-    independent = read_json(evidence / "matrix-awakens/independent-menu.json")
-    if (independent.get("executable_sha256") == report.get("sha256") and report.get("sha256")
-            and "independent-menu.webp" in independent.get("captures", {})):
-        rows = [("Main menu", "Rendered", GREEN)]
-        if "independent-settings.webp" in independent["captures"]:
-            rows.append(("Settings", "Opened from keyboard", GREEN))
-        menu = read_json(evidence / "matrix-awakens/menu-background.json")
-        if menu.get("title_sha256") == report["sha256"] and "verified" in menu:
-            if menu["verified"]:
-                rows.append(("Green code background", "Animated", GREEN))
-            elif menu.get("observation") == "Black":
-                rows.append(("Green code background", "Missing", RED))
-        if "independent-wakeup.webp" in independent["captures"]:
-            rows.append(("Start Chase", "Opening cinematic", GREEN))
-        chase = read_json(evidence / "matrix-awakens/chase-gameplay.json")
-        if (chase.get("title_sha256") == report["sha256"]
-                and chase.get("run", {}).get("first_gameplay_profile", {}).get("name") == "XSX_ChaseGameplay"):
-            rows.append(("Chase tutorial", "Reached in game", GREEN))
-            controls = chase.get("current_build", {}).get("controls") or chase["controls"]
-            if controls.get("target_lock_action", {}).get("verified"):
-                rows.append(("Controller target lock", "Registered in game", GREEN))
-            fired = controls.get("manual_fire_verified")
-            rows.append(("Manual shooting", "Verified" if fired else "Unverified", GREEN if fired else MUTED))
-            runs = [chase.get(key, {}) for key in ("warm_replay", "sandbox_replay", "normal_final")]
-            sandboxes = [run["sandbox"] for run in runs if run.get("title_sha256") == report["sha256"]
-                         and run.get("sandbox", {}).get("state") == "EFrostyGameStateType::Sandbox"]
-            if sandboxes:
-                rows.append(("City sandbox", "Reached after the chase", GREEN))
-            movement = any(sandbox.get("free_roam_movement_verified") for sandbox in sandboxes)
-            rows.append(("Free roam", "Verified" if movement else "Unverified", GREEN if movement else MUTED))
-        else:
-            rows.append(("Driving and shooting", "Unverified", MUTED))
-        packaged = read_json(evidence / "matrix-awakens/packaged-graphics.json")
-        boot = packaged.get("retail_boot", {})
-        renderer = read_json(evidence / "matrix-awakens/packaged-renderer.json")
-        if renderer.get("title_sha256") == report["sha256"] and renderer.get("first_present"):
-            milestone = "Menu displayed" if renderer.get("menu_verified") else (
-                "Black frame" if renderer.get("window", "").startswith("Black") else "Frame presented")
-            previous = {label for label, _, _ in rows}
-            reduced = "Chase + city reached" if "City sandbox" in previous else (
-                "Chase reached" if "Chase tutorial" in previous else "Menu rendered")
-            rows = [("Original settings", milestone, GREEN if renderer.get("menu_verified") else RED),
-                    ("Earlier reduced-effects run", reduced, GREEN),
-                    ("Visual quality", "Artifacts remain", AMBER)]
-        elif (packaged.get("title_sha256") == report["sha256"] and boot.get("exit_code")
-                and boot.get("mangohud_frames") == 0 and boot.get("first_present") is False):
-            rows[:0] = [("Packaged graphics settings", "Blocked before first frame", RED),
-                        ("Earlier reduced-effects tests", "", MUTED)]
-        host = independent.get("proton", "")
-        if "experimental" in host.casefold():
-            host = "Proton Experimental"
-        return host, notes, rows
-    replay = read_json(evidence / report["chase_display_receipt"]) if report.get("chase_display_receipt") else {}
-    extended = replay.get("desktop_extended_trial", {})
-    if not report.get("sha256"):
-        return "", notes, []
-    if extended.get("title_sha256") != report["sha256"]:
-        replay, extended = {}, {}
-    host = replay
-    rows = []
-    if replay.get("city_vista_trial", {}).get("later_clip_match"):
-        rows.append(("Chase cinematics", "Rendered", GREEN))
-    mixed = read_json(evidence / "matrix-awakens/retail-mixed-input.json")
-    if mixed.get("title_sha256") == report["sha256"] and mixed.get("actions"):
-        rows.append(("Menu input", "Keyboard, mouse, XInput", GREEN))
-        host = host or mixed
-    menu = read_json(evidence / "matrix-awakens/menu-background.json")
-    if (menu.get("title_sha256") == report["sha256"] and menu.get("verified") is False
-            and menu.get("observation") == "Black"):
-        rows.append(("Menu code background", "Missing", RED))
-        host = host or menu
-    if extended.get("fraction_pixels_with_all_rgb_channels_at_most_12", 0) > 0.99:
-        rows.append(("Real-time dialogue", "Near-black", RED))
-    if "driving_and_shooting_verified" in extended:
-        verified = extended["driving_and_shooting_verified"]
-        rows.append(("Driving and shooting", "Verified" if verified else "Unverified", GREEN if verified else MUTED))
-    seconds = extended.get("seconds_from_chase_global_to_last_render_warning")
-    if seconds and "Cine_10_ChaseIntro_1_Dialogue" in extended.get("activated_layers_utc", {}):
-        minutes, seconds = divmod(int(seconds), 60)
-        rows.append(("Recorded chase run", f"{minutes}m {seconds:02d}s", TEXT))
-    prep = read_json(evidence / "matrix-awakens/first-boot-pipelines.json")
-    if prep.get("title_sha256") == report["sha256"] and "complete_preparation" in prep:
-        host = host or prep
-        run = prep["complete_preparation"]
-        rows.append(("First-boot prep", f"{run['cold_dxil_compiled']} shaders · {run['cold_gpu_pipelines_created']} pipelines", TEXT))
-    gpu = host.get("gpu", "").removeprefix("NVIDIA GeForce ")
-    provider = host.get("proton") or host.get("provider", "")
-    if "experimental" in provider.lower():
-        provider = "Proton Experimental"
-    return " · ".join(filter(None, (provider, gpu))), notes, rows
-
-
-def draw_runtime(svg, y, evidence):
-    rows = milestones(evidence.parent / "docs/PROGRESS.md")
-    report = read_json(evidence / "matrix-awakens-launch.json")
-    if not rows and not report:
+def draw_roadmap(svg, y, path):
+    if not path.is_file():
         return y
-    host, notes, retail = retail_summary(evidence, report) if report else ("", [], [])
-    if retail:
-        # The retail title has its own panel with the measured result.
-        rows = [row for row in rows if row[0] != "First retail title"]
-    left = 509 if rows and report else INNER
-    right = INNER - left - GAP if rows and report else INNER
-    runtime_rows = []
-    for name, status, summary in rows:
-        # Leave room for the right-aligned status when a fallback monospace font is used.
-        names = wrap(name, max(16, int((left-48-9*len(status))/9.7)))
-        detail = wrap(summary, (left-36)//9) or [""]
-        runtime_rows.append((names, status, detail))
-    runtime_height = 91 + sum(15 + 20*len(names) + 18*len(detail) for names, _, detail in runtime_rows)
+    milestones = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        number, separator, name = cells[0].partition(". ")
+        if len(cells) == 4 and number.isdecimal() and separator and name:
+            milestones.append((name, cells[1]))
+    if not milestones:
+        return y
+    count = sum(status == "Verified" for _, status in milestones)
+    total = len(milestones)
+    height = 89
+    group = section(svg, PAD, y, "Overall TuxBox progress")
+    rect(group, 0, 0, INNER, height, PANEL, stroke=AMBER)
+    element(group, "desc").text = ". ".join(f"{name} · {status}" for name, status in milestones)
+    text(group, 18, 32, "Overall TuxBox progress", 25, AMBER, bold=True)
+    text(group, INNER-18, 32, f"{count/total:.0%}", 23, AQUA, bold=True, anchor="end")
+    text(group, 18, 56, f"{count}/{total} project roadmap milestones verified", 15)
+    rect(group, 18, 68, INNER-36, 8, LINE)
+    if count:
+        rect(group, 18, 68, (INNER-36)*count/total, 8, AQUA)
+    return y+height+GAP
 
-    fallback = [part for note in notes for part in wrap(note, (right-36)//9)]
-    retail_rows = []
-    for label, value, color in retail:
-        labels = wrap(label, max(10, int((right-48)/9.2) - len(value)))
-        retail_rows.append((labels, value, color))
-    retail_height = (149 + sum(21 + 18*len(labels) for labels, _, _ in retail_rows)
-                     if retail else 99 + 23*len(fallback))
-    height = max(runtime_height if rows else 0, retail_height if report else 0)
-    if rows:
-        group = section(svg, PAD, y, "Runtime capabilities")
-        window(group, left, height, "~/docs/PROGRESS.md", focused=True)
-        text(group, 18, 70, "Runtime capabilities", 25, AMBER, bold=True)
-        top = 83
-        for names, status, detail in runtime_rows:
-            rect(group, 18, top, left-36, 1, LINE)
-            for i, line in enumerate(names):
-                text(group, 18, top+23+i*20, line, 16, bold=True)
-            color = {"Verified": GREEN, "Partial": AMBER, "Pending": MUTED}.get(status, AQUA)
-            text(group, left-18, top+23, status, 14, color, anchor="end")
-            top += 20*len(names)
-            for i, line in enumerate(detail):
-                text(group, 18, top+22+i*18, line, 15, MUTED)
-            top += 15 + 18*len(detail)
-    if report:
-        group = section(svg, WIDTH-PAD-right, y, "The Matrix Awakens")
-        window(group, right, height, "~/evidence/matrix-awakens-launch.json", focused=not rows)
-        text(group, 18, 70, "The Matrix Awakens", 25, AMBER, bold=True)
-        if retail:
-            element(group, "desc").text = ". ".join(notes)
-            label = "Retail launch with TuxBox providers" if any(row[0] == "Main menu" for row in retail) else "Retail comparison run"
-            text(group, 18, 96, label, 15)
-            text(group, 18, 118, host, 15, MUTED)
-            top = 136
-            for labels, value, color in retail_rows:
-                rect(group, 18, top, right-36, 1, LINE)
-                for i, line in enumerate(labels):
-                    text(group, 18, top+25+18*i, line, 15)
-                text(group, right-18, top+25, value, 15, color, anchor="end")
-                top += 21 + 18*len(labels)
-        else:
-            for i, line in enumerate(fallback):
-                text(group, 18, 96+i*23, line, 15, MUTED)
+
+def draw_frosty_target(svg, y, evidence):
+    title = read_json(evidence / "matrix-awakens-launch.json")
+    if not title:
+        return y
+    receipt = read_json(evidence / title["progress_receipt"]) if title.get("progress_receipt") else {}
+    settings = receipt.get("settings", {})
+    run = receipt.get("runs", {}).get("tuxbox", {})
+    measured = bool(title.get("sha256") and title["sha256"] == receipt.get("title_sha256")
+                    and run.get("log_sha256") and "verified_milestones" in run
+                    and settings.get("graphics_profile") == "packaged"
+                    and settings.get("loose_graphics_overrides_in_package") == 0
+                    and settings.get("ray_tracing") == settings.get("lumen_hardware_ray_tracing") == 1)
+    verified = set(run["verified_milestones"]) if measured else set()
+    unknown = verified.difference(FROSTY_GATES)
+    if unknown:
+        raise ValueError(f"Unknown Frosty milestone(s): {sorted(unknown)}")
+    failure = receipt.get("failure", {}) if measured else {}
+    shader = failure.get("global_shader")
+    blocker = f"Blocked at global shader {shader} · {failure['entry']}" if shader is not None else ""
+    height = 231 if blocker else 208
+    group = section(svg, PAD, y, "Frosty gameplay target")
+    window(group, INNER, height, "~/docs/PROGRESS.md")
+    text(group, 18, 69, "Frosty gameplay target", 25, AMBER, bold=True)
+    count, total = len(verified), len(FROSTY_GATES)
+    text(group, INNER-18, 69, f"{count/total:.0%}" if measured else "Unmeasured",
+         23, AQUA if measured else MUTED, bold=True, anchor="end")
+    text(group, 18, 94, "Current target · The Matrix Awakens with its packaged graphics settings", 15)
+    text(group, INNER-18, 94, f"{count}/{total} gates verified" if measured else "Awaiting a recorded run",
+         14, MUTED, anchor="end")
+    rect(group, 18, 107, INNER-36, 9, LINE)
+    if count:
+        rect(group, 18, 107, (INNER-36)*count/total, 9, AQUA)
+    for index, (key, label) in enumerate(FROSTY_GATES.items()):
+        x, top = 18+(index % 4)*233, 145+(index//4)*28
+        status = key in verified
+        mark = element(group, "g")
+        element(mark, "title").text = f"{label} · {'Verified' if status else 'Awaiting verification'}"
+        rect(mark, x, top-11, 12, 12, GREEN if status else PANEL, stroke=GREEN if status else MUTED)
+        if status:
+            element(mark, "path", d=f"M{x+2},{top-5} l3,3 l5,-7", fill="none", stroke=BG, stroke_width=1.6)
+        text(mark, x+20, top, label, 15, TEXT if status else MUTED)
+    if blocker:
+        rect(group, 18, 190, INNER-36, 1, LINE)
+        text(group, 18, 215, blocker, 15, AMBER)
     return y+height+GAP
 
 
@@ -409,13 +286,7 @@ def draw_libraries(svg, y, data, direct):
     group = section(svg, PAD, y, "Xbox library coverage")
     window(group, INNER, height, "~/evidence/library-status.json")
     text(group, 18, 70, "Xbox library coverage", 25, AMBER, bold=True)
-    summary = data.get("inventory_summary", {})
-    if summary:
-        heading = (f"{len(libraries)} tracked · {summary['system_image_dlls_scanned']} system DLLs scanned · "
-                   f"{summary['direct_static_imports']} imports · {summary['transitive_static_dependencies']} transitive")
-    else:
-        heading = f"{len(libraries)} tracked DLLs · TuxBox and reference providers"
-    text(group, INNER-18, 68, heading, 14, MUTED, anchor="end")
+    text(group, INNER-18, 68, f"{len(libraries)} active Frosty libraries", 14, MUTED, anchor="end")
     x = 18
     for name in COLORS:
         symbol(group, x+5, 99, name)
@@ -423,7 +294,7 @@ def draw_libraries(svg, y, data, direct):
         text(group, x+20, 104, label, 15, COLORS[name])
         x += 20 + 10*len(label) + 24
     text(group, 18, 130,
-         "Bars: verified exports, not game compatibility. * Frosty import  ·  ~ static dependency  ·  dynamic loads unmeasured.",
+         "Bars count verified exports. Empty circles mark incomplete support.",
          13, MUTED)
     y0 = 148
     for band, band_height in zip(bands, band_heights):
@@ -441,8 +312,6 @@ def draw_libraries(svg, y, data, direct):
                 cell = element(group, "g")
                 parts = export_breakdown(library)
                 inventory = library.get("inventory") or {}
-                relation = inventory.get("title_reachability")
-                marker = {"direct": " *", "transitive": " ~"}.get(relation, "")
                 title_symbols = inventory.get("title_import_symbols", [])
                 if direct is not None and name in direct:
                     symbols = direct[name]
@@ -459,12 +328,12 @@ def draw_libraries(svg, y, data, direct):
                 elif inventory.get("static_import_chain"):
                     reach_note = "Static title path: " + " -> ".join(inventory["static_import_chain"])
                 else:
-                    reach_note = "No static PE import path found; dynamic loads are not measured."
+                    reach_note = "No static PE import path found."
                 element(cell, "title").text = (f"{name} · {state.capitalize()} · Verified TuxBox exports {tally} "
                                                f"({percent}). {library['provider']} {library['scope']} "
                                                f"{reach_note}")
                 symbol(cell, x+6, top-5, state)
-                text(cell, x+20, top, name + marker, 13)
+                text(cell, x+20, top, name, 13)
                 if fraction is None:
                     element(cell, "line", x1=bar_x, x2=bar_x+bar_width, y1=top-5, y2=top-5,
                             stroke=MUTED, stroke_dasharray="2 4")
@@ -523,42 +392,55 @@ def culling_readbacks(evidence, archive, compiler, name):
     return f"Nanite {name} · {count}/{len(family)} packaged variants passed GPU readback on both adapters"
 
 
-def shader_checks(evidence, data):
-    notes = [validation] if (validation := shader_validation(data)) else []
+def shader_archive_results(evidence, data):
+    archives = {name: archive["member_sha256"] for name, archive in data.get("archives", {}).items()
+                if archive.get("member_sha256")}
     raster = read_json(evidence / "matrix-awakens/raster-archive-survey.json")
     for name in ("global", "material"):
-        archive = raster.get("archives", {}).get(name, {})
-        if archive.get("archive_sha256") != data.get("archives", {}).get(name, {}).get("member_sha256"):
+        report = raster.get("archives", {}).get(name, {})
+        if not report.get("compiler_sha256") or report.get("archive_sha256") != archives.get(name):
             continue
-        stages = archive.get("stages", {})
-        if not archive.get("compiler_sha256") or not all(
-                key in stages and all(field in stages[key] for field in ("entries", "translated"))
-                for key in ("vertex", "pixel", "geometry")):
+        stages = [report.get("stages", {}).get(stage, {}) for stage in ("vertex", "pixel", "geometry")]
+        if not all(type(s.get("translated")) is int and type(s.get("entries")) is int
+                   and 0 <= s["translated"] <= s["entries"] for s in stages):
             continue
-        total = sum(row["entries"] for row in stages.values())
-        translated = sum(row["translated"] for row in stages.values())
-        if total:
-            notes.append(f"{name.capitalize()} raster archive · {translated:,}/{total:,} entries emitted HLSL "
-                         f"({translated/total:.1%}) · compiler {archive['compiler_sha256'][:8]}")
+        total = sum(s["entries"] for s in stages)
+        if total and name in archives:
+            yield (name.capitalize() + " raster", sum(s["translated"] for s in stages),
+                   total, "HLSL", report["compiler_sha256"])
     compute = read_json(evidence / "matrix-awakens/compute-archive-survey.json")
     stage = compute.get("stage", {})
-    total = stage.get("entries")
-    translated = stage.get("translated")
-    if (compute.get("archive_sha256") == data.get("archives", {}).get("global", {}).get("member_sha256")
-            and compute.get("compiler_sha256")
-            and type(total) is int and type(translated) is int and 0 <= translated <= total and total > 0):
-        notes.append(f"Global compute archive · {translated:,}/{total:,} entries emitted HLSL "
-                     f"({translated/total:.1%}) · compiler {compute['compiler_sha256'][:8]}")
+    total, translated = stage.get("entries"), stage.get("translated")
+    if ("global" in archives and compute.get("archive_sha256") == archives["global"]
+            and compute.get("compiler_sha256") and type(total) is int and type(translated) is int
+            and total > 0 and 0 <= translated <= total):
+        yield "Global compute", translated, total, "HLSL", compute["compiler_sha256"]
     census = read_json(evidence / "matrix-awakens/ray-state-census.json")
-    ray_archives = census.get("archives", {})
-    if ray_archives and all(
-            info.get("archive_sha256") == data.get("archives", {}).get(name, {}).get("member_sha256")
-            and "compiled_entries" in info.get("desktop_translation", {})
-            for name, info in ray_archives.items()):
-        compiled = sum(info["desktop_translation"]["compiled_entries"] for info in ray_archives.values())
-        total = sum(sum(info["entries"].values()) for info in ray_archives.values())
+    sources = census.get("archives", {})
+    if sources and all(name in archives and info.get("archive_sha256") == archives[name]
+                       for name, info in sources.items()):
+        compiled = total = 0
+        for source in sources.values():
+            count = source.get("desktop_translation", {}).get("compiled_entries")
+            entries = list(source.get("entries", {}).values())
+            if (type(count) is not int or not all(type(n) is int and n >= 0 for n in entries)
+                    or not 0 <= count <= sum(entries)):
+                return
+            total += sum(entries)
+            compiled += count
         if total:
-            notes.append(f"Ray tracing · {compiled:,} of {total:,} packaged entries compiled to DXIL ({compiled/total:.1%})")
+            yield "Ray tracing", compiled, total, "DXIL", census.get("xshader_sha256", "")
+
+
+def shader_checks(evidence, data):
+    notes = [validation] if (validation := shader_validation(data)) else []
+    for label, translated, total, output, compiler in shader_archive_results(evidence, data):
+        if output == "HLSL":
+            notes.append(f"{label} archive · {translated:,}/{total:,} entries emitted HLSL "
+                         f"({translated/total:.1%}) · compiler {compiler[:8]}")
+        else:
+            notes.append(f"{label} · {translated:,} of {total:,} packaged entries compiled to DXIL "
+                         f"({translated/total:.1%})")
     archive = data.get("archives", {}).get("global", {}).get("member_sha256")
     warmup = read_json(evidence / "matrix-awakens/chase-warmup.json")
     if (warmup and warmup["title_sha256"] == data.get("executable_sha256")
@@ -638,7 +520,7 @@ def shader_table(evidence):
     if not data:
         return "No retail shader inventory recorded."
     independent = independent_counts(data)
-    lines = ["Frosty shader coverage",
+    lines = ["RDNA 2 shader translation measured on Frosty",
              f"{'Shader stage':<16} {'Packaged':>9} {'HLSL / unique DXBC':>21} {'TuxBox only':>12} "
              f"{'In profile':>11} {'Profiled / requested':>23}"]
     for row in data["stages"]:
@@ -669,51 +551,25 @@ def draw_shaders(svg, y, evidence):
     data = read_json(evidence / "matrix-awakens/shader-inventory.json")
     if not data:
         return y
-    # Reuse the receipt checks so mismatched builds and invalid counts never
-    # appear as measured coverage. Detailed per-stage results live in SHADERS.md.
-    checks = shader_checks(evidence, data)
-    rows = []
-    for prefix, label in (("Global raster archive", "Global raster"),
-                          ("Material raster archive", "Material raster"),
-                          ("Global compute archive", "Global compute"),
-                          ("Ray tracing", "Ray tracing")):
-        note = next((item for item in checks if item.startswith(prefix)), None)
-        if note:
-            rows.append((label, note.split(" · ", 1)[1] if " · " in note else note))
-    height = 146 + 29 * len(rows)
-    group = section(svg, PAD, y, "Frosty shader coverage")
+    rows = list(shader_archive_results(evidence, data))
+    height = 146 + 28*len(rows)
+    group = section(svg, PAD, y, "RDNA 2 shader translation")
     window(group, INNER, height, "~/docs/SHADERS.md")
-    text(group, 18, 70, "Frosty shader coverage", 25, AMBER, bold=True)
-    text(group, 18, 96, "Packaged entries translated in measured compiler snapshots", 14, MUTED)
-    for index, (label, detail) in enumerate(rows):
-        top = 112 + 29 * index
-        rect(group, 18, top, INNER-36, 1, LINE)
-        text(group, 18, top+20, label, 15)
-        text(group, INNER-18, top+20, detail, 14, TEXT, anchor="end")
-    text(group, 18, height-13, "Translation is not proof of correct rendering. See SHADERS.md for GPU checks.", 14, MUTED)
-    return y + height + GAP
-
-
-def draw_d3d12(svg, y, data):
-    if not data:
-        return y
-    rows = data["interfaces"]
-    height = 138 + 23 * ((len(rows) + 2) // 3)
-    group = section(svg, PAD, y, "d3d12_xs Xbox interface methods")
-    window(group, INNER, height, "d3d12_xs.dll / interface methods")
-    text(group, 18, 63, "Checked slots in Frosty’s catalogued interfaces", 18, TEXT, bold=True)
-    text(group, 18, 86, f"Build {data['package_version']} · Counts show methods with TuxBox checks / identified methods in the sample.", 13, MUTED)
-    for i, entry in enumerate(rows):
-        col, row = i % 3, i // 3
-        x, baseline = 18 + col * 318, 113 + 23 * row
-        slots = entry["slots"]
-        checked = sum(bool(slot.get("checks")) for slot in slots)
-        text(group, x, baseline, entry["name"], 14, TEXT)
-        text(group, x + 279, baseline, f"{checked}/{len(slots)}", 14, AQUA if checked else MUTED, anchor="end")
-    bindings = data["registered_slots"]
-    text(group, 18, height - 15, f"Compiled TuxBox handlers: {len(bindings['Device'])} device · "
-         f"{len(bindings['Graphics command list'])} graphics list · {len(bindings['DMA command list'])} DMA list · "
-         f"{len(bindings['Command queue'])} queue", 13, MUTED)
+    text(group, 18, 70, "RDNA 2 shader translation", 25, AMBER, bold=True)
+    text(group, 18, 96, "Measured on Frosty’s shader archives", 15)
+    text(group, 301, 121, "Compiler output", 13, MUTED)
+    text(group, INNER-102, 121, "Archive entries", 13, MUTED, anchor="end")
+    for index, (label, count, total, output, compiler) in enumerate(rows):
+        top = 145 + 28*index
+        cell = element(group, "g")
+        element(cell, "title").text = f"{label} · compiler snapshot {compiler}"
+        rect(cell, 18, top-18, INNER-36, 1, LINE)
+        text(cell, 18, top, label, 15)
+        text(cell, 301, top, "HLSL emitted" if output == "HLSL" else "DXIL compiled", 14)
+        rect(cell, 510, top-10, 125, 6, LINE)
+        rect(cell, 510, top-10, 125*count/total, 6, AQUA)
+        text(cell, INNER-102, top, f"{count:,}/{total:,}", 14, TEXT, anchor="end")
+        text(cell, INNER-18, top, f"{count/total:.1%}", 14, TEXT, anchor="end")
     return y + height + GAP
 
 
@@ -735,9 +591,9 @@ def render_map(evidence):
                              "aria-labelledby": "map-title map-description"})
     element(svg, "title", id="map-title").text = "TuxBox runtime compatibility"
     element(svg, "desc", id="map-description").text = (
-        "Current runtime capabilities, retail output, Xbox DLL coverage and shader preparation. "
-        "A checked circle marks complete coverage, a half-filled circle partial coverage "
-        "and an open ring incomplete coverage. Shader bars show frontend and preparation coverage. DLL bars show verified exports.")
+        "Overall progress counts fully verified project roadmap milestones. "
+        "Frosty gameplay tracks title milestones at packaged graphics settings. "
+        "Shader rows measure the reusable RDNA 2 translator on Frosty archives. DLL bars show verified exports.")
     bg = rect(svg, 0, 0, WIDTH, 1, BG)
     rect(svg, 0, 0, WIDTH, 48, BAR)
     rect(svg, 0, 47, WIDTH, 1, LINE)
@@ -746,7 +602,8 @@ def render_map(evidence):
     brand = text(svg, WIDTH//2, 32, "TUXBOX", 22, AMBER, bold=True, anchor="middle")
     brand.set("letter-spacing", "4")
     text(svg, WIDTH-PAD, 30, "Xbox Series X|S", 16, AQUA, anchor="end")
-    y = draw_runtime(svg, 48+GAP, evidence)
+    y = draw_roadmap(svg, 48+GAP, evidence.parent / "docs/PROGRESS.md")
+    y = draw_frosty_target(svg, y, evidence)
     y = draw_shaders(svg, y, evidence)
     data = read_json(evidence / "library-status.json")
     y = draw_libraries(svg, y, data, frosty_import_coverage(evidence, data.get("libraries", [])))

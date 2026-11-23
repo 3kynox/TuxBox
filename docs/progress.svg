@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" role="img" font-family="'Terminess Nerd Font Mono', 'DejaVu Sans Mono', Consolas, monospace" aria-labelledby="map-title map-description" viewBox="0 0 1000 2435" width="1000" height="2435">
+<svg xmlns="http://www.w3.org/2000/svg" role="img" font-family="'Terminess Nerd Font Mono', 'DejaVu Sans Mono', Consolas, monospace" aria-labelledby="map-title map-description" viewBox="0 0 1000 1262" width="1000" height="1262">
   <title id="map-title">TuxBox runtime compatibility</title>
-  <desc id="map-description">Current runtime capabilities, retail output, Xbox DLL coverage and shader preparation. A checked circle marks complete coverage, a half-filled circle partial coverage and an open ring incomplete coverage. Shader bars show frontend and preparation coverage. DLL bars show verified exports.</desc>
-  <rect x="0" y="0" width="1000" height="2435" fill="#0b0b0f" />
+  <desc id="map-description">Overall progress counts fully verified project roadmap milestones. Frosty gameplay tracks title milestones at packaged graphics settings. Shader rows measure the reusable RDNA 2 translator on Frosty archives. DLL bars show verified exports.</desc>
+  <rect x="0" y="0" width="1000" height="1262" fill="#0b0b0f" />
   <rect x="0" y="0" width="1000" height="48" fill="#090910" />
   <rect x="0" y="47" width="1000" height="1" fill="#272733" />
   <rect x="14" y="10" width="210" height="27" fill="#e2bc8c" />
@@ -9,95 +9,132 @@
   <text x="500" y="32" fill="#e2bc8c" font-size="22" text-anchor="middle" font-weight="bold" letter-spacing="4">TUXBOX</text>
   <text x="986" y="30" fill="#6fc7d4" font-size="16" text-anchor="end" font-weight="normal">Xbox Series X|S</text>
   <g transform="translate(14 60)">
-    <title>Runtime capabilities</title>
-    <rect x="0" y="0" width="509" height="463" fill="#14141d" stroke="#e2bc8c" stroke-width="2" />
-    <rect x="1" y="1" width="507" height="32" fill="#0d0d15" />
-    <rect x="1" y="33" width="507" height="1" fill="#272733" />
+    <title>Overall TuxBox progress</title>
+    <rect x="0" y="0" width="972" height="89" fill="#14141d" stroke="#e2bc8c" />
+    <desc>Identify a package · Verified. Native process and memory · Partial. Guest graphics submission · Partial. Retail shader and resource translation · Partial. Playable platform services · Partial. First retail title · Original settings blocked. Multi-title compatibility and performance · Pending</desc>
+    <text x="18" y="32" fill="#e2bc8c" font-size="25" text-anchor="start" font-weight="bold">Overall TuxBox progress</text>
+    <text x="954" y="32" fill="#6fc7d4" font-size="23" text-anchor="end" font-weight="bold">14%</text>
+    <text x="18" y="56" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">1/7 project roadmap milestones verified</text>
+    <rect x="18" y="68" width="936" height="8" fill="#272733" />
+    <rect x="18" y="68" width="133.71428571428572" height="8" fill="#6fc7d4" />
+  </g>
+  <g transform="translate(14 161)">
+    <title>Frosty gameplay target</title>
+    <rect x="0" y="0" width="972" height="231" fill="#14141d" stroke="#272733" stroke-width="1" />
+    <rect x="1" y="1" width="970" height="32" fill="#0d0d15" />
+    <rect x="1" y="33" width="970" height="1" fill="#272733" />
     <circle cx="16" cy="17" r="4.5" fill="#e74c3c" />
     <circle cx="32" cy="17" r="4.5" fill="#f1c40f" />
     <circle cx="48" cy="17" r="4.5" fill="#2ecc71" />
     <text x="68" y="22" fill="#6fc7d4" font-size="14" text-anchor="start" font-weight="normal">~/docs/PROGRESS.md</text>
-    <text x="18" y="70" fill="#e2bc8c" font-size="25" text-anchor="start" font-weight="bold">Runtime capabilities</text>
-    <rect x="18" y="83" width="473" height="1" fill="#272733" />
-    <text x="18" y="106" fill="#d7d7de" font-size="16" text-anchor="start" font-weight="bold">Identify a package</text>
-    <text x="491" y="106" fill="#2ecc71" font-size="14" text-anchor="end" font-weight="normal">Verified</text>
-    <text x="18" y="125" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Frosty packages and DLL exports inventoried</text>
-    <rect x="18" y="136" width="473" height="1" fill="#272733" />
-    <text x="18" y="159" fill="#d7d7de" font-size="16" text-anchor="start" font-weight="bold">Native process and memory</text>
-    <text x="491" y="159" fill="#e2bc8c" font-size="14" text-anchor="end" font-weight="normal">Partial</text>
-    <text x="18" y="178" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Memory allocation and working-set controls pass on</text>
-    <text x="18" y="196" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Proton</text>
-    <rect x="18" y="207" width="473" height="1" fill="#272733" />
-    <text x="18" y="230" fill="#d7d7de" font-size="16" text-anchor="start" font-weight="bold">Guest graphics submission</text>
-    <text x="491" y="230" fill="#e2bc8c" font-size="14" text-anchor="end" font-weight="normal">Partial</text>
-    <text x="18" y="249" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Xbox device, command list and presentation controls</text>
-    <text x="18" y="267" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">pass on selected hosts</text>
-    <rect x="18" y="278" width="473" height="1" fill="#272733" />
-    <text x="18" y="301" fill="#d7d7de" font-size="16" text-anchor="start" font-weight="bold">Retail shader and resource translation</text>
-    <text x="491" y="301" fill="#e2bc8c" font-size="14" text-anchor="end" font-weight="normal">Partial</text>
-    <text x="18" y="320" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Packaged shader pipelines and individual GPU outputs</text>
-    <text x="18" y="338" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">tested</text>
-    <rect x="18" y="349" width="473" height="1" fill="#272733" />
-    <text x="18" y="372" fill="#d7d7de" font-size="16" text-anchor="start" font-weight="bold">Playable platform services</text>
-    <text x="491" y="372" fill="#e2bc8c" font-size="14" text-anchor="end" font-weight="normal">Partial</text>
-    <text x="18" y="391" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Lanes tests input and selected audio paths</text>
-    <rect x="18" y="402" width="473" height="1" fill="#272733" />
-    <text x="18" y="425" fill="#d7d7de" font-size="16" text-anchor="start" font-weight="bold">Multi-title compatibility and performance</text>
-    <text x="491" y="425" fill="#a0a0b1" font-size="14" text-anchor="end" font-weight="normal">Pending</text>
-    <text x="18" y="444" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">No second retail title has a recorded launch</text>
+    <text x="18" y="69" fill="#e2bc8c" font-size="25" text-anchor="start" font-weight="bold">Frosty gameplay target</text>
+    <text x="954" y="69" fill="#6fc7d4" font-size="23" text-anchor="end" font-weight="bold">25%</text>
+    <text x="18" y="94" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Current target · The Matrix Awakens with its packaged graphics settings</text>
+    <text x="954" y="94" fill="#a0a0b1" font-size="14" text-anchor="end" font-weight="normal">2/8 gates verified</text>
+    <rect x="18" y="107" width="936" height="9" fill="#272733" />
+    <rect x="18" y="107" width="234.0" height="9" fill="#6fc7d4" />
+    <g>
+      <title>Load game world · Verified</title>
+      <rect x="18" y="134" width="12" height="12" fill="#2ecc71" stroke="#2ecc71" />
+      <path d="M20,140 l3,3 l5,-7" fill="none" stroke="#0b0b0f" stroke-width="1.6" />
+      <text x="38" y="145" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Load game world</text>
+    </g>
+    <g>
+      <title>Submit a frame · Verified</title>
+      <rect x="251" y="134" width="12" height="12" fill="#2ecc71" stroke="#2ecc71" />
+      <path d="M253,140 l3,3 l5,-7" fill="none" stroke="#0b0b0f" stroke-width="1.6" />
+      <text x="271" y="145" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Submit a frame</text>
+    </g>
+    <g>
+      <title>Use main menu · Awaiting verification</title>
+      <rect x="484" y="134" width="12" height="12" fill="#14141d" stroke="#a0a0b1" />
+      <text x="504" y="145" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Use main menu</text>
+    </g>
+    <g>
+      <title>Play chase · Awaiting verification</title>
+      <rect x="717" y="134" width="12" height="12" fill="#14141d" stroke="#a0a0b1" />
+      <text x="737" y="145" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Play chase</text>
+    </g>
+    <g>
+      <title>Explore city · Awaiting verification</title>
+      <rect x="18" y="162" width="12" height="12" fill="#14141d" stroke="#a0a0b1" />
+      <text x="38" y="173" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Explore city</text>
+    </g>
+    <g>
+      <title>Verify visuals · Awaiting verification</title>
+      <rect x="251" y="162" width="12" height="12" fill="#14141d" stroke="#a0a0b1" />
+      <text x="271" y="173" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Verify visuals</text>
+    </g>
+    <g>
+      <title>Verify audio · Awaiting verification</title>
+      <rect x="484" y="162" width="12" height="12" fill="#14141d" stroke="#a0a0b1" />
+      <text x="504" y="173" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Verify audio</text>
+    </g>
+    <g>
+      <title>Verify frame pacing · Awaiting verification</title>
+      <rect x="717" y="162" width="12" height="12" fill="#14141d" stroke="#a0a0b1" />
+      <text x="737" y="173" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Verify frame pacing</text>
+    </g>
+    <rect x="18" y="190" width="936" height="1" fill="#272733" />
+    <text x="18" y="215" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">Blocked at global shader 219 · LumenSceneDirectLightingHardwareRayTracingCS</text>
   </g>
-  <g transform="translate(535 60)">
-    <title>The Matrix Awakens</title>
-    <rect x="0" y="0" width="451" height="463" fill="#14141d" stroke="#272733" stroke-width="1" />
-    <rect x="1" y="1" width="449" height="32" fill="#0d0d15" />
-    <rect x="1" y="33" width="449" height="1" fill="#272733" />
-    <circle cx="16" cy="17" r="4.5" fill="#e74c3c" />
-    <circle cx="32" cy="17" r="4.5" fill="#f1c40f" />
-    <circle cx="48" cy="17" r="4.5" fill="#2ecc71" />
-    <text x="68" y="22" fill="#6fc7d4" font-size="14" text-anchor="start" font-weight="normal">~/evidence/matrix-awakens-launch.json</text>
-    <text x="18" y="70" fill="#e2bc8c" font-size="25" text-anchor="start" font-weight="bold">The Matrix Awakens</text>
-    <desc>Trial menu-video-audio. Title code reached. Frame verified. Unresolved imports in loaded DLLs: 1</desc>
-    <text x="18" y="96" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Retail comparison run</text>
-    <text x="18" y="118" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Proton Experimental</text>
-    <rect x="18" y="136" width="415" height="1" fill="#272733" />
-    <text x="18" y="161" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Original settings</text>
-    <text x="433" y="161" fill="#e74c3c" font-size="15" text-anchor="end" font-weight="normal">Black frame</text>
-    <rect x="18" y="175" width="415" height="1" fill="#272733" />
-    <text x="18" y="200" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Earlier reduced-effects</text>
-    <text x="18" y="218" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">run</text>
-    <text x="433" y="200" fill="#2ecc71" font-size="15" text-anchor="end" font-weight="normal">Chase + city reached</text>
-    <rect x="18" y="232" width="415" height="1" fill="#272733" />
-    <text x="18" y="257" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Visual quality</text>
-    <text x="433" y="257" fill="#e2bc8c" font-size="15" text-anchor="end" font-weight="normal">Artifacts remain</text>
-  </g>
-  <g transform="translate(14 535)">
-    <title>Frosty shader coverage</title>
-    <rect x="0" y="0" width="972" height="262" fill="#14141d" stroke="#272733" stroke-width="1" />
+  <g transform="translate(14 404)">
+    <title>RDNA 2 shader translation</title>
+    <rect x="0" y="0" width="972" height="258" fill="#14141d" stroke="#272733" stroke-width="1" />
     <rect x="1" y="1" width="970" height="32" fill="#0d0d15" />
     <rect x="1" y="33" width="970" height="1" fill="#272733" />
     <circle cx="16" cy="17" r="4.5" fill="#e74c3c" />
     <circle cx="32" cy="17" r="4.5" fill="#f1c40f" />
     <circle cx="48" cy="17" r="4.5" fill="#2ecc71" />
     <text x="68" y="22" fill="#6fc7d4" font-size="14" text-anchor="start" font-weight="normal">~/docs/SHADERS.md</text>
-    <text x="18" y="70" fill="#e2bc8c" font-size="25" text-anchor="start" font-weight="bold">Frosty shader coverage</text>
-    <text x="18" y="96" fill="#a0a0b1" font-size="14" text-anchor="start" font-weight="normal">Packaged entries translated in measured compiler snapshots</text>
-    <rect x="18" y="112" width="936" height="1" fill="#272733" />
-    <text x="18" y="132" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Global raster</text>
-    <text x="954" y="132" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">1,566/1,571 entries emitted HLSL (99.7%) · compiler 6b7622ee</text>
-    <rect x="18" y="141" width="936" height="1" fill="#272733" />
-    <text x="18" y="161" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Material raster</text>
-    <text x="954" y="161" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">32,122/32,122 entries emitted HLSL (100.0%) · compiler 2204da68</text>
-    <rect x="18" y="170" width="936" height="1" fill="#272733" />
-    <text x="18" y="190" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Global compute</text>
-    <text x="954" y="190" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">2,287/2,508 entries emitted HLSL (91.2%) · compiler 8b09d1d9</text>
-    <rect x="18" y="199" width="936" height="1" fill="#272733" />
-    <text x="18" y="219" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Ray tracing</text>
-    <text x="954" y="219" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">1,110 of 6,280 packaged entries compiled to DXIL (17.7%)</text>
-    <text x="18" y="249" fill="#a0a0b1" font-size="14" text-anchor="start" font-weight="normal">Translation is not proof of correct rendering. See SHADERS.md for GPU checks.</text>
+    <text x="18" y="70" fill="#e2bc8c" font-size="25" text-anchor="start" font-weight="bold">RDNA 2 shader translation</text>
+    <text x="18" y="96" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Measured on Frosty’s shader archives</text>
+    <text x="301" y="121" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">Compiler output</text>
+    <text x="870" y="121" fill="#a0a0b1" font-size="13" text-anchor="end" font-weight="normal">Archive entries</text>
+    <g>
+      <title>Global raster · compiler snapshot 6b7622ee4827b4c3f506c2571eb6c743fbd0e96ae322d5dbcc1483715d797942</title>
+      <rect x="18" y="127" width="936" height="1" fill="#272733" />
+      <text x="18" y="145" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Global raster</text>
+      <text x="301" y="145" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">HLSL emitted</text>
+      <rect x="510" y="135" width="125" height="6" fill="#272733" />
+      <rect x="510" y="135" width="124.60216422660726" height="6" fill="#6fc7d4" />
+      <text x="870" y="145" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">1,566/1,571</text>
+      <text x="954" y="145" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">99.7%</text>
+    </g>
+    <g>
+      <title>Material raster · compiler snapshot 2204da685854522c272493d84b31d83c9db04f700514dde554140509f6a0e883</title>
+      <rect x="18" y="155" width="936" height="1" fill="#272733" />
+      <text x="18" y="173" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Material raster</text>
+      <text x="301" y="173" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">HLSL emitted</text>
+      <rect x="510" y="163" width="125" height="6" fill="#272733" />
+      <rect x="510" y="163" width="125.0" height="6" fill="#6fc7d4" />
+      <text x="870" y="173" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">32,122/32,122</text>
+      <text x="954" y="173" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">100.0%</text>
+    </g>
+    <g>
+      <title>Global compute · compiler snapshot 8b09d1d99add1425c99c5d1f98df509dab1c663835f4d1388745aaee1b2ea5ba</title>
+      <rect x="18" y="183" width="936" height="1" fill="#272733" />
+      <text x="18" y="201" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Global compute</text>
+      <text x="301" y="201" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">HLSL emitted</text>
+      <rect x="510" y="191" width="125" height="6" fill="#272733" />
+      <rect x="510" y="191" width="113.98524720893143" height="6" fill="#6fc7d4" />
+      <text x="870" y="201" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">2,287/2,508</text>
+      <text x="954" y="201" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">91.2%</text>
+    </g>
+    <g>
+      <title>Ray tracing · compiler snapshot 4236d8bef4118869e34c524f7f4f1eabf69fb60470bc58766a351edac4c721ae</title>
+      <rect x="18" y="211" width="936" height="1" fill="#272733" />
+      <text x="18" y="229" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Ray tracing</text>
+      <text x="301" y="229" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">DXIL compiled</text>
+      <rect x="510" y="219" width="125" height="6" fill="#272733" />
+      <rect x="510" y="219" width="22.093949044585987" height="6" fill="#6fc7d4" />
+      <text x="870" y="229" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">1,110/6,280</text>
+      <text x="954" y="229" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">17.7%</text>
+    </g>
   </g>
-  <g transform="translate(14 809)">
+  <g transform="translate(14 674)">
     <title>Xbox library coverage</title>
-    <rect x="0" y="0" width="972" height="1580" fill="#14141d" stroke="#272733" stroke-width="1" />
+    <rect x="0" y="0" width="972" height="542" fill="#14141d" stroke="#272733" stroke-width="1" />
     <rect x="1" y="1" width="970" height="32" fill="#0d0d15" />
     <rect x="1" y="33" width="970" height="1" fill="#272733" />
     <circle cx="16" cy="17" r="4.5" fill="#e74c3c" />
@@ -105,22 +142,22 @@
     <circle cx="48" cy="17" r="4.5" fill="#2ecc71" />
     <text x="68" y="22" fill="#6fc7d4" font-size="14" text-anchor="start" font-weight="normal">~/evidence/library-status.json</text>
     <text x="18" y="70" fill="#e2bc8c" font-size="25" text-anchor="start" font-weight="bold">Xbox library coverage</text>
-    <text x="954" y="68" fill="#a0a0b1" font-size="14" text-anchor="end" font-weight="normal">61 tracked · 245 system DLLs scanned · 11 imports · 1 transitive</text>
+    <text x="954" y="68" fill="#a0a0b1" font-size="14" text-anchor="end" font-weight="normal">15 active Frosty libraries</text>
     <g transform="translate(23 99)">
       <circle cx="0" cy="0" r="5.5" fill="none" stroke="#2ecc71" stroke-width="1.7" />
       <path d="M-3,0 -1,2 3,-2" fill="none" stroke="#2ecc71" stroke-width="1.5" />
     </g>
-    <text x="38" y="104" fill="#2ecc71" font-size="15" text-anchor="start" font-weight="normal">1 complete</text>
+    <text x="38" y="104" fill="#2ecc71" font-size="15" text-anchor="start" font-weight="normal">0 complete</text>
     <g transform="translate(167 99)">
       <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
       <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
     </g>
-    <text x="182" y="104" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">20 partial</text>
+    <text x="182" y="104" fill="#e2bc8c" font-size="15" text-anchor="start" font-weight="normal">15 partial</text>
     <g transform="translate(311 99)">
       <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
     </g>
-    <text x="326" y="104" fill="#e74c3c" font-size="15" text-anchor="start" font-weight="normal">40 incomplete</text>
-    <text x="18" y="130" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">Bars: verified exports, not game compatibility. * Frosty import  ·  ~ static dependency  ·  dynamic loads unmeasured.</text>
+    <text x="326" y="104" fill="#e74c3c" font-size="15" text-anchor="start" font-weight="normal">0 incomplete</text>
+    <text x="18" y="130" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">Bars count verified exports. Empty circles mark incomplete support.</text>
     <rect x="18.0" y="148" width="462.0" height="1" fill="#272733" />
     <text x="18.0" y="173" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Graphics and memory</text>
     <g>
@@ -129,9 +166,9 @@
         <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
         <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="38.0" y="200" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">d3d12_xs.dll *</text>
-      <rect x="315.09999999999997" y="191" width="54.900000000000034" height="7" fill="#272733" />
-      <rect x="315.09999999999997" y="191" width="53.8833" height="7" fill="#6fc7d4" />
+      <text x="38.0" y="200" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">d3d12_xs.dll</text>
+      <rect x="169.1" y="191" width="200.89999999999998" height="7" fill="#272733" />
+      <rect x="169.1" y="191" width="197.1796" height="7" fill="#6fc7d4" />
       <text x="422.0" y="200" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">53/54</text>
       <text x="480.0" y="200" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">98.1%</text>
       <text x="38.0" y="216" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">21/22 functions, 32/32 data</text>
@@ -142,9 +179,9 @@
         <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
         <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="38.0" y="245" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">dxcompiler_xs.dll *</text>
-      <rect x="315.09999999999997" y="236" width="54.900000000000034" height="7" fill="#272733" />
-      <rect x="315.09999999999997" y="236" width="54.9" height="7" fill="#6fc7d4" />
+      <text x="38.0" y="245" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">dxcompiler_xs.dll</text>
+      <rect x="169.1" y="236" width="200.89999999999998" height="7" fill="#272733" />
+      <rect x="169.1" y="236" width="200.9" height="7" fill="#6fc7d4" />
       <text x="422.0" y="245" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">4/4</text>
       <text x="480.0" y="245" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">100%</text>
     </g>
@@ -154,9 +191,9 @@
         <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
         <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="38.0" y="274" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xmem.dll *</text>
-      <rect x="315.09999999999997" y="265" width="54.900000000000034" height="7" fill="#272733" />
-      <rect x="315.09999999999997" y="265" width="54.9" height="7" fill="#6fc7d4" />
+      <text x="38.0" y="274" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xmem.dll</text>
+      <rect x="169.1" y="265" width="200.89999999999998" height="7" fill="#272733" />
+      <rect x="169.1" y="265" width="200.9" height="7" fill="#6fc7d4" />
       <text x="422.0" y="274" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">32/32</text>
       <text x="480.0" y="274" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">100%</text>
       <text x="38.0" y="290" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">31/31 functions, 1/1 data</text>
@@ -167,166 +204,23 @@
         <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
         <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="38.0" y="319" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xg_xs.dll *</text>
-      <rect x="315.09999999999997" y="310" width="54.900000000000034" height="7" fill="#272733" />
-      <rect x="315.09999999999997" y="310" width="54.9" height="7" fill="#6fc7d4" />
+      <text x="38.0" y="319" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xg_xs.dll</text>
+      <rect x="169.1" y="310" width="200.89999999999998" height="7" fill="#272733" />
+      <rect x="169.1" y="310" width="200.9" height="7" fill="#6fc7d4" />
       <text x="422.0" y="319" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">21/21</text>
       <text x="480.0" y="319" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">100%</text>
-    </g>
-    <g>
-      <title>d3d12_x.dll · Incomplete · Verified TuxBox exports 0/53 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox D3D12.X Runtime Library for UWP Extensions. 53 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 343)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="348" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">d3d12_x.dll</text>
-      <rect x="315.09999999999997" y="339" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="348" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/53</text>
-      <text x="480.0" y="348" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-      <text x="38.0" y="364" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">0/22 functions, 0/31 data</text>
-    </g>
-    <g>
-      <title>d3dcompiler_47.dll · Incomplete · Verified TuxBox exports 0/29 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Direct3D HLSL Compiler for XBOX GAMECORE. 29 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 388)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="393" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">d3dcompiler_47.dll</text>
-      <rect x="315.09999999999997" y="384" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="393" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/29</text>
-      <text x="480.0" y="393" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>dxbc2dxil_xs.dll · Incomplete · Verified TuxBox exports 0/1 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. 1 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 417)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="422" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">dxbc2dxil_xs.dll</text>
-      <rect x="315.09999999999997" y="413" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="422" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/1</text>
-      <text x="480.0" y="422" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>dxcompiler_x.dll · Partial · Verified TuxBox exports 2/2 (100%). TuxBox forwards both Xbox One factories to desktop DXC at the packaged ordinals. Both factories match the packaged DLL for retained blobs, caller allocation, a cs_6_0 shader with a root signature, and diagnostics for an invalid entry point. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 446)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
-        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
-      </g>
-      <text x="38.0" y="451" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">dxcompiler_x.dll</text>
-      <rect x="315.09999999999997" y="442" width="54.900000000000034" height="7" fill="#272733" />
-      <rect x="315.09999999999997" y="442" width="54.9" height="7" fill="#6fc7d4" />
-      <text x="422.0" y="451" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">2/2</text>
-      <text x="480.0" y="451" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">100%</text>
-    </g>
-    <g>
-      <title>newbe_xs.dll · Incomplete · Verified TuxBox exports 0/6 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. 6 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 475)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="480" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">newbe_xs.dll</text>
-      <rect x="315.09999999999997" y="471" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="480" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/6</text>
-      <text x="480.0" y="480" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>scdxil.dll · Incomplete · Verified TuxBox exports 0/7 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. 7 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 504)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="509" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">scdxil.dll</text>
-      <rect x="315.09999999999997" y="500" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="509" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/7</text>
-      <text x="480.0" y="509" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>xbsc_xs.dll · Incomplete · Verified TuxBox exports 0/41 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. 41 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 533)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="538" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xbsc_xs.dll</text>
-      <rect x="315.09999999999997" y="529" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="538" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/41</text>
-      <text x="480.0" y="538" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>xg_x.dll · Incomplete · Verified TuxBox exports 0/21 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox XG Library. 21 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 562)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="567" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xg_x.dll</text>
-      <rect x="315.09999999999997" y="558" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="567" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/21</text>
-      <text x="480.0" y="567" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>xgs12.dll · Incomplete · Verified TuxBox exports 0/17 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox UMD12 User Mode Driver for UWP Extensions. 17 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 591)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="596" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xgs12.dll</text>
-      <rect x="315.09999999999997" y="587" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="596" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/17</text>
-      <text x="480.0" y="596" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>xgs12_10.dll · Incomplete · Verified TuxBox exports 0/18 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox UMD12 User Mode Driver for UWP Extensions. 18 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 620)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="625" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xgs12_10.dll</text>
-      <rect x="315.09999999999997" y="616" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="625" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/18</text>
-      <text x="480.0" y="625" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>xgs12_10d.dll · Incomplete · Verified TuxBox exports 0/18 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox Debug UMD12 User Mode Driver for UWP Extensions. 18 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 649)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="654" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xgs12_10d.dll</text>
-      <rect x="315.09999999999997" y="645" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="654" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/18</text>
-      <text x="480.0" y="654" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>xgs12_10i.dll · Incomplete · Verified TuxBox exports 0/18 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox Instrumented UMD12 User Mode Driver for UWP Extensions. 18 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 678)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="683" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xgs12_10i.dll</text>
-      <rect x="315.09999999999997" y="674" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="683" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/18</text>
-      <text x="480.0" y="683" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>xgs12_d.dll · Incomplete · Verified TuxBox exports 0/17 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox Debug UMD12 User Mode Driver for UWP Extensions. 17 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 707)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="712" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xgs12_d.dll</text>
-      <rect x="315.09999999999997" y="703" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="712" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/17</text>
-      <text x="480.0" y="712" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>xgs12_i.dll · Incomplete · Verified TuxBox exports 0/17 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox Instrumented UMD12 User Mode Driver for UWP Extensions. 17 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 736)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="741" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xgs12_i.dll</text>
-      <rect x="315.09999999999997" y="732" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="741" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/17</text>
-      <text x="480.0" y="741" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
     </g>
     <rect x="492.0" y="148" width="462.0" height="1" fill="#272733" />
     <text x="492.0" y="173" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Platform and storage</text>
     <g>
-      <title>xgameruntime.dll · Partial · Verified TuxBox exports 4/5 (80%). TuxBox Xbox Game Runtime with Rust task queues. TuxBox implements runtime initialization, threading-interface queries and queues. The guest checks manual, threadpool, serialized and immediate dispatch, cancellation and termination. No static PE import path found; dynamic loads are not measured.</title>
+      <title>xgameruntime.dll · Partial · Verified TuxBox exports 4/5 (80%). TuxBox Xbox Game Runtime with Rust task queues. TuxBox implements runtime initialization, threading-interface queries and queues. The guest checks manual, threadpool, serialized and immediate dispatch, cancellation and termination. No static PE import path found.</title>
       <g transform="translate(498.0 195)">
         <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
         <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
       <text x="512.0" y="200" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xgameruntime.dll</text>
-      <rect x="789.0999999999999" y="191" width="54.90000000000009" height="7" fill="#272733" />
-      <rect x="789.0999999999999" y="191" width="43.92" height="7" fill="#6fc7d4" />
+      <rect x="643.1" y="191" width="200.89999999999998" height="7" fill="#272733" />
+      <rect x="643.1" y="191" width="160.72" height="7" fill="#6fc7d4" />
       <text x="896.0" y="200" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">4/5</text>
       <text x="954.0" y="200" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">80%</text>
     </g>
@@ -336,460 +230,124 @@
         <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
         <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="512.0" y="229" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xcrdapi.dll *</text>
-      <rect x="789.0999999999999" y="220" width="54.90000000000009" height="7" fill="#272733" />
-      <rect x="789.0999999999999" y="220" width="0.4653" height="7" fill="#6fc7d4" />
+      <text x="512.0" y="229" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xcrdapi.dll</text>
+      <rect x="643.1" y="220" width="200.89999999999998" height="7" fill="#272733" />
+      <rect x="643.1" y="220" width="1.7025" height="7" fill="#6fc7d4" />
       <text x="896.0" y="229" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">1/118</text>
       <text x="954.0" y="229" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0.8%</text>
     </g>
-    <g>
-      <title>gameconfighelper.dll · Partial · Verified TuxBox exports 3/24 (12.5%). TuxBox package registry helper using Win32 and WinRT. Implements three of the 24 exports in the reviewed Windows Game Runtime helper. The guest obtains an owned UTF-16 package path and opens configuration keys in both supported registry hives, including the GameCore machine key. Boundary lengths, Unicode and missing keys matched the supplied helper. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(498.0 253)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
-        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
-      </g>
-      <text x="512.0" y="258" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">gameconfighelper.dll</text>
-      <rect x="789.0999999999999" y="249" width="54.90000000000009" height="7" fill="#272733" />
-      <rect x="789.0999999999999" y="249" width="6.8625" height="7" fill="#6fc7d4" />
-      <text x="896.0" y="258" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">3/24</text>
-      <text x="954.0" y="258" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">12.5%</text>
-    </g>
-    <g>
-      <title>ConnectedStorageService.ProxyStub.dll · Incomplete · Verified TuxBox exports 0/5 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox Connected Storage Service Proxies and Stubs. 5 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(498.0 282)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="512.0" y="287" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">ConnectedStorageService.ProxyStub.dll</text>
-      <rect x="789.0999999999999" y="278" width="54.90000000000009" height="7" fill="#272733" />
-      <text x="896.0" y="287" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/5</text>
-      <text x="954.0" y="287" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>gamecoreclient.dll · Incomplete · Verified TuxBox exports 0/3 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox GameCore Client Dll. 3 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(498.0 311)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="512.0" y="316" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">gamecoreclient.dll</text>
-      <rect x="789.0999999999999" y="307" width="54.90000000000009" height="7" fill="#272733" />
-      <text x="896.0" y="316" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/3</text>
-      <text x="954.0" y="316" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>gamecorecomproxy.dll · Incomplete · Verified TuxBox exports 0/5 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox GameCore Proxy Dll. 5 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(498.0 340)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="512.0" y="345" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">gamecorecomproxy.dll</text>
-      <rect x="789.0999999999999" y="336" width="54.90000000000009" height="7" fill="#272733" />
-      <text x="896.0" y="345" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/5</text>
-      <text x="954.0" y="345" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>minappmodelx.dll · Incomplete · Verified TuxBox exports 0/4 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox MinAppModel Api Dll. 4 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(498.0 369)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="512.0" y="374" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">minappmodelx.dll</text>
-      <rect x="789.0999999999999" y="365" width="54.90000000000009" height="7" fill="#272733" />
-      <text x="896.0" y="374" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/4</text>
-      <text x="954.0" y="374" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>minuserx.dll · Incomplete · Verified TuxBox exports 0/74 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox MinUser Api Dll. 74 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(498.0 398)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="512.0" y="403" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">minuserx.dll</text>
-      <rect x="789.0999999999999" y="394" width="54.90000000000009" height="7" fill="#272733" />
-      <text x="896.0" y="403" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/74</text>
-      <text x="954.0" y="403" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>msave64xgs.dll · Incomplete · Verified TuxBox exports 0/24 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. "msave64xgs.DYNLINK". 24 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(498.0 427)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="512.0" y="432" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">msave64xgs.dll</text>
-      <rect x="789.0999999999999" y="423" width="54.90000000000009" height="7" fill="#272733" />
-      <text x="896.0" y="432" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/24</text>
-      <text x="954.0" y="432" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>xbthunk.dll · Incomplete · Verified TuxBox exports 0/11 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox Thunk API Dll. 11 exports catalogued; reached through the title's static DLL dependency graph. No TuxBox implementation has been verified. Static title path: Frosty-XSX-Shipping.exe -&gt; xmem.dll -&gt; xbthunk.dll</title>
-      <g transform="translate(498.0 456)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="512.0" y="461" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xbthunk.dll ~</text>
-      <rect x="789.0999999999999" y="452" width="54.90000000000009" height="7" fill="#272733" />
-      <text x="896.0" y="461" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/11</text>
-      <text x="954.0" y="461" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-      <text x="512.0" y="477" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">0/10 functions, 0/1 data</text>
-    </g>
-    <g>
-      <title>xbtp.dll · Incomplete · Verified TuxBox exports 0/132 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. "xbtp.dll" (Game OS). 132 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(498.0 501)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="512.0" y="506" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xbtp.dll</text>
-      <rect x="789.0999999999999" y="497" width="54.90000000000009" height="7" fill="#272733" />
-      <text x="896.0" y="506" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/132</text>
-      <text x="954.0" y="506" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <rect x="18.0" y="767" width="462.0" height="1" fill="#272733" />
-    <text x="18.0" y="792" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Input and audio</text>
+    <rect x="18.0" y="345" width="462.0" height="1" fill="#272733" />
+    <text x="18.0" y="370" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Input and audio</text>
     <g>
       <title>GameInput.dll · Partial · Verified TuxBox exports 1/1 (100%). TuxBox GameInput v0 provider for polling and device status callbacks. Lanes reads keyboard, mouse and XInput state through ordinal 1. TuxBox handles the blocking device enumeration requested by Frosty. With keyboard-to-gamepad enabled, all 48 tested key edges, mouse confirmation and signed mouse-look reached the gamepad reading. Frosty direct imports verified 1/1. Verified (#1).</title>
-      <g transform="translate(24.0 814)">
+      <g transform="translate(24.0 392)">
         <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
         <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="38.0" y="819" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">GameInput.dll *</text>
-      <rect x="315.09999999999997" y="810" width="54.900000000000034" height="7" fill="#272733" />
-      <rect x="315.09999999999997" y="810" width="54.9" height="7" fill="#6fc7d4" />
-      <text x="422.0" y="819" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">1/1</text>
-      <text x="480.0" y="819" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">100%</text>
+      <text x="38.0" y="397" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">GameInput.dll</text>
+      <rect x="169.1" y="388" width="200.89999999999998" height="7" fill="#272733" />
+      <rect x="169.1" y="388" width="200.9" height="7" fill="#6fc7d4" />
+      <text x="422.0" y="397" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">1/1</text>
+      <text x="480.0" y="397" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">100%</text>
     </g>
     <g>
       <title>AcpHal.dll · Partial · Verified TuxBox exports 0/10 (0%). TuxBox Rust AcpHal provider; runtime validation pending. The Rust provider builds seven of Frosty's imported exports: the host-backed APU heap, XMA context allocation, inert IAcpHal object, and release entry point. The earlier reference-provider trial started the mixer; TuxBox behavior remains unverified. Frosty direct imports verified 0/7. Unverified (AcpHalReleaseShapeContexts, AcpHalAllocateShapeContexts, AcpHalCreate, ApuAlloc, ApuFree, ApuHeapGetState, ApuCreateHeap).</title>
-      <g transform="translate(24.0 843)">
+      <g transform="translate(24.0 421)">
         <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
         <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="38.0" y="848" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">AcpHal.dll *</text>
-      <rect x="315.09999999999997" y="839" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="848" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/10</text>
-      <text x="480.0" y="848" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
+      <text x="38.0" y="426" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">AcpHal.dll</text>
+      <rect x="169.1" y="417" width="200.89999999999998" height="7" fill="#272733" />
+      <text x="422.0" y="426" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/10</text>
+      <text x="480.0" y="426" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
     </g>
     <g>
       <title>XAudio2_9.dll · Partial · Verified TuxBox exports 8/10 (80%). TuxBox Xbox ordinal exports backed by system XAudio2. Eight exports cover all five static imports in Frosty. The guest creates engines through all three tested factory ordinals, instantiates three effects, pans a source and measures the signal on each stereo channel. Frosty direct imports verified 5/5. Verified (#2, #1, #4, #5, #6).</title>
-      <g transform="translate(24.0 872)">
+      <g transform="translate(24.0 450)">
         <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
         <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="38.0" y="877" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">XAudio2_9.dll *</text>
-      <rect x="315.09999999999997" y="868" width="54.900000000000034" height="7" fill="#272733" />
-      <rect x="315.09999999999997" y="868" width="43.92" height="7" fill="#6fc7d4" />
-      <text x="422.0" y="877" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">8/10</text>
-      <text x="480.0" y="877" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">80%</text>
+      <text x="38.0" y="455" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">XAudio2_9.dll</text>
+      <rect x="169.1" y="446" width="200.89999999999998" height="7" fill="#272733" />
+      <rect x="169.1" y="446" width="160.72" height="7" fill="#6fc7d4" />
+      <text x="422.0" y="455" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">8/10</text>
+      <text x="480.0" y="455" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">80%</text>
     </g>
     <g>
       <title>GameChat2.dll · Partial · Verified TuxBox exports 13/70 (18.6%). TuxBox Rust chat session, user roster and outgoing frame provider. Thirteen exports cover sessions, encoding bitrate, remote users, user context and outgoing endpoint announcements. Nine are among Frosty’s 15 delay imports. The guest checks payloads, endpoint IDs and borrowed frame lifetimes against the packaged DLL. Frosty direct imports verified 9/15. Verified (ChatManagerInitialize, ChatManagerCleanup, ChatManagerSetAudioEncodingBitrate, ChatManagerStartProcessingDataFrames, ChatManagerFinishProcessingDataFrames, ChatManagerAddRemoteUser, ChatManagerRemoveUser, ChatManagerGetChatUsers, ChatUserGetIsLocal). Unverified (GameChatFailFastWithInform, ChatManagerAddLocalUser, ChatManagerProcessIncomingPacket, ChatUserSetMicrophoneMuted, ChatUserGetRemoteUserMuted, ChatUserSetRemoteUserMuted).</title>
-      <g transform="translate(24.0 901)">
+      <g transform="translate(24.0 479)">
         <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
         <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="38.0" y="906" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">GameChat2.dll *</text>
-      <rect x="315.09999999999997" y="897" width="54.900000000000034" height="7" fill="#272733" />
-      <rect x="315.09999999999997" y="897" width="10.1957" height="7" fill="#6fc7d4" />
-      <text x="422.0" y="906" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">13/70</text>
-      <text x="480.0" y="906" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">18.6%</text>
+      <text x="38.0" y="484" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">GameChat2.dll</text>
+      <rect x="169.1" y="475" width="200.89999999999998" height="7" fill="#272733" />
+      <rect x="169.1" y="475" width="37.31" height="7" fill="#6fc7d4" />
+      <text x="422.0" y="484" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">13/70</text>
+      <text x="480.0" y="484" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">18.6%</text>
     </g>
-    <g>
-      <title>AudioHALWrapper.dll · Incomplete · Verified TuxBox exports 0/32 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox AudioHALWrapper. 32 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 930)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="935" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">AudioHALWrapper.dll</text>
-      <rect x="315.09999999999997" y="926" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="935" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/32</text>
-      <text x="480.0" y="935" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>GCXAudioExt.dll · Incomplete · Verified TuxBox exports 0/11 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. XAudio platform extensions for GameCore on Xbox One. 11 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 959)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="964" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">GCXAudioExt.dll</text>
-      <rect x="315.09999999999997" y="955" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="964" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/11</text>
-      <text x="480.0" y="964" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>xapu.dll · Incomplete · Verified TuxBox exports 0/6 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Audio Processing Unit DLL. 6 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 988)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="993" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xapu.dll</text>
-      <rect x="315.09999999999997" y="984" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="993" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/6</text>
-      <text x="480.0" y="993" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>XVMAudioService.dll · Incomplete · Verified TuxBox exports 0/3 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Gamecore XVM Audio Service. 3 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 1017)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="1022" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">XVMAudioService.dll</text>
-      <rect x="315.09999999999997" y="1013" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="1022" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/3</text>
-      <text x="480.0" y="1022" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <rect x="492.0" y="767" width="462.0" height="1" fill="#272733" />
-    <text x="492.0" y="792" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Media</text>
+    <rect x="492.0" y="345" width="462.0" height="1" fill="#272733" />
+    <text x="492.0" y="370" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Media</text>
     <g>
       <title>mfplat.dll · Partial · Verified TuxBox exports 2/140 (1.4%). TuxBox DXGI device bridge and Proton Media Foundation. GPU readback verifies the Xbox device-manager reset and surface buffer. The packaged video decoders matched FFmpeg on both NV12 planes. Frosty direct imports verified 1/13. Verified (MFResetDXGIDeviceManagerX). Unverified (MFShutdown, MFCreateAlignedMemoryBuffer, MFCreateMediaType, MFCreateSample, MFStartup, MFCreateDXGIDeviceManager, MFTEnumEx, MFCreateAttributes, MFCreateMemoryBuffer, MFCreateFile, MFllMulDiv, MFCreateWaveFormatExFromMFMediaType).</title>
-      <g transform="translate(498.0 814)">
+      <g transform="translate(498.0 392)">
         <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
         <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="512.0" y="819" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">mfplat.dll *</text>
-      <rect x="789.0999999999999" y="810" width="54.90000000000009" height="7" fill="#272733" />
-      <rect x="789.0999999999999" y="810" width="0.7843" height="7" fill="#6fc7d4" />
-      <text x="896.0" y="819" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">2/140</text>
-      <text x="954.0" y="819" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">1.4%</text>
+      <text x="512.0" y="397" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">mfplat.dll</text>
+      <rect x="643.1" y="388" width="200.89999999999998" height="7" fill="#272733" />
+      <rect x="643.1" y="388" width="2.87" height="7" fill="#6fc7d4" />
+      <text x="896.0" y="397" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">2/140</text>
+      <text x="954.0" y="397" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">1.4%</text>
     </g>
     <g>
-      <title>mfhevcdec.dll · Partial · Verified TuxBox exports 0/5 (0%). TuxBox transform adapter around the supplied HEVC decoder. The adapter delivers synchronized D3D12 NV12 samples. Original intro and chase footage passed decoded-frame comparisons. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(498.0 843)">
+      <title>mfhevcdec.dll · Partial · Verified TuxBox exports 0/5 (0%). TuxBox transform adapter around the supplied HEVC decoder. The adapter delivers synchronized D3D12 NV12 samples. Original intro and chase footage passed decoded-frame comparisons. No static PE import path found.</title>
+      <g transform="translate(498.0 421)">
         <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
         <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="512.0" y="848" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">mfhevcdec.dll</text>
-      <rect x="789.0999999999999" y="839" width="54.90000000000009" height="7" fill="#272733" />
-      <text x="896.0" y="848" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/5</text>
-      <text x="954.0" y="848" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
+      <text x="512.0" y="426" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">mfhevcdec.dll</text>
+      <rect x="643.1" y="417" width="200.89999999999998" height="7" fill="#272733" />
+      <text x="896.0" y="426" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/5</text>
+      <text x="954.0" y="426" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
     </g>
     <g>
-      <title>mfh264dec.dll · Partial · Verified TuxBox exports 1/1 (100%). TuxBox transform adapter around the supplied H.264 decoder. The registered H.264 transform returns D3D12 samples for both 1024 × 512 menu previews. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(498.0 872)">
+      <title>mfh264dec.dll · Partial · Verified TuxBox exports 1/1 (100%). TuxBox transform adapter around the supplied H.264 decoder. The registered H.264 transform returns D3D12 samples for both 1024 × 512 menu previews. No static PE import path found.</title>
+      <g transform="translate(498.0 450)">
         <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
         <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="512.0" y="877" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">mfh264dec.dll</text>
-      <rect x="789.0999999999999" y="868" width="54.90000000000009" height="7" fill="#272733" />
-      <rect x="789.0999999999999" y="868" width="54.9" height="7" fill="#6fc7d4" />
-      <text x="896.0" y="877" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">1/1</text>
-      <text x="954.0" y="877" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">100%</text>
+      <text x="512.0" y="455" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">mfh264dec.dll</text>
+      <rect x="643.1" y="446" width="200.89999999999998" height="7" fill="#272733" />
+      <rect x="643.1" y="446" width="200.9" height="7" fill="#6fc7d4" />
+      <text x="896.0" y="455" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">1/1</text>
+      <text x="954.0" y="455" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">100%</text>
     </g>
     <g>
       <title>mfreadwrite.dll · Partial · Verified TuxBox exports 2/7 (28.6%). TuxBox synchronous PCM source reader. Opens seekable PCM RIFF/WAVE streams, Windows file paths and escaped file URLs. The guest compares 2,501 stereo frames and checks stream selection, seeking, timestamps, end of stream and invalid inputs. Frosty direct imports verified 1/1. Verified (MFCreateSourceReaderFromByteStream).</title>
-      <g transform="translate(498.0 901)">
+      <g transform="translate(498.0 479)">
         <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
         <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="512.0" y="906" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">mfreadwrite.dll *</text>
-      <rect x="789.0999999999999" y="897" width="54.90000000000009" height="7" fill="#272733" />
-      <rect x="789.0999999999999" y="897" width="15.6857" height="7" fill="#6fc7d4" />
-      <text x="896.0" y="906" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">2/7</text>
-      <text x="954.0" y="906" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">28.6%</text>
+      <text x="512.0" y="484" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">mfreadwrite.dll</text>
+      <rect x="643.1" y="475" width="200.89999999999998" height="7" fill="#272733" />
+      <rect x="643.1" y="475" width="57.4" height="7" fill="#6fc7d4" />
+      <text x="896.0" y="484" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">2/7</text>
+      <text x="954.0" y="484" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">28.6%</text>
     </g>
     <g>
-      <title>MSAudDecMFT.dll · Partial · Verified TuxBox exports 2/2 (100%). TuxBox AAC transform adapter using GE-Proton's host decoder. Handles the first format change and end-of-stream drain. On GE-Proton the guest decoded 25 generated and 96 Frosty AAC-LC packets into 48 kHz six-channel PCM. Each channel was compared with FFmpeg. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(498.0 930)">
+      <title>MSAudDecMFT.dll · Partial · Verified TuxBox exports 2/2 (100%). TuxBox AAC transform adapter using GE-Proton's host decoder. Handles the first format change and end-of-stream drain. On GE-Proton the guest decoded 25 generated and 96 Frosty AAC-LC packets into 48 kHz six-channel PCM. Each channel was compared with FFmpeg. No static PE import path found.</title>
+      <g transform="translate(498.0 508)">
         <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
         <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
       </g>
-      <text x="512.0" y="935" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">MSAudDecMFT.dll</text>
-      <rect x="789.0999999999999" y="926" width="54.90000000000009" height="7" fill="#272733" />
-      <rect x="789.0999999999999" y="926" width="54.9" height="7" fill="#6fc7d4" />
-      <text x="896.0" y="935" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">2/2</text>
-      <text x="954.0" y="935" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">100%</text>
-    </g>
-    <rect x="18.0" y="1048" width="462.0" height="1" fill="#272733" />
-    <text x="18.0" y="1073" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Diagnostics and tooling</text>
-    <g>
-      <title>hix_xs.dll · Incomplete · Verified TuxBox exports 0/8 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Hang Investigation for Xbox. 8 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 1095)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="1100" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">hix_xs.dll</text>
-      <rect x="315.09999999999997" y="1091" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="1100" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/8</text>
-      <text x="480.0" y="1100" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>pixrt.dll · Incomplete · Verified TuxBox exports 0/3 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox Tools Framework (Durango Title OS). 3 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 1124)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="1129" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">pixrt.dll</text>
-      <rect x="315.09999999999997" y="1120" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="1129" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/3</text>
-      <text x="480.0" y="1129" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>pixrt10.dll · Incomplete · Verified TuxBox exports 0/3 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox Tools Framework (Durango Title OS). 3 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 1153)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="1158" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">pixrt10.dll</text>
-      <rect x="315.09999999999997" y="1149" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="1158" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/3</text>
-      <text x="480.0" y="1158" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>WerXboxGc.dll · Incomplete · Verified TuxBox exports 0/8 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Windows Error Reporting Xbox Support. 8 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 1182)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="1187" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">WerXboxGc.dll</text>
-      <rect x="315.09999999999997" y="1178" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="1187" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/8</text>
-      <text x="480.0" y="1187" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>xhit.dll · Incomplete · Verified TuxBox exports 0/4 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox Hang Investigation Tool (XHIT) User Mode Client. 4 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 1211)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="1216" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xhit.dll</text>
-      <rect x="315.09999999999997" y="1207" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="1216" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/4</text>
-      <text x="480.0" y="1216" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>xhit_s.dll · Incomplete · Verified TuxBox exports 0/4 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox Hang Investigation Tool (XHIT) User Mode Client. 4 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 1240)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="1245" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xhit_s.dll</text>
-      <rect x="315.09999999999997" y="1236" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="1245" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/4</text>
-      <text x="480.0" y="1245" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>pixevt.dll · Partial · Verified TuxBox exports 2/16 (12.5%). TuxBox Rust PIX status and optional counter logger. No-capturer state and counter reporting match the checked reference path; counters can be written to the TuxBox log when enabled. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 1269)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
-        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
-      </g>
-      <text x="38.0" y="1274" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">pixevt.dll</text>
-      <rect x="315.09999999999997" y="1265" width="54.900000000000034" height="7" fill="#272733" />
-      <rect x="315.09999999999997" y="1265" width="6.8625" height="7" fill="#6fc7d4" />
-      <text x="422.0" y="1274" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">2/16</text>
-      <text x="480.0" y="1274" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">12.5%</text>
-    </g>
-    <g>
-      <title>pixlivemerge.dll · Partial · Verified TuxBox exports 1/6 (16.7%). TuxBox Rust PIX PDB record lookup. FindPdbInfo matches the checked Xbox/MSVC x64 vector and string ABI for first-match UTF-16 suffix lookups. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 1298)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
-        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
-      </g>
-      <text x="38.0" y="1303" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">pixlivemerge.dll</text>
-      <rect x="315.09999999999997" y="1294" width="54.900000000000034" height="7" fill="#272733" />
-      <rect x="315.09999999999997" y="1294" width="9.15" height="7" fill="#6fc7d4" />
-      <text x="422.0" y="1303" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">1/6</text>
-      <text x="480.0" y="1303" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">16.7%</text>
-    </g>
-    <g>
-      <title>xtfbaseservices.dll · Partial · Verified TuxBox exports 5/60 (8.3%). TuxBox Rust XTF assertion state. Process-wide assertion enable, nested push and pop state match the checked no-handler reference cases. Diagnostic severity labels and console colors match the checked reference levels. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 1327)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e2bc8c" stroke-width="1.7" />
-        <path d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z" fill="#e2bc8c" />
-      </g>
-      <text x="38.0" y="1332" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xtfbaseservices.dll</text>
-      <rect x="315.09999999999997" y="1323" width="54.900000000000034" height="7" fill="#272733" />
-      <rect x="315.09999999999997" y="1323" width="4.575" height="7" fill="#6fc7d4" />
-      <text x="422.0" y="1332" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">5/60</text>
-      <text x="480.0" y="1332" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">8.3%</text>
-      <text x="38.0" y="1348" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">5/55 functions, 0/5 data</text>
-    </g>
-    <g>
-      <title>xtfconsolecontrol.dll · Incomplete · Verified TuxBox exports 0/2 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. "XtfConsoleControl.dll" (Game OS). 2 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 1372)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="1377" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xtfconsolecontrol.dll</text>
-      <rect x="315.09999999999997" y="1368" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="1377" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/2</text>
-      <text x="480.0" y="1377" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>xtfdebugmonitor.dll · Incomplete · Verified TuxBox exports 0/2 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. "XtfDebugMonitor.dll" (Game OS). 2 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 1401)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="1406" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xtfdebugmonitor.dll</text>
-      <rect x="315.09999999999997" y="1397" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="1406" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/2</text>
-      <text x="480.0" y="1406" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>xtfdiaginfo.dll · Incomplete · Verified TuxBox exports 0/2 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. "XtfDiagInfo.dll" (Game OS). 2 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 1430)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="1435" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xtfdiaginfo.dll</text>
-      <rect x="315.09999999999997" y="1426" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="1435" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/2</text>
-      <text x="480.0" y="1435" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>xtfeventserver.dll · Incomplete · Verified TuxBox exports 0/2 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. "XtfEventServer.dll" (Game OS). 2 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 1459)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="1464" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xtfeventserver.dll</text>
-      <rect x="315.09999999999997" y="1455" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="1464" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/2</text>
-      <text x="480.0" y="1464" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>xtffileio.dll · Incomplete · Verified TuxBox exports 0/2 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. "XtfFileIO.dll" (Game OS). 2 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 1488)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="1493" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xtffileio.dll</text>
-      <rect x="315.09999999999997" y="1484" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="1493" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/2</text>
-      <text x="480.0" y="1493" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>xtfpix.dll · Incomplete · Verified TuxBox exports 0/9 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. "XtfPix.dll" (Game OS). 9 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 1517)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="1522" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xtfpix.dll</text>
-      <rect x="315.09999999999997" y="1513" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="1522" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/9</text>
-      <text x="480.0" y="1522" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>xtfremoterun.dll · Incomplete · Verified TuxBox exports 0/2 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. "XtfRemoteRun.dll" (Game OS). 2 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(24.0 1546)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="38.0" y="1551" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xtfremoterun.dll</text>
-      <rect x="315.09999999999997" y="1542" width="54.900000000000034" height="7" fill="#272733" />
-      <text x="422.0" y="1551" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/2</text>
-      <text x="480.0" y="1551" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <rect x="492.0" y="1048" width="462.0" height="1" fill="#272733" />
-    <text x="492.0" y="1073" fill="#6fc7d4" font-size="16" text-anchor="start" font-weight="bold">Other Xbox support</text>
-    <g>
-      <title>xfp_gc.dll · Incomplete · Verified TuxBox exports 0/8 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. Xbox Front Panel Display API. 8 exports catalogued; present in the system image but outside the title's static DLL dependency graph. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(498.0 1095)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="512.0" y="1100" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xfp_gc.dll</text>
-      <rect x="789.0999999999999" y="1091" width="54.90000000000009" height="7" fill="#272733" />
-      <text x="896.0" y="1100" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/8</text>
-      <text x="954.0" y="1100" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
-    </g>
-    <g>
-      <title>xfrontpaneldisplay.dll · Complete · Verified TuxBox exports 8/8 (100%). TuxBox Rust front-panel API with optional xfp_gc transport. All eight wrapper exports match the packaged DLL on systems without a panel and with a controlled connected transport. The guest checks all 32 light masks, buttons, frame dimensions, pixel format, a full frame, naming and error propagation. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(498.0 1124)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#2ecc71" stroke-width="1.7" />
-        <path d="M-3,0 -1,2 3,-2" fill="none" stroke="#2ecc71" stroke-width="1.5" />
-      </g>
-      <text x="512.0" y="1129" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">xfrontpaneldisplay.dll</text>
-      <rect x="789.0999999999999" y="1120" width="54.90000000000009" height="7" fill="#272733" />
-      <rect x="789.0999999999999" y="1120" width="54.9" height="7" fill="#6fc7d4" />
-      <text x="896.0" y="1129" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">8/8</text>
-      <text x="954.0" y="1129" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">100%</text>
-    </g>
-    <g>
-      <title>ConIoSrv.dll · Incomplete · Verified TuxBox exports 0/1 (0%). No verified TuxBox provider for this library. On-disk Xbox support module. OneCore Console IO Server. 1 exports catalogued; not present in the title's static DLL dependency graph; dynamic loads are not measured here. No TuxBox implementation has been verified. No static PE import path found; dynamic loads are not measured.</title>
-      <g transform="translate(498.0 1153)">
-        <circle cx="0" cy="0" r="5.5" fill="none" stroke="#e74c3c" stroke-width="1.7" />
-      </g>
-      <text x="512.0" y="1158" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">ConIoSrv.dll</text>
-      <rect x="789.0999999999999" y="1149" width="54.90000000000009" height="7" fill="#272733" />
-      <text x="896.0" y="1158" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">0/1</text>
-      <text x="954.0" y="1158" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">0%</text>
+      <text x="512.0" y="513" fill="#d7d7de" font-size="13" text-anchor="start" font-weight="normal">MSAudDecMFT.dll</text>
+      <rect x="643.1" y="504" width="200.89999999999998" height="7" fill="#272733" />
+      <rect x="643.1" y="504" width="200.9" height="7" fill="#6fc7d4" />
+      <text x="896.0" y="513" fill="#a0a0b1" font-size="12" text-anchor="end" font-weight="normal">2/2</text>
+      <text x="954.0" y="513" fill="#d7d7de" font-size="13" text-anchor="end" font-weight="bold">100%</text>
     </g>
   </g>
-  <g transform="translate(14 2401)">
+  <g transform="translate(14 1228)">
     <title>Guest regression checks</title>
     <text x="0" y="21" fill="#a0a0b1" font-size="15" text-anchor="start" font-weight="normal">Guest regression checks</text>
     <text x="972" y="21" fill="#a0a0b1" font-size="15" text-anchor="end" font-weight="normal">47 of 52 passed across 4 host configurations</text>

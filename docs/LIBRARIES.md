@@ -1,16 +1,10 @@
-# Xbox library inventory and translation
+# Xbox libraries used by Frosty
 
-The map now tracks **61 Xbox-facing DLLs** found in Frosty's Xbox system image and game folder. Each bar is the number of DLL exports verified through a TuxBox provider, out of the exports in that exact local binary. See the [progress map](progress.svg), run `python tuxbox.py status --libraries`, or open the [full PE inventory](../evidence/frosty-xbox-library-inventory.json).
+The progress map tracks **15 Xbox-facing DLLs**. Frosty imports 11 directly or by delay-load. A loader trace also shows the Game Runtime and the HEVC, H.264 and AAC decoders. The latter two were loaded under different filenames and matched to the package by SHA-256. Run `python tuxbox.py status --libraries` for the active list. [Progress map](progress.svg) · [Loader trace](../evidence/matrix-awakens/independent-menu.json)
 
-The scan parsed all **245 system-image DLLs** and **4 game-folder DLLs** with no errors. It selected libraries by Xbox, GameCore, Durango, Game OS, PIX, or console-support metadata; known Xbox, Xtf, and PIX families; and the Xbox-facing DLLs already tracked by this project. The inventory records binary hashes, file descriptions and versions, exports and ordinals, imported symbols, reverse importers, and the static path from Frosty's executable. Export names that are aliases for one ordinal count once. Export coverage is a useful translation measure, but it does not count methods on COM objects or prove that every title path works.
+Each bar counts exports with checked behavior against the occupied ordinals in that build of the DLL. A factory can pass while methods on the objects it returns still need work. The current original-settings blocker is shader 219 during Lumen scene lighting. [Retail comparison](../evidence/matrix-awakens/three-library-comparison.json)
 
-Use `python tools/library_gaps.py xmem.dll xg_xs.dll` to list the unverified exports and Frosty's direct imports. Add `--all` to include verified entries, or compare a built provider with `python tools/library_gaps.py xmem.dll --provider /path/to/xmem.dll`. The comparison checks names and ordinals separately; an exported symbol is not necessarily implemented or behaviorally tested. `--json` produces machine-readable results.
-
-| Status | Libraries | What it means |
-| --- | ---: | --- |
-| 🟢 Complete | 1 | All identified exports and Xbox-facing behavior for the reviewed build are implemented and verified. |
-| 🟡 Partial | 20 | A TuxBox provider or named reference bridge covers some behavior; other operations remain open. |
-| 🔴 Incomplete | 40 | The DLL is inventoried, but no TuxBox export behavior has been verified. |
+The full audit covers 61 Xbox-facing DLLs among 249 scanned files. Use `python tools/library_gaps.py d3d12_xs.dll` to see individual ordinals and title imports for any catalogued DLL. Add `--all` for verified entries or `--provider /path/to/file.dll` to compare a provider's export table. [Full package inventory](../evidence/frosty-xbox-library-inventory.json)
 
 ## Xbox D3D12 interface methods
 
@@ -39,65 +33,9 @@ Frosty imports **60 symbols across 11 tracked DLLs**. The executable also import
 | `xmem.dll` | 9 | 9 | Regular |
 | **Total** | **60** | **35** | |
 
-The static graph reaches one more tracked library, `xbthunk.dll`, through `xmem.dll`. The other 49 have no static path from this executable. Runtime traces can still identify requirements among them. Frosty loads `xgameruntime.dll` dynamically. The independent menu run used TuxBox’s Game Runtime, GameInput and storage libraries. [Independent loader evidence](../evidence/matrix-awakens/independent-menu.json) [Runtime evidence](../evidence/matrix-awakens/reference-runtime.json) · [Import and dependency inventory](../evidence/frosty-xbox-library-inventory.json)
+The packaged Xbox `xmem.dll` also imports `xbthunk.dll`. Frosty’s run with TuxBox XMem established its own dependency path. The full inventory retains these package relationships for reference. [Loader trace](../evidence/matrix-awakens/independent-menu.json) · [Import graph](../evidence/frosty-xbox-library-inventory.json)
 
-The remaining D3D12 export, `D3D12UploadCustomMicrocodeX`, asks Xbox HostOS to install three firmware images. TuxBox matches both packaged DLLs on invalid arguments and a missing receiver. A successful install still needs a reference profile. Frosty, Fortnite and Minecraft have no static import for this function. [Microcode controls and driver findings](../evidence/providers/d3d12-custom-microcode.json)
-
-### Newly catalogued system-image modules
-
-These 45 libraries were added from the on-disk scan. Export counts are occupied ordinals, including ordinal-only exports. The title-path column describes static imports. The progress map also tracks the verified exports in each library.
-
-| Family | Library | Exports | Static title path |
-| --- | --- | ---: | --- |
-| Graphics and memory | `d3d12_x.dll` | 53 | None found |
-| Graphics and memory | `d3dcompiler_47.dll` | 29 | None found |
-| Graphics and memory | `dxbc2dxil_xs.dll` | 1 | None found |
-| Graphics and memory | `dxcompiler_x.dll` | 2 | None found |
-| Graphics and memory | `newbe_xs.dll` | 6 | None found |
-| Graphics and memory | `scdxil.dll` | 7 | None found |
-| Graphics and memory | `xbsc_xs.dll` | 41 | None found |
-| Graphics and memory | `xg_x.dll` | 21 | None found |
-| Graphics and memory | `xgs12.dll` | 17 | None found |
-| Graphics and memory | `xgs12_10.dll` | 18 | None found |
-| Graphics and memory | `xgs12_10d.dll` | 18 | None found |
-| Graphics and memory | `xgs12_10i.dll` | 18 | None found |
-| Graphics and memory | `xgs12_d.dll` | 17 | None found |
-| Graphics and memory | `xgs12_i.dll` | 17 | None found |
-| Platform and storage | `ConnectedStorageService.ProxyStub.dll` | 5 | None found |
-| Platform and storage | `gamecoreclient.dll` | 3 | None found |
-| Platform and storage | `gamecorecomproxy.dll` | 5 | None found |
-| Platform and storage | `minappmodelx.dll` | 4 | None found |
-| Platform and storage | `minuserx.dll` | 74 | None found |
-| Platform and storage | `msave64xgs.dll` | 24 | None found |
-| Platform and storage | `xbthunk.dll` | 11 | Through `xmem.dll` |
-| Platform and storage | `xbtp.dll` | 132 | None found |
-| Input and audio | `AudioHALWrapper.dll` | 32 | None found |
-| Input and audio | `GCXAudioExt.dll` | 11 | None found |
-| Input and audio | `xapu.dll` | 6 | None found |
-| Input and audio | `XVMAudioService.dll` | 3 | None found |
-| Diagnostics and tooling | `hix_xs.dll` | 8 | None found |
-| Diagnostics and tooling | `pixrt.dll` | 3 | None found |
-| Diagnostics and tooling | `pixrt10.dll` | 3 | None found |
-| Diagnostics and tooling | `WerXboxGc.dll` | 8 | None found |
-| Diagnostics and tooling | `xhit.dll` | 4 | None found |
-| Diagnostics and tooling | `xhit_s.dll` | 4 | None found |
-| Diagnostics and tooling | `pixevt.dll` | 16 | None found |
-| Diagnostics and tooling | `pixlivemerge.dll` | 6 | None found |
-| Diagnostics and tooling | `xtfbaseservices.dll` | 60 | None found |
-| Diagnostics and tooling | `xtfconsolecontrol.dll` | 2 | None found |
-| Diagnostics and tooling | `xtfdebugmonitor.dll` | 2 | None found |
-| Diagnostics and tooling | `xtfdiaginfo.dll` | 2 | None found |
-| Diagnostics and tooling | `xtfeventserver.dll` | 2 | None found |
-| Diagnostics and tooling | `xtffileio.dll` | 2 | None found |
-| Diagnostics and tooling | `xtfpix.dll` | 9 | None found |
-| Diagnostics and tooling | `xtfremoterun.dll` | 2 | None found |
-| Other Xbox support | `xfp_gc.dll` | 8 | None found |
-| Other Xbox support | `xfrontpaneldisplay.dll` | 8 | None found |
-| Other Xbox support | `ConIoSrv.dll` | 1 | None found |
-
-The metadata identifies several useful families: `d3d12_x.dll` is the UWP D3D12 extension; the `xgs12*` files are UMD12 driver variants; `newbe_xs.dll`, `xbsc_xs.dll`, and the DXIL compilers are shader/compiler support; `hix_xs.dll` and `xhit*.dll` are hang diagnostics; and the `pixrt*`, `pixevt`, and `xtf*` files are Xbox tooling. The XTF modules import shared `xbtp.dll` services, and PIX runtime modules also import `xbtp.dll` and `xmem.dll`. The `msave64xgs.dll` export table has 24 ordinal-only entries, so the scanner preserves their ordinals without guessing names.
-
-Static import edges also show shared dependencies: the `xgs12_10*` drivers import `xbsc_xs`, `xg_xs`, and `d3d12_xs`; `xgameruntime.dll` imports `gameconfighelper`, `xcrdapi`, and `xmem`; audio extensions import `AcpHal` and `xmem`; and media DLLs import `mfplat` and `xmem`. These are candidate translation clusters, not proof that Frosty loads every member.
+Frosty uses the Series `d3d12_xs.dll`. Its six direct imports have checked behavior. The remaining export across the whole DLL, `D3D12UploadCustomMicrocodeX` at ordinal 12, asks the Xbox graphics service to install three firmware images. The Xbox One `d3d12_x.dll` exposes a differently named upload at ordinal 1. Import checks found zero callers across 712 Frosty, Fortnite and ProjectScarlett binaries. Successful installation still requires a known accepted set of images and a reference for its effect. [Microcode controls and driver findings](../evidence/providers/d3d12-custom-microcode.json)
 
 ## Current Frosty gates
 
@@ -111,7 +49,6 @@ The new Rust AcpHal builds the seven functions Frosty imports. The earlier launc
 | --- | --- | --- |
 | `d3d12_xs.dll` | 🟡 Partial | **53/54 exports** have checked behavior (21/22 functions and 32/32 identifiers). The GPU placement check covers configured address bounds, cache flush and memory profiling. The private driver handles record updates and device disposal. PIX supports table prefixes through 32 bytes. Firmware installation, framebuffer backing, private descriptor heaps and active capture remain open. [GPU placement](../evidence/providers/d3d12-configured-placement.json) · [Driver operations](../evidence/providers/d3d12-private-driver.json) |
 | `dxcompiler_xs.dll` | 🟡 Partial | All **4/4 factories** have checked behavior. The Xbox linker accepted five TuxBox-compiled Frosty miss shaders. General ray traversal and scheduling remain open. [Ray compiler controls](../runtime/dxc/README.md) |
-| `dxcompiler_x.dll` | 🟡 Partial | Both Xbox One factories work for the same tests at ordinals 1 and 2. Xbox-specific GPU code generation and compiler intrinsics remain open. [Original and TuxBox comparisons](../evidence/providers/dxc-factories.json) |
 | `xmem.dll` | 🟡 Partial | All **32/32 exports** have checked behavior. Frosty’s memory profile passed 512 simultaneous CPU mappings. Pools, partition accounting and the live history page are also tested. GPU-visible pages remain open. [Memory controls](../runtime/xmem/README.md) · [Partitions](../evidence/providers/xmem-partitions.json) |
 | `xg_xs.dll` | 🟡 Partial | All **21/21 exports** have checked behavior. All 1,760 distinct texture layouts captured through Frosty’s second frame matched the Xbox DLL. DCC checks cover 45 formats, including per-pixel compression in the eight-bit profiles. [Layout replay](../evidence/providers/xg-frosty-trace-replay.json) · [DCC results](../evidence/providers/xg-dcc.json) |
 
@@ -121,7 +58,6 @@ The new Rust AcpHal builds the seven functions Frosty imports. The earlier launc
 | --- | --- | --- |
 | `xgameruntime.dll` | 🟡 Partial | TuxBox implements four tested runtime entry points, including the threading-interface query. Queue checks cover dispatch, delayed work, cancellation and termination. User, device association and other services remain open. [Queue control](../evidence/providers/xgameruntime-queues.json) · [Mapped GDK wrappers](../evidence/matrix-awakens/runtime-wrappers.csv) |
 | `xcrdapi.dll` | 🟡 Partial | TuxBox reads raw and zlib-compressed data through Xbox storage queues. Two 64 KiB blocks from Frosty’s container matched an independent decoder on two Proton builds. BCPack and physical-page requests remain open. [Storage checks](../evidence/providers/xcrdapi-storage.json) |
-| `gameconfighelper.dll` | 🟡 Partial | TuxBox builds package registry paths and opens both package and machine-wide Game Core configuration keys with the requested access. The tests cover both registry hives and read-only access. Frosty’s embedded runtime still needs `GetCurrentPackageGameConfig`. [Registry tests](../runtime/gameconfig/guest.c) · [Control results](../evidence/providers/platform-controls.json) |
 
 ## Input and audio
 
@@ -131,7 +67,6 @@ The new Rust AcpHal builds the seven functions Frosty imports. The earlier launc
 | `AcpHal.dll` | 🟡 Partial | The new Rust provider builds the seven exports Frosty imports. It uses a host-backed APU heap and XMA context array, and returns an inert IAcpHal object; SHAPE/XMA DSP is not implemented. Its export bar remains at 0/10 until behavior is verified. The recorded mixer control used a reference provider. [Provider design](../runtime/acphal/README.md) · [Static call sites](../evidence/matrix-awakens/acphal-call-sites.json) · [Mixer control](../evidence/matrix-awakens/frosty-engine-control.json) |
 | `XAudio2_9.dll` | 🟡 Partial | TuxBox maps eight Xbox exports to system XAudio2, including all five Frosty imports at startup. Tests measure left and right output from the 2.9 and versioned factories. The 2.8 reverb factory, shared-context factory and XMA playback remain open. [Stereo and export comparisons](../evidence/providers/xaudio-control.json) |
 | `GameChat2.dll` | 🟡 Partial | Thirteen exports cover chat sessions, remote users, bitrate and outgoing endpoint announcements. The tests compare packet bytes, destination IDs and the lifetime of each batch. Voice and incoming packets remain open. The game supplies network delivery. [Microsoft’s outgoing frame contract](https://learn.microsoft.com/en-us/gaming/gdk/docs/services/multiplayer/chat/game-chat2/using-game-chat-2#processing-data-frames) · [Guest](../runtime/gamechat/guest.c) · [Original and TuxBox comparisons](../evidence/providers/platform-controls.json) |
-| `xfrontpaneldisplay.dll` | 🟢 Complete | All eight front-panel exports match the supplied DLL with the panel absent or with a controlled connected transport. The tests cover 32 light masks and all 16,384 frame bytes. The lower-level `xfp_gc.dll` transport is separate. Physical hardware remains untested. [Front-panel comparisons](../evidence/providers/frontpanel-control.json) |
 
 ## Media
 
@@ -147,7 +82,7 @@ The separate Scarlett package inventory includes game middleware, redistributabl
 
 ## Refresh the local inventory
 
-The scan command expects a package root containing `EmbeddedXvd/Windows/System32` and `Mount/Frosty/Binaries/XSX/Frosty-XSX-Shipping.exe`. It writes the raw PE inventory, adds new candidates to the coverage map as incomplete, and preserves reviewed provider records.
+The scan command expects a package root containing `EmbeddedXvd/Windows/System32` and `Mount/Frosty/Binaries/XSX/Frosty-XSX-Shipping.exe`. It inventories the entire package and refreshes metadata for reviewed providers. Add a DLL to the active list when a title import, runtime load or reproduced dependency establishes its role.
 
 ```sh
 python tools/scan_frosty_xbox_libraries.py /path/to/package --update-map
@@ -164,7 +99,7 @@ Build the DLLs and run these checks on Linux with a stereo audio output. These t
 ```sh
 python build.py
 python tuxbox.py verify --only xmem --only xg-provider --only gameconfig --only gamechat \
-  --only xaudio --only mfreadwrite --only frontpanel --output build/provider-results.json
+  --only xaudio --only mfreadwrite --output build/provider-results.json
 python tools/check_aac_provider.py --proton "/path/to/GE-Proton" \
   --prefix build/aac-prefix --output build/aac-results.json
 ```

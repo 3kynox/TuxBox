@@ -109,7 +109,7 @@ class ShaderInventoryTests(unittest.TestCase):
             evidence.mkdir(parents=True)
             (evidence / "shader-inventory.json").write_text(json.dumps(result))
             svg = ET.fromstring(render_map(evidence.parent))
-            self.assertIn("Frosty shader coverage", [e.text for e in svg.findall(".//{*}text")])
+            self.assertIn("RDNA 2 shader translation", [e.text for e in svg.findall(".//{*}text")])
             self.assertIn(absent, shader_table(evidence.parent))
 
     def test_mesh_pipeline_counts_require_matching_archive_and_compiler(self):

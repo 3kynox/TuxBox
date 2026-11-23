@@ -36,6 +36,18 @@ class LibraryGapTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'duplicate verified'):
             gap_rows(self.status, self.inventory, 'Example.dll')
 
+    def test_inventoried_dll_can_be_queried_outside_the_active_map(self):
+        self.status['other_reviewed_libraries'] = self.status.pop('libraries')
+        self.status['libraries'] = []
+        report = gap_rows(self.status, self.inventory, 'EXAMPLE.dll')
+        self.assertTrue(report['reviewed'])
+        self.assertTrue(report['exports'][0]['verified'])
+        self.status['other_reviewed_libraries'].clear()
+        report = gap_rows(self.status, self.inventory, 'EXAMPLE.dll')
+        self.assertFalse(report['reviewed'])
+        self.assertFalse(any(entry['verified'] for entry in report['exports']))
+        self.assertEqual(report['exports'][1]['imports'], ['delay_imports:Second'])
+
     def test_provider_name_and_ordinal_are_checked_separately(self):
         with patch('tools.library_gaps.export_table', return_value=({1: {'Other'}, 8: {'First'}, 3: set()}, set())):
             rows = gap_rows(self.status, self.inventory, 'Example.dll', 'provider.dll')['exports']

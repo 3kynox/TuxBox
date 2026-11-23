@@ -1,5 +1,6 @@
 {
   "type": "retail-loader",
+  "progress_receipt": "matrix-awakens/three-library-comparison.json",
   "package_version": "1.20.1831.3754",
   "app_id": "AppTheMatrixAwakensAnUnrealEngine5ExperienceShipping",
   "family": "Scarlett",

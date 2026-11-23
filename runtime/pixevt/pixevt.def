@@ -1,7 +1,0 @@
-LIBRARY pixevt
-EXPORTS
-    PIXBeginCapture1 @5
-    PIXBeginCapture2 @6
-    PIXEndCapture @7
-    PIXGetCaptureState @9
-    PIXReportCounter @10

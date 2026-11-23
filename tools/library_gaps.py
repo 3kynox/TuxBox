@@ -19,15 +19,16 @@ from project_tuxbox.inspect import export_table
 def gap_rows(status, inventory, name, provider=None):
     """Compare occupied reference slots, preserving aliases and import spellings."""
     key = name.casefold()
-    library = next((row for row in status['libraries'] if row['name'].casefold() == key), None)
+    reviewed = status['libraries'] + status.get('other_reviewed_libraries', [])
+    library = next((row for row in reviewed if row['name'].casefold() == key), None)
     image = next((row for row in inventory['libraries'] if row['name'].casefold() == key), None)
-    if library is None or image is None:
-        raise ValueError(f'{name}: missing reviewed status or reference inventory')
-    coverage = library['export_coverage']
+    if image is None:
+        raise ValueError(f'{name}: missing reference inventory')
+    coverage = library['export_coverage'] if library else None
     entries = image['exports']['entries']
-    if coverage.get('binary_sha256') != image.get('sha256') or not image.get('sha256'):
+    if not image.get('sha256') or (coverage and coverage.get('binary_sha256') != image['sha256']):
         raise ValueError(f'{name}: reference hashes differ; rescan before comparing')
-    if coverage['total'] != len(entries):
+    if coverage and coverage['total'] != len(entries):
         raise ValueError(f'{name}: reference export count differs')
     by_spelling = {}
     for entry in entries:
@@ -36,7 +37,7 @@ def gap_rows(status, inventory, name, provider=None):
                 raise ValueError(f'{name}: duplicate reference export {spelling}')
             by_spelling[spelling] = entry['ordinal']
     verified = set()
-    for spelling in coverage['verified']:
+    for spelling in (coverage['verified'] if coverage else []):
         if spelling not in by_spelling:
             raise ValueError(f'{name}: unknown verified export {spelling}')
         ordinal = by_spelling[spelling]
@@ -66,14 +67,14 @@ def gap_rows(status, inventory, name, provider=None):
             row['provider_name'] = any(alias in provider_names for alias in aliases)
             row['provider_ordinal'] = actual is not None and (not aliases or bool(set(aliases) & actual))
         rows.append(row)
-    return {'library': library['name'], 'reference_sha256': image['sha256'],
+    return {'library': image['name'], 'reviewed': library is not None, 'reference_sha256': image['sha256'],
             'provider': str(provider) if provider is not None else None,
             'unresolved_imports': sorted(set(unresolved)), 'exports': rows}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('libraries', nargs='+', help='reviewed library names, e.g. xmem.dll')
+    parser.add_argument('libraries', nargs='+', help='catalogued DLL names, e.g. xmem.dll')
     parser.add_argument('--provider', type=Path, help='compare one built provider PE export table')
     parser.add_argument('--all', action='store_true', help='include already verified exports')
     parser.add_argument('--json', action='store_true', help='write machine-readable output')
@@ -91,6 +92,8 @@ def main():
         return
     for report in reports:
         print(f"{report['library']} · reference {report['reference_sha256'][:12]}")
+        if not report['reviewed']:
+            print('Package inventory only. This library has no current provider review.')
         if report['provider']:
             print('Provider exports show linkability only; behavior still needs verification.')
         for row in report['exports']:

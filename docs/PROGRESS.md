@@ -1,6 +1,10 @@
 # Progress and compatibility
 
-TuxBox is experimental. The progress map summarizes measured support for the Xbox libraries and Frosty's shaders. It does not represent a percentage of the Xbox platform or a guarantee that a game is playable. [Progress map](progress.svg) · [Xbox libraries](LIBRARIES.md) · [Shader coverage](SHADERS.md)
+The overall bar counts verified milestones on the seven-step project roadmap below. Package identification is verified. Four milestones have partial results, and retail gameplay and multi-title performance are still open. Each milestone earns one point when verified.
+
+The Frosty bar measures eight milestones on Linux with the packaged graphics settings. The latest TuxBox run loaded the Construct world and submitted a 3840 × 2160 frame. The frame was black. Lumen compute shader 219 stopped the run before the menu. [Progress map](progress.svg) · [Retail comparison](../evidence/matrix-awakens/three-library-comparison.json)
+
+The six remaining milestones are an operable menu, a playable chase, open-city exploration, correct visuals, working game audio and verified frame pacing. Visual checks cover the menu code, hair, vehicles and buildings. Frame pacing needs a sustained gameplay capture with MangoHud. Earlier reduced-settings runs are recorded separately. Cross-title compatibility remains a later project milestone. [Game results](MATRIX_AWAKENS.md) · [Shader translation](SHADERS.md)
 
 ## Games
 
@@ -13,7 +17,7 @@ TuxBox is experimental. The progress map summarizes measured support for the Xbo
 
 No other retail title is currently claimed playable. Record the build, settings, host, provider and observed faults for each run, and distinguish starting, rendering, input and sustained gameplay.
 
-## Milestones
+## Longer-term project milestones
 
 | Milestone | Status | Evidence | Next step |
 | --- | --- | --- | --- |

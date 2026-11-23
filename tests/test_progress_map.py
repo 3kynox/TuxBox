@@ -1,6 +1,5 @@
 import json
-from collections import Counter
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from tempfile import TemporaryDirectory
 import unittest
 from xml.etree import ElementTree as ET
@@ -9,13 +8,19 @@ from project_tuxbox.progress_map import export_progress, culling_readbacks, libr
 
 
 class ProgressMapTests(unittest.TestCase):
-    def test_library_summary_matches_inventory(self):
-        root = Path(__file__).resolve().parents[1]
-        rows = json.loads((root / "evidence/library-status.json").read_text())["libraries"]
-        counts = Counter(row["status"] for row in rows)
-        document = (root / "docs/LIBRARIES.md").read_text()
-        for state, symbol in (("complete", "🟢"), ("partial", "🟡"), ("incomplete", "🔴")):
-            self.assertIn(f"| {symbol} {state.capitalize()} | {counts[state]} |", document)
+    def test_active_libraries_match_title_imports_and_observed_loads(self):
+        evidence = Path(__file__).resolve().parents[1] / "evidence"
+        inventory = json.loads((evidence / "frosty-xbox-library-inventory.json").read_text())
+        report = json.loads((evidence / "matrix-awakens/independent-menu.json").read_text())
+        status = json.loads((evidence / "library-status.json").read_text())
+        self.assertEqual(inventory["title"]["sha256"], report["executable_sha256"])
+        direct = {entry["module"].casefold() for entry in inventory["title"]["imports"]}
+        loaded = report["loader"]["modules"]
+        filenames = {PureWindowsPath(path).name.casefold() for path in loaded}
+        binary_hashes = {entry["sha256"] for entry in loaded.values()}
+        active = {dll["name"].casefold() for dll in inventory["libraries"]
+                  if dll["name"].casefold() in direct | filenames or dll["sha256"] in binary_hashes}
+        self.assertEqual(active, {dll["name"].casefold() for dll in status["libraries"]})
 
     def test_compute_survey_requires_matching_archive_and_valid_counts(self):
         inventory = json.loads((Path(__file__).resolve().parents[1] /
@@ -163,94 +168,55 @@ class ProgressMapTests(unittest.TestCase):
                                 "Verified (AlsoFirst, Second). Unverified (#3)." in tip for tip in tips))
             self.assertTrue(any("Other.dll" in tip and "Unmeasured" in tip for tip in tips))
 
-    def test_current_trial_takes_precedence_over_later_observations(self):
+    def test_overall_counts_fully_verified_numbered_roadmap_milestones(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            file = root / "matrix-awakens-launch.json"
-            latest = {"missing_modules": ["Unknown.dll"], "unresolved_direct_symbols": []}
-            earlier = {"missing_modules": ["ONE.dll"], "unresolved_direct_symbols": ["x!a"]}
-            data = {"trials": {"earlier": earlier, "latest": latest}, "current_trial": "earlier",
-                    "imports_from_missing_modules": {"One.DLL": ["a", "b"]}}
-            file.write_text(json.dumps(data))
-            current = render_map(root)
-            self.assertIn("Trial earlier", current)
-            self.assertIn("ONE.dll", current)
-            self.assertNotIn("Unknown.dll", current)
-            self.assertIn("Direct imports in missing DLLs: 2", current)
-            earlier.update(stage="title-code", frame_verified=False,
-                           observed_failure={"kind": "unimplemented-import", "symbol": "x!a",
-                                             "title_frame_rva": "0x24", "exception_code": "0x80000100"})
-            file.write_text(json.dumps(data))
-            advanced = render_map(root)
-            for proof in ["Title code reached", "Frame unverified", "Unimplemented import x!a", "Title stack RVA 0x24"]:
-                self.assertIn(proof, advanced)
-            earlier["observed_failure"].update(kind="access-violation", exception_code="0xc0000005",
-                                              title_diagnostic="XGameRuntimeInitialize failed: 0x80070001")
-            file.write_text(json.dumps(data))
-            report = render_map(root)
-            self.assertLess(report.index("XGameRuntimeInitialize failed"), report.index("Access violation"))
-            del data["current_trial"]
-            file.write_text(json.dumps(data))
-            self.assertIn("Unknown.dll", render_map(root))
-            self.assertIn("Direct imports in missing DLLs: unknown", render_map(root))
-            data["current_trial"] = "typo"
-            file.write_text(json.dumps(data))
-            with self.assertRaisesRegex(ValueError, "Unknown current retail trial"):
+            (root / "evidence").mkdir()
+            (root / "docs").mkdir()
+            roadmap = root / "docs/PROGRESS.md"
+            rows = ["| Milestone | Status | Evidence | Next step |", "| --- | --- | --- | --- |",
+                    "| Other topic | Verified | Reference | Archive |",
+                    "| 0. Identify package | Verified | Inventory | Dynamically loaded modules |",
+                    "| 1. Retail title | Partial | Frame | Playable input |"]
+            roadmap.write_text("\n".join(rows))
+            first = render_map(root / "evidence")
+            self.assertIn("1/2 project roadmap milestones verified", first)
+            self.assertIn(">50%<", first)
+            roadmap.write_text("\n".join(rows).replace("Partial", "Verified"))
+            self.assertIn("2/2 project roadmap milestones verified", render_map(root / "evidence"))
+
+    def test_frosty_milestones_use_matching_retail_profile_and_tuxbox_run(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "matrix-awakens-launch.json").write_text(json.dumps({
+                "sha256": "game", "progress_receipt": "latest.json"}))
+            receipt = {
+                "title_sha256": "game",
+                "settings": {"graphics_profile": "packaged", "loose_graphics_overrides_in_package": 0,
+                             "ray_tracing": 1, "lumen_hardware_ray_tracing": 1},
+                "runs": {"tuxbox": {"log_sha256": "tuxbox", "verified_milestones": ["load_world", "submit_frame"]},
+                         "control": {"log_sha256": "other", "verified_milestones": ["use_menu", "play_chase"]}},
+                "failure": {"global_shader": 219, "entry": "ExampleCS"},
+            }
+            file = root / "latest.json"
+            file.write_text(json.dumps(receipt))
+            svg = ET.fromstring(render_map(root))
+            labels = [node.text for node in svg.findall(".//{*}text")]
+            self.assertIn("25%", labels)
+            self.assertIn("2/8 gates verified", labels)
+            self.assertIn("Use main menu · Awaiting verification", [n.text for n in svg.findall(".//{*}title")])
+            self.assertIn("Blocked at global shader 219 · ExampleCS", labels)
+            for field, value in [("graphics_profile", "reduced"), ("loose_graphics_overrides_in_package", 1),
+                                 ("ray_tracing", 0), ("lumen_hardware_ray_tracing", 0)]:
+                with self.subTest(field=field):
+                    file.write_text(json.dumps(dict(receipt, settings=dict(receipt["settings"], **{field: value}))))
+                    graphic = render_map(root)
+                    self.assertIn("Unmeasured", graphic)
+                    self.assertNotIn("2/8 gates verified", graphic)
+                    self.assertNotIn("ExampleCS", graphic)
+            file.write_text(json.dumps(dict(receipt, title_sha256="other")))
+            self.assertIn("Unmeasured", render_map(root))
+            receipt["runs"]["tuxbox"]["verified_milestones"].append("unknown")
+            file.write_text(json.dumps(receipt))
+            with self.assertRaisesRegex(ValueError, "Unknown Frosty milestone"):
                 render_map(root)
-
-    def test_retail_summary_requires_matching_title(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "matrix-awakens-launch.json").write_text(json.dumps({
-                "sha256": "title1", "trials": {"earlier": {}}, "chase_display_receipt": "replay.json"}))
-            receipt = {"title_sha256": "title2", "fraction_pixels_with_all_rgb_channels_at_most_12": 0.995,
-                       "driving_and_shooting_verified": False}
-            file = root / "replay.json"
-            file.write_text(json.dumps({"desktop_extended_trial": receipt}))
-            self.assertNotIn("Near-black", render_map(root))
-            (root / "matrix-awakens").mkdir()
-            menu = root / "matrix-awakens/menu-background.json"
-            menu.write_text(json.dumps({"title_sha256": "other", "verified": False, "observation": "Black"}))
-            receipt["title_sha256"] = "title1"
-            file.write_text(json.dumps({"desktop_extended_trial": receipt}))
-            graphic = render_map(root)
-            self.assertIn("Near-black", graphic)
-            self.assertIn("Unverified", graphic)
-            self.assertNotIn("Menu code background", graphic)
-            menu.write_text(json.dumps({"title_sha256": "title1", "verified": False, "observation": "Black"}))
-            self.assertIn("Menu code background", render_map(root))
-            file.unlink()
-            self.assertIn("Menu code background", render_map(root))
-            self.assertNotIn("Near-black", render_map(root))
-
-    def test_independent_menu_uses_the_matching_background_measurement(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            evidence = root / "matrix-awakens"
-            evidence.mkdir()
-            (root / "matrix-awakens-launch.json").write_text(json.dumps({"sha256": "game", "trials": {"trial": {}}}))
-            (evidence / "independent-menu.json").write_text(json.dumps({
-                "executable_sha256": "game", "captures": {"independent-menu.webp": "capture"}}))
-            background = evidence / "menu-background.json"
-            background.write_text(json.dumps({"title_sha256": "different", "verified": True}))
-            self.assertNotIn(">Animated<", render_map(root))
-            background.write_text(json.dumps({"title_sha256": "game", "verified": True}))
-            graphic = render_map(root)
-            self.assertIn(">Animated<", graphic)
-            self.assertIn("Retail launch with TuxBox providers", graphic)
-
-    def test_current_original_settings_are_not_described_as_a_rendered_frame(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            evidence = root / "matrix-awakens"
-            evidence.mkdir()
-            (root / "matrix-awakens-launch.json").write_text(json.dumps({
-                "sha256": "game", "trials": {"trial": {}}}))
-            (evidence / "independent-menu.json").write_text(json.dumps({
-                "executable_sha256": "game", "captures": {"independent-menu.webp": "capture"}}))
-            (evidence / "packaged-renderer.json").write_text(json.dumps({
-                "title_sha256": "game", "first_present": "presented", "menu_verified": False,
-                "window": "Black outside the MangoHud overlay"}))
-            graphic = render_map(root)
-            self.assertIn("Black frame", graphic)
-            self.assertNotIn("First 4K frame", graphic)
