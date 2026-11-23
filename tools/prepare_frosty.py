@@ -25,7 +25,7 @@ SHIPPED = {TITLE.lower(), "gamechat2.dll", "msvcp140.dll", "vcruntime140.dll", "
 PROVIDERS = {"d3d12": "d3d12-smoke/d3d12_xs.dll", "dxc-utils": "dxc-utils/dxcompiler_xs.dll",
              "gameinput": "gameinput/GameInput.dll", "xmem": "xmem-smoke/xmem.dll",
              "acphal": "acphal/AcpHal.dll", "xcrdapi": "xcrdapi/xcrdapi.dll",
-             "xgameruntime": "xgameruntime/xgameruntime.dll", "gameconfig": "gameconfig/gameconfighelper.dll"}
+             "xgameruntime": "xgameruntime/xgameruntime.dll"}
 POINTER = OUTPUT / "frosty-native/latest-independent"
 ENGINE_INI = Path("Frosty/Config/UserEngine.ini")
 XG_PATH = Path("Mount") / BIN / "xg_xs.dll"
@@ -115,6 +115,18 @@ def refresh_xg(work):
     print(f"Refreshed TuxBox XG in {work}; sha256 {expected}")
 
 
+def update_provider_manifest(work, files):
+    manifest = work / "providers.json"
+    # Older preparations installed this optional helper in the prefix.
+    legacy = "prefix/drive_c/windows/system32/gameconfighelper.dll"
+    if manifest.is_file():
+        previous = json.loads(manifest.read_text()).get(legacy, {})
+        path = work / legacy
+        if previous.get("origin") == "TuxBox gameconfig" and path.is_file() and digest(path) == previous.get("sha256"):
+            path.unlink()
+    publish(manifest, json.dumps(files, indent=2) + "\n")
+
+
 def prepare(source, packaged_os, work, proton, windows_dxc, *, select=True, use_tuxbox_xg=False):
     import fcntl
 
@@ -176,7 +188,7 @@ def prepare(source, packaged_os, work, proton, windows_dxc, *, select=True, use_
         shutil.copyfile(OUTPUT / "xmem-smoke" / http.name, http)
         record(http, "TuxBox xmem")
         for target, relative in PROVIDERS.items():
-            folder = system if target in {"xgameruntime", "gameconfig"} else guest_bin
+            folder = system if target == "xgameruntime" else guest_bin
             name = Path(relative).name
             if target == "acphal":
                 name = name.lower()
@@ -198,7 +210,7 @@ def prepare(source, packaged_os, work, proton, windows_dxc, *, select=True, use_
                       "frosty_packaged_h264.dll": "Packaged Xbox H.264"}.get(name, "TuxBox media")
             record(guest_bin / name, origin)
         register_frosty_media(guest_bin, proton, prefix)
-        publish(work / "providers.json", json.dumps(files, indent=2) + "\n")
+        update_provider_manifest(work, files)
         if os.environ.get("TUXBOX_SHADER_PREP") != "chase":
             os.environ["TUXBOX_SHADER_PREP"] = "menu"
         if not prepare_for_launch(guest_bin / TITLE, host):

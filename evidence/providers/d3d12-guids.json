@@ -32,19 +32,5 @@
       ]
     }
   ],
-  "companion_ordinal_test": {
-    "reference": "EmbeddedXvd/Windows/System32/d3d12_x.dll",
-    "reference_sha256": "fafdfb277c36f654a0043241edcf9bb8eefee6c1092c09090b4913e917f8c469",
-    "reference_exports": 53,
-    "provider_sha256": "5287a686542c4f5a5d7581cbc2896799f5b3548b0251edf8005b0f7d0ff4d37c",
-    "guest_sha256": "b0bede7237e53358d3371d434d1e6c4504f63bc500af26c9cd74aa4702b9316a",
-    "ordinals_matched": 45,
-    "verified_guid_values": 31,
-    "absent_optional_identifier": "WKPDID_D3DDebugObjectNameW",
-    "host": "1789159601 experimental-11.0-20260910b-x86_64",
-    "receipt": "d3d12-guids PASS identifiers=31 bytes=496",
-    "scope": "Companion DLL used as an ordinal and GUID control only.",
-    "original_dll_receipt": "d3d12-guids PASS identifiers=31 bytes=496"
-  },
   "original_dll_receipt": "d3d12-guids PASS identifiers=32 bytes=512"
 }

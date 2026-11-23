@@ -10,7 +10,7 @@ The packaged `D3D12CreateDevice` constructs a 72-byte Xbox record and calls `D3D
 
 Games can import all 32 data symbols in the Scarlett DLL, including the Xbox DMA command-list and graphics-unknown interface IDs. The guest checks all 512 bytes and resolves each symbol by import, name and ordinal. [Rust exports](src/guids.rs) · [Console comparison](../../evidence/providers/d3d12-guids.json)
 
-The Xbox debug interface can set process flags. Games can read them back through `D3D12XboxGetProcessDebugFlags`. `D3D10CreateBlob` provides writable shader storage. The four legacy `DXGIX` entry points return `DXGI_ERROR_UNSUPPORTED`, matching both packaged DLLs. The `d3d12-exports` check exercises these calls on Linux. [Guest](exports_guest.cpp) · [Original and translated results](../../evidence/providers/d3d12-exports.json)
+The Xbox debug interface can set process flags. Games can read them back through `D3D12XboxGetProcessDebugFlags`. `D3D10CreateBlob` provides writable shader storage. The four legacy `DXGIX` entry points return `DXGI_ERROR_UNSUPPORTED`, matching the packaged Series DLL. The `d3d12-exports` check exercises these calls on Linux. [Guest](exports_guest.cpp) · [Original and translated results](../../evidence/providers/d3d12-exports.json)
 
 The Series export `D3D12ZeroMemoryX` clears aligned CPU memory ranges. Tests against the packaged DLL cover overlapping ranges, optional workspace and invalid requests that must leave memory intact. GPU-assisted clearing remains open. [CPU clear comparison](../../evidence/providers/d3d12-cpu-clear.json)
 

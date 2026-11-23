@@ -37,12 +37,7 @@ class LibraryGapTests(unittest.TestCase):
             gap_rows(self.status, self.inventory, 'Example.dll')
 
     def test_inventoried_dll_can_be_queried_outside_the_active_map(self):
-        self.status['other_reviewed_libraries'] = self.status.pop('libraries')
         self.status['libraries'] = []
-        report = gap_rows(self.status, self.inventory, 'EXAMPLE.dll')
-        self.assertTrue(report['reviewed'])
-        self.assertTrue(report['exports'][0]['verified'])
-        self.status['other_reviewed_libraries'].clear()
         report = gap_rows(self.status, self.inventory, 'EXAMPLE.dll')
         self.assertFalse(report['reviewed'])
         self.assertFalse(any(entry['verified'] for entry in report['exports']))

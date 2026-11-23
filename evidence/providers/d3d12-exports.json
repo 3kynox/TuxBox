@@ -2,8 +2,8 @@
   "scope": "Guest calls for D3D10CreateBlob, D3D12GetDebugInterface and four legacy DXGIX exports, plus their name and ordinal lookups.",
   "debug": "Repeated factory and interface queries return the same Xbox object. A rejected IUnknown query preserves the output. The second table implements the observed constant reference counts. Setting the flags through the first table updates the masked process getter.",
   "blob": "Create, query ID3DBlob, write and read 257 bytes, AddRef and release to zero. The provider forwards to D3DCreateBlob in d3dcompiler_47.",
-  "legacy_dxgix": "Both original DLLs alias DXGIXGetFrameStatistics, DXGIXPresentArray, DXGIXSetFrameNotification and DXGIXSetVLineNotification. All return DXGI_ERROR_UNSUPPORTED for null arguments and for pointers to a guarded value.",
-  "reference_setup": "App-local original d3d12 and UMD dependencies from each packaged reference, plus the TuxBox xmem.dll. The control pins the UMD for the lifetime of its blob. The XS run loads xgs12_10.dll and the companion loads xgs12.dll.",
+  "legacy_dxgix": "The Series DLL aliases DXGIXGetFrameStatistics, DXGIXPresentArray, DXGIXSetFrameNotification and DXGIXSetVLineNotification. All return DXGI_ERROR_UNSUPPORTED for null arguments and for pointers to a guarded value.",
+  "reference_setup": "App-local d3d12_xs.dll and xgs12_10.dll from the Series package, plus TuxBox xmem.dll. The control pins the UMD for the lifetime of its blob.",
   "xmem": {
     "sha256": "ac3e68c658c9ff8684d5e9c0d991900f0102e5a90f234976fa8875acd3fdd5f3",
     "allocation_attributes": {
@@ -61,40 +61,6 @@
         },
         {
           "provider": "1792432585 GE-Proton11-11",
-          "checks": [
-            {
-              "gate": "d3d12-exports",
-              "passed": true,
-              "exit_code": 0,
-              "receipt": "d3d12-exports PASS debug=1 blob=1 dxgix=4"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "reference": "d3d12_x.dll",
-      "reference_sha256": "fafdfb277c36f654a0043241edcf9bb8eefee6c1092c09090b4913e917f8c469",
-      "umd": "xgs12.dll",
-      "umd_sha256": "afb0f9b351a1bee483441c28bb8a32b4573d5d656dadd7d9ec0be0ffdf66fa78",
-      "guest_sha256": "bbef6211241d11519981e216b229bad006956a2ce5dfab716f17679b03010d9b",
-      "provider_sha256": "5287a686542c4f5a5d7581cbc2896799f5b3548b0251edf8005b0f7d0ff4d37c",
-      "matched_named_ordinals": 45,
-      "total_reference_exports": 53,
-      "original_run": {
-        "provider": "1793301796 experimental-11.0-20261027b-x86_64",
-        "checks": [
-          {
-            "gate": "d3d12-exports",
-            "passed": true,
-            "exit_code": 0,
-            "receipt": "d3d12-exports PASS debug=1 blob=1 dxgix=4"
-          }
-        ]
-      },
-      "provider_runs": [
-        {
-          "provider": "1793301796 experimental-11.0-20261027b-x86_64",
           "checks": [
             {
               "gate": "d3d12-exports",

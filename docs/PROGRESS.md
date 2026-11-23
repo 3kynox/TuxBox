@@ -1,8 +1,8 @@
 # Progress and compatibility
 
-The overall bar counts verified milestones on the seven-step project roadmap below. Package identification is verified. Four milestones have partial results, and retail gameplay and multi-title performance are still open. Each milestone earns one point when verified.
+The overall percentage gives equal weight to two measurements. Library coverage is the average fraction of checked exports across the active TuxBox DLLs. Shader coverage is the fraction of surveyed archive entries that produced compiler output. The current sample is Frosty’s Series build. It supplies both the library inventory and the shader programs. [Progress map](progress.svg) · [Library audit](LIBRARIES.md) · [Shader survey](SHADERS.md)
 
-The Frosty bar measures eight milestones on Linux with the packaged graphics settings. The latest TuxBox run loaded the Construct world and submitted a 3840 × 2160 frame. The frame was black. Lumen compute shader 219 stopped the run before the menu. [Progress map](progress.svg) · [Retail comparison](../evidence/matrix-awakens/three-library-comparison.json)
+Gameplay is measured separately on Linux with the packaged graphics settings. The latest run with those settings loaded the Construct world and submitted a 3840 × 2160 frame. The frame was black. Lumen compute shader 219 stopped the run before the menu. [Progress map](progress.svg) · [Retail comparison](../evidence/matrix-awakens/three-library-comparison.json)
 
 The six remaining milestones are an operable menu, a playable chase, open-city exploration, correct visuals, working game audio and verified frame pacing. Visual checks cover the menu code, hair, vehicles and buildings. Frame pacing needs a sustained gameplay capture with MangoHud. Earlier reduced-settings runs are recorded separately. Cross-title compatibility remains a later project milestone. [Game results](MATRIX_AWAKENS.md) · [Shader translation](SHADERS.md)
 

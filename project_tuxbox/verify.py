@@ -17,7 +17,7 @@ BUILD = ROOT / "build"
 BASE_SUITES = ("cpu", "xmem", "xgameruntime", "xcrdapi", "graphics", "graphics-abi", "guest-frame", "present", "lanes",
                "cpu-benchmark", "d3d12-exports", "d3d12-features", "d3d12-indirect", "d3d12-queries", "d3d12-queues", "d3d12-tables",
                "d3d12-heaps", "d3d12-placement", "d3d12-copy-resource", "d3d12-draw", "d3d12-stream", "d3d12-frame-events",
-               "d3d12-guids", "d3d12-signatures", "xg-provider", "frontpanel", "gameconfig", "gamechat", "mfreadwrite", "xaudio")
+               "d3d12-guids", "d3d12-signatures", "xg-provider")
 OPTIONAL_PROVIDERS = {"dxc-utils": "dxc-utils/dxcompiler.dll", "xg": "xg/xg_xs.dll"}
 SUITES = (*BASE_SUITES, "d3d12-mesh", *OPTIONAL_PROVIDERS)
 
@@ -127,22 +127,18 @@ def verify(host, output, adapter, selected=None, samples=1):
         memory_symbols = ("XMemAllocDefault", "XMemFreeDefault")
         graphics_symbols = ("D3D12SerializeRootSignature",)
         if "dxc-utils" in selected:
-            for family, exe, dll, ordinals in (
-                ("dxc", "dxc-utils.exe", "dxcompiler_xs.dll", "3,4"),
-                ("dxc-x", "dxc-x.exe", "dxcompiler_x.dll", "1,2"),
-            ):
-                binary = f"dxc-utils/{exe}"
-                provider = f"dxc-utils/{dll}"
-                dependencies = ("dxc-utils/dxcompiler.dll",)
-                check(f"{family}-create-blob", binary, ["--report"],
-                      r"dxc-utils PASS bytes=257 source-freed=1 writable=257 retained=1",
-                      providers={provider: ("DxcCreateInstance",)}, dependencies=dependencies)
-                check(f"{family}-allocator", binary, ["--allocator", "--report"],
-                      f"dxc-allocator PASS ordinals={ordinals} custom=1 retained=1 balanced=1",
-                      providers={provider: ("DxcCreateInstance2",)}, dependencies=dependencies)
-                check(f"{family}-compile", binary, ["--compile", "--report"],
-                      r"dxc-compiler PASS profile=cs_6_0 dxil=1 invalid-entry=1 diagnostics=1",
-                      providers={provider: ("DxcCreateInstance",)}, dependencies=dependencies)
+            binary = "dxc-utils/dxc-utils.exe"
+            provider = "dxc-utils/dxcompiler_xs.dll"
+            dependencies = ("dxc-utils/dxcompiler.dll",)
+            check("dxc-create-blob", binary, ["--report"],
+                  r"dxc-utils PASS bytes=257 source-freed=1 writable=257 retained=1",
+                  providers={provider: ("DxcCreateInstance",)}, dependencies=dependencies)
+            check("dxc-allocator", binary, ["--allocator", "--report"],
+                  "dxc-allocator PASS ordinals=3,4 custom=1 retained=1 balanced=1",
+                  providers={provider: ("DxcCreateInstance2",)}, dependencies=dependencies)
+            check("dxc-compile", binary, ["--compile", "--report"],
+                  r"dxc-compiler PASS profile=cs_6_0 dxil=1 invalid-entry=1 diagnostics=1",
+                  providers={provider: ("DxcCreateInstance",)}, dependencies=dependencies)
             check("xdxr-link", "dxc-utils/xdxr-link.exe", ["--report"],
                   r"xdxr-link PASS factories=2 flat=1 grouped=1 retained-shader-body=1 shader-tables=single,multiple",
                   providers={"dxc-utils/dxcompiler_xs.dll": ("CreateXdxrCompiler", "CreateXdxrCompiler2", "DxcCreateInstance")},
@@ -183,38 +179,6 @@ def verify(host, output, adapter, selected=None, samples=1):
                 check(formats_gate, f"{suite}/xg-texture.exe", ["--formats", "--report"],
                       r"xg-formats PASS formats=78 layouts=156 element-addresses=9231018",
                       providers=provider, dependencies=deps)
-        if "frontpanel" in selected:
-            panel = {"frontpanel/xfrontpaneldisplay.dll": (
-                "XFrontPanelGetButtonStates", "XFrontPanelGetLightStates", "XFrontPanelGetScreenDimensions",
-                "XFrontPanelGetScreenPixelFormat", "XFrontPanelIsSupported", "XFrontPanelPresentBuffer",
-                "XFrontPanelSetDisplayName", "XFrontPanelSetLightStates")}
-            check("frontpanel-absent", "frontpanel/frontpanel.exe", ["--report"],
-                  "frontpanel PASS no-panel exports=8", providers=panel)
-            check("frontpanel-connected", "frontpanel/frontpanel.exe", ["--connected", "--report"],
-                  "frontpanel PASS connected led-masks=32 pixels=16384 errors=8", providers=panel,
-                  dependencies=("frontpanel/fixture/xfp_gc.dll",))
-        if "gameconfig" in selected:
-            check("gameconfig-query", "gameconfig/gameconfig-query.exe", ["--report"],
-                  r"gameconfig-query PASS paths=7 hives=2 missing-key=1 gamecore-readonly=1",
-                  providers={"gameconfig/gameconfighelper.dll":
-                             ("GetRegistryPathForPackage", "OpenGameConfigForGameCore", "OpenGameConfigKeyForPackage")})
-        if "gamechat" in selected:
-            check("gamechat-roster", "gamechat/gamechat-session.exe", ["--report"],
-                  r"gamechat-session PASS sessions=2 remote-users=5 bitrate-settings=3 stale-handles=1 xuids=2 contexts=2 frame-batches=4",
-                  providers={"gamechat/GameChat2.dll": ("ChatManagerInitialize", "ChatManagerCleanup",
-                             "ChatManagerAddRemoteUser", "ChatManagerGetChatUsers", "ChatManagerRemoveUser",
-                             "ChatUserGetIsLocal", "ChatManagerSetAudioEncodingBitrate",
-                             "ChatManagerGetAudioEncodingBitrate", "ChatUserGetXboxUserId",
-                             "ChatUserGetCustomUserContext", "ChatUserSetCustomUserContext",
-                             "ChatManagerStartProcessingDataFrames", "ChatManagerFinishProcessingDataFrames")})
-        if "mfreadwrite" in selected:
-            check("mfreadwrite-pcm", "mfreadwrite/mfreadwrite-smoke.exe", ["--report"],
-                  r"mfreadwrite PASS pcm=48000/2/16 frames=2501 bytes=10004 seek=1200 eos=2 invalid=2 file-inputs=2",
-                  providers={"mfreadwrite/mfreadwrite.dll": ("MFCreateSourceReaderFromByteStream", "MFCreateSourceReaderFromURL")})
-        if "xaudio" in selected:
-            check("xaudio-mix", "xaudio/xaudio.exe", ["--report"],
-                  r"xaudio PASS factories=1,8,9 effects=3 spatial=2/2 mix=4/4",
-                  providers={"xaudio/XAudio2_9.dll": ("#1", "#2", "#3", "#4", "#5", "#6", "#8", "#9")})
         if "xgameruntime" in selected:
             check("xgameruntime", "xgameruntime/runtime-control.exe", [],
                   r"xgameruntime PASS init=balanced interfaces=checked manual=ordered termination=canceled automatic=3 stale=rejected",
@@ -416,18 +380,9 @@ GATE_LABELS = {
     "xg-native-formats": "Supplied XG layouts and addresses across 78 formats",
     "xg-formats": "TuxBox XG layouts and addresses across 78 formats",
     "xg-addresses": "TuxBox XG texture layouts and element addresses",
-    "frontpanel-absent": "Front panel queries on a host without a panel",
-    "frontpanel-connected": "Front panel buttons, lights, frames and transport errors",
-    "gameconfig-query": "Package registry paths and configuration keys",
-    "gamechat-roster": "Game-chat session, remote roster, bitrate and outgoing frames",
-    "mfreadwrite-pcm": "PCM source reading, seeking and end of stream",
-    "xaudio-mix": "Xbox audio ordinals, spatial routing and stereo mix",
     "dxc-allocator": "Xbox DXC caller allocator and factory ordinals",
     "dxc-create-blob": "Xbox DXC utilities and binary blob lifetime",
     "dxc-compile": "Scarlett DXC compute shader and compiler diagnostics",
-    "dxc-x-allocator": "Xbox One DXC caller allocator and factory ordinals",
-    "dxc-x-create-blob": "Xbox One DXC utilities and binary blob lifetime",
-    "dxc-x-compile": "Xbox One DXC compute shader and compiler diagnostics",
     "desktop-clear": "Desktop D3D12 pixel readback", "root-signature": "Xbox root-signature import and compute readback",
     "guest-command-list": "Xbox command-list clear and ordered copy readback",
     "guest-command-errors": "Guest command rejection, fence isolation and list recovery",

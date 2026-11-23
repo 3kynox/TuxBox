@@ -1,10 +1,10 @@
 # Xbox libraries used by Frosty
 
-The progress map tracks **15 Xbox-facing DLLs**. Frosty imports 11 directly or by delay-load. A loader trace also shows the Game Runtime and the HEVC, H.264 and AAC decoders. The latter two were loaded under different filenames and matched to the package by SHA-256. Run `python tuxbox.py status --libraries` for the active list. [Progress map](progress.svg) · [Loader trace](../evidence/matrix-awakens/independent-menu.json)
+The progress map tracks **11 Xbox Series DLLs** with a TuxBox implementation or media adapter. Four further dependencies come from the game or Proton. Frosty uses the shipped GameChat2 and AAC decoder, plus Proton’s MFReadWrite and XAudio2. The HEVC and H.264 decoders still need TuxBox adapters for video frames. Run `python tuxbox.py status --libraries` for the translation targets. [Provider audit](../evidence/matrix-awakens/provider-audit.json) [Progress map](progress.svg) · [Loader trace](../evidence/matrix-awakens/independent-menu.json)
 
 Each bar counts exports with checked behavior against the occupied ordinals in that build of the DLL. A factory can pass while methods on the objects it returns still need work. The current original-settings blocker is shader 219 during Lumen scene lighting. [Retail comparison](../evidence/matrix-awakens/three-library-comparison.json)
 
-The full audit covers 61 Xbox-facing DLLs among 249 scanned files. Use `python tools/library_gaps.py d3d12_xs.dll` to see individual ordinals and title imports for any catalogued DLL. Add `--all` for verified entries or `--provider /path/to/file.dll` to compare a provider's export table. [Full package inventory](../evidence/frosty-xbox-library-inventory.json)
+The package scan catalogues 22 Series libraries and dependencies among 249 files, including the original graphics driver used in comparison tests. Use `python tools/library_gaps.py d3d12_xs.dll` to see individual ordinals and title imports for any catalogued DLL. Add `--all` for verified entries or `--provider /path/to/file.dll` to compare a provider's export table. [Full package inventory](../evidence/frosty-xbox-library-inventory.json)
 
 ## Xbox D3D12 interface methods
 
@@ -16,26 +16,26 @@ The denominator for an interface is the set of distinct slots catalogued from th
 
 ## Frosty's imported Xbox-facing APIs
 
-Frosty imports **60 symbols across 11 tracked DLLs**. The executable also imports ordinary Windows libraries. Across the whole executable there are 537 regular imports and another 15 delay imports, all from GameChat2. The table counts named and ordinal imports against the reviewed binary. A verified import has at least one tested TuxBox behavior. A factory can pass that test while a game still needs more methods on the object it returns.
+Frosty imports **60 symbols across 11 Xbox-facing DLLs**. Of these, 39 imports reach DLLs with TuxBox implementations and 21 reach external libraries. The executable also imports ordinary Windows libraries. Across the whole executable there are 537 regular imports and another 15 delay imports, all from GameChat2. The table counts named and ordinal imports against the reviewed binary. A verified import has at least one tested TuxBox behavior. A factory can pass that test while a game still needs more methods on the object it returns.
 
 | Library | Frosty imports | Verified in TuxBox | Import kind |
 | --- | ---: | ---: | --- |
 | `AcpHal.dll` | 7 | 0 | Regular |
 | `d3d12_xs.dll` | 6 | 6 | Regular |
 | `dxcompiler_xs.dll` | 1 | 1 | Regular |
-| `GameChat2.dll` | 15 | 9 | Delay-load |
+| `GameChat2.dll` | 15 | — | Delay-load, retail package |
 | `GameInput.dll` | 1 | 1 | Regular, ordinal |
 | `mfplat.dll` | 13 | 1 | Regular |
-| `mfreadwrite.dll` | 1 | 1 | Regular |
-| `XAudio2_9.dll` | 5 | 5 | Regular, ordinal |
+| `mfreadwrite.dll` | 1 | — | Regular, Proton |
+| `XAudio2_9.dll` | 5 | — | Regular ordinal, Proton |
 | `xcrdapi.dll` | 1 | 1 | Regular |
 | `xg_xs.dll` | 1 | 1 | Regular |
 | `xmem.dll` | 9 | 9 | Regular |
-| **Total** | **60** | **35** | |
+| **Total** | **60** | **20 of 39 translated imports checked** | **21 supplied externally** |
 
 The packaged Xbox `xmem.dll` also imports `xbthunk.dll`. Frosty’s run with TuxBox XMem established its own dependency path. The full inventory retains these package relationships for reference. [Loader trace](../evidence/matrix-awakens/independent-menu.json) · [Import graph](../evidence/frosty-xbox-library-inventory.json)
 
-Frosty uses the Series `d3d12_xs.dll`. Its six direct imports have checked behavior, and all 54 packaged export names resolve at the matching ordinals in TuxBox. `D3D12UploadCustomMicrocodeX` at ordinal 12 asks the Xbox graphics service to install three firmware images. The Xbox One `d3d12_x.dll` exposes a differently named upload at ordinal 1. Import checks found zero callers across 712 Frosty, Fortnite and ProjectScarlett binaries. TuxBox builds the 56-byte request and maps the driver reply to the guest result. On desktop the receiver is absent. Successful installation still requires a known accepted set of images and a reference for its effect. [Microcode controls and driver findings](../evidence/providers/d3d12-custom-microcode.json)
+Frosty uses the Series `d3d12_xs.dll`. Its six direct imports have checked behavior, and all 54 packaged export names resolve at the matching ordinals in TuxBox. `D3D12UploadCustomMicrocodeX` at ordinal 12 asks the Xbox graphics service to install three firmware images. Import checks found zero callers across 712 Frosty, Fortnite and ProjectScarlett binaries. TuxBox builds the 56-byte request and maps the driver reply to the guest result. On desktop the receiver is absent. Successful installation still requires a known accepted set of images and a reference for its effect. [Microcode controls and driver findings](../evidence/providers/d3d12-custom-microcode.json)
 
 ## Current Frosty gates
 
@@ -65,8 +65,6 @@ The new Rust AcpHal builds the seven functions Frosty imports. The earlier launc
 | --- | --- | --- |
 | `GameInput.dll` | 🟡 Partial | Lanes reads keyboard, mouse and XInput through the TuxBox factory. The provider handles Frosty’s blocking device enumeration and maps desktop input to a gamepad. Tests cover 48 key transitions, mouse aim and menu confirmation. [Device and desktop input checks](../evidence/providers/gameinput-devices.json) · [Lanes input](../evidence/lanes-xbox-input.json) |
 | `AcpHal.dll` | 🟡 Partial | The new Rust provider builds the seven exports Frosty imports. It uses a host-backed APU heap and XMA context array, and returns an inert IAcpHal object; SHAPE/XMA DSP is not implemented. Its export bar remains at 0/10 until behavior is verified. The recorded mixer control used a reference provider. [Provider design](../runtime/acphal/README.md) · [Static call sites](../evidence/matrix-awakens/acphal-call-sites.json) · [Mixer control](../evidence/matrix-awakens/frosty-engine-control.json) |
-| `XAudio2_9.dll` | 🟡 Partial | TuxBox maps eight Xbox exports to system XAudio2, including all five Frosty imports at startup. Tests measure left and right output from the 2.9 and versioned factories. The 2.8 reverb factory, shared-context factory and XMA playback remain open. [Stereo and export comparisons](../evidence/providers/xaudio-control.json) |
-| `GameChat2.dll` | 🟡 Partial | Thirteen exports cover chat sessions, remote users, bitrate and outgoing endpoint announcements. The tests compare packet bytes, destination IDs and the lifetime of each batch. Voice and incoming packets remain open. The game supplies network delivery. [Microsoft’s outgoing frame contract](https://learn.microsoft.com/en-us/gaming/gdk/docs/services/multiplayer/chat/game-chat2/using-game-chat-2#processing-data-frames) · [Guest](../runtime/gamechat/guest.c) · [Original and TuxBox comparisons](../evidence/providers/platform-controls.json) |
 
 ## Media
 
@@ -75,8 +73,6 @@ The new Rust AcpHal builds the seven functions Frosty imports. The earlier launc
 | `mfplat.dll` | 🟡 Partial | The TuxBox bridge uses Proton Media Foundation and preserves 135 of the 140 Xbox export names and ordinals. The Xbox surface-buffer and device-manager entries passed GPU readback on desktop and TuxBox devices. [Independent controls](../evidence/matrix-awakens/independent-media.json) · [Movie comparisons](../evidence/matrix-awakens/retail-chase-cinematic.json) |
 | `mfhevcdec.dll` | 🟡 Partial | A TuxBox transform adapter delivers synchronized D3D12 NV12 samples around the supplied HEVC decoder. Intro and chase frames were compared with a reference decode. [Intro](../evidence/matrix-awakens/hevc-valve.json) · [Chase](../evidence/matrix-awakens/wake-hevc-valve.json) |
 | `mfh264dec.dll` | 🟡 Partial | A TuxBox transform adapter exposes the supplied H.264 decoder to the game. Both 1024 × 512 menu previews returned D3D12 samples. Other output formats remain unverified. [H.264 results](../evidence/matrix-awakens/h264-valve.json) |
-| `mfreadwrite.dll` | 🟡 Partial | TuxBox reads PCM WAV audio from byte streams, local paths and file URLs. Tests check stereo samples, timestamps, seeking, end of stream and file-handle release. Frosty’s MP4 movies still need the existing video reader. [Source-reader tests](../runtime/mfreadwrite/guest.cpp) · [Path and URL comparisons](../evidence/providers/mfreadwrite-url-control.json) |
-| `MSAudDecMFT.dll` | 🟡 Partial | TuxBox adapts GE-Proton’s AAC decoder. It produced 98,304 frames of six-channel PCM from 96 Frosty soundtrack packets and matched FFmpeg within 0.000016 per sample. Proton Experimental failed to decode the same audio format. [Frosty audio](../evidence/providers/aac-frosty-ge.json) · [Experimental result](../evidence/providers/aac-valve.json) |
 
 The separate Scarlett package inventory includes game middleware, redistributable runtimes and GPU helpers. All 16 supplied DLLs loaded on Proton, and selected upscaler and BVH calls also passed behavioral tests. Those results track package compatibility outside the Xbox platform-library counts above. [Library loads](../evidence/scarlett-all-library-load.json) · [Functional checks](../evidence/scarlett-library-controls.json)
 
@@ -94,16 +90,11 @@ The static graph comes from PE imports and delay imports. Runtime traces are nee
 
 ## Run the provider checks
 
-Build the DLLs and run these checks on Linux with a stereo audio output. These tests use generated inputs and can run from this checkout alone. The AAC comparison also needs FFmpeg and a GE-Proton installation. [Build requirements](../examples/lanes/README.md#build-requirements) · [Proton Experimental results](../evidence/providers/valve.json) · [GE-Proton results](../evidence/providers/ge.json)
+Build the providers and run their guest checks on Linux. [Build requirements](../examples/lanes/README.md#build-requirements)
 
 ```sh
 python build.py
-python tuxbox.py verify --only xmem --only xg-provider --only gameconfig --only gamechat \
-  --only xaudio --only mfreadwrite --output build/provider-results.json
-python tools/check_aac_provider.py --proton "/path/to/GE-Proton" \
-  --prefix build/aac-prefix --output build/aac-results.json
+python tuxbox.py verify --only xmem --only xg-provider --output build/provider-results.json
 ```
 
 To time the XG format checks, run `python tuxbox.py run build/xg-provider/xg-texture.exe --bench-formats timing.txt`. The guest writes seven timings beside the executable after one warm-up. On a Ryzen 7 9800X3D under Proton Experimental the median was 39.1 ms for TuxBox and 219.9 ms for the supplied DLL. These timings cover the 41-format address and validation workload. [Measurements](../evidence/providers/xg-formats.json)
-
-The AAC check loads the TuxBox transform directly and compares six generated tones channel by channel with FFmpeg. Pass `--video /path/to/movie.mp4` to check the first 96 packets of a 48 kHz 5.1 AAC-LC track. The recorded Frosty run used its staged graphics and platform providers and packaged media decoders. [Generated audio results](../evidence/providers/aac-ge.json) · [Retail setup](MATRIX_AWAKENS.md)

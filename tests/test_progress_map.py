@@ -20,7 +20,10 @@ class ProgressMapTests(unittest.TestCase):
         binary_hashes = {entry["sha256"] for entry in loaded.values()}
         active = {dll["name"].casefold() for dll in inventory["libraries"]
                   if dll["name"].casefold() in direct | filenames or dll["sha256"] in binary_hashes}
-        self.assertEqual(active, {dll["name"].casefold() for dll in status["libraries"]})
+        tracked = {dll["name"].casefold() for dll in status["libraries"]}
+        external = {dll["name"].casefold() for dll in status.get("external_libraries", [])}
+        self.assertFalse(tracked & external)
+        self.assertEqual(active, tracked | external)
 
     def test_compute_survey_requires_matching_archive_and_valid_counts(self):
         inventory = json.loads((Path(__file__).resolve().parents[1] /
@@ -74,7 +77,7 @@ class ProgressMapTests(unittest.TestCase):
                 dict(run, adapter="10de:2705", programs=[updated])))
             self.assertFalse(culling_readbacks(root, "archive", "current", "InstanceCull"))
 
-    def test_workspace_map_matches_saved_receipts_and_milestones(self):
+    def test_workspace_map_matches_saved_evidence(self):
         root = Path(__file__).resolve().parents[1]
         self.assertEqual((root / "docs/progress.svg").read_text(encoding="utf-8"),
                          render_map(root / "evidence"),
@@ -168,22 +171,35 @@ class ProgressMapTests(unittest.TestCase):
                                 "Verified (AlsoFirst, Second). Unverified (#3)." in tip for tip in tips))
             self.assertTrue(any("Other.dll" in tip and "Unmeasured" in tip for tip in tips))
 
-    def test_overall_counts_fully_verified_numbered_roadmap_milestones(self):
+    def test_overall_weights_library_and_shader_coverage_equally(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "evidence").mkdir()
-            (root / "docs").mkdir()
-            roadmap = root / "docs/PROGRESS.md"
-            rows = ["| Milestone | Status | Evidence | Next step |", "| --- | --- | --- | --- |",
-                    "| Other topic | Verified | Reference | Archive |",
-                    "| 0. Identify package | Verified | Inventory | Dynamically loaded modules |",
-                    "| 1. Retail title | Partial | Frame | Playable input |"]
-            roadmap.write_text("\n".join(rows))
-            first = render_map(root / "evidence")
-            self.assertIn("1/2 project roadmap milestones verified", first)
-            self.assertIn(">50%<", first)
-            roadmap.write_text("\n".join(rows).replace("Partial", "Verified"))
-            self.assertIn("2/2 project roadmap milestones verified", render_map(root / "evidence"))
+            dest = root / "matrix-awakens"
+            dest.mkdir()
+            libraries = [{"name": name, "group": "Test", "scope": "", "provider": "Test",
+                          "status": "partial", "export_coverage": {"total": total, "verified": verified}}
+                         for name, total, verified in [("small.dll", 1, ["Factory"]), ("large.dll", 100, [])]]
+            (root / "library-status.json").write_text(json.dumps({
+                "libraries": libraries, "external_libraries": [{"name": "packaged.dll"}]}))
+            archives = {"global": {"member_sha256": "g", "entries": 1},
+                        "material": {"member_sha256": "m", "entries": 3}}
+            (dest / "shader-inventory.json").write_text(json.dumps({"archives": archives}))
+            reports = {}
+            for name, count in [("global", 1), ("material", 2)]:
+                reports[name] = {"archive_sha256": archives[name]["member_sha256"], "compiler_sha256": "tool",
+                                 "stages": {"vertex": {"entries": archives[name]["entries"], "translated": count},
+                                            "pixel": {"entries": 0, "translated": 0},
+                                            "geometry": {"entries": 0, "translated": 0}}}
+            report = dest / "raster-archive-survey.json"
+            report.write_text(json.dumps({"archives": reports}))
+            graphic = render_map(root)
+            self.assertIn(">62.5%<", graphic)
+            self.assertIn("Library exports · 50.0% across 2 DLLs", graphic)
+            self.assertIn("Shader translation · 3/4 entries (75.0%)", graphic)
+            reports["material"]["archive_sha256"] = "other"
+            report.write_text(json.dumps({"archives": reports}))
+            self.assertIn("Shader translation · Unmeasured", render_map(root))
+            self.assertNotIn(">62.5%<", render_map(root))
 
     def test_frosty_milestones_use_matching_retail_profile_and_tuxbox_run(self):
         with TemporaryDirectory() as directory:
@@ -202,20 +218,21 @@ class ProgressMapTests(unittest.TestCase):
             file.write_text(json.dumps(receipt))
             svg = ET.fromstring(render_map(root))
             labels = [node.text for node in svg.findall(".//{*}text")]
-            self.assertIn("25%", labels)
-            self.assertIn("2/8 gates verified", labels)
-            self.assertIn("Use main menu · Awaiting verification", [n.text for n in svg.findall(".//{*}title")])
+            self.assertIn("Frosty retail test", labels)
+            self.assertNotIn("25%", labels)
+            self.assertIn("World loaded · Frame submitted", labels)
+            self.assertNotIn("Menu used", render_map(root))
             self.assertIn("Blocked at global shader 219 · ExampleCS", labels)
             for field, value in [("graphics_profile", "reduced"), ("loose_graphics_overrides_in_package", 1),
                                  ("ray_tracing", 0), ("lumen_hardware_ray_tracing", 0)]:
                 with self.subTest(field=field):
                     file.write_text(json.dumps(dict(receipt, settings=dict(receipt["settings"], **{field: value}))))
                     graphic = render_map(root)
-                    self.assertIn("Unmeasured", graphic)
-                    self.assertNotIn("2/8 gates verified", graphic)
+                    self.assertIn("No matching retail run", graphic)
+                    self.assertNotIn("World loaded", graphic)
                     self.assertNotIn("ExampleCS", graphic)
             file.write_text(json.dumps(dict(receipt, title_sha256="other")))
-            self.assertIn("Unmeasured", render_map(root))
+            self.assertIn("No matching retail run", render_map(root))
             receipt["runs"]["tuxbox"]["verified_milestones"].append("unknown")
             file.write_text(json.dumps(receipt))
             with self.assertRaisesRegex(ValueError, "Unknown Frosty milestone"):

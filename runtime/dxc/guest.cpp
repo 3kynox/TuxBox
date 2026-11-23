@@ -18,13 +18,8 @@
 namespace {
 using Microsoft::WRL::ComPtr;
 constexpr UINT32 size = 257;
-#ifdef TUXBOX_DXC_XBOX_ONE
-constexpr wchar_t module_name[] = L"dxcompiler_x.dll";
-constexpr WORD first_ordinal = 1;
-#else
 constexpr wchar_t module_name[] = L"dxcompiler_xs.dll";
 constexpr WORD first_ordinal = 3;
-#endif
 
 void check(HRESULT hr, const char* operation) {
     if (SUCCEEDED(hr)) return;

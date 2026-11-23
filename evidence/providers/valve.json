@@ -10,15 +10,7 @@
   "provider": "1789159601 experimental-11.0-20260910b-x86_64",
   "binaries_sha256": {
     "xg-provider/xg-texture.exe": "894f7a78b49c18ba1daa79d6bb3e98c77e3ed9b4515448844e688dbf73e7920b",
-    "xg-provider/xg_xs.dll": "2f0fffb525b36c20bf537670e3f2309001430d03a68e3fc32cd8ea78900c7dc6",
-    "gameconfig/gameconfig-query.exe": "cd57966419dd0a6ab2ef47dbdeb91705bdffeb5178cb4ffa30f32383053b37a7",
-    "gameconfig/gameconfighelper.dll": "20f03f2405f714cd5f1f014de1027df221e60abc2adfd3011c5106905ce74363",
-    "gamechat/gamechat-session.exe": "1b7443a72093980f6bb7025fe874b8932ef693e734d611e7bcfaa3f3daa5958e",
-    "gamechat/GameChat2.dll": "c6086ab13911a8a68fcd1daf5e536d343676d9ee0f7b5f2032204a1e70699507",
-    "mfreadwrite/mfreadwrite-smoke.exe": "a011da6b0d767c6d3ee7e52afbb0fc3304ea5dc59a4ab75a76b906e3447910f3",
-    "mfreadwrite/mfreadwrite.dll": "f9761f9a31889caf8b1efaae4eabbfdb99cb35a13fcf0b2551caa9acf06ddba4",
-    "xaudio/xaudio.exe": "bb984a54e1bb96557e4c2a1085755e5794065ea7a0cc8be6b634c6b56d30e66c",
-    "xaudio/XAudio2_9.dll": "439f27dd265b141d416b8f4ec2d8afb08d24cc50aad586f328df0166ebd8c327"
+    "xg-provider/xg_xs.dll": "2f0fffb525b36c20bf537670e3f2309001430d03a68e3fc32cd8ea78900c7dc6"
   },
   "checks": [
     {
@@ -32,30 +24,7 @@
       "passed": true,
       "exit_code": 0,
       "receipt": "xg-formats PASS formats=41 layouts=82 element-addresses=6231134"
-    },
-    {
-      "gate": "gameconfig-query",
-      "passed": true,
-      "exit_code": 0,
-      "receipt": "gameconfig-query PASS paths=7 hives=2 missing-key=1 gamecore-readonly=1"
-    },
-    {
-      "gate": "gamechat-roster",
-      "passed": true,
-      "exit_code": 0,
-      "receipt": "gamechat-session PASS sessions=2 remote-users=3 bitrate-settings=3 stale-handles=1 xuids=2 contexts=2"
-    },
-    {
-      "gate": "mfreadwrite-pcm",
-      "passed": true,
-      "exit_code": 0,
-      "receipt": "mfreadwrite PASS pcm=48000/2/16 frames=2501 bytes=10004 seek=1200 eos=2 invalid=2 file-inputs=2"
-    },
-    {
-      "gate": "xaudio-mix",
-      "passed": true,
-      "exit_code": 0,
-      "receipt": "xaudio PASS factories=1,8,9 effects=3 spatial=2/2 mix=4/4"
     }
-  ]
+  ],
+  "scope": "Retained XG checks from the recorded provider run."
 }

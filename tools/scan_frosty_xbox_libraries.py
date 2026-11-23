@@ -18,23 +18,10 @@ from project_tuxbox.inspect import digest, image
 TITLE_RELATIVE = Path("Mount/Frosty/Binaries/XSX/Frosty-XSX-Shipping.exe")
 SYSTEM_RELATIVE = Path("EmbeddedXvd/Windows/System32")
 MOUNT_RELATIVE = Path("Mount/Frosty/Binaries/XSX")
-KNOWN_XBOX_MODULES = {
-    "acphal.dll", "audiohalwrapper.dll", "connectedstorageservice.proxystub.dll",
-    "d3d12_x.dll", "d3d12_xs.dll", "d3dcompiler_47.dll", "dxbc2dxil_xs.dll",
-    "dxcompiler_x.dll", "dxcompiler_xs.dll", "gameconfighelper.dll",
-    "gamecoreclient.dll", "gamecorecomproxy.dll", "gameinput.dll", "gcxaudioext.dll",
-    "hix_xs.dll", "minappmodelx.dll", "minuserx.dll", "msave64xgs.dll",
-    "newbe_xs.dll", "pixrt.dll", "pixrt10.dll", "scdxil.dll", "xapu.dll",
-    "xbsc_xs.dll", "xbthunk.dll", "xbtp.dll", "xcrdapi.dll", "xfp_gc.dll",
-    "xfrontpaneldisplay.dll", "xg_x.dll", "xg_xs.dll", "xgameruntime.dll",
-    "xgs12.dll", "xgs12_10.dll", "xgs12_10d.dll", "xgs12_10i.dll",
-    "xgs12_d.dll", "xgs12_i.dll", "xhit.dll", "xhit_s.dll", "xmem.dll",
-    "werxboxgc.dll", "xvmaudioservice.dll",
-    "pixevt.dll", "xtfbaseservices.dll", "xtfconsolecontrol.dll",
-    "xtfdebugmonitor.dll", "xtfdiaginfo.dll", "xtfeventserver.dll",
-    "xtffileio.dll", "xtfpix.dll", "xtfremoterun.dll",
-}
-XBOX_PLATFORM_METADATA = re.compile(r"\b(?:xbox|gamecore|durango|game os|pix|console)\b", re.IGNORECASE)
+# The Series graphics controls load these helpers dynamically.
+SERIES_GRAPHICS_HELPERS = {"xgs12_10.dll", "scdxil.dll"}
+XBOX_PLATFORM_METADATA = re.compile(r"\b(?:xbox|gamecore|game os)\b", re.IGNORECASE)
+
 
 def _key(value):
     if isinstance(value, bytes):
@@ -113,17 +100,36 @@ def export_metadata(path):
         }
 
 
-def candidate(path, metadata, reviewed_names):
-    name = path.name.casefold()
-    description = " ".join(metadata.values())
-    reasons = []
-    if name in reviewed_names:
-        reasons.append("already tracked as an Xbox-facing Frosty library")
-    if name in KNOWN_XBOX_MODULES:
-        reasons.append("known Xbox, Game OS, Xtf, or PIX support module name")
-    if XBOX_PLATFORM_METADATA.search(description):
-        reasons.append("Xbox, GameCore, Durango, Game OS, PIX, or console-support file metadata")
-    return reasons
+def series_modules(rows, title, reviewed_names):
+    """Start from the Series title and graphics providers, then follow platform imports."""
+    by_name = _module_map(rows)
+    pending = deque()
+    selected = set()
+
+    def select(row, reason):
+        row["selection_reasons"].append(reason)
+        name = row["name"].casefold()
+        if name not in selected:
+            selected.add(name)
+            pending.append(row)
+
+    for row in rows:
+        name = row["name"].casefold()
+        if name in reviewed_names:
+            select(row, "reviewed Frosty dependency")
+        elif name.endswith("_xs.dll") or name in SERIES_GRAPHICS_HELPERS:
+            select(row, "Series graphics provider or compiler helper")
+    pending.append(title)
+    while pending:
+        importer = pending.popleft()
+        for item in importer["imports"] + importer["delay_imports"]:
+            name = item["module"].casefold()
+            if name in selected or name not in by_name:
+                continue
+            row = by_name[name]
+            if XBOX_PLATFORM_METADATA.search(" ".join(row["metadata"].values())):
+                select(row, "Xbox-facing dependency of the Series title or a catalogued provider")
+    return [row for row in rows if row["name"].casefold() in selected]
 
 
 def record_module(path, package, root_label):
@@ -224,9 +230,8 @@ def sync_library_map(inventory, map_path):
         "title_delay_import_dlls": inventory["title"]["delay_import_dlls"],
         "title_delay_import_symbols": inventory["title"]["delay_import_symbols"],
     }
-    reviewed = data["libraries"] + data.get("other_reviewed_libraries", [])
     images = {row["name"].casefold(): row for row in inventory["libraries"]}
-    for library in reviewed:
+    for library in data["libraries"]:
         name = library["name"]
         row = images.get(name.casefold())
         if row is None or row["sha256"] != library["export_coverage"]["binary_sha256"]:
@@ -252,7 +257,8 @@ def scan(package):
         if not path.exists():
             raise ValueError(f"Expected Frosty package member is missing: {path.relative_to(package)}")
     reviewed = read_reviewed_map(ROOT / "evidence/library-status.json")
-    reviewed_names = {row["name"].casefold() for row in reviewed["libraries"] + reviewed.get("other_reviewed_libraries", [])}
+    entries = reviewed["libraries"] + reviewed.get("external_libraries", [])
+    reviewed_names = {row["name"].casefold() for row in entries}
     all_dlls = [(path, "system image") for path in sorted(system.rglob("*.dll"), key=lambda p: p.as_posix().casefold())]
     all_dlls += [(path, "title mount") for path in sorted(mount.rglob("*.dll"), key=lambda p: p.as_posix().casefold())]
     all_modules = []
@@ -260,14 +266,13 @@ def scan(package):
     for path, source in all_dlls:
         try:
             row = record_module(path, package, source)
-            row["selection_reasons"] = candidate(path, row["metadata"], reviewed_names)
             all_modules.append(row)
         except (OSError, ValueError, pefile.PEFormatError, AttributeError, KeyError) as exc:
             errors.append({"path": path.relative_to(package).as_posix(), "error": str(exc)})
-    candidates = [row for row in all_modules if row["selection_reasons"]]
     target = image(title_path)
+    candidates = series_modules(all_modules, target, reviewed_names)
     paths = title_reachability(candidates, target)
-    edges, reverse = import_edges(all_modules, target)
+    edges, reverse = import_edges(candidates, target)
     for row in candidates:
         chain = paths.get(row["name"].casefold(), [])
         row["title_reachability"] = ("direct" if len(chain) == 2 else
@@ -289,7 +294,7 @@ def scan(package):
     ]
     return {
         "schema_version": 1,
-        "purpose": "Static inventory of Xbox-facing binaries, their PE export/import surfaces, and Frosty's static DLL reachability. Presence and imports do not prove runtime use.",
+        "purpose": "Series title and platform library PE inventory. The dependency graph contains edges between catalogued libraries and direct title imports.",
         "source_layout": {
             "system_image": SYSTEM_RELATIVE.as_posix(),
             "title_mount": MOUNT_RELATIVE.as_posix(),
@@ -301,7 +306,7 @@ def scan(package):
             "successfully_parsed_dlls": len(all_modules),
             "xbox_facing_libraries_catalogued": len(candidates),
             "scan_errors": len(errors),
-            "selection_rule": "Existing reviewed Xbox-facing map entries, named Xbox/Xtf/PIX families, or PE version metadata identifying Xbox, GameCore, Durango, Game OS, PIX, or console support.",
+            "selection_rule": "Reviewed Frosty dependencies, Series graphics providers and compiler helpers, and Xbox-facing modules imported by the title or those libraries.",
         },
         "title": {
             "path": TITLE_RELATIVE.as_posix(),

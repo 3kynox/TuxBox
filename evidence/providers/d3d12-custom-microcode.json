@@ -43,19 +43,11 @@
   },
   "title_imports": "No regular or delay import by name or ordinal in the inspected Frosty, Fortnite or Minecraft title binaries or the available ProjectScarlett DLLs.",
   "open": "No successful upload control. A known accepted selector and three images, together with the before/after query and the graphics behavior they enable, would give TuxBox a profile to translate.",
-  "xbox_one_comparison": {
-    "dll": "Frosty Game OS d3d12_x.dll",
-    "export": "D3DUploadCustomMicrocode",
-    "ordinal": 1,
-    "sha256": "fafdfb277c36f654a0043241edcf9bb8eefee6c1092c09090b4913e917f8c469",
-    "proton": "With selector 0 this export returns E_INVALIDARG and preserves last error. With selector 1 and three inert buffers it reaches the unimplemented ntdll.NtDirectGraphicsCall on Valve Proton Experimental and the process exits."
-  },
   "wrapper_control": {
-    "method": "Executed the three unmodified packaged PE export routines in an isolated x64 interpreter (Unicorn). The transport import was replaced with fixed replies. No firmware was installed.",
+    "method": "Executed the unmodified packaged Series PE export routines in an isolated x64 interpreter (Unicorn). The transport import was replaced with fixed replies. No firmware was installed.",
     "dlls": [
       "Frosty d3d12_xs.dll",
-      "Fortnite d3d12_xs.dll",
-      "Frosty Game OS d3d12_x.dll"
+      "Fortnite d3d12_xs.dll"
     ],
     "request": "Each produced the same 56-byte descriptor with the selector, zero DWORD, and three address/length pairs in input order.",
     "reply_to_hresult": {

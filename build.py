@@ -9,8 +9,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT / "build"
-TARGETS = ("route", "graphics", "frontpanel", "xmem", "acphal", "xgameruntime", "xcrdapi", "dxc-utils", "xg", "gameconfig", "gamechat", "gameinput",
-           "mfreadwrite", "xaudio", "aac", "d3d12", "lanes")
+TARGETS = ("route", "graphics", "xmem", "acphal", "xgameruntime", "xcrdapi", "dxc-utils", "xg", "gameinput",
+           "d3d12", "lanes")
 # rustc --print native-static-libs for the Windows MSVC target with +crt-static.
 RUST_STD_LIBS = ("kernel32.lib", "ntdll.lib", "userenv.lib", "ws2_32.lib", "dbghelp.lib",
                  "/defaultlib:libcmt")
@@ -66,12 +66,10 @@ class Toolchain:
                        cwd=ROOT, check=True)
         return directory / target / "release" / (package.replace("-", "_") + ".lib")
 
-    def link(self, output, *inputs, exports=None, no_entry=False):
+    def link(self, output, *inputs, exports=None):
         flags = ["/subsystem:console"]
         if exports is not None:
             flags = ["/dll", f"/def:{exports}", f"/implib:{output.stem}.lib"]
-            if no_entry:
-                flags.extend(["/noentry", "/nodefaultlib"])
         subprocess.run([self.linker, "/nologo", "/machine:x64", "/Brepro", "/incremental:no",
                         *flags, f"/out:{output.name}", *self.libraries, *inputs],
                        cwd=output.parent, check=True)
@@ -141,17 +139,6 @@ def build_target(tools, target, dxc, d3d12_reference=None):
         out = OUTPUT / "graphics"
         obj = tools.compile(ROOT / "graphics/desktop_clear.cpp", out)
         tools.link(out / "desktop-clear.exe", obj, "dxgi.lib", "d3d12.lib", "kernel32.lib")
-    elif target == "frontpanel":
-        src, out = ROOT / "runtime/frontpanel", OUTPUT / "frontpanel"
-        out.mkdir(parents=True, exist_ok=True)
-        archive = tools.rust_library("tuxbox-frontpanel")
-        tools.link(out / "xfrontpaneldisplay.dll", archive, *RUST_STD_LIBS,
-                   exports=src / "xfrontpaneldisplay.def")
-        guest = tools.compile(src / "guest.c", out, "/W4", "/WX")
-        tools.link(out / "frontpanel.exe", guest, "xfrontpaneldisplay.lib", "kernel32.lib")
-        fixture = out / "fixture"
-        obj = tools.compile(src / "fixture.c", fixture, "/W4", "/WX")
-        tools.link(fixture / "xfp_gc.dll", obj, exports=src / "fixture.def", no_entry=True)
     elif target == "xmem":
         src, out = ROOT / "runtime/xmem", OUTPUT / "xmem-smoke"
         out.mkdir(parents=True, exist_ok=True)
@@ -192,51 +179,15 @@ def build_target(tools, target, dxc, d3d12_reference=None):
         control = OUTPUT / "xg"
         control.mkdir(exist_ok=True)
         shutil.copyfile(out / "xg-texture.exe", control / "xg-texture.exe")
-    elif target in ("gameconfig", "gamechat", "mfreadwrite", "xaudio", "aac"):
-        src, out = ROOT / "runtime" / target, OUTPUT / target
-        out.mkdir(parents=True, exist_ok=True)
-        archive = tools.rust_library(f"tuxbox-{target}")
-        if target == "gameconfig":
-            tools.link(out / "gameconfighelper.dll", archive, "runtimeobject.lib", "advapi32.lib",
-                       *RUST_STD_LIBS, exports=src / "gameconfighelper.def")
-            guest = tools.compile(src / "guest.c", out, "/W4", "/WX")
-            tools.link(out / "gameconfig-query.exe", guest, "gameconfighelper.lib", "runtimeobject.lib",
-                       "advapi32.lib", "kernel32.lib")
-        elif target == "gamechat":
-            tools.link(out / "GameChat2.dll", archive, *RUST_STD_LIBS, exports=src / "GameChat2.def")
-            guest = tools.compile(src / "guest.c", out, "/W4", "/WX")
-            tools.link(out / "gamechat-session.exe", guest, "GameChat2.lib", "kernel32.lib")
-        elif target == "mfreadwrite":
-            tools.link(out / "mfreadwrite.dll", archive, "mfplat.lib", "ole32.lib",
-                       *RUST_STD_LIBS, exports=src / "mfreadwrite.def")
-            guest = tools.compile(src / "guest.cpp", out, "/W4", "/WX")
-            tools.link(out / "mfreadwrite-smoke.exe", guest, "mfreadwrite.lib", "mfplat.lib",
-                       "mfuuid.lib", "ole32.lib", "shlwapi.lib", "kernel32.lib")
-        elif target == "xaudio":
-            tools.link(out / "XAudio2_9.dll", archive, *RUST_STD_LIBS, exports=src / "xaudio.def")
-            guest = tools.compile(src / "guest.cpp", out, "/W4", "/WX")
-            subprocess.run([tools.linker, "/lib", "/nologo", "/machine:x64",
-                            f"/def:{src / 'guest-imports.def'}", "/out:guest-xaudio.lib"], cwd=out, check=True)
-            tools.link(out / "xaudio.exe", guest, "guest-xaudio.lib", "ole32.lib", "kernel32.lib")
-        else:
-            tools.link(out / "MSAudDecMFT.dll", archive, "mfplat.lib", "ole32.lib", *RUST_STD_LIBS,
-                       exports=src / "msauddecmft.def")
-            guest = tools.compile(ROOT / "tools/reference/aac/decode.cpp", out, "/W4", "/WX",
-                                  f"/I{ROOT / 'runtime/d3d12'}")
-            tools.link(out / "aac.exe", guest, "mfplat.lib", "mfuuid.lib", "ole32.lib",
-                       "advapi32.lib", "kernel32.lib")
     elif target == "dxc-utils":
         src, out = ROOT / "runtime/dxc", OUTPUT / "dxc-utils"
-        obj = tools.compile(src / "module.c", out, "/W4", "/WX")
+        out.mkdir(parents=True, exist_ok=True)
         tools.link(out / "dxcompiler_xs.dll", tools.rust_library("tuxbox-dxc"), *RUST_STD_LIBS,
                    exports=src / "dxcompiler_xs.def")
         guest = tools.compile(src / "guest.cpp", out, "/W4", "/WX")
         tools.link(out / "dxc-utils.exe", guest, "dxcompiler_xs.lib", "kernel32.lib")
         xdxr = tools.compile(src / "xdxr_guest.cpp", out, "/W4", "/WX")
         tools.link(out / "xdxr-link.exe", xdxr, "dxcompiler_xs.lib", "kernel32.lib", "ole32.lib")
-        tools.link(out / "dxcompiler_x.dll", obj, exports=src / "dxcompiler_x.def", no_entry=True)
-        guest_x = tools.compile(src / "guest.cpp", out, "/W4", "/WX", "/DTUXBOX_DXC_XBOX_ONE")
-        tools.link(out / "dxc-x.exe", guest_x, "dxcompiler_x.lib", "kernel32.lib")
     elif target == "d3d12":
         src, out = ROOT / "runtime/d3d12", OUTPUT / "d3d12-smoke"
         out.mkdir(parents=True, exist_ok=True)

@@ -6,6 +6,8 @@ TuxBox translates the Xbox shader program a game supplies. Implementing an RDNA2
 
 Frosty supplies a real collection of programs for testing the translator. Percentages here use the sampled archive entries as their denominator. A percentage of the RDNA2 instruction set would need a separate survey covering instructions, operand forms and execution modes. Frosty's reviewed archives contain 4,576 global entries and 38,831 material entries. Some refer to the same program. [Progress map](progress.svg) · [Shader inventory](../evidence/matrix-awakens/shader-inventory.json)
 
+Across both archives, 38,010 of 43,407 entries produced compiler output. Raster, compute and mesh entries count when they produce HLSL. Ray-tracing entries count when DXC builds their DXIL. The material compute survey produced HLSL for 733 of 734 entries. Entry 6308 stops where the compiler cannot verify which lane the shader elects to execute. [Material compute survey](../evidence/matrix-awakens/material-compute-survey.json) · [Ray-state survey](../evidence/matrix-awakens/ray-state-census.json)
+
 Offline raster surveys cover 1,566 of 1,571 global entries and all 32,122 material entries. Each survey records its compiler hash in the evidence. These counts measure HLSL generation. DXIL validation and rendering are checked separately. The five remaining global pixel entries require cross-half wave64 behavior. [Archive survey](../evidence/matrix-awakens/raster-archive-survey.json)
 
 | Column | What it measures |

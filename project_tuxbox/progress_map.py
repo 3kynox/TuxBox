@@ -63,45 +63,49 @@ def symbol(parent, x, y, level):
         element(group, "path", d="M0,-5.5 A5.5,5.5 0 0 0 0,5.5 Z", fill=color)
 
 
-# Each gate is worth one point on the current Frosty target. Evidence refers
-# to retail gameplay with the packaged graphics profile.
+# Labels for observations in a packaged-settings retail run.
 FROSTY_GATES = {
-    "load_world": "Load game world",
-    "submit_frame": "Submit a frame",
-    "use_menu": "Use main menu",
-    "play_chase": "Play chase",
-    "explore_city": "Explore city",
-    "verify_visuals": "Verify visuals",
-    "verify_audio": "Verify audio",
-    "verify_frame_pacing": "Verify frame pacing",
+    "load_world": "World loaded",
+    "submit_frame": "Frame submitted",
+    "use_menu": "Menu used",
+    "play_chase": "Chase played",
+    "explore_city": "City explored",
+    "verify_visuals": "Visuals verified",
+    "verify_audio": "Audio verified",
+    "verify_frame_pacing": "Frame pacing verified",
 }
 
 
-def draw_roadmap(svg, y, path):
-    if not path.is_file():
-        return y
-    milestones = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.startswith("|"):
-            continue
-        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        number, separator, name = cells[0].partition(". ")
-        if len(cells) == 4 and number.isdecimal() and separator and name:
-            milestones.append((name, cells[1]))
-    if not milestones:
-        return y
-    count = sum(status == "Verified" for _, status in milestones)
-    total = len(milestones)
-    height = 89
-    group = section(svg, PAD, y, "Overall TuxBox progress")
+def draw_overall(svg, y, libraries, inventory, shader_rows):
+    # Give each active DLL the same weight so large export tables do not drown
+    # out smaller libraries. The shader unit is a packaged archive entry.
+    fractions = [export_progress(lib)[2] for lib in libraries]
+    library_share = None
+    if fractions and None not in fractions:
+        library_share = sum(fractions) / len(fractions)
+
+    archives = inventory.get("archives", {})
+    totals = [archives.get(name, {}).get("entries") for name in ("global", "material")]
+    shader_total = sum(totals) if all(type(n) is int and n > 0 for n in totals) else 0
+    surveyed = sum(row[2] for row in shader_rows)
+    translated = sum(row[1] for row in shader_rows)
+    shader_share = translated / shader_total if surveyed == shader_total and shader_total else None
+
+    group = section(svg, PAD, y, "Overall TuxBox coverage")
+    height = 112
     rect(group, 0, 0, INNER, height, PANEL, stroke=AMBER)
-    element(group, "desc").text = ". ".join(f"{name} · {status}" for name, status in milestones)
-    text(group, 18, 32, "Overall TuxBox progress", 25, AMBER, bold=True)
-    text(group, INNER-18, 32, f"{count/total:.0%}", 23, AQUA, bold=True, anchor="end")
-    text(group, 18, 56, f"{count}/{total} project roadmap milestones verified", 15)
-    rect(group, 18, 68, INNER-36, 8, LINE)
-    if count:
-        rect(group, 18, 68, (INNER-36)*count/total, 8, AQUA)
+    text(group, 18, 32, "Overall TuxBox coverage", 25, AMBER, bold=True)
+    overall = None if library_share is None or shader_share is None else (library_share + shader_share) / 2
+    text(group, INNER-18, 32, f"{overall:.1%}" if overall is not None else "Unmeasured",
+         23, AQUA if overall is not None else MUTED, bold=True, anchor="end")
+    rect(group, 18, 45, INNER-36, 8, LINE)
+    if overall:
+        rect(group, 18, 45, (INNER-36)*overall, 8, AQUA)
+    library_label = f"{library_share:.1%} across {len(libraries)} DLLs" if library_share is not None else "Unmeasured"
+    shader_label = f"{translated:,}/{shader_total:,} entries ({shader_share:.1%})" if shader_share is not None else "Unmeasured"
+    text(group, 18, 77, f"Library exports · {library_label}", 15)
+    text(group, INNER-18, 77, f"Shader translation · {shader_label}", 15, anchor="end")
+    text(group, 18, 99, "Equal weight for libraries and shaders. Each tracked DLL counts equally.", 13, MUTED)
     return y+height+GAP
 
 
@@ -124,31 +128,20 @@ def draw_frosty_target(svg, y, evidence):
     failure = receipt.get("failure", {}) if measured else {}
     shader = failure.get("global_shader")
     blocker = f"Blocked at global shader {shader} · {failure['entry']}" if shader is not None else ""
-    height = 231 if blocker else 208
-    group = section(svg, PAD, y, "Frosty gameplay target")
-    window(group, INNER, height, "~/docs/PROGRESS.md")
-    text(group, 18, 69, "Frosty gameplay target", 25, AMBER, bold=True)
-    count, total = len(verified), len(FROSTY_GATES)
-    text(group, INNER-18, 69, f"{count/total:.0%}" if measured else "Unmeasured",
-         23, AQUA if measured else MUTED, bold=True, anchor="end")
-    text(group, 18, 94, "Current target · The Matrix Awakens with its packaged graphics settings", 15)
-    text(group, INNER-18, 94, f"{count}/{total} gates verified" if measured else "Awaiting a recorded run",
-         14, MUTED, anchor="end")
-    rect(group, 18, 107, INNER-36, 9, LINE)
-    if count:
-        rect(group, 18, 107, (INNER-36)*count/total, 9, AQUA)
-    for index, (key, label) in enumerate(FROSTY_GATES.items()):
-        x, top = 18+(index % 4)*233, 145+(index//4)*28
-        status = key in verified
-        mark = element(group, "g")
-        element(mark, "title").text = f"{label} · {'Verified' if status else 'Awaiting verification'}"
-        rect(mark, x, top-11, 12, 12, GREEN if status else PANEL, stroke=GREEN if status else MUTED)
-        if status:
-            element(mark, "path", d=f"M{x+2},{top-5} l3,3 l5,-7", fill="none", stroke=BG, stroke_width=1.6)
-        text(mark, x+20, top, label, 15, TEXT if status else MUTED)
+    labels = [label for key, label in FROSTY_GATES.items() if key in verified]
+    # Five or more observations wrap to a second line within the SVG.
+    lines = [" · ".join(labels[pos:pos+4]) for pos in range(0, len(labels), 4)]
+    if not lines:
+        lines = ["No verified gameplay observations" if measured else "No matching retail run"]
+    height = 65 + 22*len(lines) + (30 if blocker else 0)
+    group = section(svg, PAD, y, "Frosty retail test")
+    rect(group, 0, 0, INNER, height, PANEL, stroke=LINE)
+    text(group, 18, 32, "Frosty retail test", 23, AMBER, bold=True)
+    text(group, INNER-18, 32, "Packaged graphics settings", 15, MUTED, anchor="end")
+    for index, line in enumerate(lines):
+        text(group, 18, 61+22*index, line, 15)
     if blocker:
-        rect(group, 18, 190, INNER-36, 1, LINE)
-        text(group, 18, 215, blocker, 15, AMBER)
+        text(group, 18, height-15, blocker, 15, AMBER)
     return y+height+GAP
 
 
@@ -225,7 +218,8 @@ def import_tally(symbols):
 
 
 def library_table(evidence):
-    libraries = read_json(evidence / "library-status.json").get("libraries", [])
+    status = read_json(evidence / "library-status.json")
+    libraries = status.get("libraries", [])
     direct = frosty_import_coverage(evidence, libraries)
     name_width = max([len("Library"), *(len(lib["name"]) for lib in libraries)])
     heading = f"{'Library':<{name_width}}  {'Verified TuxBox exports':<26} {'Count':>7}  {'Share':>10}  Status"
@@ -261,7 +255,12 @@ def library_table(evidence):
         else:
             lines.extend(["", "Frosty direct import coverage is unmeasured for this build."])
     details = [f"{library['name']} covers {parts}." for library in libraries if (parts := export_breakdown(library))]
-    return "\n".join(lines + (["", *details] if details else []))
+    if details:
+        lines.extend(["", *details])
+    if external := status.get("external_libraries"):
+        lines.extend(["", "Supplied by the package or host"])
+        lines.extend(f"{row['name']:<{name_width}}  {row['source']}" for row in external)
+    return "\n".join(lines)
 
 
 def draw_libraries(svg, y, data, direct):
@@ -408,17 +407,28 @@ def shader_archive_results(evidence, data):
         if total and name in archives:
             yield (name.capitalize() + " raster", sum(s["translated"] for s in stages),
                    total, "HLSL", report["compiler_sha256"])
-    compute = read_json(evidence / "matrix-awakens/compute-archive-survey.json")
-    stage = compute.get("stage", {})
-    total, translated = stage.get("entries"), stage.get("translated")
-    if ("global" in archives and compute.get("archive_sha256") == archives["global"]
-            and compute.get("compiler_sha256") and type(total) is int and type(translated) is int
-            and total > 0 and 0 <= translated <= total):
-        yield "Global compute", translated, total, "HLSL", compute["compiler_sha256"]
+    for name, filename in (("global", "compute-archive-survey.json"),
+                           ("material", "material-compute-survey.json")):
+        compute = read_json(evidence / "matrix-awakens" / filename)
+        stage = compute.get("stage", {})
+        total, translated = stage.get("entries"), stage.get("translated")
+        if (name in archives and compute.get("archive_sha256") == archives[name]
+                and compute.get("compiler_sha256") and type(total) is int and type(translated) is int
+                and total > 0 and 0 <= translated <= total):
+            yield name.capitalize() + " compute", translated, total, "HLSL", compute["compiler_sha256"]
+    # One unique program per mesh archive entry lets us use the inventory's
+    # HLSL survey directly, without double-counting shared program hashes.
+    mesh = next((s for s in data.get("stages", []) if s["stage"] == "Mesh"), {})
+    total, emitted = mesh.get("global"), mesh.get("hlsl_emitted")
+    if ("global" in archives and data.get("compiler_sha256") and not mesh.get("material")
+            and type(total) is int and total > 0 and total == mesh.get("unique_dxbc")
+            and type(emitted) is int and 0 <= emitted <= total):
+        yield "Global mesh", emitted, total, "HLSL", data["compiler_sha256"]
     census = read_json(evidence / "matrix-awakens/ray-state-census.json")
     sources = census.get("archives", {})
-    if sources and all(name in archives and info.get("archive_sha256") == archives[name]
-                       for name, info in sources.items()):
+    if set(sources) == {"global", "material"} and census.get("xshader_sha256") and all(
+            name in archives and info.get("archive_sha256") == archives[name]
+            for name, info in sources.items()):
         compiled = total = 0
         for source in sources.values():
             count = source.get("desktop_translation", {}).get("compiled_entries")
@@ -547,11 +557,9 @@ def shader_table(evidence):
     return "\n".join(lines)
 
 
-def draw_shaders(svg, y, evidence):
-    data = read_json(evidence / "matrix-awakens/shader-inventory.json")
+def draw_shaders(svg, y, data, rows):
     if not data:
         return y
-    rows = list(shader_archive_results(evidence, data))
     height = 146 + 28*len(rows)
     group = section(svg, PAD, y, "RDNA 2 shader translation")
     window(group, INNER, height, "~/docs/SHADERS.md")
@@ -591,7 +599,7 @@ def render_map(evidence):
                              "aria-labelledby": "map-title map-description"})
     element(svg, "title", id="map-title").text = "TuxBox runtime compatibility"
     element(svg, "desc", id="map-description").text = (
-        "Overall progress counts fully verified project roadmap milestones. "
+        "Overall coverage averages verified library exports and translated shader archive entries. "
         "Frosty gameplay tracks title milestones at packaged graphics settings. "
         "Shader rows measure the reusable RDNA 2 translator on Frosty archives. DLL bars show verified exports.")
     bg = rect(svg, 0, 0, WIDTH, 1, BG)
@@ -602,11 +610,13 @@ def render_map(evidence):
     brand = text(svg, WIDTH//2, 32, "TUXBOX", 22, AMBER, bold=True, anchor="middle")
     brand.set("letter-spacing", "4")
     text(svg, WIDTH-PAD, 30, "Xbox Series X|S", 16, AQUA, anchor="end")
-    y = draw_roadmap(svg, 48+GAP, evidence.parent / "docs/PROGRESS.md")
-    y = draw_frosty_target(svg, y, evidence)
-    y = draw_shaders(svg, y, evidence)
     data = read_json(evidence / "library-status.json")
+    inventory = read_json(evidence / "matrix-awakens/shader-inventory.json")
+    shader_rows = list(shader_archive_results(evidence, inventory))
+    y = draw_overall(svg, 48+GAP, data.get("libraries", []), inventory, shader_rows)
+    y = draw_shaders(svg, y, inventory, shader_rows)
     y = draw_libraries(svg, y, data, frosty_import_coverage(evidence, data.get("libraries", [])))
+    y = draw_frosty_target(svg, y, evidence)
     height = draw_verification(svg, y, evidence) + 6
     bg.set("height", str(height))
     svg.set("viewBox", f"0 0 {WIDTH} {height}")

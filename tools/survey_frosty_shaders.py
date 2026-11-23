@@ -39,11 +39,16 @@ def main():
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--archive", choices=("global", "material"), default="global",
                         help="shader archive to survey (default: global)")
-    parser.add_argument("--include-compute", action="store_true", help="also survey compute shaders")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--include-compute", action="store_true", help="also survey compute shaders")
+    selection.add_argument("--stage", choices=STAGES.values(), help="survey just this stage")
     args = parser.parse_args()
     if args.workers < 1:
         parser.error("--workers must be positive")
 
+    selected = {args.stage} if args.stage else set(STAGES.values())
+    if not args.stage and not args.include_compute:
+        selected.remove("compute")
     observed = set()
     for log in args.trace_log:
         observed.update(REQUEST.findall(log.read_text(errors="replace")))
@@ -71,7 +76,7 @@ def main():
             raise ValueError("shader compiler changed while being copied")
         jobs = []
         for index, entry in enumerate(entries):
-            if entry[3] not in STAGES or (entry[3] == 5 and not args.include_compute):
+            if STAGES.get(entry[3]) not in selected:
                 continue
             if args.archive == "global":
                 native = next(containers(decompress(payload, entry, decode)))[1]
@@ -96,6 +101,7 @@ def main():
                 [snapshot, source, "--hlsl-out", hlsl],
                 capture_output=True, text=True, check=False,
             )
+            emitted = result.returncode == 0 and hlsl.is_file() and hlsl.stat().st_size > 0
             hlsl.unlink(missing_ok=True)
             name = ENTRY.search(result.stdout)
             return {
@@ -104,8 +110,8 @@ def main():
                 "source_sha256": source_hash,
                 "entry": name.group(1) if name else None,
                 "observed": source_hash in observed,
-                "translated": result.returncode == 0,
-                "diagnostic": result.stderr.strip() if result.returncode else None,
+                "translated": emitted,
+                "diagnostic": None if emitted else result.stderr.strip() or "No HLSL emitted",
             }
 
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
@@ -113,7 +119,7 @@ def main():
 
     stages = {}
     for stage in STAGES.values():
-        if stage == "compute" and not args.include_compute:
+        if stage not in selected:
             continue
         rows = [row for row in results if row["stage"] == stage]
         failures = [row for row in rows if not row["translated"]]

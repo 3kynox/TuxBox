@@ -1,5 +1,5 @@
 {
-  "scope": "The Frosty map covers Xbox-facing DLLs imported directly or by delay-load and DLLs observed in the retail loader trace, including packaged codecs identified by SHA-256. Other reviewed providers are available in the export audit.",
+  "scope": "TuxBox implementations and media adapters used by Frosty on Xbox Series. External libraries record the runtime bindings of the tested Linux setup.",
   "levels": {
     "complete": "All identified console exports and interfaces for the reviewed build have an implemented, behaviorally verified replacement.",
     "partial": "A TuxBox provider or named reference bridge implements at least one verified Xbox-facing behavior. Other exports, interface methods or execution paths remain open.",
@@ -549,118 +549,6 @@
       }
     },
     {
-      "name": "XAudio2_9.dll",
-      "group": "Input and audio",
-      "status": "partial",
-      "provider": "TuxBox Xbox ordinal exports backed by system XAudio2.",
-      "scope": "Eight exports cover all five static imports in Frosty. The guest creates engines through all three tested factory ordinals, instantiates three effects, pans a source and measures the signal on each stereo channel.",
-      "remaining": "Console ordinals 7 and 10, XMA playback and a retail mixer run with the replacement.",
-      "evidence": [
-        "runtime/xaudio/xaudio.def",
-        "evidence/providers/xaudio-control.json",
-        "evidence/providers/valve.json",
-        "evidence/providers/ge.json"
-      ],
-      "export_coverage": {
-        "reference": "EmbeddedXvd/Windows/System32/XAudio2_9.dll",
-        "binary_sha256": "8d49f4c47a6ee01f344c45375b5a022045ad8ff7dd9f4b61e6554186c1e87c02",
-        "total": 10,
-        "data_exports": [],
-        "verified": [
-          "XAudio2Create",
-          "CreateAudioReverb",
-          "CreateAudioVolumeMeter",
-          "CreateFX",
-          "X3DAudioCalculate",
-          "X3DAudioInitialize",
-          "XAudio2CreateWithVersionInfo",
-          "XAudio2CreateV2_9"
-        ]
-      },
-      "inventory": {
-        "source_path": "EmbeddedXvd/Windows/System32/XAudio2_9.dll",
-        "source_sha256": "8d49f4c47a6ee01f344c45375b5a022045ad8ff7dd9f4b61e6554186c1e87c02",
-        "file_description": "XAudio2 Game Audio API",
-        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
-        "title_reachability": "direct",
-        "title_import_symbols": [
-          "#2",
-          "#1",
-          "#4",
-          "#5",
-          "#6"
-        ],
-        "static_import_chain": [
-          "Frosty-XSX-Shipping.exe",
-          "XAudio2_9.dll"
-        ]
-      }
-    },
-    {
-      "name": "GameChat2.dll",
-      "group": "Input and audio",
-      "status": "partial",
-      "provider": "TuxBox Rust chat session, user roster and outgoing frame provider.",
-      "scope": "Thirteen exports cover sessions, encoding bitrate, remote users, user context and outgoing endpoint announcements. Nine are among Frosty\u2019s 15 delay imports. The guest checks payloads, endpoint IDs and borrowed frame lifetimes against the packaged DLL.",
-      "remaining": "Local users, microphone capture, audio encoding, incoming packets and network transport remain open.",
-      "evidence": [
-        "runtime/gamechat/guest.c",
-        "evidence/providers/platform-controls.json",
-        "evidence/providers/valve.json",
-        "evidence/providers/ge.json"
-      ],
-      "export_coverage": {
-        "reference": "Mount/Frosty/Binaries/XSX/GameChat2.dll",
-        "binary_sha256": "35ecdfbea3a9f4d004b638d8b1070dcded9cb05f76514a4184b5a5832f4afb87",
-        "total": 70,
-        "data_exports": [],
-        "verified": [
-          "ChatManagerAddRemoteUser",
-          "ChatManagerCleanup",
-          "ChatManagerFinishProcessingDataFrames",
-          "ChatManagerGetAudioEncodingBitrate",
-          "ChatManagerGetChatUsers",
-          "ChatManagerInitialize",
-          "ChatManagerRemoveUser",
-          "ChatManagerSetAudioEncodingBitrate",
-          "ChatManagerStartProcessingDataFrames",
-          "ChatUserGetCustomUserContext",
-          "ChatUserGetIsLocal",
-          "ChatUserGetXboxUserId",
-          "ChatUserSetCustomUserContext"
-        ],
-        "notes": "Packaged and TuxBox providers returned matching results on Valve Proton Experimental and GE-Proton."
-      },
-      "inventory": {
-        "source_path": "Mount/Frosty/Binaries/XSX/GameChat2.dll",
-        "source_sha256": "35ecdfbea3a9f4d004b638d8b1070dcded9cb05f76514a4184b5a5832f4afb87",
-        "file_description": "Microsoft Xbox Game Chat 2",
-        "file_version": "2106.4.0.0 (WinBuild.160101.0800)",
-        "title_reachability": "direct",
-        "title_import_symbols": [
-          "GameChatFailFastWithInform",
-          "ChatManagerInitialize",
-          "ChatManagerCleanup",
-          "ChatManagerSetAudioEncodingBitrate",
-          "ChatManagerStartProcessingDataFrames",
-          "ChatManagerFinishProcessingDataFrames",
-          "ChatManagerAddLocalUser",
-          "ChatManagerAddRemoteUser",
-          "ChatManagerRemoveUser",
-          "ChatManagerProcessIncomingPacket",
-          "ChatManagerGetChatUsers",
-          "ChatUserSetMicrophoneMuted",
-          "ChatUserGetRemoteUserMuted",
-          "ChatUserSetRemoteUserMuted",
-          "ChatUserGetIsLocal"
-        ],
-        "static_import_chain": [
-          "Frosty-XSX-Shipping.exe",
-          "GameChat2.dll"
-        ]
-      }
-    },
-    {
       "name": "mfplat.dll",
       "group": "Media",
       "status": "partial",
@@ -768,78 +656,6 @@
         "title_import_symbols": [],
         "static_import_chain": []
       }
-    },
-    {
-      "name": "mfreadwrite.dll",
-      "group": "Media",
-      "status": "partial",
-      "provider": "TuxBox synchronous PCM source reader.",
-      "scope": "Opens seekable PCM RIFF/WAVE streams, Windows file paths and escaped file URLs. The guest compares 2,501 stereo frames and checks stream selection, seeking, timestamps, end of stream and invalid inputs.",
-      "remaining": "Compressed audio, MP4 video, asynchronous source reading and sink writing.",
-      "evidence": [
-        "runtime/mfreadwrite/guest.cpp",
-        "evidence/providers/valve.json",
-        "evidence/providers/ge.json",
-        "evidence/providers/mfreadwrite-url-control.json"
-      ],
-      "export_coverage": {
-        "reference": "EmbeddedXvd/Windows/System32/mfreadwrite.dll",
-        "binary_sha256": "e697c5620b6f685a80c6ed56c5cd5e25af4d46ebf15d9afa1bd7670d1ad84982",
-        "total": 7,
-        "data_exports": [],
-        "verified": [
-          "MFCreateSourceReaderFromByteStream",
-          "MFCreateSourceReaderFromURL"
-        ]
-      },
-      "inventory": {
-        "source_path": "EmbeddedXvd/Windows/System32/mfreadwrite.dll",
-        "source_sha256": "e697c5620b6f685a80c6ed56c5cd5e25af4d46ebf15d9afa1bd7670d1ad84982",
-        "file_description": "",
-        "file_version": "",
-        "title_reachability": "direct",
-        "title_import_symbols": [
-          "MFCreateSourceReaderFromByteStream"
-        ],
-        "static_import_chain": [
-          "Frosty-XSX-Shipping.exe",
-          "mfreadwrite.dll"
-        ]
-      }
-    },
-    {
-      "name": "MSAudDecMFT.dll",
-      "group": "Media",
-      "status": "partial",
-      "provider": "TuxBox AAC transform adapter using GE-Proton's host decoder.",
-      "scope": "Handles the first format change and end-of-stream drain. On GE-Proton the guest decoded 25 generated and 96 Frosty AAC-LC packets into 48 kHz six-channel PCM. Each channel was compared with FFmpeg.",
-      "remaining": "Proton Experimental fails with 0xd0000001. Retail COM activation, other hosts and additional AAC profiles need validation.",
-      "evidence": [
-        "tools/check_aac_provider.py",
-        "evidence/providers/aac-ge.json",
-        "evidence/providers/aac-frosty-ge.json",
-        "evidence/providers/aac-valve.json"
-      ],
-      "export_coverage": {
-        "reference": "EmbeddedXvd/Windows/System32/MSAudDecMFT.dll",
-        "binary_sha256": "810c007551ec389a2c7dd0f0066747e453b5c3d1efb3cdc62cc1f22a76c5b454",
-        "total": 2,
-        "data_exports": [],
-        "verified": [
-          "DllCanUnloadNow",
-          "DllGetClassObject"
-        ],
-        "notes": "The class factory and unload query passed on GE-Proton. The host codec performs AAC decoding."
-      },
-      "inventory": {
-        "source_path": "EmbeddedXvd/Windows/System32/MSAudDecMFT.dll",
-        "source_sha256": "810c007551ec389a2c7dd0f0066747e453b5c3d1efb3cdc62cc1f22a76c5b454",
-        "file_description": "Media Foundation Audio Decoders",
-        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
-        "title_reachability": "not statically reachable",
-        "title_import_symbols": [],
-        "static_import_chain": []
-      }
     }
   ],
   "export_measurement": {
@@ -853,119 +669,31 @@
     "evidence": "evidence/frosty-xbox-library-inventory.json",
     "system_image_dlls_scanned": 245,
     "title_mount_dlls_scanned": 4,
-    "catalogued_xbox_facing_dlls": 61,
+    "catalogued_xbox_facing_dlls": 22,
     "direct_static_imports": 11,
     "transitive_static_dependencies": 1,
-    "not_statically_reachable": 49,
+    "not_statically_reachable": 10,
     "title_regular_import_dlls": 65,
     "title_regular_import_symbols": 537,
     "title_delay_import_dlls": 1,
     "title_delay_import_symbols": 15
   },
-  "other_reviewed_libraries": [
+  "external_libraries": [
     {
-      "name": "gameconfighelper.dll",
-      "group": "Platform and storage",
-      "status": "partial",
-      "provider": "TuxBox package registry helper using Win32 and WinRT.",
-      "scope": "Implements three of the 24 exports in the reviewed Windows Game Runtime helper. The guest obtains an owned UTF-16 package path and opens configuration keys in both supported registry hives, including the GameCore machine key. Boundary lengths, Unicode and missing keys matched the supplied helper.",
-      "remaining": "The embedded runtime's GetCurrentPackageGameConfig call and the remaining configuration and package-identity queries.",
-      "evidence": [
-        "runtime/gameconfig/guest.c",
-        "evidence/providers/platform-controls.json",
-        "evidence/providers/valve.json",
-        "evidence/providers/ge.json"
-      ],
-      "export_coverage": {
-        "reference": "EmbeddedXvd/Windows/System32/gameconfighelper.dll",
-        "binary_sha256": "28562599eaba50711d5225e4b05478f8a83a9438f5501bf9068283eb71a4f33f",
-        "total": 24,
-        "data_exports": [],
-        "verified": [
-          "GetRegistryPathForPackage",
-          "OpenGameConfigKeyForPackage",
-          "OpenGameConfigForGameCore"
-        ]
-      },
-      "inventory": {
-        "source_path": "EmbeddedXvd/Windows/System32/gameconfighelper.dll",
-        "source_sha256": "28562599eaba50711d5225e4b05478f8a83a9438f5501bf9068283eb71a4f33f",
-        "file_description": "Game Config Helper",
-        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
-        "title_reachability": "not statically reachable",
-        "title_import_symbols": [],
-        "static_import_chain": []
-      }
+      "name": "GameChat2.dll",
+      "source": "Retail package"
     },
     {
-      "name": "dxcompiler_x.dll",
-      "group": "Graphics and memory",
-      "status": "partial",
-      "provider": "TuxBox forwards both Xbox One factories to desktop DXC at the packaged ordinals.",
-      "scope": "Both factories match the packaged DLL for retained blobs, caller allocation, a cs_6_0 shader with a root signature, and diagnostics for an invalid entry point.",
-      "remaining": "Xbox GPU-specific code generation, custom intrinsics and the compiler interfaces behind the factories need further coverage.",
-      "evidence": [
-        "evidence/frosty-xbox-library-inventory.json",
-        "evidence/providers/dxc-factories.json"
-      ],
-      "export_coverage": {
-        "reference": "EmbeddedXvd/Windows/System32/dxcompiler_x.dll",
-        "binary_sha256": "6d1ad1f61da68e875a40daddcae4616ef156a53e6539ec81313708c6bdbdedc6",
-        "total": 2,
-        "data_exports": [],
-        "verified": [
-          "DxcCreateInstance",
-          "DxcCreateInstance2"
-        ],
-        "notes": "Both exported factories are exercised. The shader check validates portable DXIL."
-      },
-      "inventory": {
-        "source_path": "EmbeddedXvd/Windows/System32/dxcompiler_x.dll",
-        "source_sha256": "6d1ad1f61da68e875a40daddcae4616ef156a53e6539ec81313708c6bdbdedc6",
-        "file_description": "",
-        "file_version": "2106.2109.12814.14741",
-        "title_reachability": "not statically reachable",
-        "title_import_symbols": [],
-        "static_import_chain": []
-      }
+      "name": "mfreadwrite.dll",
+      "source": "Proton Media Foundation"
     },
     {
-      "name": "xfrontpaneldisplay.dll",
-      "group": "Other Xbox support",
-      "status": "complete",
-      "provider": "TuxBox Rust front-panel API with optional xfp_gc transport.",
-      "scope": "All eight wrapper exports match the packaged DLL on systems without a panel and with a controlled connected transport. The guest checks all 32 light masks, buttons, frame dimensions, pixel format, a full frame, naming and error propagation.",
-      "remaining": "Physical panel hardware was unavailable. The separate xfp_gc.dll transport has its own coverage row.",
-      "evidence": [
-        "evidence/frosty-xbox-library-inventory.json",
-        "evidence/providers/frontpanel-control.json"
-      ],
-      "export_coverage": {
-        "reference": "EmbeddedXvd/Windows/System32/xfrontpaneldisplay.dll",
-        "binary_sha256": "a75f8c736fec842da0b7f1868733175848f6f4bcb769261c016bedeeb5de38e0",
-        "total": 8,
-        "data_exports": [],
-        "verified": [
-          "XFrontPanelGetButtonStates",
-          "XFrontPanelGetLightStates",
-          "XFrontPanelGetScreenDimensions",
-          "XFrontPanelGetScreenPixelFormat",
-          "XFrontPanelIsSupported",
-          "XFrontPanelPresentBuffer",
-          "XFrontPanelSetDisplayName",
-          "XFrontPanelSetLightStates"
-        ],
-        "notes": "Eight names and ordinals match the package. Fifteen fresh-process runs cover Proton Experimental, GE-Proton and Wine."
-      },
-      "inventory": {
-        "source_path": "EmbeddedXvd/Windows/System32/xfrontpaneldisplay.dll",
-        "source_sha256": "a75f8c736fec842da0b7f1868733175848f6f4bcb769261c016bedeeb5de38e0",
-        "file_description": "Xbox Front Panel Display API",
-        "file_version": "10.0.19041.7032 (WinBuild.160101.0800)",
-        "title_reachability": "not statically reachable",
-        "title_import_symbols": [],
-        "static_import_chain": []
-      }
+      "name": "XAudio2_9.dll",
+      "source": "Proton XAudio2"
+    },
+    {
+      "name": "MSAudDecMFT.dll",
+      "source": "Packaged Xbox Series AAC decoder"
     }
   ]
 }

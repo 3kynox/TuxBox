@@ -47,14 +47,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tuxbox-aac"
-version = "0.1.0"
-dependencies = [
- "windows",
- "windows-core",
-]
-
-[[package]]
 name = "tuxbox-acphal"
 version = "0.1.0"
 dependencies = [
@@ -82,27 +74,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tuxbox-frontpanel"
-version = "0.1.0"
-dependencies = [
- "windows-sys",
-]
-
-[[package]]
-name = "tuxbox-gamechat"
-version = "0.1.0"
-dependencies = [
- "windows-sys",
-]
-
-[[package]]
-name = "tuxbox-gameconfig"
-version = "0.1.0"
-dependencies = [
- "windows-sys",
-]
-
-[[package]]
 name = "tuxbox-gameinput"
 version = "0.1.0"
 dependencies = [
@@ -110,25 +81,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "tuxbox-mfreadwrite"
-version = "0.1.0"
-dependencies = [
- "windows",
- "windows-core",
-]
-
-[[package]]
 name = "tuxbox-pipeline-prep"
 version = "0.1.0"
 dependencies = [
  "windows",
-]
-
-[[package]]
-name = "tuxbox-xaudio"
-version = "0.1.0"
-dependencies = [
- "windows-sys",
 ]
 
 [[package]]

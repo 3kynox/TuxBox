@@ -35,8 +35,7 @@ def main():
     parser.add_argument("package", type=Path, help="root containing EmbeddedXvd and Mount")
     args = parser.parse_args()
     status = json.loads((ROOT / "evidence/library-status.json").read_text())
-    libraries = status["libraries"] + status.get("other_reviewed_libraries", [])
-    for library in libraries:
+    for library in status["libraries"]:
         row = library["export_coverage"]
         try:
             check(args.package / row["reference"], row)

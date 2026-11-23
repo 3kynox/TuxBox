@@ -12,7 +12,7 @@ from project_tuxbox.shader_prep import matching_tuxbox_provider
 if sys.platform != "linux":
     raise unittest.SkipTest("Frosty's staging and launch tools require Linux")
 
-from tools.prepare_frosty import BIN, ENGINE_INI, TITLE, XG_PATH, prepare, refresh_xg, stage_xg_provider, verify_staged_files
+from tools.prepare_frosty import BIN, ENGINE_INI, TITLE, XG_PATH, prepare, refresh_xg, stage_xg_provider, update_provider_manifest, verify_staged_files
 
 
 class FrostyPreparationTests(unittest.TestCase):
@@ -37,6 +37,24 @@ class FrostyPreparationTests(unittest.TestCase):
         self.provider = self.binaries / "d3d12_xs.dll"
         self.manifest = self.work / "providers.json"
         self.manifest.write_text(json.dumps(self.records))
+
+    def test_refresh_retires_only_the_previously_staged_gameconfig(self):
+        relative = "prefix/drive_c/windows/system32/gameconfighelper.dll"
+        helper = self.work / relative
+        helper.parent.mkdir(parents=True)
+        for origin, modified, keep in (("TuxBox gameconfig", False, False),
+                                       ("TuxBox gameconfig", True, True),
+                                       ("Original retail package", False, True)):
+            with self.subTest(origin=origin, modified=modified):
+                helper.write_bytes(b"previous DLL")
+                records = dict(self.records)
+                records[relative] = {"origin": origin, "sha256": digest(helper)}
+                self.manifest.write_text(json.dumps(records))
+                if modified:
+                    helper.write_bytes(b"replacement DLL")
+                update_provider_manifest(self.work, self.records)
+                self.assertEqual(helper.exists(), keep)
+                self.assertEqual(json.loads(self.manifest.read_text()), self.records)
 
     def test_rejects_replacement_of_original_and_provider(self):
         verify_staged_files(self.work)

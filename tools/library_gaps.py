@@ -19,8 +19,7 @@ from project_tuxbox.inspect import export_table
 def gap_rows(status, inventory, name, provider=None):
     """Compare occupied reference slots, preserving aliases and import spellings."""
     key = name.casefold()
-    reviewed = status['libraries'] + status.get('other_reviewed_libraries', [])
-    library = next((row for row in reviewed if row['name'].casefold() == key), None)
+    library = next((row for row in status['libraries'] if row['name'].casefold() == key), None)
     image = next((row for row in inventory['libraries'] if row['name'].casefold() == key), None)
     if image is None:
         raise ValueError(f'{name}: missing reference inventory')

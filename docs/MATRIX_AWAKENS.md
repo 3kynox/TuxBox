@@ -4,6 +4,10 @@ Frosty selects its original XSX graphics profile on stock Proton Experimental. O
 
 TuxBox rebuilt the 528-triangle sphere through the Xbox command list. All 3,171 test rays matched desktop D3D12 on GeForce and Radeon. The Radeon’s compacted structure needed 56,704 bytes, so TuxBox translated the game’s 31,232-byte allocation to a larger host buffer. A street lamp with an empty material section also matched the original mesh, including the geometry indices used to select hit shaders. [Geometry checks](../evidence/matrix-awakens/retail-sphere-blas.json) · [Ray-shader checks](SHADERS.md)
 
+## Provider audit
+
+A desktop run with the package configuration helper absent reached the Wake Up chase on the earlier graphics build and packaged Series XG. Two runs using the newer TuxBox XG staging reached Construct and reported GPU device removal before the menu. All three used an isolated reduced graphics profile. The successful control also used a different D3D12 build, so the comparison cannot isolate the cause. [Loader and gameplay results](../evidence/matrix-awakens/provider-audit.json)
+
 ## Earlier tests with reduced graphics settings
 
 Frosty reached the main menu, highway chase and open city on Linux with a TuxBox graphics override. On an RTX 4070 Ti SUPER with the shaders and graphics pipelines cached, the shooting tutorial appeared 4 minutes 4 seconds after selecting **Start Chase**. The game finished the bridge finale and entered Sandbox at 7 minutes 43 seconds. At 11 minutes 2 seconds, the player was walking in the street. The chase accepts target lock and manually fired shots. In the city, a controller and W/S moved the same character forward and back. The right stick and mouse turned the camera in both directions. [Chase HUD](../evidence/matrix-awakens/chase-gameplay-hud.jpg) · [City street](../evidence/matrix-awakens/city-free-roam.jpg) · [Input and timing records](../evidence/matrix-awakens/chase-gameplay.json)

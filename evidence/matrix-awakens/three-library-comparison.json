@@ -6,7 +6,10 @@
   "d3d12_xs_sha256": "0d0204dacb201de737391b73a4393f02d346b5ed5c6789eb6286ff86a287ef0f",
   "runs": {
     "tuxbox": {
-      "verified_milestones": ["load_world", "submit_frame"],
+      "verified_milestones": [
+        "load_world",
+        "submit_frame"
+      ],
       "log_sha256": "b21c9a2c95276f643833beeaca8300aa946d4f798933c7b8b1fd278334c4cee3",
       "xg_sha256": "07576cb2724600e833171ddce6d15fe3a6e392f7eaed2b9acae94b432f12884a",
       "mangohud_frame_samples": 1,
@@ -43,14 +46,11 @@
   "provider_verification": {
     "valve": {
       "proton": "1793301796 experimental-11.0-20261027b-x86_64",
-      "passed": 23,
+      "passed": 20,
       "gates": [
         "dxc-create-blob",
         "dxc-allocator",
         "dxc-compile",
-        "dxc-x-create-blob",
-        "dxc-x-allocator",
-        "dxc-x-compile",
         "xdxr-link",
         "xg-dcc",
         "xg-library",
@@ -72,14 +72,11 @@
     },
     "ge": {
       "proton": "1792432585 GE-Proton11-11",
-      "passed": 23,
+      "passed": 20,
       "gates": [
         "dxc-create-blob",
         "dxc-allocator",
         "dxc-compile",
-        "dxc-x-create-blob",
-        "dxc-x-allocator",
-        "dxc-x-compile",
         "xdxr-link",
         "xg-dcc",
         "xg-library",
@@ -99,5 +96,6 @@
         "xmem-pages"
       ]
     }
-  }
+  },
+  "provider_verification_scope": "Retained Series XMem, XG and DXC checks from the recorded provider runs."
 }

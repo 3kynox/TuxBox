@@ -2,7 +2,7 @@
   "export": "D3D12ZeroMemoryX",
   "implementation": "The Series CPU path validates every range and the optional workspace before clearing caller-owned memory. A call with zero ranges succeeds. Nonempty requests for GPU-assisted clearing are unsupported.",
   "control": {
-    "loader": "The original packaged Series DLL and the TuxBox provider ran the same exports guest under Proton Experimental. The Xbox One control tested its original export set.",
+    "loader": "The original packaged Series DLL and the TuxBox provider ran the same exports guest under Proton Experimental.",
     "probe_source": "runtime/d3d12/exports_guest.cpp",
     "checked_memory_bytes": 128,
     "range_alignment_bytes": 16,
@@ -40,18 +40,6 @@
       "checks": {
         "original": "d3d12-exports PASS debug=1 blob=1 dxgix=4 cpu_clear=1",
         "translated": "d3d12-exports PASS debug=1 blob=1 dxgix=4 cpu_clear=1"
-      }
-    },
-    "x": {
-      "reference_sha256": "fafdfb277c36f654a0043241edcf9bb8eefee6c1092c09090b4913e917f8c469",
-      "provider_sha256": "49940a7b557af5da1397a17cd144f6ec27b7d19740ed6e4f352fb93e595bcb6d",
-      "guest_sha256": "bbef6211241d11519981e216b229bad006956a2ce5dfab716f17679b03010d9b",
-      "matched_exports": 45,
-      "host": "1793301796 experimental-11.0-20261027b-x86_64",
-      "export_ordinal": null,
-      "checks": {
-        "original": "d3d12-exports PASS debug=1 blob=1 dxgix=4",
-        "translated": "d3d12-exports PASS debug=1 blob=1 dxgix=4"
       }
     }
   }
