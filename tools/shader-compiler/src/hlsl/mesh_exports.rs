@@ -5,11 +5,12 @@ use Opnd::{ConstInt as I, ExecLo, Literal, Scc, Sgpr as S, VccLo, Vgpr as V, M0}
 
 pub(super) struct MeshExports {
     pub start: usize,
+    pub lane_index: Opnd,
     pub vertices: Opnd,
     pub primitives: Opnd,
     pub connectivity: Opnd,
-    // A vertex past the last primitive never executes the guarded write to v0.
-    pub vertex_v0_without_primitive: Opnd,
+    pub guarded_connectivity: Opnd,
+    pub connectivity_without_primitive: Opnd,
     pub vertex_exports: Vec<Insn>,
     pub primitive_exports: Vec<Insn>,
 }
@@ -160,21 +161,91 @@ fn allocation(seq: &mut Sequence<'_>) -> Result<(Opnd, Opnd, Opnd, [Opnd; 3]), S
     Ok((vertices, primitives, invalid, temps))
 }
 
-pub(super) fn recognize(insns: &[Insn]) -> Result<MeshExports, String> {
+fn allocation_128(seq: &mut Sequence<'_>) -> Result<(Opnd, Opnd, Opnd, [Opnd; 3]), String> {
+    let vertices = seq.count()?;
+    let limit = seq.imm("s_movk_i32", 128)?;
+    let [limit @ (S(6) | S(14..))] = limit.dst[..] else {
+        return Err("unsupported mesh count limit register".into());
+    };
+    seq.write(S(0), "s_cselect_b64", &[ExecLo, I(0)])?;
+    let primitives = seq.count()?;
+    if limit == vertices || limit == primitives {
+        return Err("mesh limit overwrites an output count".into());
+    }
+    seq.write(S(2), "s_cselect_b64", &[ExecLo, I(0)])?;
+    seq.write(Scc, "s_cmp_lt_u32", &[limit, vertices])?;
+    seq.write(S(4), "s_cselect_b64", &[ExecLo, I(0)])?;
+    seq.write(Scc, "s_cmp_lt_u32", &[limit, primitives])?;
+    seq.write(S(6), "s_cselect_b64", &[ExecLo, I(0)])?;
+    seq.write(S(0), "s_or_b64", &[S(0), S(2)])?;
+    seq.write(S(2), "s_or_b64", &[S(4), S(6)])?;
+    seq.write(S(0), "s_or_b64", &[S(2), S(0)])?;
+    let bad = seq.assign("v_cndmask_b32", &[I(0), I(1), S(0)])?;
+    seq.write(S(0), "v_readfirstlane_b32", &[bad])?;
+    seq.write(S(0), "s_and_b32", &[I(1), S(0)])?;
+    seq.write(Scc, "s_cmp_eq_u32", &[S(0), I(1)])?;
+    seq.write(S(0), "s_mov_b64", &[ExecLo])?;
+    seq.write(S(2), "s_cselect_b64", &[ExecLo, I(0)])?;
+    let vert = seq.assign("v_cndmask_b32", &[vertices, I(1), S(2)])?;
+    let prim = seq.assign("v_cndmask_b32", &[primitives, I(1), S(2)])?;
+    let temps = [bad, vert, prim];
+    if vert == prim || !temps.iter().all(|op| matches!(op, V(1..))) {
+        return Err("unsupported temporary registers in mesh allocation".into());
+    }
+    seq.write(S(4), "s_xor_b64", &[S(2), I(-1)])?;
+    seq.write(S(6), "v_readfirstlane_b32", &[vert])?;
+    seq.write(S(7), "v_readfirstlane_b32", &[prim])?;
+    seq.write(VccLo, "v_cmpx_eq_u32", &[I(0), V(0)])?;
+    let restore = seq.branch("s_cbranch_execz")?;
+    seq.write(S(7), "s_lshl_b32", &[S(7), I(12)])?;
+    seq.write(VccLo, "s_andn2_b64", &[ExecLo, S(2)])?;
+    seq.write(S(6), "s_or_b32", &[S(7), S(6)])?;
+    seq.write(M0, "s_mov_b32", &[S(6)])?;
+    seq.imm("s_sendmsg", 9)?;
+    seq.imm("s_waitcnt", 0)?;
+    let valid = seq.branch("s_cbranch_vccnz")?;
+    seq.imm("s_barrier", 0)?;
+    let null = seq.assign("v_bfrev_b32", &[I(1)])?;
+    if null != bad {
+        return Err("unexpected null primitive register".into());
+    }
+    seq.export(12, 0, 2)?;
+    if seq.export(20, 1, 2)?.src.first() != Some(&null) {
+        return Err("missing null primitive in mesh allocation".into());
+    }
+    seq.arrive(valid)?;
+    seq.arrive(restore)?;
+    seq.imm("s_waitcnt", -241)?;
+    seq.write(ExecLo, "s_mov_b64", &[S(0)])?;
+    seq.imm("s_barrier", 0)?;
+    Ok((vertices, primitives, S(2), temps))
+}
+
+pub(super) fn recognize(insns: &[Insn], max_vertices: u16) -> Result<MeshExports, String> {
+    let compact = max_vertices == 128;
     let start = insns
         .iter()
         .position(|op| op.mnemonic == "s_sendmsg")
-        .and_then(|index| index.checked_sub(28))
+        .and_then(|index| index.checked_sub(if compact { 29 } else { 28 }))
         .ok_or("missing mesh allocation request")?;
     let mut seq = Sequence {
         code: insns,
         at: start,
     };
-    let (vertices, primitives, invalid, temps) = allocation(&mut seq)?;
-    seq.write(VccLo, "v_cmp_gt_u32", &[primitives, V(1)])?;
-    seq.write(S(4), "s_xor_b64", &[invalid, I(-1)])?;
-    seq.write(S(0), "s_and_b64", &[ExecLo, S(4)])?;
-    seq.write(S(0), "s_and_b64", &[VccLo, S(0)])?;
+    let (vertices, primitives, invalid, temps) = if compact {
+        allocation_128(&mut seq)?
+    } else {
+        allocation(&mut seq)?
+    };
+    let lane_index = V(if compact { 0 } else { 1 });
+    seq.write(VccLo, "v_cmp_gt_u32", &[primitives, lane_index])?;
+    if compact {
+        seq.write(S(0), "s_and_b64", &[VccLo, S(4)])?;
+    } else {
+        seq.write(S(4), "s_xor_b64", &[invalid, I(-1)])?;
+        seq.write(S(0), "s_and_b64", &[ExecLo, S(4)])?;
+        seq.write(S(0), "s_and_b64", &[VccLo, S(0)])?;
+    }
     seq.write(S(6), "s_and_saveexec_b64", &[S(0)])?;
     let end_primitives = seq.branch("s_cbranch_execz")?;
 
@@ -189,11 +260,14 @@ pub(super) fn recognize(insns: &[Insn]) -> Result<MeshExports, String> {
     let x = seq.assign("v_and_b32", &[Literal(0x3ff), packed])?;
     let indices = [x, y, z];
     if temps.contains(&packed)
+        || packed == lane_index
         || indices.contains(&packed)
         || x == y
         || y == z
         || x == z
-        || !indices.iter().all(|op| matches!(op, V(n) if *n != 1))
+        || !indices
+            .iter()
+            .all(|op| matches!(op, V(_)) && *op != lane_index)
     {
         return Err("mesh triangle index register overwritten".into());
     }
@@ -202,38 +276,70 @@ pub(super) fn recognize(insns: &[Insn]) -> Result<MeshExports, String> {
     seq.write(S(0), "v_cmp_le_u32", &[vertices, x, S(0)])?;
     seq.write(S(2), "s_or_b64", &[VccLo, S(2)])?;
     seq.write(S(0), "s_or_b64", &[S(0), S(2)])?;
-    seq.write(V(0), "v_cndmask_b32", &[packed, Literal(0x80000000), S(0)])?;
-    if seq.export(20, 1, 2)?.src.first() != Some(&V(0)) {
+    let guarded = if compact { packed } else { V(0) };
+    seq.write(
+        guarded,
+        "v_cndmask_b32",
+        &[packed, Literal(0x80000000), S(0)],
+    )?;
+    if seq.export(20, 1, 2)?.src.first() != Some(&guarded) {
         return Err("missing guarded triangle export".into());
     }
-    let primitive = seq.next("exp")?;
-    let preserved = |reg: &Opnd| !temps.contains(reg) && !indices.contains(reg) && *reg != V(0);
-    if !(32..64).contains(&primitive.aux.imm)
-        || primitive.aux.mask != 15
-        || primitive.aux.imm2 != 0
-        || !primitive.src.iter().all(preserved)
-    {
-        return Err("unsupported mesh primitive attribute export".into());
-    }
+    let preserved = |reg: &Opnd| !temps.contains(reg) && !indices.contains(reg) && *reg != guarded;
+    let primitive = if seq.code.get(seq.at).is_some_and(|op| op.enc == Enc::Exp) {
+        let export = seq.next("exp")?;
+        if !(32..64).contains(&export.aux.imm)
+            || export.aux.mask != 15
+            || export.aux.imm2 != 0
+            || !export.src.iter().all(preserved)
+        {
+            return Err("unsupported mesh primitive attribute export".into());
+        }
+        Some(export)
+    } else {
+        None
+    };
     seq.arrive(end_primitives)?;
     seq.imm("s_waitcnt", -241)?;
     seq.write(ExecLo, "s_mov_b64", &[S(6)])?;
-    seq.write(VccLo, "v_cmp_gt_u32", &[vertices, V(1)])?;
-    seq.write(S(0), "s_and_b64", &[ExecLo, S(4)])?;
-    seq.write(S(0), "s_and_b64", &[VccLo, S(0)])?;
+    seq.write(VccLo, "v_cmp_gt_u32", &[vertices, lane_index])?;
+    if compact {
+        seq.write(S(0), "s_and_b64", &[VccLo, S(4)])?;
+    } else {
+        seq.write(S(0), "s_and_b64", &[ExecLo, S(4)])?;
+        seq.write(S(0), "s_and_b64", &[VccLo, S(0)])?;
+    }
     seq.write(S(0), "s_and_saveexec_b64", &[S(0)])?;
     let end_vertices = seq.branch("s_cbranch_execz")?;
     let mut vertex_exports = Vec::new();
     let mut targets = 0u64;
-    while seq.code.get(seq.at).is_some_and(|op| op.enc == Enc::Exp) {
+    let mut zero_lane_register = false;
+    while let Some(op) = seq.code.get(seq.at) {
+        if compact
+            && !zero_lane_register
+            && targets & (1 << 12) != 0
+            && op.mnemonic == "v_mov_b32"
+            && op.enc == Enc::Vop1
+            && op.dst == [lane_index]
+        {
+            seq.write(lane_index, "v_mov_b32", &[I(0)])?;
+            zero_lane_register = true;
+            continue;
+        }
+        if op.enc != Enc::Exp {
+            break;
+        }
         let export = seq.next("exp")?;
         let target = export.aux.imm;
         if !matches!(target, 12 | 32..64)
-            || export.aux.mask != 15
+            || (target == 12 && export.aux.mask != 15)
+            || export.aux.mask == 0
             || export.aux.imm2 != if target == 12 { 2 } else { 0 }
-            || !export.src.iter().all(|reg| *reg == V(0) || preserved(reg))
+            || !export.src.iter().enumerate().all(|(channel, reg)| {
+                export.aux.mask & (1 << channel) == 0 || *reg == guarded || preserved(reg)
+            })
             || targets & (1 << target) != 0
-            || target == primitive.aux.imm
+            || primitive.is_some_and(|export| target == export.aux.imm)
         {
             return Err(format!(
                 "unsupported mesh vertex export at {:#x}",
@@ -241,14 +347,24 @@ pub(super) fn recognize(insns: &[Insn]) -> Result<MeshExports, String> {
             ));
         }
         targets |= 1 << target;
-        vertex_exports.push(export.clone());
+        let mut export = export.clone();
+        if zero_lane_register {
+            for source in &mut export.src {
+                if *source == lane_index {
+                    *source = I(0);
+                }
+            }
+        }
+        vertex_exports.push(export);
     }
     seq.arrive(end_vertices)?;
     seq.imm("s_endpgm", 0)?;
     if seq.at != insns.len() || targets & (1 << 12) == 0 {
         return Err("missing mesh position export or unexpected trailing code".into());
     }
-    let vertex_v0_without_primitive = if temps[2] == V(0) {
+    let connectivity_without_primitive = if compact {
+        packed
+    } else if temps[2] == V(0) {
         primitives
     } else if temps[1] == V(0) {
         vertices
@@ -259,11 +375,13 @@ pub(super) fn recognize(insns: &[Insn]) -> Result<MeshExports, String> {
     };
     Ok(MeshExports {
         start,
+        lane_index,
         vertices,
         primitives,
         connectivity: packed,
-        vertex_v0_without_primitive,
+        guarded_connectivity: guarded,
+        connectivity_without_primitive,
         vertex_exports,
-        primitive_exports: vec![primitive.clone()],
+        primitive_exports: primitive.cloned().into_iter().collect(),
     })
 }

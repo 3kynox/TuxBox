@@ -17,8 +17,8 @@ pub(super) fn translate(
     interpolation: Option<&InputInterp>,
 ) -> Result<Translated, String> {
     let info = ex.mesh_info.ok_or("missing mesh PSV runtime information")?;
-    if info.threads != [256, 1, 1]
-        || info.vertices != 256
+    if !matches!(info.vertices, 128 | 256)
+        || info.threads != [u32::from(info.vertices), 1, 1]
         || info.primitives != 128
         || info.topology != 2
         || info.shared_bytes != 0
@@ -34,11 +34,20 @@ pub(super) fn translate(
         .filter(|e| e.sysval == 1 && e.comp_type == 3 && e.mask == 15)
         .count()
         != 1
-        || ex.primitive_sig.is_empty()
         || !ex.input_sig.is_empty()
     {
-        return Err("mesh stage requires a full position, primitive outputs and no incoming vertex signature".into());
+        return Err("mesh stage requires a full position and no incoming vertex signature".into());
     }
+    let mut body = disassemble(&ex.isa);
+    let exports = mesh_exports::recognize(&body, info.vertices)?;
+    let has_primitive_attributes = ex.primitive_sig.iter().any(|element| element.sysval == 0);
+    let has_attribute_exports = !exports.primitive_exports.is_empty();
+    if has_primitive_attributes != has_attribute_exports {
+        return Err("mesh primitive attribute exports do not match PSG1".into());
+    }
+    body.truncate(exports.start);
+    let group_shift = if info.vertices == 128 { 7 } else { 8 };
+    validate_launch(&body, group_shift, exports.lane_index)?;
     let root = ex.root_sig.as_ref().ok_or("mesh root signature missing")?;
     for (parameter, range_type) in [(9, 0), (10, 2)] {
         if !root.params.get(parameter).is_some_and(|p| {
@@ -49,10 +58,6 @@ pub(super) fn translate(
             return Err("unrecognized mesh SRV/CBV root-table layout".into());
         }
     }
-    let mut body = disassemble(&ex.isa);
-    let exports = mesh_exports::recognize(&body)?;
-    body.truncate(exports.start);
-    validate_launch(&body)?;
     validate_lane_ops(&body)?;
     let mut em = Emitter::new(ex, body);
     // These NGG programs receive the wave number in s3, two mesh-visible root
@@ -94,13 +99,13 @@ pub(super) fn translate(
         &prim_regs,
         first_primitive,
     )?;
-    // The NGG bounds check replaces lane v0 with a null primitive on invalid
-    // connectivity. Some permutations also consume that register in a vertex output.
-    em.touch(&exports.vertex_v0_without_primitive);
-    em.touch(&Opnd::Vgpr(0));
+    // The bounds check can also change a register read by the vertex exports.
+    em.touch(&exports.connectivity_without_primitive);
+    em.touch(&exports.guarded_connectivity);
+    let guarded = r(&exports.guarded_connectivity)?;
+    let unguarded = r(&exports.connectivity_without_primitive)?;
     em.line(&format!(
-        "v0 = lane < {prims} ? checkedConn : {};",
-        r(&exports.vertex_v0_without_primitive)?
+        "{guarded} = lane < {prims} ? checkedConn : {unguarded};"
     ));
     write_exports(
         &mut em,
@@ -121,7 +126,11 @@ pub(super) fn translate(
         em.regs.insert(register.into());
     }
     writeln!(h, "{}", em.reg_decls()).unwrap();
-    h.push_str("    s3 = (lane >> 6) << 24; v5 = group << 8;\n");
+    writeln!(
+        h,
+        "    s3 = (lane >> 6) << 24; v5 = group << {group_shift};"
+    )
+    .unwrap();
     h.push_str(&em.body);
     h.push_str("    return result;\n}\n");
     h.push_str(
@@ -130,13 +139,31 @@ groupshared uint2 counts;
 [outputtopology("triangle")]
 [numthreads(128, 1, 1)]
 void main(uint lane : SV_GroupIndex, uint3 group : SV_GroupID,
-          out vertices Vertex vertices[256], out indices uint3 triangles[128],
+"#,
+    );
+    writeln!(
+        h,
+        "          out vertices Vertex vertices[{}], out indices uint3 triangles[128],",
+        info.vertices
+    )
+    .unwrap();
+    h.push_str(
+        r#"
           out primitives Primitive attributes[128]) {
     MeshLane first = evaluate(lane, group.x);
     if (lane == 0) counts = first.counts;
     GroupMemoryBarrierWithGroupSync();
     uint2 sizes = counts;
-    if (any(sizes == 0) || any(sizes > uint2(256,128))) sizes = 0;
+"#,
+    );
+    writeln!(
+        h,
+        "    if (any(sizes == 0) || any(sizes > uint2({},128))) sizes = 0;",
+        info.vertices
+    )
+    .unwrap();
+    h.push_str(
+        r#"
     SetMeshOutputCounts(sizes.x, sizes.y);
     if (lane < sizes.y) {
         triangles[lane] = first.dropPrimitive ? uint3(0,0,0) : first.indices;
@@ -144,10 +171,12 @@ void main(uint lane : SV_GroupIndex, uint3 group : SV_GroupID,
         attributes[lane] = first.primitive;
     }
     if (lane < sizes.x) vertices[lane] = first.vertex;
-    if (lane + 128 < sizes.x) vertices[lane + 128] = evaluate(lane + 128, group.x).vertex;
-}
 "#,
     );
+    if info.vertices > 128 {
+        h.push_str("    if (lane + 128 < sizes.x) vertices[lane + 128] = evaluate(lane + 128, group.x).vertex;\n");
+    }
+    h.push_str("}\n");
     Ok(Translated {
         hlsl: h,
         entry: "main",
@@ -164,7 +193,7 @@ void main(uint lane : SV_GroupIndex, uint3 group : SV_GroupID,
 // Check the actual operand chains that turn the packed launch registers into
 // SV_GroupID.x and the logical 0..255 group index. The compiler schedules
 // unrelated scalar loads and vector moves among the two chains.
-fn validate_launch(body: &[Insn]) -> Result<(), String> {
+fn validate_launch(body: &[Insn], group_shift: i64, lane_index: Opnd) -> Result<(), String> {
     use Opnd::{ConstInt as I, Literal, Sgpr as S, Vgpr as V};
 
     fn writes(ins: &Insn, reg: Opnd) -> bool {
@@ -198,14 +227,14 @@ fn validate_launch(body: &[Insn]) -> Result<(), String> {
             break;
         }
         match (op.mnemonic.as_str(), op.src.as_slice()) {
-            ("s_lshr_b32", [packed @ S(_), I(8)]) => {
+            ("s_lshr_b32", [packed @ S(_), I(shift)]) if *shift == group_shift => {
                 if let Some((j, read)) = def(body, i, *packed) {
                     group_x |= read.mnemonic == "v_readfirstlane_b32"
                         && read.src == [V(5)]
                         && def(body, j, V(5)).is_none();
                 }
             }
-            ("v_lshl_add_u32", [wave @ S(_), I(6), lane @ V(_)]) if op.dst == [V(1)] => {
+            ("v_lshl_add_u32", [wave @ S(_), I(6), lane @ V(_)]) if op.dst == [lane_index] => {
                 let Some((bfe_idx, bfe)) = def(body, i, *wave) else {
                     continue;
                 };
@@ -224,7 +253,7 @@ fn validate_launch(body: &[Insn]) -> Result<(), String> {
                     && hi.mnemonic == "v_mbcnt_hi_u32_b32"
                     && lo.mnemonic == "v_mbcnt_lo_u32_b32"
                     && lo.src.starts_with(&[I(-1), I(0)])
-                    && !body[i + 1..].iter().any(|next| writes(next, V(1)));
+                    && !body[i + 1..].iter().any(|next| writes(next, lane_index));
             }
             _ => {}
         }
@@ -409,7 +438,7 @@ mod tests {
                 .iter()
                 .flat_map(|w| w.to_le_bytes())
                 .collect::<Vec<_>>();
-            validate_launch(&disassemble(&bytes))
+            validate_launch(&disassemble(&bytes), 8, Opnd::Vgpr(1))
         };
         assert!(check(&words).is_ok());
         let mut wrong_wave = words;

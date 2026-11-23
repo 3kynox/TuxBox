@@ -216,7 +216,7 @@ pub fn extract(bytes: &[u8]) -> Result<ShaderExtract, String> {
     let inputs = signature(&[b"ISG1", b"ISGN"])?;
     let outputs = signature(&[b"OSG1", b"OSG5", b"OSGN"])?;
     let primitive_sig = if code.stage == Stage::Mesh {
-        signature(&[b"PSG1"])?.ok_or("missing mesh primitive signature")?
+        signature(&[b"PSG1"])?.unwrap_or_default()
     } else {
         Vec::new()
     };

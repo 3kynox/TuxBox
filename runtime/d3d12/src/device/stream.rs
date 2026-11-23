@@ -147,11 +147,7 @@ unsafe fn create(
                     };
                     fields[index] = Some(ptr::from_mut(shader));
                     let compiled = match tag {
-                        AMPLIFICATION_X => {
-                            shader_cache::mesh_stage(code, shader_cache::Stage::Amplification)?
-                        }
-                        MESH_X => shader_cache::mesh_stage(code, shader_cache::Stage::Mesh)?,
-                        1 | 2 => None, // Resolve these together after reading the root subobject.
+                        1 | 2 | AMPLIFICATION_X | MESH_X => None,
                         _ => shader_cache::prepared(code),
                     };
                     original[index] = Some((code, compiled.as_ref().map(|_| stages.len())));
@@ -206,6 +202,20 @@ unsafe fn create(
             _ => {}
         }
         at += bytes;
+    }
+
+    for (index, stage) in [(6, shader_cache::Stage::Amplification), (7, shader_cache::Stage::Mesh)] {
+        let Some((code, _)) = original[index] else { continue };
+        let compiled = shader_cache::mesh_stage(code, stage, guest_root.map(|root| root.payload()));
+        if compiled.is_err() && let Some(root) = guest_root {
+            super::compute_table::capture_stage_root(code, root);
+        }
+        if let Some(compiled) = compiled? {
+            let field = fields[index].ok_or(E_INVALIDARG)?;
+            unsafe { field.write(rectangle::bytecode(&compiled)) };
+            original[index] = Some((code, Some(stages.len())));
+            stages.push(compiled);
+        }
     }
 
     let guest_pixel = original[1].map(|(pixel, _)| pixel);
