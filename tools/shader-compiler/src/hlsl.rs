@@ -53,6 +53,7 @@ mod packed_root;
 mod light_grid;
 mod page_waves;
 mod wave_cull;
+mod fspx_wave;
 mod singleton_wave;
 mod wave_sum;
 mod reflection_compact;
@@ -68,6 +69,7 @@ pub struct Translated {
     pub needs_barycentrics: bool,
     /// A two-word typed image atomic requires shader model 6.6.
     pub typed_int64_atomics: bool,
+    pub packed_dot_product: bool,
     /// Required wave size for compute shaders with width-specific lane reads.
     pub required_wave_size: Option<u32>,
     /// Workgroup dimensions for the subset verified to tolerate either Scarlett wave width.
@@ -412,6 +414,7 @@ struct Emitter<'a> {
     light_grid: bool,
     page_waves: bool,
     wave_cull: bool,
+    fspx_wave: Option<u32>,
     hair_multisample: bool,
     hoist_wave_exchanges: bool,
     regs: BTreeSet<String>,
@@ -829,7 +832,7 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
             let compute = ex.stage == Stage::Compute;
             return Ok(Translated {
                 hlsl, entry: "main", profile: if compute { "cs_5_0" } else { "ps_5_0" },
-                needs_barycentrics: false, typed_int64_atomics: false, required_wave_size: None,
+                needs_barycentrics: false, typed_int64_atomics: false, packed_dot_product: false, required_wave_size: None,
                 portable_compute_group: if compute { ex.psv_threads } else { None },
                 ps_input_interp: InputInterp::default(),
             });
@@ -885,11 +888,12 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     let classify_tiles = classify_materials::prepare(ex, &mut insns);
     singleton_wave::prepare(ex, &mut insns);
     let hair_multisample = hair_multisample::recognize(ex);
-    let wave_cull = hair_multisample || wave_cull::recognize(ex);
+    let fspx_wave = fspx_wave::width(ex, &insns);
+    let wave_cull = fspx_wave.is_some() || hair_multisample || wave_cull::recognize(ex);
     let page_waves = page_waves::recognize(ex);
     let allocation_wave64 = !wave_cull && !page_waves && mark_wave_allocations(&mut insns)?;
     let reflection = reflection_compact::prepare(ex, &mut insns);
-    let required_wave_size = if wave_cull { None } else { lower_wave_reductions(&mut insns)? };
+    let required_wave_size = if wave_cull { fspx_wave.filter(|&width| width == 32) } else { lower_wave_reductions(&mut insns)? };
     let uses_bpermute = insns.iter().any(|ins| ins.mnemonic == "ds_bpermute_b32");
     if uses_bpermute && insns.iter().any(|ins| ins.enc == Enc::Sopp && Emitter::branch_cond(ins.op).is_some()) {
         return Err("backward permute with scalar branches needs verified convergent control flow".into());
@@ -905,6 +909,7 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     let mut em = Emitter::new(ex, insns);
     em.page_waves = page_waves;
     em.wave_cull = wave_cull;
+    em.fspx_wave = fspx_wave;
     em.hair_multisample = hair_multisample;
     em.hoist_wave_exchanges = wave_cull && (compute_group(ex) == [16, 16, 1]
         || ex.entry.as_deref() == Some("GenerateReflectionRaysCS")
@@ -962,7 +967,8 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
         || matches!((scan_width, required_wave_size), (Some(a), Some(b)) if a != b) {
         return Err("conflicting wave widths for ballot and reduction".into());
     }
-    let required_wave_size = required_wave_size.or(scan_width).or(requires_ballot.then_some(64)).or((uses_quad_add || uses_bpermute).then_some(32));
+    let register_wave_size = em.packed.as_ref().and_then(|plan| plan.register_wave_size);
+    let required_wave_size = required_wave_size.or(scan_width).or(register_wave_size).or(requires_ballot.then_some(64)).or((uses_quad_add || uses_bpermute).then_some(32));
     em.required_wave_size = required_wave_size;
     // DS bit-mask mode operates on the low five lane bits in wave32 and wave64.
     // Map guest lanes by workgroup index, independently of the Vulkan subgroup layout.
@@ -1070,7 +1076,7 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     em.view_cull = view_cull;
     em.light_grid = light_grid;
     em.emit_body(is_ps)?;
-    if ex.stage == Stage::Pixel
+    if ex.stage == Stage::Pixel || fspx_wave.is_some()
         || (ex.stage == Stage::Compute
             && (packed_root::matches_program(&ex.isa, 60424, 0xc449ec66f2170fb3)
                 || packed_root::matches_program(&ex.isa, 56932, 0x5504968d23557c53)))
@@ -1107,11 +1113,11 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     }
     if light_grid { hlsl.insert_str(0, light_grid::DECLARATIONS); }
     if page_waves || wave_cull {
-        if compute_group(ex) == [1024, 1, 1] {
-            hlsl.insert_str(0, &page_waves::DECLARATIONS.replace("page_bits[8]", "page_bits[32]")
-                .replace("page_lane_values[256]", "page_lane_values[1024]").replace("tid < 8u", "tid < 32u"));
+        if fspx_wave == Some(32) {
+            hlsl.insert_str(0, fspx_wave::WAVE32);
         } else {
-            hlsl.insert_str(0, page_waves::DECLARATIONS);
+            let branchless = wave_cull && wave_cull::needs_branchless_ballots(ex);
+            hlsl.insert_str(0, &page_waves::declarations(compute_group(ex), branchless));
         }
     }
     if particle_sort { hlsl.insert_str(0, particle_sort::DECLARATIONS); }
@@ -1131,6 +1137,7 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
         entry: "main",
         profile,
         needs_barycentrics: !em.pulled_attrs.is_empty(),
+        packed_dot_product: fspx_wave.is_some(),
         typed_int64_atomics: !em.wide_visibility_uavs.is_empty() || em.packed.as_ref().is_some_and(|p| !p.wide_images.is_empty()),
         required_wave_size,
         portable_compute_group: portable_compute_group.or(light_grid.then(|| compute_group(ex))),
@@ -1432,6 +1439,7 @@ impl<'a> Emitter<'a> {
             light_grid: false,
             page_waves: false,
             wave_cull: false,
+            fspx_wave: None,
             hair_multisample: false,
             hoist_wave_exchanges: false,
             regs: if has_mode { BTreeSet::from(["tb_fp_mode".into()]) } else { BTreeSet::new() },
@@ -2885,7 +2893,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 }
                 let exits: Vec<String> = labels.iter().filter(|&&t| t > i).map(|t| format!("j{t}")).collect();
                 let exit = if exits.is_empty() { String::new() } else { format!(" && !({})", exits.join(" || ")) };
-                let guard = if self.wave_cull || self.light_grid || self.packed.as_ref().is_some_and(|p| p.copy_backedges.contains(&i)) {
+                let guard = if self.wave_cull || self.light_grid || self.packed.as_ref().is_some_and(|p| p.copy_backedges.contains(&i) || p.bounded_backedges.contains(&i)) {
                     ""
                 } else {
                     " && ++tb_guard < 65536u"
@@ -3081,9 +3089,16 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         let d = ins.dst.first().cloned();
         self.line(&format!("// {:#06x} {m}", ins.offset));
         self.cur_idx = idx;
+        if let Some(reg) = self.packed.as_ref().and_then(|p| p.ballot_nonempty.get(&idx)) {
+            self.line(&format!("s{reg} &= exec_lo; scc = uint(WaveActiveAnyTrue((s{reg} & 1u) != 0u));"));
+            return Ok(());
+        }
         if ins.enc == Enc::Ds && m != "ds_swizzle_b32" && !self.hoist_wave_exchanges && wave_cull::lds_words(self).is_some() {
             // Publish writes and finish reads before the next guest LDS access.
             self.line("GroupMemoryBarrierWithGroupSync();");
+        }
+        if let Some(width) = self.fspx_wave {
+            if fspx_wave::emit(self, idx, ins, width)? { return Ok(()); }
         }
         if self.wave_cull {
             wave_cull::prepare_insn(self, idx, ins)?;
@@ -4323,7 +4338,14 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             } else {
                 return Err("unsupported signed byte dot product encoding".into());
             };
-            return self.wv(&d, &format!("tb_dot4_i8({}, {rhs}, {})", r(&s[0])?, r(acc)?));
+            let lhs = r(&s[0])?;
+            let acc = r(acc)?;
+            let value = if self.fspx_wave.is_some() {
+                format!("asuint(dot4add_i8packed({lhs}, {rhs}, asint({acc})))")
+            } else {
+                format!("tb_dot4_i8({lhs}, {rhs}, {acc})")
+            };
+            return self.wv(&d, &value);
         }
         if let Some(result) = int16::expression(ins)? {
             return self.wv(&d, &result);

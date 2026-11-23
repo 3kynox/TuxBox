@@ -3,6 +3,7 @@
 //! MUBUF operations can use desktop root SRVs/UAVs without exposing a GPU address.
 mod copy_loop;
 mod fspx;
+pub(in crate::hlsl) use fspx::convolution_layout;
 mod ps09_depth;
 pub(super) mod ps09_raster;
 use super::*;
@@ -63,6 +64,10 @@ pub(super) struct PackedRoot {
     loads: BTreeMap<usize, Vec<Option<(u32, u32)>>>,
     raw_scalar: BTreeMap<usize, (Binding, u32, u8)>,
     raw_offsets: BTreeMap<usize, u8>,
+    coherent_loads: BTreeSet<usize>,
+    pub(super) bounded_backedges: BTreeSet<usize>,
+    pub(super) register_wave_size: Option<u32>,
+    pub(super) ballot_nonempty: BTreeMap<usize, u8>,
     pub(super) wide_images: BTreeSet<usize>,
     images: BTreeMap<usize, (Binding, u32, Option<u32>)>,
     buffers: BTreeMap<usize, (Binding, u32)>,
@@ -657,7 +662,8 @@ impl PackedRoot {
         if !self.wide_images.is_empty() { h.push_str("RWTexture2D<uint64_t> wide_u10 : register(u10);\n"); }
         for binding in self.buffers.values().map(|(b, _)| *b).chain(self.raw_scalar.values().map(|(b, _, _)| *b)).collect::<BTreeSet<_>>() {
             let reg = binding.register();
-            let rw = if binding.uav { "RW" } else { "" };
+            let coherent = self.coherent_loads.iter().any(|idx| self.buffers[idx].0 == binding);
+            let rw = if coherent { "globallycoherent RW" } else if binding.uav { "RW" } else { "" };
             writeln!(h, "{rw}ByteAddressBuffer root_{reg} : register({reg});").unwrap();
         }
     }
@@ -692,11 +698,12 @@ impl Emitter<'_> {
         if let Some(&(binding, offset, n)) = self.packed.as_ref().and_then(|p| p.raw_scalar.get(&idx)) {
             let d = sreg_num(&ins.dst[0]).ok_or("invalid raw scalar destination")?;
             let base = if let Some(&sgpr) = self.packed.as_ref().and_then(|p| p.raw_offsets.get(&idx)) {
-                self.touch(&Opnd::Sgpr(sgpr));
+                let operand = sreg_opnd(sgpr);
+                self.touch(&operand);
                 let temp = self.tmp;
                 self.tmp += 1;
                 // The offset SGPR can also be a load destination.
-                self.line(&format!("uint base{temp} = s{sgpr};"));
+                self.line(&format!("uint base{temp} = {};", r(&operand)?));
                 format!("base{temp} + ")
             } else {String::new()};
             for k in 0..n {
@@ -727,7 +734,8 @@ impl Emitter<'_> {
             .as_ref()
             .and_then(|p| p.buffers.get(&idx))
             .ok_or("unresolved packed buffer")?;
-        let n = Self::mubuf_dwords(&ins.mnemonic).ok_or("bad root buffer width")? as u8;
+        let atomic_add = ins.mnemonic == "buffer_atomic_add";
+        let n = if atomic_add { 1 } else { Self::mubuf_dwords(&ins.mnemonic).ok_or("bad root buffer width")? as u8 };
         let Opnd::Vgpr(vd) = ins.dst[0] else {
             return Err("bad root buffer data register".into());
         };
@@ -744,8 +752,13 @@ impl Emitter<'_> {
         self.line(&format!("uint t{t}addr = {address} + {};", r(&ins.src[2])?));
         let resource = format!("root_{}", binding.register());
         let suffix = if n == 1 { String::new() } else { n.to_string() };
-        if ins.mnemonic.starts_with("buffer_load") {
+        if atomic_add {
+            self.line(&format!("if (exec_lo & 1u) {{ DeviceMemoryBarrier(); {resource}.InterlockedAdd(t{t}addr, v{vd}); }}"));
+        } else if ins.mnemonic.starts_with("buffer_load") {
             self.line("if (exec_lo & 1u) {");
+            if self.packed.as_ref().is_some_and(|plan| plan.coherent_loads.contains(&idx)) {
+                self.line("DeviceMemoryBarrier();");
+            }
             self.line(&format!("uint{suffix} t{t}load = {resource}.Load{suffix}(t{t}addr);"));
             for k in 0..n {
                 let sw = if n == 1 {

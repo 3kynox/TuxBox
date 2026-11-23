@@ -76,26 +76,42 @@ pub(super) fn emit(em: &mut Emitter<'_>, i: usize, ins: &Insn, target: Option<us
     Ok(true)
 }
 
-pub(super) const DECLARATIONS: &str = r#"
-groupshared uint page_bits[8];
-groupshared uint page_lane_values[256];
+pub(super) fn declarations(group: [u32; 3], branchless: bool) -> String {
+    let (words, lanes, clear, vote) = if branchless {
+        // Each of the 64 lanes clears a distinct word. Zero votes contribute
+        // zero to the OR. Omitting both branches per vote keeps the large
+        // field interpreter within the pipeline compiler's 1 MiB guest stack.
+        (64, 256, "page_bits[tid] = 0u;",
+            "InterlockedOr(page_bits[tid >> 5], uint(vote) << (tid & 31u));")
+    } else {
+        let vote = "if (vote) InterlockedOr(page_bits[tid >> 5], 1u << (tid & 31u));";
+        if group == [1024, 1, 1] {
+            (32, 1024, "if (tid < 32u) page_bits[tid] = 0u;", vote)
+        } else {
+            (8, 256, "if (tid < 8u) page_bits[tid] = 0u;", vote)
+        }
+    };
+    format!(r#"
+groupshared uint page_bits[{words}];
+groupshared uint page_lane_values[{lanes}];
 
-uint2 tb_page_ballot(uint tid, bool vote) {
-    if (tid < 8u) page_bits[tid] = 0u;
+uint2 tb_page_ballot(uint tid, bool vote) {{
+    {clear}
     GroupMemoryBarrierWithGroupSync();
-    if (vote) InterlockedOr(page_bits[tid >> 5], 1u << (tid & 31u));
+    {vote}
     GroupMemoryBarrierWithGroupSync();
     uint halfWave = (tid >> 6) * 2u;
     uint2 bits = uint2(page_bits[halfWave], page_bits[halfWave + 1u]);
     GroupMemoryBarrierWithGroupSync();
     return bits;
-}
+}}
 
-uint tb_page_read(uint tid, uint value, uint lane) {
+uint tb_page_read(uint tid, uint value, uint lane) {{
     page_lane_values[tid] = value;
     GroupMemoryBarrierWithGroupSync();
     uint result = page_lane_values[(tid & ~63u) | (lane & 63u)];
     GroupMemoryBarrierWithGroupSync();
     return result;
+}}
+"#)
 }
-"#;

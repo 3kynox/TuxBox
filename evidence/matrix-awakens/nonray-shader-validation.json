@@ -1,6 +1,6 @@
 {
   "baseline_commit": "858d0570885102cecd145ef8f6b90385255d6ce6",
-  "compiler_sha256": "778a109782be7eeb094fe499bcd88dfc17a928ad5a4affcec7600fa25fcb075e",
+  "compiler_sha256": "be66324a0de67077bdaf3b997e2b13e88f8669084444eefe370f4bc195ae2f6e",
   "scope": "New complete compute programs since the baseline. DXC compiled each program, DXV validated the resulting DXIL, and both Vulkan drivers attempted a D3D12 compute pipeline with the original packaged root signature. A pipeline check does not dispatch the shader.",
   "global_entries": [
     254,
@@ -9,6 +9,7 @@
     491,
     493,
     679,
+    681,
     692,
     695,
     724,
@@ -60,6 +61,7 @@
     1079,
     1081,
     1274,
+    1279,
     1293,
     1333,
     1336,
@@ -76,6 +78,12 @@
     2164,
     2224,
     2225,
+    2238,
+    2240,
+    2241,
+    2242,
+    2243,
+    2244,
     2254,
     2550,
     2558,
@@ -122,60 +130,27 @@
   "material_entries": [
     6308
   ],
-  "dxil_validated": 116,
+  "dxil_validated": 124,
   "gpu": {
     "AMD": {
       "adapter_pci": "1002:13c0",
-      "pipelines_created": 116,
+      "pipelines_created": 124,
       "failures": {}
     },
     "NVIDIA": {
       "adapter_pci": "10de:2705",
-      "pipelines_created": 116,
+      "pipelines_created": 124,
       "failures": {}
     }
   },
-  "input_and_dxil_hash_manifest_sha256": "08f80d3dea27b258e84bff7d6b670bb585b28642cd46963e8193885ae99ce314",
+  "input_and_dxil_hash_manifest_sha256": "6e07411e0821947fd49c3bc0739d56ff2a41986e85ff96b19ec7beebfc3ac2bb",
   "nonray": {
     "surveyed": 37031,
-    "emitted": 37018,
+    "emitted": 37026,
     "excluded_serialized_ray_states": 6280,
     "excluded_compute_with_inline_traversal": 96
   },
-  "remaining_global_compute": [
-    {
-      "entry": 681,
-      "diagnostic": "unverified EXEC election at 0x8b0"
-    },
-    {
-      "entry": 1279,
-      "diagnostic": "unverified EXEC election at 0x67c"
-    },
-    {
-      "entry": 2238,
-      "diagnostic": "unverified EXEC election at 0x1c58"
-    },
-    {
-      "entry": 2240,
-      "diagnostic": "unverified EXEC election at 0x718"
-    },
-    {
-      "entry": 2241,
-      "diagnostic": "unverified EXEC election at 0x1f08"
-    },
-    {
-      "entry": 2242,
-      "diagnostic": "unverified EXEC election at 0x1f10"
-    },
-    {
-      "entry": 2243,
-      "diagnostic": "unverified EXEC election at 0x710"
-    },
-    {
-      "entry": 2244,
-      "diagnostic": "unverified EXEC election at 0x5e0"
-    }
-  ],
+  "remaining_global_compute": [],
   "remaining_global_pixel": [
     726,
     727,
@@ -186,7 +161,7 @@
   "global_mesh": {
     "entries": 192,
     "translated": 192,
-    "full_survey_sha256": "3e21e2ed034497974d49929f95ca327db28aa413c173df9e036fbe8f50cdaf15",
+    "full_survey_sha256": "44e5cafe59edd7a037c07c0cd90dbc07a7398404df4915047eec1648b0634e2e",
     "reproduce": "python tools/survey_frosty_shaders.py /path/to/MA/Mount --stage mesh --output build/global-mesh.json"
   }
 }

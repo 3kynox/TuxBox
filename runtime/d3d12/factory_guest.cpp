@@ -1,6 +1,7 @@
 // The two factories in Frosty's DLL return devices with the Xbox queue slots.
 #include "frame_abi.h"
 #include "frame_cli.h"
+#include <cstring>
 
 extern "C" __declspec(dllimport) HRESULT WINAPI D3D12XboxSetProcessDebugFlags(UINT flags);
 extern "C" __declspec(dllimport) UINT WINAPI D3D12XboxGetProcessDebugFlags();
@@ -35,6 +36,38 @@ void check_queue(ID3D12Device* device) {
     CloseHandle(done);
     if (waited != WAIT_OBJECT_0 || fence->GetCompletedValue() != 3)
         throw std::runtime_error("fence did not complete");
+}
+
+void check_private_texture(ID3D12Device* device) {
+    using Create = HRESULT (WINAPI *)(ID3D12Device*, const D3D12_HEAP_PROPERTIES*, D3D12_HEAP_FLAGS,
+        const void*, D3D12_RESOURCE_STATES, const D3D12_CLEAR_VALUE*, REFIID, void**);
+    const auto create = method<Create>(device, 76);
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    heap.CreationNodeMask = heap.VisibleNodeMask = 1;
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = desc.Height = 32;
+    desc.MipLevels = desc.DepthOrArraySize = desc.SampleDesc.Count = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.Layout = static_cast<D3D12_TEXTURE_LAYOUT>(0x101);
+    desc.Flags = static_cast<D3D12_RESOURCE_FLAGS>(0x00c00000 | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    alignas(8) std::array<UINT, 16> record{};
+    static_assert(offsetof(D3D12_RESOURCE_DESC, Flags) == 48);
+    std::memcpy(record.data(), &desc, 52);
+    record[13] = 3;
+    ComPtr<ID3D12Resource> texture;
+    check(create(device, &heap, D3D12_HEAP_FLAG_NONE, record.data(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                 nullptr, IID_PPV_ARGS(&texture)), "Xbox private texture");
+    const auto actual = texture->GetDesc();
+    if (actual.Layout != desc.Layout || actual.Flags != desc.Flags || actual.Format != desc.Format ||
+        actual.Width != desc.Width || actual.Height != desc.Height)
+        throw std::runtime_error("Xbox private texture description");
+    record[14] = 1;
+    void* unsupported = device;
+    if (create(device, &heap, D3D12_HEAP_FLAG_NONE, record.data(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+               nullptr, __uuidof(ID3D12Resource), &unsupported) != E_NOTIMPL || unsupported)
+        throw std::runtime_error("unsupported Xbox texture extension accepted");
 }
 
 void check_dxgi(ComPtr<ID3D12Device>& device, IDXGIAdapter1* selected) {
@@ -93,6 +126,13 @@ std::string run(const wchar_t* requested, bool) {
         0x20004, 0, UINT_MAX, 0, 0, 0, UINT_MAX, UINT_MAX, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0};
     ComPtr<ID3D12Device> direct, standard;
     check(D3D12XboxCreateDevice(adapter.Get(), params.data(), IID_PPV_ARGS(&direct)), "0x20004 factory");
+    using Deserialize = HRESULT (WINAPI *)(ID3D12Device*, const void*, REFIID, void**);
+    std::array<UINT64, 9> serialized{};
+    void* pipeline = direct.Get();
+    if (method<Deserialize>(direct.Get(), 67)(direct.Get(), serialized.data(),
+            __uuidof(ID3D12PipelineState), &pipeline) != E_NOTIMPL || pipeline)
+        throw std::runtime_error("serialized Xbox pipeline fallback");
+    check_private_texture(direct.Get());
     check_dxgi(direct, adapter.Get());
     check_queue(direct.Get());
     check(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&standard)), "standard factory");

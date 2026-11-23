@@ -2,6 +2,13 @@
 //! In a single-wave group, the guest PC and scalar branches are group-uniform.
 use super::{compute_group, packed_root::matches_program, r, Emitter, Insn, Opnd, ShaderExtract, Stage};
 
+const SCALAR_FIELD_INTERPRETER: (usize, u64) = (0x7600, 0xe9bc16e878389630);
+
+pub(super) fn needs_branchless_ballots(ex: &ShaderExtract) -> bool {
+    let (size, hash) = SCALAR_FIELD_INTERPRETER;
+    matches_program(&ex.isa, size, hash)
+}
+
 pub(super) fn recognize(ex: &ShaderExtract) -> bool {
     if ex.stage != Stage::Compute { return false; }
     let signatures: &[(usize, u64)] = match (ex.entry.as_deref(), compute_group(ex)) {
@@ -18,8 +25,14 @@ pub(super) fn recognize(ex: &ShaderExtract) -> bool {
         ],
         (Some("MainCS"), [16, 16, 1]) =>
             &[(1928, 0xf08580324c59c199), (2464, 0xed9544d539da1bfe), (4564, 0x7793b99bec855677)],
-        (Some("MainCS"), [8, 8, 1]) =>
-            &[(2356, 0xe4995b0e2291e61e), (2884, 0x1c9821104747da89), (0xb60, 0x12a42452f6c1a572)],
+        (Some("MainCS"), [8, 8, 1]) => &[
+            (2356, 0xe4995b0e2291e61e), (2884, 0x1c9821104747da89),
+            (0xb60, 0x12a42452f6c1a572), (0xb14, 0xfa0fb2a25f9a6daa),
+            (0x46d4, 0x66e5a41fe82edbb5), (0x5e08, 0xe7a79d07a42bb0dd),
+            (0x5ecc, 0x8bc61c0c39d60c8b), SCALAR_FIELD_INTERPRETER,
+        ],
+        (Some("MainCS"), [4, 4, 4]) =>
+            &[(0x4e98, 0xdce6ffe25dfb267a), (0x6510, 0xad6ae60bb84e14ba)],
         (Some("MarkValid_PrepareCS"), [32, 1, 1]) =>
             &[(2156, 0x1ece7ffcb2a479e1)],
         (Some("GenerateReflectionRaysCS"), [1024, 1, 1]) =>
@@ -65,7 +78,7 @@ pub(super) fn recognize(ex: &ShaderExtract) -> bool {
         (Some("DepthExport"), [8, 8, 1]) =>
             &[(0xb74, 0xb8f638844c43ba0b), (0x14c4, 0x4b87869861958c9b)],
         (Some("GenerateProbeTraceTilesCS"), [8, 8, 1]) =>
-            &[(0x35c, 0xb403ec1c63de7a13)],
+            &[(0x35c, 0xb403ec1c63de7a13), (0x9b0, 0x46b23175b16b9945)],
         (Some("ReflectionTileClassificationBuildListsCS"), [8, 8, 1]) =>
             &[(0x6e4, 0x9d6b53fa2d02366c), (0x5e8, 0x4086c3fedd3beafc)],
         (Some("CullMeshSDFObjectsForViewCS"), [64, 1, 1]) =>
@@ -110,6 +123,9 @@ pub(super) fn lds_words(em: &Emitter<'_>) -> Option<u32> {
         "SetupIndirectCS" => 1, // tile flags
         "ReduceCS" => 4, // near/far masks and their allocation bases
         "WaterTileCatergorisationCS" => 64, // one word per tile lane
+        "GenerateProbeTraceTilesCS" if em.ex.isa.len() == 0x9b0 => 1027, // two queues of 256 uint2 tiles, two counts, one base
+        "MainCS" if em.ex.isa.len() == 0xb14 => 390, // six 64-lane planes and their allocation bases
+        "MainCS" if matches!(em.ex.isa.len(), 0x6510 | 0x5ecc | 0x7600) => 2048, // field interpreter working storage
         "GenerateProbeTraceTilesCS" => 1, // allocation base
         "ReflectionTileClassificationBuildListsCS" => 130, // two tiles and their counters
         "TileMainCS" => 256, // two pairs of dwords per lane

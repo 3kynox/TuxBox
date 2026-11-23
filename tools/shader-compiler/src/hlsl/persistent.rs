@@ -92,6 +92,7 @@ pub(super) fn translate(ex: &ShaderExtract) -> Result<Translated, String> {
         entry: "main",
         profile: "cs_6_0",
         needs_barycentrics: false,
+        packed_dot_product: false,
         typed_int64_atomics: !em.wide_visibility_uavs.is_empty(),
         required_wave_size: None,
         portable_compute_group: None,

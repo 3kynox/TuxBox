@@ -117,7 +117,7 @@ impl Pair {
     }
 }
 
-pub(super) unsafe fn wrap(
+pub(super) unsafe fn wrap<const CONSOLE_LAYOUT: bool>(
     device: &Device,
     heap: &D3D12_HEAP_PROPERTIES,
     guest: &D3D12_RESOURCE_DESC,
@@ -130,6 +130,7 @@ pub(super) unsafe fn wrap(
         return E_POINTER;
     };
     let backing = match primary {
+        None if CONSOLE_LAYOUT => Backing::ConsoleLayout(guest.Layout, guest.Flags),
         None => Backing::Native,
         Some(host_desc) => match Pair::new(&device.native, heap, guest, host_desc) {
             Ok(pair) => Backing::Depth(Box::new(pair)),

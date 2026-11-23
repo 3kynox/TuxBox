@@ -2,7 +2,7 @@
 use super::{Device, Out, identity, wrap_pageable};
 use crate::proxy::{Proxy, Slots, allocate, check_output, child_slots, unwrap};
 use core::{ffi::c_void, mem::ManuallyDrop, slice};
-use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL};
+use windows::Win32::Foundation::{E_INVALIDARG, E_NOTIMPL, E_POINTER};
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::core::{GUID, HRESULT, Interface};
 
@@ -23,7 +23,27 @@ const _: () = assert!(
         + core::mem::offset_of!(PipelineData, packets)
         == 0x10
 );
-pub(super) static PIPELINE: Slots<9> = child_slots::<ID3D12PipelineState, PipelineData, 9>();
+pub(super) static PIPELINE: Slots<12> = {
+    let mut slots = child_slots::<ID3D12PipelineState, PipelineData, 12>();
+    slots[11] = crate::slot!(scratch_info);
+    slots
+};
+
+// FidelityFX queries a blob for the console pipeline's scratch size. Desktop
+// pipelines manage their own scratch. The caller skips the blob on failure.
+unsafe extern "system" fn scratch_info(
+    _this: &Proxy<ID3D12PipelineState, PipelineData>,
+    _arg1: usize,
+    _arg2: usize,
+    blob: Out,
+) -> HRESULT {
+    if blob.is_null() {
+        return E_POINTER;
+    }
+    // SAFETY: the caller provided storage for one COM interface pointer.
+    unsafe { blob.write(core::ptr::null_mut()) };
+    E_NOTIMPL
+}
 
 // A null root signature is valid for a shader with an embedded signature.
 // The caller keeps every non-null guest object alive for the returned borrow.
@@ -88,6 +108,19 @@ pub(super) unsafe extern "system" fn create_root_signature(
         },
         Err(error) => error.code(),
     }
+}
+
+// Slot 67 receives a serialized console PSO. FidelityFX retries slot 62 with a
+// shader descriptor if its precompiled ACO pipeline cannot be deserialized.
+pub(super) unsafe extern "system" fn deserialize_pipeline_x(
+    _this: &Device,
+    _desc: *const c_void,
+    iid: *const GUID,
+    out: Out,
+) -> HRESULT {
+    // SAFETY: the guest supplies a readable IID and writable output slot.
+    let hr = unsafe { check_output::<ID3D12PipelineState>(iid, out) };
+    if hr.is_err() { hr } else { E_NOTIMPL }
 }
 
 // Slot 62 takes a compute descriptor followed by an array of Xbox extensions.

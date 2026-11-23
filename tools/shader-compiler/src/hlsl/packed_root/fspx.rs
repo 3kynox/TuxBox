@@ -3,6 +3,7 @@
 use super::*;
 
 mod convolution;
+pub(in crate::hlsl) use convolution::layout as convolution_layout;
 mod exposure;
 mod prepass;
 
@@ -115,18 +116,8 @@ impl PackedRoot {
         {
             return Err("unsupported FSPX root signature".into());
         }
-        if ex.psv_threads == Some([32, 1, 1])
-            && ex.fspx_config == Some([0x4005cf00, 0x6c090102, 0, 0x10020, 0x100001, 0x402c0345, 0x19c])
-            && matches_program(&ex.isa, 3852, 0xd0be69c77bcf1c68)
-        {
-            return convolution::bindings(ex, insns, u, &srvs[0]);
-        }
-        if ex.psv_threads == Some([64, 1, 1])
-            && ex.fspx_config == Some([0x4005cf00, 0x6c090102, 0, 0x10040, 0x100001, 0x402c0347, 0x19c])
-            && (matches_program(&ex.isa, 8636, 0xf017f2f3910a91d4)
-                || matches_program(&ex.isa, 8692, 0x5e6613904ba3e659))
-        {
-            return convolution::bindings(ex, insns, u, &srvs[0]);
+        if let Some(abi) = convolution::layout(ex) {
+            return convolution::bindings(ex, insns, u, &srvs[0], abi);
         }
         if sharpen
             || (ex.psv_threads == Some([256, 1, 1])

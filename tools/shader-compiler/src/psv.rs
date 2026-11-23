@@ -45,13 +45,7 @@ fn thread_group(runtime: &[u8]) -> Option<[u32; 3]> {
     (!xyz.contains(&0)).then_some(xyz)
 }
 
-pub fn parse_compute_threads(body: &[u8]) -> Option<[u32; 3]> {
-    let (runtime, _) = sections(body)?;
-    if runtime.get(24) != Some(&5) {
-        return None;
-    }
-    thread_group(runtime)
-}
+pub use tuxbox_dxbc::compute_threads as parse_compute_threads;
 
 pub fn parse_psv0_gs(body: &[u8]) -> Option<GsInfo> {
     let (runtime, _) = sections(body)?;

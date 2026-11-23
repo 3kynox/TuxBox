@@ -5,72 +5,8 @@
 use super::fssm::executable_extent;
 use super::{NativeProgram, Stage};
 
-fn words<const N: usize>(mut bytes: &[u8]) -> Result<[u32; N], String> {
-    let mut values = [0; N];
-    for value in &mut values {
-        let (field, rest) = bytes
-            .split_first_chunk::<4>()
-            .ok_or("truncated FSPX record")?;
-        *value = u32::from_le_bytes(*field);
-        bytes = rest;
-    }
-    Ok(values)
-}
-
 pub(super) fn extract(body: &[u8], threads: [u32; 3]) -> Result<NativeProgram, String> {
-    let [magic, version, count, total] = words(body)?;
-    if magic != u32::from_le_bytes(*b"FSPX") || version != 1 {
-        return Err("unrecognized FSPX header".into());
-    }
-    let file = body.get(..total as usize).ok_or("truncated FSPX image")?;
-    let directory_end = (count as usize)
-        .checked_mul(16)
-        .and_then(|n| n.checked_add(16))
-        .ok_or("FSPX directory size overflow")?;
-    let directory = file
-        .get(16..directory_end)
-        .ok_or("truncated FSPX directory")?;
-
-    let mut spans = Vec::with_capacity(directory.len() / 16);
-    let mut config = None;
-    let mut code = None;
-    for descriptor in directory.chunks_exact(16) {
-        let [kind, offset, length, _reserved] = words(descriptor)?;
-        let start = offset as usize;
-        let end = start
-            .checked_add(length as usize)
-            .ok_or("FSPX section length overflow")?;
-        let section = file
-            .get(start..end)
-            .ok_or("FSPX section outside declared image")?;
-        if !section.is_empty() {
-            if start < directory_end {
-                return Err("FSPX section overlaps directory".into());
-            }
-            spans.push((start, end));
-        }
-        match kind {
-            0 => {
-                if config.replace(words::<7>(section)?).is_some() {
-                    return Err("multiple FSPX compute configurations".into());
-                }
-            }
-            6 => {
-                if code.replace(section).is_some() {
-                    return Err("multiple FSPX code sections".into());
-                }
-            }
-            _ => {}
-        }
-    }
-    spans.sort_unstable();
-    if spans.windows(2).any(|pair| pair[0].1 > pair[1].0) {
-        return Err("overlapping FSPX sections".into());
-    }
-    let code = code.ok_or("missing FSPX code section")?;
-    if code.len() % 4 != 0 {
-        return Err("partial dword in FSPX code section".into());
-    }
+    let tuxbox_dxbc::Fspx { config, code } = tuxbox_dxbc::parse_fspx(body)?;
     let isa_bytes = executable_extent(code)?;
     Ok(NativeProgram {
         stage: Stage::Compute,

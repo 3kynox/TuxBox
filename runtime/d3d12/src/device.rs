@@ -40,6 +40,7 @@ mod views;
 type Device = Proxy<ID3D12Device, dxgi::DxgiDevice>;
 pub(crate) enum Backing {
     Native,
+    ConsoleLayout(D3D12_TEXTURE_LAYOUT, D3D12_RESOURCE_FLAGS),
     Placed(std::sync::Arc<placement::Texture>),
     Depth(Box<depth::Pair>),
 }
@@ -172,6 +173,11 @@ unsafe extern "system" fn resource_desc(
             Backing::Depth(pair) => pair.guest,
             Backing::Placed(texture) => texture.desc,
             Backing::Native => this.native.GetDesc(),
+            Backing::ConsoleLayout(layout, flags) => D3D12_RESOURCE_DESC {
+                Layout: *layout,
+                Flags: *flags,
+                ..this.native.GetDesc()
+            },
         })
     };
     out
@@ -405,11 +411,11 @@ pub(crate) fn host_state(state: D3D12_RESOURCE_STATES, texture: bool) -> D3D12_R
     })
 }
 
-unsafe extern "system" fn create_resource(
+unsafe extern "system" fn create_resource<const EXTENDED: bool>(
     this: &Device,
     properties: *const D3D12_HEAP_PROPERTIES,
     flags: D3D12_HEAP_FLAGS,
-    desc: *const D3D12_RESOURCE_DESC,
+    guest_desc: *const D3D12_RESOURCE_DESC,
     initial: D3D12_RESOURCE_STATES,
     clear: *const D3D12_CLEAR_VALUE,
     iid: *const GUID,
@@ -419,7 +425,7 @@ unsafe extern "system" fn create_resource(
     if status.is_err() {
         return status;
     }
-    let (Some(heap), Some(desc)) = (unsafe { (properties.as_ref(), desc.as_ref()) }) else {
+    let (Some(heap), Some(desc)) = (unsafe { (properties.as_ref(), guest_desc.as_ref()) }) else {
         return E_INVALIDARG;
     };
     if !matches!(flags, D3D12_HEAP_FLAG_NONE | D3D12_HEAP_FLAG_ALLOW_DISPLAY)
@@ -443,6 +449,38 @@ unsafe extern "system" fn create_resource(
     {
         return E_INVALIDARG;
     }
+    let mut host_desc = *desc;
+    if EXTENDED {
+        // Slot 76 extends the resource description at byte 52 (desktop padding).
+        // The Scarlett upscaler writes DCC options there and a zero qword at 56.
+        const _: () = assert!(core::mem::offset_of!(D3D12_RESOURCE_DESC, Flags) == 48);
+        let bytes = guest_desc.cast::<u8>();
+        let (dcc, extension) = unsafe {
+            (
+                bytes.add(52).cast::<u32>().read_unaligned(),
+                bytes.add(56).cast::<u64>().read_unaligned(),
+            )
+        };
+        if !matches!(dcc, 0 | 1 | 3) || extension != 0 {
+            return E_NOTIMPL;
+        }
+        const DCC_FLAGS: i32 = 0x00c0_0000;
+        if desc.Layout.0 == 0x101 || desc.Flags.0 & DCC_FLAGS != 0 {
+            // A private committed texture exposes its logical contents through
+            // D3D12. The host driver chooses its tiling and compression.
+            if flags != D3D12_HEAP_FLAG_NONE
+                || heap.Type != D3D12_HEAP_TYPE_DEFAULT
+                || desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D
+                || desc.Flags.contains(D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER)
+            {
+                return E_NOTIMPL;
+            }
+            if desc.Layout.0 == 0x101 {
+                host_desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+            }
+            host_desc.Flags.0 &= !DCC_FLAGS;
+        }
+    }
     let primary = depth::primary(desc);
     if primary.is_some()
         && (flags != D3D12_HEAP_FLAG_NONE
@@ -456,7 +494,7 @@ unsafe extern "system" fn create_resource(
         this.native.CreateCommittedResource::<ID3D12Resource>(
             heap,
             flags,
-            primary.as_ref().unwrap_or(desc),
+            primary.as_ref().unwrap_or(&host_desc),
             host_state(initial, desc.Dimension != D3D12_RESOURCE_DIMENSION_BUFFER),
             Some(clear),
             &mut native,
@@ -464,7 +502,7 @@ unsafe extern "system" fn create_resource(
     } {
         return error.code();
     }
-    unsafe { depth::wrap(this, heap, desc, primary.as_ref(), initial, native, out) }
+    unsafe { depth::wrap::<EXTENDED>(this, heap, desc, primary.as_ref(), initial, native, out) }
 }
 
 unsafe extern "system" fn create_fence(
@@ -729,7 +767,7 @@ static DEVICE: Slots<160> = {
     slots[23] = crate::slot!(descriptor_copy::ranges);
     slots[24] = crate::slot!(descriptor_copy::simple);
     slots[25] = crate::slot!(allocation::info);
-    slots[27] = crate::slot!(create_resource);
+    slots[27] = crate::slot!(create_resource::<false>);
     slots[28] = crate::slot!(heap::create);
     slots[29] = crate::slot!(heap::place);
     slots[36] = crate::slot!(create_fence);
@@ -741,7 +779,9 @@ static DEVICE: Slots<160> = {
     slots[48] = crate::slot!(create_queue_x);
     slots[60] = crate::slot!(graphics::create_pipeline);
     slots[62] = crate::slot!(compute::create_pipeline_x);
+    slots[67] = crate::slot!(compute::deserialize_pipeline_x);
     slots[73] = crate::slot!(create_list_x);
+    slots[76] = crate::slot!(create_resource::<true>);
     slots[78] = crate::slot!(frame_events::interval);
     slots[79] = crate::slot!(frame_events::schedule);
     slots[80] = crate::slot!(frame_events::wait);

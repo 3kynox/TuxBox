@@ -168,7 +168,7 @@ pub(super) unsafe extern "system" fn place(
         return error.code();
     }
     unsafe {
-        super::depth::wrap(
+        super::depth::wrap::<false>(
             device,
             &heap.state.Properties,
             desc,

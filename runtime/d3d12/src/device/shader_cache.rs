@@ -93,6 +93,7 @@ fn shader_code(data: &[u8]) -> Option<(Stage, ShaderCode)> {
     }
     let table_end = 32 + word(data, 28)? * 4;
     let mut program = None;
+    let mut has_accc = false;
     for offset in data.get(32..table_end)?.as_chunks::<4>().0 {
         let start = u32::from_le_bytes(*offset) as usize;
         if start < table_end {
@@ -101,11 +102,30 @@ fn shader_code(data: &[u8]) -> Option<(Stage, ShaderCode)> {
         let tag = data.get(start..start + 4)?;
         let length = word(data, start + 4)?;
         let body = data.get(start + 8..start + 8 + length)?;
+        has_accc |= tag == b"ACCC";
         if tag == b"DXIL" && program.replace(body).is_some() {
             return None;
         }
     }
-    let dxil = program?;
+    let Some(dxil) = program else {
+        if !has_accc {
+            return None;
+        }
+        // DXIL-less Scarlett compute programs carry their ISA in ACCC and the
+        // stage in PSV0. Validate both before asking the host for a translation.
+        let container = tuxbox_dxbc::Dxbc::parse(data).ok()?;
+        let unique_part = |tag: &[u8; 4]| {
+            let mut parts = container.chunks.iter().filter(|part| &part.fourcc == tag);
+            let part = parts.next()?;
+            parts
+                .next()
+                .is_none()
+                .then_some(&data[part.offset..part.offset + part.size])
+        };
+        tuxbox_dxbc::compute_threads(unique_part(b"PSV0")?)?;
+        tuxbox_dxbc::parse_fspx(unique_part(b"ACCC")?).ok()?;
+        return Some((Stage::Compute, ShaderCode::Xbox));
+    };
     // ProgramVersion encodes the shader stage in its upper half and shader
     // model 6.x in its low byte. BitcodeOffset is relative to DXIL magic.
     let version = word(dxil, 0)?;

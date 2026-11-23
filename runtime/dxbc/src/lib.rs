@@ -1,11 +1,13 @@
 //! DirectX shader containers, signatures, and raster-stage linkage.
 
 mod container;
+mod fspx;
 mod raster;
 pub mod ray;
 mod signature;
 
 pub use container::{Chunk, Dxbc};
+pub use fspx::{Fspx, compute_threads, parse_fspx};
 pub use raster::{
     exports_stencil_reference, has_packing_mismatch, pixel_input_order, raster_outputs,
 };

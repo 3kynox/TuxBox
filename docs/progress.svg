@@ -14,9 +14,9 @@
     <text x="18" y="32" fill="#e2bc8c" font-size="25" text-anchor="start" font-weight="bold">Overall TuxBox coverage</text>
     <text x="954" y="32" fill="#6fc7d4" font-size="23" text-anchor="end" font-weight="bold">88.4%</text>
     <rect x="18" y="45" width="936" height="8" fill="#272733" />
-    <rect x="18" y="45" width="827.0835579514824" height="8" fill="#6fc7d4" />
+    <rect x="18" y="45" width="827.1698113207548" height="8" fill="#6fc7d4" />
     <text x="18" y="77" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Library behaviors · 8/9 verified (88.9%)</text>
-    <text x="954" y="77" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">Shader translation · 38,128/43,407 entries (87.8%)</text>
+    <text x="954" y="77" fill="#d7d7de" font-size="15" text-anchor="end" font-weight="normal">Shader translation · 38,136/43,407 entries (87.9%)</text>
     <text x="18" y="99" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">Frosty sample · 50% required library behaviors, 50% shader translation.</text>
   </g>
   <g transform="translate(14 184)">
@@ -33,7 +33,7 @@
     <text x="301" y="121" fill="#a0a0b1" font-size="13" text-anchor="start" font-weight="normal">Compiler output</text>
     <text x="870" y="121" fill="#a0a0b1" font-size="13" text-anchor="end" font-weight="normal">Archive entries</text>
     <g>
-      <title>Global raster · compiler snapshot 778a109782be7eeb094fe499bcd88dfc17a928ad5a4affcec7600fa25fcb075e</title>
+      <title>Global raster · compiler snapshot be66324a0de67077bdaf3b997e2b13e88f8669084444eefe370f4bc195ae2f6e</title>
       <rect x="18" y="127" width="936" height="1" fill="#272733" />
       <text x="18" y="145" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Global raster</text>
       <text x="301" y="145" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">HLSL emitted</text>
@@ -43,7 +43,7 @@
       <text x="954" y="145" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">99.7%</text>
     </g>
     <g>
-      <title>Material raster · compiler snapshot 778a109782be7eeb094fe499bcd88dfc17a928ad5a4affcec7600fa25fcb075e</title>
+      <title>Material raster · compiler snapshot be66324a0de67077bdaf3b997e2b13e88f8669084444eefe370f4bc195ae2f6e</title>
       <rect x="18" y="155" width="936" height="1" fill="#272733" />
       <text x="18" y="173" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Material raster</text>
       <text x="301" y="173" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">HLSL emitted</text>
@@ -53,17 +53,17 @@
       <text x="954" y="173" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">100.0%</text>
     </g>
     <g>
-      <title>Global compute · compiler snapshot 778a109782be7eeb094fe499bcd88dfc17a928ad5a4affcec7600fa25fcb075e</title>
+      <title>Global compute · compiler snapshot be66324a0de67077bdaf3b997e2b13e88f8669084444eefe370f4bc195ae2f6e</title>
       <rect x="18" y="183" width="936" height="1" fill="#272733" />
       <text x="18" y="201" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Global compute</text>
       <text x="301" y="201" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">HLSL emitted</text>
       <rect x="510" y="191" width="125" height="6" fill="#272733" />
-      <rect x="510" y="191" width="119.81658692185007" height="6" fill="#6fc7d4" />
-      <text x="870" y="201" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">2,404/2,508</text>
-      <text x="954" y="201" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">95.9%</text>
+      <rect x="510" y="191" width="120.2153110047847" height="6" fill="#6fc7d4" />
+      <text x="870" y="201" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">2,412/2,508</text>
+      <text x="954" y="201" fill="#d7d7de" font-size="14" text-anchor="end" font-weight="normal">96.2%</text>
     </g>
     <g>
-      <title>Material compute · compiler snapshot 778a109782be7eeb094fe499bcd88dfc17a928ad5a4affcec7600fa25fcb075e</title>
+      <title>Material compute · compiler snapshot be66324a0de67077bdaf3b997e2b13e88f8669084444eefe370f4bc195ae2f6e</title>
       <rect x="18" y="211" width="936" height="1" fill="#272733" />
       <text x="18" y="229" fill="#d7d7de" font-size="15" text-anchor="start" font-weight="normal">Material compute</text>
       <text x="301" y="229" fill="#d7d7de" font-size="14" text-anchor="start" font-weight="normal">HLSL emitted</text>

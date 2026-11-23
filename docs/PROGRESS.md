@@ -10,14 +10,14 @@ With reduced graphics settings, TuxBox reached the Wake Up cinematic and loaded 
 | --- | --- | --- |
 | **Lanes** | Runs through TuxBox's Xbox graphics, memory and input providers. Its replay checks GPU output and game state. | Continue testing presentation, input and other providers across systems. [Lanes](../examples/lanes/README.md) |
 | **The Matrix Awakens (Frosty)** | With the original Xbox graphics settings, the latest recorded Linux run loaded the Construct map and presented a black frame before stopping during Lumen shader creation. The current reduced-settings build reached Wake Up. Earlier reduced-settings runs reached the highway and city with missing and distorted surfaces. | Support the inline ray-traversal shader and validate the full game image, controls and performance with the original settings. [Setup and results](MATRIX_AWAKENS.md) · [Recorded original-settings run](../evidence/matrix-awakens/packaged-renderer.json) |
-| **Supplied ProjectScarlett package** | The declared game executable was not present when inspected. Its packaged DLLs were inventoried, but the game was not launched. | Inspect and test the executable when it is available. |
+| **Supplied ProjectScarlett package** | The declared game executable was not present when inspected. Its packaged FidelityFX upscaler ran in isolation. TuxBox compiled 28 of its 29 compute shaders to validated DXIL. [Upscaler results](SHADERS.md#projectscarlett-upscaler) | Inspect and test the executable when it is available. |
 | **Fortnite** | One supplied build provided graphics API call-site evidence. | Test initialization and rendering in TuxBox for a specific build. [Device evidence](../evidence/fortnite-device.json) |
 
 No other retail title is currently claimed playable. Record the build, settings, host, provider and observed faults for each run, and distinguish starting, rendering, input and sustained gameplay.
 
 ## Current priorities
 
-1. Finish the surveyed raster, mesh and compute shaders that do not require ray traversal. Check newly translated programs with DXIL validation and use GPU readbacks for changes to memory addressing and wave operations. [Shader survey](SHADERS.md#measured-on-the-matrix-awakens)
+1. Finish the five remaining non-ray-tracing pixel shaders. Two light hair strands and three cull distance-field objects. Check their output with the packaged bindings on both GPUs. [Shader survey](SHADERS.md#measured-on-the-matrix-awakens)
 2. Return to ray tracing, starting with the Xbox-format scene nodes that Lumen shader 219 reads. Check its shadow mask for an empty tile, a hit and a miss, then rerun Frosty with the original settings. [Shader 219 comparison](SHADERS.md#inline-lumen-ray-tracing)
 3. Check the menu, characters, hair, vehicles and city in the game. Test input and audio, then measure cold and warm frame times.
 4. Repeat title and provider checks on additional hardware and games as their executables become available.

@@ -78,6 +78,10 @@ std::string run(const wchar_t* requested, bool) {
     ComPtr<ID3D12PipelineState> pipeline;
     check(method<Pipeline>(device.Get(), 62)(device.Get(), &shader, 0, nullptr, IID_PPV_ARGS(&pipeline)),
           "Xbox compute pipeline");
+    using ScratchInfo = HRESULT (WINAPI *)(ID3D12PipelineState*, SIZE_T, SIZE_T, void**);
+    void* scratch = device.Get();
+    if (method<ScratchInfo>(pipeline.Get(), 11)(pipeline.Get(), 0, 0, &scratch) != E_NOTIMPL || scratch)
+        throw std::runtime_error("Xbox pipeline scratch query");
     shader.CS = {accumulate_dxil, sizeof(accumulate_dxil)};
     ComPtr<ID3D12PipelineState> accumulate;
     check(method<Pipeline>(device.Get(), 62)(device.Get(), &shader, 0, nullptr, IID_PPV_ARGS(&accumulate)),

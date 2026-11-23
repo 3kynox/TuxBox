@@ -35,6 +35,7 @@ fn assignment(line: &str) -> Option<&str> {
                     | "asuint"
                     | "asfloat"
                     | "asint"
+                    | "dot4add_i8packed"
                     | "tb_mull"
                     | "rsqrt"
                     | "sqrt"

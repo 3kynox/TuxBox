@@ -39,6 +39,8 @@ fn translate(
         "6_6"
     } else if shader.stage == Stage::Mesh {
         "6_5"
+    } else if translated.packed_dot_product {
+        "6_4"
     } else if translated.needs_barycentrics {
         "6_1"
     } else {
