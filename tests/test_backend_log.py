@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 import tempfile
 from threading import Event
@@ -60,6 +61,7 @@ class BackendDiagnostics(unittest.TestCase):
         with game_diagnostics("native", env, ".", self.fail):
             self.assertEqual(env, {})
 
+    @unittest.skipUnless(sys.platform == "linux", "Proton raw log rotation requires POSIX unlink-while-open semantics")
     def test_proton_raw_log_arrives_live_and_drains_final_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "logs/steam-default.log"
