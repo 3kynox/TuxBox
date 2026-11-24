@@ -19,3 +19,7 @@ class PortableLinkTests(unittest.TestCase):
         depth=struct.unpack_from("<16f",data,4096+2*256)
         self.assertEqual(depth[3:12],(.5,)*9)
         self.assertEqual(depth[:3],(.875,)*3)
+
+    def test_runtime_compile_log_keys(self):
+        from tools.check_slot86_portable_link import compiled_keys
+        self.assertEqual(compiled_keys("Compiled Xbox shader a_b_b\nnot compiled\nCompiled Xbox shader c\n"),["a_b_b","c"])
