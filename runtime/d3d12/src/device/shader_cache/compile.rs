@@ -181,12 +181,20 @@ fn request(
             return None;
         }
     }
+    // The title is now waiting on the host worker; the progress panel counts it.
+    let waiting = crate::progress::begin();
     let start = Instant::now();
     loop {
         if let Some(bytes) = read_portable_file(&result, stage) {
+            waiting.finish(crate::progress::Outcome::Translated);
             return Some(bytes);
         }
-        if failed.exists() || start.elapsed() >= Duration::from_secs(90) {
+        if failed.exists() {
+            waiting.finish(crate::progress::Outcome::Unsupported);
+            return None;
+        }
+        if start.elapsed() >= Duration::from_secs(90) {
+            waiting.finish(crate::progress::Outcome::TimedOut);
             return None;
         }
         std::thread::sleep(Duration::from_millis(25));
