@@ -72,3 +72,12 @@ class D3D12RegressionTests(unittest.TestCase):
         self.assertFalse(validate("alias-deferred","10de:2704",0,output.replace("ms=0","ms=1999"))[0])
         self.assertFalse(validate("alias-deferred","10de:2704",0,output.replace(line,"unrelated",1))[0])
         self.assertFalse(validate("alias-deferred","10de:2704",0,output+"\nFailed to signal event")[0])
+
+    def test_root_cbv_window_requires_full_imports(self):
+        line="d3d12-root-cbv-window PASS pci=10de:2704 words=120/120 window=65536 offsets=0,256,65280,65536,65792"
+        records=[f"TuxBox d3d12_xs: buffer backing path=imported count={i} source=view bytes={n}" for i,n in enumerate((65536,131072,131072,65536,131072),1)]
+        output="\n".join([line]+records)
+        self.assertTrue(validate("root-cbv-window","10de:2704",0,output)[0])
+        self.assertFalse(validate("root-cbv-window","10de:2704",0,output.replace("131072","65536"))[0])
+        self.assertFalse(validate("root-cbv-window","10de:2704",0,output+"\nbound with a short range")[0])
+        self.assertFalse(validate("root-cbv-window","10de:2704",0,output+"\nsubstituted null compute pipeline")[0])
