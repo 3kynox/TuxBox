@@ -235,10 +235,10 @@ pub(super) unsafe extern "system" fn create_pipeline_x(
     };
     // SAFETY: native creation consumes the descriptor synchronously. The owned
     // clone in the C layout must be released explicitly on success and failure.
-    let create = |descriptor: &D3D12_COMPUTE_PIPELINE_STATE_DESC| unsafe {
+    let create = |descriptor: &D3D12_COMPUTE_PIPELINE_STATE_DESC| crate::big_stack::run(|| unsafe {
         this.native
             .CreateComputePipelineState::<ID3D12PipelineState>(descriptor)
-    };
+    });
     let mut native = create(&host);
     if translation.is_some() && reflected.is_none() && scene_root.is_none() && native.is_err() {
         // Structural checks cannot validate DXIL instructions or root bindings.
@@ -287,7 +287,7 @@ unsafe fn null_compute(
         Flags: desc.Flags,
         ..Default::default()
     };
-    let native = unsafe { this.native.CreateComputePipelineState::<ID3D12PipelineState>(&host) };
+    let native = crate::big_stack::run(|| unsafe { this.native.CreateComputePipelineState::<ID3D12PipelineState>(&host) });
     unsafe { ManuallyDrop::drop(&mut host.pRootSignature) };
     if native.is_err() { return None; }
     substituted("compute");

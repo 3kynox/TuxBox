@@ -345,7 +345,7 @@ unsafe fn create(
     };
     // SAFETY: the stream storage, translated shaders, and guest-owned inputs
     // all stay alive throughout this synchronous call on the desktop Device2.
-    let initial = unsafe { host.CreatePipelineState(&native_desc) };
+    let initial = crate::big_stack::run(|| unsafe { host.CreatePipelineState(&native_desc) });
     let Err(error) = &initial else {
         if rectangles {
             static FIRST_RECTANGLE: std::sync::Once = std::sync::Once::new();
@@ -426,7 +426,7 @@ unsafe fn create(
             linked_rectangle = unsafe { rectangle::geometry(&*field, &pixel_bytecode())? };
             unsafe { geometry_record.write(rectangle::bytecode(&linked_rectangle)) };
         }
-        let retry = unsafe { host.CreatePipelineState(&native_desc) };
+        let retry = crate::big_stack::run(|| unsafe { host.CreatePipelineState(&native_desc) });
         match &retry {
             Ok(_) => {
                 static VERTEX: std::sync::Once = std::sync::Once::new();
