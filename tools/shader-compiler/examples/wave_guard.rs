@@ -10,6 +10,6 @@ fn main() {
     assert!(matches!(width, 32 | 64));
     let (shader, _, _) = fixture::shader(width);
     let translated = hlsl::translate(&shader).expect("translate synthetic reductions");
-    assert_eq!(translated.required_wave_size, Some(width));
+    assert_eq!(translated.required_wave_size, (width == 32).then_some(32));
     print!("{}", translated.hlsl);
 }

@@ -317,6 +317,117 @@ pub(super) fn check_control_flow(insns: &[Insn], width: u32) -> Result<(), Strin
     Ok(())
 }
 
+// Only a complete, single guest wave64 may use group rendezvous. Every
+// branch must be proven group-uniform and every collective must be one of the
+// exact recognized integer reductions. All other programs keep the native path.
+pub(super) fn portable_single_wave(insns: &[Insn]) -> bool {
+    let mut covered = vec![false; insns.len()];
+    let mut masks = Vec::new();
+    let mut reads = Vec::new();
+    for (first, i) in insns.iter().enumerate() {
+        if i.op != DPP_REDUCE || i.aux.imm != 0 {
+            continue;
+        }
+        let Some(start) = first.checked_sub(2) else { return false };
+        let Some(block) = insns.get(start..start + 12) else { return false };
+        let [Opnd::Sgpr(saved)] = block[0].dst[..] else { return false };
+        if saved >= 105 || saved % 2 != 0 || block[0].mnemonic != "s_or_saveexec_b64"
+            || block[0].src != [Opnd::ConstInt(-1)]
+            || block[1].mnemonic != "v_cndmask_b32"
+            || !block[2..6].iter().enumerate().all(|(step, i)| {
+                i.op == DPP_REDUCE && i.aux.imm == step as i64 && i.mnemonic == "v_add_nc_u32"
+            })
+            || block[6].mnemonic != "v_permlanex16_b32"
+            || block[6].raw.first().is_none_or(|w| w & 0x7800 != 0)
+            || block[7].mnemonic != "v_add_nc_u32"
+            || block[9].mnemonic != "v_add_nc_u32"
+            || block[11].mnemonic != "s_mov_b64"
+            || block[11].dst != [Opnd::ExecLo]
+            || block[11].src != [Opnd::Sgpr(saved)]
+            || covered[start..start + 12].iter().any(|&v| v)
+        {
+            return false;
+        }
+        for (idx, lane) in [(8, 32), (10, 0)] {
+            let read = &block[idx];
+            if read.op != READ_LANE || read.enc != Enc::Vop3
+                || read.src.get(1) != Some(&Opnd::ConstInt(lane))
+                || !matches!(read.dst[..], [Opnd::Sgpr(n)] if n != saved && n != saved + 1)
+            {
+                return false;
+            }
+        }
+        masks.extend([saved, saved + 1]);
+        reads.push(start + 10);
+        covered[start..start + 12].fill(true);
+    }
+    if reads.is_empty() {
+        return false;
+    }
+    for (idx, i) in insns.iter().enumerate() {
+        if covered[idx] {
+            continue;
+        }
+        // The generic emitter represents an EXEC bit per invocation, not a
+        // full scalar mask. Do not let a saved mask escape the reduction.
+        if masks.iter().any(|&n| super::reads_sgpr(i, n)) {
+            return false;
+        }
+        if i.enc == Enc::Sopp {
+            if Emitter::branch_cond(i.op).is_some() {
+                let prior: Vec<_> = reads.iter().copied().filter(|&r| r < idx).collect();
+                if !uniform_forward_guard(insns, idx, i.offset, &prior) {
+                    return false;
+                }
+                continue;
+            }
+            if matches!(i.mnemonic.as_str(), "s_nop" | "s_waitcnt")
+                || (i.mnemonic == "s_endpgm" && idx + 1 == insns.len())
+            {
+                continue;
+            }
+            return false;
+        }
+        // No other wave/quad instructions, EXEC transitions, or LDS accesses.
+        // Keep a deliberately small whitelist of ordinary ALU and buffer ops.
+        let lane_local = matches!(i.mnemonic.as_str(),
+            "v_mov_b32" | "v_add_nc_u32" | "v_sub_nc_u32" | "v_subrev_nc_u32"
+            | "v_and_b32" | "v_or_b32" | "v_xor_b32" | "v_lshlrev_b32"
+            | "v_lshrrev_b32" | "v_mul_lo_u32" | "v_add_f32" | "v_mul_f32"
+            | "s_mov_b32" | "s_movk_i32" | "s_add_u32" | "s_sub_u32"
+            | "s_cmp_eq_u32" | "s_cmp_lg_u32" | "s_cmp_gt_u32" | "s_cmp_ge_u32"
+            | "s_cmp_lt_u32" | "s_cmp_le_u32" | "s_cmp_eq_i32" | "s_cmp_lg_i32"
+            | "s_cmp_gt_i32" | "s_cmp_ge_i32" | "s_cmp_lt_i32" | "s_cmp_le_i32")
+            && i.src.iter().chain(&i.dst).all(|o| matches!(o, Opnd::Vgpr(_)
+                | Opnd::Sgpr(_) | Opnd::ConstInt(_) | Opnd::ConstF32(_) | Opnd::Literal(_) | Opnd::Scc));
+        let buffer = matches!(i.enc, Enc::Mubuf | Enc::Smem)
+            && (i.mnemonic.starts_with("buffer_load_dword")
+                || i.mnemonic.starts_with("buffer_store_dword")
+                || i.mnemonic.starts_with("s_load_dword")
+                || i.mnemonic.starts_with("s_buffer_load_dword"))
+            && i.src.iter().chain(&i.dst).all(|o| matches!(o, Opnd::Vgpr(_)
+                | Opnd::Sgpr(_) | Opnd::ConstInt(_) | Opnd::Literal(_)));
+        if !lane_local && !buffer {
+            return false;
+        }
+    }
+    true
+}
+
+// A second barrier prevents a fast host subgroup from overwriting a slot
+// before the other subgroup has consumed it. The verifier above ensures
+// that every invocation reaches these barriers in the same order.
+pub(super) const PORTABLE_DECLARATIONS: &str = r#"
+groupshared uint tb_reduction_lanes[64];
+uint tb_reduction_read(uint lane, uint value, uint source) {
+    tb_reduction_lanes[lane] = value;
+    GroupMemoryBarrierWithGroupSync();
+    uint result = tb_reduction_lanes[source];
+    GroupMemoryBarrierWithGroupSync();
+    return result;
+}
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,8 +497,14 @@ mod tests {
             // control words from the exact reduction recognized by lower().
             let (mut ex, mut words, cmp) = fixture::shader(width);
             let translated = super::super::translate(&ex).unwrap();
-            assert_eq!(translated.required_wave_size, Some(width));
-            assert!(translated.hlsl.contains("WaveReadLaneAt("));
+            assert_eq!(translated.required_wave_size, (width == 32).then_some(32));
+            if width == 64 {
+                assert!(translated.hlsl.contains("tb_reduction_read("));
+                assert!(!translated.hlsl.contains("WaveReadLaneAt("));
+                assert!(!translated.hlsl.contains("[WaveSize("));
+            } else {
+                assert!(translated.hlsl.contains("WaveReadLaneAt("));
+            }
             // Replace the proven scalar with an unproven entry register.
             words[cmp] = 0xbf06_8008;
             ex.isa = words.iter().flat_map(|word| word.to_le_bytes()).collect();
@@ -395,6 +512,34 @@ mod tests {
             let refusal = super::super::translate(&ex).err().unwrap();
             assert!(refusal.contains("divergent control flow"), "{refusal}");
         }
+    }
+
+    #[test]
+    fn portable_wave64_requires_a_single_group_and_no_other_wave_operations() {
+        let (mut ex, _, _) = fixture::shader(64);
+        let mut insns = crate::rdna2::disassemble(&ex.isa);
+        assert_eq!(super::super::lower_wave_reductions(&mut insns).unwrap(), Some(64));
+        assert!(portable_single_wave(&insns));
+        let compare = insns.iter().position(|i| i.mnemonic == "s_cmp_eq_u32").unwrap();
+        let outside = compare + 2;
+        let mut changed = insns.clone();
+        changed[outside].mnemonic = "v_readfirstlane_b32".into();
+        assert!(!portable_single_wave(&changed));
+        changed = insns.clone();
+        changed[outside].src[0] = Opnd::Sgpr(0); // saved EXEC must not escape
+        assert!(!portable_single_wave(&changed));
+        changed = insns.clone();
+        changed[compare].src[0] = Opnd::Sgpr(8);
+        assert!(!portable_single_wave(&changed));
+        changed = insns.clone();
+        changed[8].dst[0] = Opnd::Sgpr(0); // overwrites saved EXEC
+        assert!(!portable_single_wave(&changed));
+
+        ex.isa_preamble = [0, 128, 1, 1];
+        let native = super::super::translate(&ex).unwrap();
+        assert_eq!(native.required_wave_size, Some(64));
+        assert!(native.hlsl.contains("[WaveSize(64)]"));
+        assert!(!native.hlsl.contains("tb_reduction_read("));
     }
 
     #[test]
