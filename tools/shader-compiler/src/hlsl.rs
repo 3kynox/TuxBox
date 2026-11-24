@@ -396,6 +396,21 @@ fn ff1_b64_expr(lo: &str, hi: &str) -> String {
     )
 }
 
+/// HLSL expression for `s_flbit_i32_b64`: first set bit from MSB to LSB over a 64-bit value.
+fn flbit_b64_expr(lo: &str, hi: &str) -> String {
+    format!("({hi} != 0u ? 31u - firstbithigh({hi}) : {lo} != 0u ? 63u - firstbithigh({lo}) : ~0u)")
+}
+
+/// HLSL expression for `s_ff0_i32_b32`: first zero bit from LSB to MSB over a 32-bit value.
+fn ff0_b32_expr(val: &str) -> String {
+    format!("firstbitlow(~{val})")
+}
+
+/// HLSL expression for `s_ff0_i32_b64`: first zero bit from LSB to MSB over a 64-bit value.
+fn ff0_b64_expr(lo: &str, hi: &str) -> String {
+    format!("(~{lo} != 0u ? uint(firstbitlow(~{lo})) : ~{hi} != 0u ? 32u + uint(firstbitlow(~{hi})) : 0xffffffffu)")
+}
+
 struct Emitter<'a> {
     lds_tile: Option<lds_tile::LdsTile>,
     packed: Option<PackedRoot>,
@@ -4607,6 +4622,17 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                         Ok(())
                     }
                     "s_flbit_i32_b32" => self.ws(&d, &format!("({a} == 0u ? ~0u : 31u - firstbithigh({a}))")),
+                    "s_flbit_i32_b64" => {
+                        self.touch(&hi(&s[0]));
+                        let ah = r(&hi(&s[0]))?;
+                        self.ws(&d, &flbit_b64_expr(&a, &ah))
+                    }
+                    "s_ff0_i32_b32" => self.ws(&d, &ff0_b32_expr(&a)),
+                    "s_ff0_i32_b64" => {
+                        self.touch(&hi(&s[0]));
+                        let ah = r(&hi(&s[0]))?;
+                        self.ws(&d, &ff0_b64_expr(&a, &ah))
+                    }
                     "s_ff1_i32_b32" => self.ws(&d, &format!("firstbitlow({a})")),
                     // s_ff1_i32_b64 is firstbitlow over the 64-bit value: the low word
                     // decides when it is nonzero, otherwise the high word.
@@ -8485,11 +8511,32 @@ mod tests {
     }
 
     #[test]
+    fn flbit_b64_checks_high_word_before_low_word() {
+        assert_eq!(
+            flbit_b64_expr("s2", "s3"),
+            "(s3 != 0u ? 31u - firstbithigh(s3) : s2 != 0u ? 63u - firstbithigh(s2) : ~0u)"
+        );
+    }
+
+    #[test]
     fn typed_buffer_extraction_masks_to_16_bits() {
         // Each channel is masked with 0xffff: no channel may leak into a wider one.
         for channel in 0..4u32 {
             let expr = tbuf_16_16_16_16_uint_channel(channel, "a", "b");
             assert!(expr.contains("& 65535u"), "channel {channel}: {expr}");
         }
+    }
+
+    #[test]
+    fn ff0_b32_inverts_operand_for_firstbitlow() {
+        assert_eq!(ff0_b32_expr("s2"), "firstbitlow(~s2)");
+    }
+
+    #[test]
+    fn ff0_b64_checks_low_word_before_high_word() {
+        assert_eq!(
+            ff0_b64_expr("s2", "s3"),
+            "(~s2 != 0u ? uint(firstbitlow(~s2)) : ~s3 != 0u ? 32u + uint(firstbitlow(~s3)) : 0xffffffffu)"
+        );
     }
 }
