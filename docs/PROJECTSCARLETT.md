@@ -82,6 +82,39 @@ Add `--mangohud` before the package path to record frame times. The prefix defau
 
 The first launch records each shader the game requests in the prefix. Before later launches, the launcher compiles the recorded requests and shows its progress, so the game reuses those translations instead of compiling them during play. Pass `--prepare-only` to prepare without starting the game, or `--no-shader-prep` to skip preparation for one launch. Place either option before the package path. [Preparation results](../evidence/projectscarlett-shader-preparation.json)
 
+### Live compilation workload
+
+During gameplay, unrelated shader requests can compile concurrently rather
+than waiting for one another. The launcher defaults to at most four jobs
+(and no more than its available CPU cores); set
+`TUXBOX_RUNTIME_SHADER_JOBS=1` for the old serial behavior or a value from 1
+to 8 to tune the CPU/memory cost. Identical shader requests within the game process still share one
+translation, including retries while the previous request remains published. Persistent refusal markers are only written for deterministic
+emitter refusals, not transient tool errors. This reduces queueing delays but
+does not make unsupported shader instructions compatible.
+
+Synthetic compute benchmark (not game performance): generate a fresh corpus with
+`python tools/reference/scarlett_worker_fixture.py /path/to/new-corpus`.
+Use `tools/benchmark_scarlett_worker.py --help` for a paired comparison of
+the old and new worker, keeping the compiler executables and corpus identical.
+On the measured Ryzen 5 5600X, 64 cold requests took a median 0.881 s serial
+and 0.300 s with four jobs (five rounds per configuration); eight jobs took
+0.229 s but had higher peak aggregate RSS. All outputs matched by SHA-256.
+A forced host-side warm-cache burst took 0.074 s serial and 0.096 s with four
+jobs; a single cold request remained about 0.065 s. The actual guest normally
+reads verified warm-cache entries directly. These are small synthetic compute
+controls, not a prediction of GTA VI loading times.
+
+The live guest control `tools/check_live_shader_worker.py` uses the synthetic
+corpus above and a disposable offline Proton prefix. It makes 24 simultaneous
+Xbox compute-pipeline calls for 16 distinct shaders, with null-pipeline fallback
+disabled. On the RTX 4080, all 24 calls succeeded at both four and eight jobs;
+each distinct source was compiled once in each run and the validated outputs
+matched across configurations. See `--help` for reproduction arguments and
+[the receipt](../evidence/scarlett-live-worker-control.json).
+
+
+
 ## What to expect
 
 The game opens its Americas window, loads its archives and presents 3840×2160 frames. The recorded run reached the player selection prompt, with Account Picker, Screen Narration and TuxBox options. It stopped at a title breakpoint 97 seconds after launch. Intro video, input after player selection and gameplay aren't verified yet. [Current priorities](PROGRESS.md#current-priorities)
@@ -176,3 +209,34 @@ refusals. The runtime log also reports 32 sampled slot-86 stage failures
 messages and three signaller timeouts; none alone establishes root cause.
 The highest remaining request-family ranking needs a fresh local triage,
 not extrapolation from the 88 visible runtime refusals.
+### CPU differential verification of integer halves
+
+The independent packed-integer Python model now covers 14 wrapping packed
+forms, seven saturating forms and ten single-half forms (31 variants).
+The latter preserve the other half of the destination. Three additional
+ordinary compute forms are supported: `v_mul_lo_u16`, `v_max_u16`,
+`v_min_u16`. Their old destination is recorded as an input for the
+partial write. New forms refuse non-compute stages, non-VGPR sources
+and unsupported modifiers.
+
+The CPU harness generates boundary and random inputs, all half selectors,
+source/destination aliases and mixed dependent chains. LLVM gfx1030
+assembles the synthetic native instructions, the full translator emits
+HLSL, and DXC/DXV constant-fold/validate it. Only the final six observable
+register stores are added by the harness. Missing, extra, duplicate or
+nonconstant stores are failures, not successful comparisons.
+
+[CPU receipt](../evidence/scarlett-packed-integer-cpu.json): before the
+three additions 3,379/4,480 programs passed and 1,101 were refused; after
+all 4,480 pass, with 26,880 observed values. A second seed with 4,096
+mixed chains passes another 6,528 programs (39,168 values). No numerical
+mismatches. A deliberate wrapping-add-to-subtract mutation is detected
+in 30/608 cases and then removed. Six new negative controls still refuse
+scalar operands and clamp. 264 unit tests pass (including latest main).
+
+Build the `packed_integer` example as above and run
+`python tools/check_packed_integer_cpu.py --help` for the LLVM, emitter,
+DXC/DXV and fresh work/output arguments. Defaults use two CPU workers,
+four input samples per selector pair and 2,048 mixed chains. No Wine,
+Proton, game or GPU is required. This is not a replacement for subsequent
+dynamic GPU and title-level validation.
