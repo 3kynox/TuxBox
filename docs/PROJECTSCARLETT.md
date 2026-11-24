@@ -79,3 +79,25 @@ The game opens its Americas window, loads its archives and presents 3840×2160 f
 In a new prefix, the game stops at a breakpoint during System Init because it reads its package through the `G:` drive, as on the console, and the launcher doesn't map that drive yet. A fix is in review. [Pull request #6](https://github.com/brcly/TuxBox/pull/6)
 
 When you report a run, include the package version, executable hash, GPU and driver, Proton build, and the log printed in the first line of the launcher's output.
+
+### Ordinary scalar bit operations
+
+The generic translator supports twelve additional scalar bit instructions
+(32/64-bit zero counts, zero searches, leading-bit searches, reversal,
+bit setting/clearing and testing). The local reaching-definition check
+requires ordinary scalar values, not an assumed full-wave EXEC/VCC mask.
+Unknown halves, branch entries and indirect control flow remain unsupported;
+private packed and mesh paths are outside this proof. The rules follow
+[AMD's RDNA 2 ISA reference](https://www.amd.com/content/dam/amd/en/documents/radeon-tech-docs/instruction-set-architectures/rdna2-shader-instruction-set-architecture.pdf), SOP1/SOPC.
+
+CPU-only controls:
+
+- Capture `cargo test --manifest-path tools/shader-compiler/Cargo.toml --target x86_64-unknown-linux-gnu scalar_bit_cpu_oracle_fixture -- --nocapture`
+  to a fresh fixture file. Run `python tools/check_scalar_bits.py --help`
+  for the DXC/DXV numerical oracle: 1,944 cases, 7,776 checked values.
+- Run `python tools/check_scalar_native.py --help` with the baseline and
+  candidate xshader executables: 13 synthetic native programs recovered,
+  six deliberately unsupported controls retained, one unchanged control.
+
+[CPU evidence](../evidence/scarlett-ordinary-scalar-bits.json). These controls
+are not retail shader coverage or proof of GPU execution.
