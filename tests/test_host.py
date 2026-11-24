@@ -209,7 +209,7 @@ class ConsoleConstantBuffers(unittest.TestCase):
             self.assertEqual(env["VK_LAYER_PATH"], layer + ":/user/layers")
             self.assertEqual(env["VK_ADD_LAYER_PATH"], "/user/extra")
             self.assertEqual(env["VK_INSTANCE_LAYERS"], "VK_LAYER_TUXBOX_console_cbv:overlay")
-            self.assertEqual(env["VKD3D_DISABLE_EXTENSIONS"], "VK_EXT_descriptor_buffer,first;second")
+            self.assertEqual(env["VKD3D_DISABLE_EXTENSIONS"], "first;second")
             self.assertEqual(env["VKD3D_CONFIG"], "force_static_cbv")
             self.assertEqual(env["PRESSURE_VESSEL_FILESYSTEMS_RO"], layer + ":/user/mount")
             before = env.copy()
@@ -236,6 +236,10 @@ class ConsoleConstantBuffers(unittest.TestCase):
             configure_console_cbv("wine", wine, self.exe, self.log.status)
             self.assertEqual(wine["VK_ADD_LAYER_PATH"], self.layer)
             self.assertNotIn("VKD3D_CONFIG", wine)
+            self.assertNotIn("VKD3D_DISABLE_EXTENSIONS", wine)
+            fork = {"PROTONPATH": str(self.root)}
+            configure_console_cbv("proton", fork, self.exe, self.log.status)
+            self.assertEqual(fork["VKD3D_DISABLE_EXTENSIONS"], "VK_EXT_descriptor_buffer")
             self.assertNotIn("PRESSURE_VESSEL_FILESYSTEMS_RO", wine)
 
     def test_native_foreign_missing_and_explicit_comparison(self):
