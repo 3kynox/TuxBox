@@ -237,8 +237,25 @@ fn uniform_forward_guard(
     let branch = &insns[branch_index];
     let pc = branch.offset as i64;
     let target = pc + 4 + 4 * branch.aux.imm;
-    if !matches!(branch.op, 4 | 5) || target <= reduction_end as i64 {
+    if !matches!(branch.op, 2 | 4 | 5) || target <= reduction_end as i64 {
         return false;
+    }
+    if branch.op == 2 {
+        // Every invocation reaching an unconditional branch takes it. Prove
+        // that there is no bypass of the branch and no entry into the skipped
+        // interval, including a backward edge or an indirect branch.
+        return insns.iter().enumerate().all(|(i, op)| {
+            if i == branch_index { return true; }
+            if matches!(op.mnemonic.as_str(), "s_setpc_b64" | "s_swappc_b64" | "s_call_b64" | "s_rfe_b64" | "s_trap") {
+                return false;
+            }
+            if op.enc == Enc::Sopp && Emitter::branch_cond(op.op).is_some() {
+                let from = op.offset as i64;
+                let to = from + 4 + 4 * op.aux.imm;
+                return !(from.min(to) < target && from.max(to) > pc);
+            }
+            !(op.enc == Enc::Sopp && op.op == 1 && (op.offset as i64) < target)
+        });
     }
     let Some(compare_index) = branch_index.checked_sub(1) else { return false };
     let compare = &insns[compare_index];
@@ -340,7 +357,8 @@ pub(super) fn check_control_flow(insns: &[Insn], width: u32) -> Result<(), Strin
             }
             if Emitter::branch_cond(branch.op).is_some() {
                 let target = pc + 4 + 4 * branch.aux.imm;
-                if ((pc < start && target > start) || (pc > end && target <= end))
+                if ((pc < start && target > start) || (pc > end && target <= end)
+                    || (pc >= start && pc <= end))
                     && !(pc < start && uniform_forward_guard(insns, branch_index, end as usize, &verified_reads))
                 {
                     return Err(format!(
@@ -656,6 +674,24 @@ mod tests {
             ops[0] = nop();
             offsets(&mut ops);
             ops[2].src[1] = Opnd::Sgpr(12);
+            assert!(check_control_flow(&ops, width).is_err());
+        }
+    }
+
+    #[test]
+    fn unconditional_bypass_must_skip_whole_collective_and_have_no_other_entry() {
+        for width in [32, 64] {
+            let mut ops = vec![nop(), branch(2)];
+            ops.extend(reduction(width, 7));
+            let after = ops.len();
+            ops.push(nop());
+            edge(&mut ops, 1, after, 2);
+            assert!(check_control_flow(&ops, width).is_ok());
+            edge(&mut ops, 0, 3, 8);
+            assert!(check_control_flow(&ops, width).is_err());
+            ops[0] = nop();
+            offsets(&mut ops);
+            edge(&mut ops, 1, after - 1, 2);
             assert!(check_control_flow(&ops, width).is_err());
         }
     }
