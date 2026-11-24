@@ -32,16 +32,16 @@ def launch_game(args):
     package_dir = package_root(args.target.expanduser(), exe)
     host = Host(args.backend, args.proton, args.prefix)
     if not (args.graphics_menu or args.graphics_profile):
-        return run_game(args, exe, host)
+        return run_game(args, exe, host, package_dir)
     if args.prepare_only:
         raise ValueError("Graphics profiles apply to a game launch")
     with graphics_profile(exe, host, args.graphics_profile, menu=args.graphics_menu) as profile:
         if profile is None:
             return 0
-        return run_game(args, exe, host, profile)
+        return run_game(args, exe, host, package_dir, profile)
 
 
-def run_game(args, exe, host, profile=None):
+def run_game(args, exe, host, package_dir, profile=None):
     if args.log_file:
         check_log_path(host.backend, host.env, exe.parent, args.log_file.expanduser().resolve())
     with game_log(exe, args.log_file) as log:
