@@ -101,3 +101,19 @@ CPU-only controls:
 
 [CPU evidence](../evidence/scarlett-ordinary-scalar-bits.json). These controls
 are not retail shader coverage or proof of GPU execution.
+
+
+The dependent-compute follow-up preserves ordinary scalar provenance through
+verified min/max, wide shifts, bit updates and conditional/carry operations
+only when the ordinary inputs (and, when required, SCC) are proven. It
+does not relax branch, special wave-mask, mesh or unknown-input checks.
+The CPU campaign found 483 rejected programs among 2,048 synthetic extended
+programs on the previous #58 implementation, across twelve known
+provenance-related refusal signatures. The twelve minimized native
+reproducers are now permanent compiler tests. The full 2,048-program
+campaign and the older 8,577 core plus 10,113 extended CPU-oracle programs
+pass on the integrated current main + follow-up build (186,642 observed
+register/flag values in total). Negative controls reject unknown SCC,
+EXEC-derived SCC and unproven high halves. See
+[evidence](../evidence/scarlett-dependent-scalar-chains.json). No GPU or
+retail compatibility claim.
