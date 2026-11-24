@@ -27,7 +27,8 @@ from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from project_tuxbox.runtime_shaders import REQUEST_PATTERNS, XSHADER_UNSUPPORTED_HLSL
+from project_tuxbox.runtime_shaders import REQUEST_PATTERNS, XSHADER_UNSUPPORTED_HLSL, ShaderRefused
+from project_tuxbox.scarlett_report import refusal_bucket, failure_bucket
 
 MASKS = (
     # "[buffer_load_dwordx3 @ 0x1a0]" names one variant of the same gap.
@@ -74,32 +75,36 @@ def command(xshader, source, work):
     return [xshader, cooked, *flags, "--hlsl-out", work / "shader.hlsl", "--profile-out", work / "profile"]
 
 
-def probe(xshader, source, timeout):
+def probe(xshader, source, timeout, *, aggregate_only=False):
     with TemporaryDirectory(prefix="tuxbox-triage-") as tmp:
         try:
             run = subprocess.run(command(xshader, source, Path(tmp)), capture_output=True, text=True,
                                  errors="replace", timeout=timeout)
-        except subprocess.TimeoutExpired:
-            return source, "failed", f"timed out after {timeout:g}s"
+        except subprocess.TimeoutExpired as exc:
+            return source, "failed", failure_bucket(exc) if aggregate_only else f"timed out after {timeout:g}s"
         except (OSError, ValueError) as exc:
-            return source, "failed", str(exc)
+            return source, "failed", failure_bucket(exc) if aggregate_only else str(exc)
     if run.returncode == 0:
         return source, "translated", None
     status = "refused" if run.returncode == XSHADER_UNSUPPORTED_HLSL else "failed"
+    if aggregate_only:
+        reason = (refusal_bucket(ShaderRefused(run.stderr or run.stdout, cached=False))
+                  if status == "refused" else "emitter_failure")
+        return source, status, reason
     return source, status, normalize(run.stderr or run.stdout)
 
 
-def triage(xshader, sources, jobs, timeout, examples):
+def triage(xshader, sources, jobs, timeout, examples, *, aggregate_only=False):
     totals = Counter()
     reasons = Counter()
     samples = defaultdict(list)
     failures = Counter()
     with ThreadPoolExecutor(max_workers=jobs) as pool:
-        for source, status, reason in pool.map(lambda s: probe(xshader, s, timeout), sources):
+        for source, status, reason in pool.map(lambda s: probe(xshader, s, timeout, aggregate_only=aggregate_only), sources):
             totals[status] += 1
             if status == "refused":
                 reasons[reason] += 1
-                if len(samples[reason]) < examples:
+                if not aggregate_only and len(samples[reason]) < examples:
                     samples[reason].append(source.name)
             elif status == "failed":
                 failures[reason] += 1
@@ -107,7 +112,7 @@ def triage(xshader, sources, jobs, timeout, examples):
     for reason, count in reasons.items():
         groups[construct(reason)] += count
     return {
-        "xshader": str(xshader),
+        **({"aggregate_only": True} if aggregate_only else {"xshader": str(xshader)}),
         "totals": {"requests": len(sources), **{k: totals[k] for k in ("translated", "refused", "failed")}},
         "constructs": [{"construct": name, "count": count} for name, count in groups.most_common()],
         "reasons": [{"reason": reason, "count": count, "examples": samples[reason]}
@@ -150,6 +155,7 @@ def main(argv=None):
     parser.add_argument("--examples", type=int, default=3, help="request names kept per refusal in --json")
     parser.add_argument("--limit", type=int, default=0, help="only the first N requests")
     parser.add_argument("--json", type=Path, help="write the full report here")
+    parser.add_argument("--aggregate-only", action="store_true", help="fixed reason buckets only; omit paths, request names and raw error text")
     args = parser.parse_args(argv)
 
     if args.limit < 0:
@@ -163,7 +169,7 @@ def main(argv=None):
         from project_tuxbox.shader_prep import shader_compiler
         args.xshader = shader_compiler()
 
-    report = triage(args.xshader, sources, max(1, args.jobs), args.timeout, args.examples)
+    report = triage(args.xshader, sources, max(1, args.jobs), args.timeout, args.examples, aggregate_only=args.aggregate_only)
     print(markdown(report, args.top))
     if args.json:
         args.json.write_text(json.dumps(report, indent=2) + "\n")

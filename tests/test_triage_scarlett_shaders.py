@@ -89,6 +89,20 @@ class TriageScarlettShaders(unittest.TestCase):
         self.assertIn("| `s_load` | 2 | 66.7% |", stdout.getvalue())
         # The cache is read only: no markers or outputs appear beside the requests.
         self.assertEqual(len(os.listdir(self.cache)), 5)
+        shared = self.root / "aggregate.json"
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(main([str(self.cache), "--xshader", str(fake), "--jobs", "2",
+                                  "--aggregate-only", "--json", str(shared)]), 0)
+        report = json.loads(shared.read_text())
+        self.assertTrue(report["aggregate_only"])
+        self.assertNotIn("xshader", report)
+        self.assertEqual(report["totals"], {"requests": 5, "translated": 1, "refused": 3, "failed": 1})
+        self.assertEqual({row["reason"]: row["count"] for row in report["reasons"]},
+                         {"scalar_dynamic_offset": 2, "wave_divergent": 1})
+        self.assertTrue(all(row["examples"] == [] for row in report["reasons"]))
+        self.assertEqual(report["failures"], [{"reason": "emitter_failure", "count": 1}])
+        self.assertNotIn(str(self.root), shared.read_text())
+
 
 
 if __name__ == "__main__":
