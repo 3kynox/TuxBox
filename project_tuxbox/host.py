@@ -18,8 +18,14 @@ from .runtime_shaders import runtime_shader_compiler
 
 def proton_installation(selection):
     if selection:
-        path = Path(selection).expanduser().resolve()
-        return path.parent if path.is_file() and path.name == "proton" else path
+        path = Path(selection).expanduser()
+        resolved = path.resolve()
+        if resolved.is_file():
+            if resolved.name == "proton":
+                return resolved.parent
+            if path.name == "proton":
+                return path.parent.resolve()
+        return resolved
     steam = Path(os.environ.get("STEAM_COMPAT_CLIENT_INSTALL_PATH") or Path.home() / ".steam/root")
     libraries = [steam, Path.home() / ".local/share/Steam"]
     vdf = steam / "steamapps/libraryfolders.vdf"
