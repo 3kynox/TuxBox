@@ -153,7 +153,7 @@ mod tests {
     fn translate(stage: Stage, body: &[u32]) -> Result<String, String> {
         let words: Vec<u32> = V4.iter().chain(&V5).chain(body).chain(&[ENDPGM]).copied().collect();
         let isa: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-        let ex = ShaderExtract {
+        let ex = ShaderExtract { flat_inputs: Vec::new(), flat_outputs: Vec::new(),
             stage, shader_model: (6, 0), required_features: None, bitcode_stripped: true,
             fspx_config: None, ps09_pixel_inputs: None, fssm: Vec::new(), entry: Some("main".into()),
             isa_data: isa.clone(), isa, isa_offset_in_fssm: 0, psv_threads: None, isa_preamble: [0, 1, 1, 1],
