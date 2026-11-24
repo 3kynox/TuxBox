@@ -15,6 +15,7 @@ from tempfile import TemporaryDirectory
 from time import monotonic
 
 CASES = {
+    "root-cbv-window": ("d3d12-root-cbv-window", (), "d3d12-root-cbv-window", ("words=72/72","window=65536","offsets=0,256,65280")),
     "tables": ("d3d12-tables", (), "d3d12-tables", ("words=16/16", "placed-srv=16/16")),
     "heaps": ("d3d12-heaps", (), "d3d12-heaps", ("words=256/256", "volume=45/45")),
     "alias-deferred": ("d3d12-copy-resource", ("--alias-deferred",), "d3d12-alias-deferred", ("overlaps=2", "old=verified", "refreshed=verified", "no_cpu_wait=1")),
@@ -31,7 +32,7 @@ CASES = {
     "buffer-import-reject": ("d3d12-buffer-import", ("--reject",), "d3d12-buffer-import-reject", ("rejected=1",)),
     "null-usage": ("d3d12-null-usage", (), "d3d12-null-usage", ("words=64/64", "recorded=64", "valid=2")),
 }
-DEFAULT = tuple(name for name in CASES if name not in ("alias-deferred", "copy-resource", "indirect-scarlett", "mesh", "buffer-import", "buffer-import-reject", "buffer-layout", "buffer-remap"))
+DEFAULT = tuple(name for name in CASES if name not in ("root-cbv-window", "alias-deferred", "copy-resource", "indirect-scarlett", "mesh", "buffer-import", "buffer-import-reject", "buffer-layout", "buffer-remap"))
 DIGEST = hashlib.sha256(bytes.fromhex("78563412efcdab90")).hexdigest()
 
 
@@ -69,6 +70,12 @@ def validate(case, adapter, status, output):
         # successful imports/retries and no stand-in, regardless of padding.
         if sorted((path, count) for path,count,_ in records) != [
             ("commit_retry","1"), ("commit_retry","2"), ("imported","1"), ("imported","2")]:
+            return False, passes[0]
+    if case == "root-cbv-window":
+        records = re.findall(r"(?m)^(?:TuxBox d3d12_xs: )?buffer backing path=([a-z_]+) count=([0-9]+) source=view bytes=([0-9]+)$", output)
+        if sorted(records) != [("imported","1","65536"),("imported","2","131072"),("imported","3","131072")]:
+            return False, passes[0]
+        if "bound with a short range" in output or "substituted null " in output:
             return False, passes[0]
     if case == "alias-deferred":
         times = re.findall(r"(?m)^alias deferred observed ms=([0-9]+)$", output)
@@ -149,7 +156,7 @@ def main(argv=None):
             env={"WINEPREFIX":trial/"prefix","WINESERVER":files/"bin/wineserver",
                  "WINEDEBUG":"-all","VKD3D_DEBUG":"warn","WINEDLLOVERRIDES":"d3d12,d3d12core,dxgi=n,b",
                  "XDG_CACHE_HOME":trial/"cache","XDG_RUNTIME_DIR":trial/"runtime","TMPDIR":trial/"tmp",
-                 "VKD3D_SHADER_CACHE_PATH":trial,"TUXBOX_LOG":"stderr","TUXBOX_TRACE_PRESENT":"1", "TUXBOX_REQUIRE_BUFFER_IMPORT":"1" if case.startswith("buffer-") else "0", "TUXBOX_TRACE_BUFFER_BACKING":"1" if case.startswith("buffer-") else "0"}
+                 "VKD3D_SHADER_CACHE_PATH":trial,"TUXBOX_LOG":"stderr","TUXBOX_TRACE_PRESENT":"1", "TUXBOX_REQUIRE_BUFFER_IMPORT":"1" if case.startswith("buffer-") else "0", "TUXBOX_TRACE_BUFFER_BACKING":"1" if case.startswith("buffer-") or case=="root-cbv-window" else "0"}
             cmd=["bwrap","--die-with-parent","--unshare-pid","--unshare-net","--ro-bind","/","/",
                  "--dev-bind","/dev","/dev","--proc","/proc","--tmpfs","/tmp","--bind",str(trial),str(trial),
                  "--unsetenv","WAYLAND_DISPLAY","--chdir",str(trial)]
