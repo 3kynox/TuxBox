@@ -23,9 +23,12 @@ CASES = {
     "frame": ("xbox-frame", (), "xbox-frame", ("pixels=962/962",)),
     "indirect": ("d3d12-indirect", (), "d3d12-indirect", ("list=59", "words=64/64")),
     "indirect-scarlett": ("d3d12-indirect", ("--scarlett",), "d3d12-indirect", ("list=61", "words=64/64")),
+    "buffer-layout": ("d3d12-buffer-import", ("--layout",), "d3d12-buffer-layout", ("slot=133", "words=512/512", "VA-offsets=0,4")),
+    "buffer-import": ("d3d12-buffer-import", (), "d3d12-buffer-import", ("pages=2", "words=1536/1536", "passes=2", "aliases=2")),
+    "buffer-import-reject": ("d3d12-buffer-import", ("--reject",), "d3d12-buffer-import-reject", ("rejected=1",)),
     "null-usage": ("d3d12-null-usage", (), "d3d12-null-usage", ("words=64/64", "recorded=64", "valid=2")),
 }
-DEFAULT = tuple(name for name in CASES if name not in ("indirect-scarlett", "mesh"))
+DEFAULT = tuple(name for name in CASES if name not in ("indirect-scarlett", "mesh", "buffer-import", "buffer-import-reject", "buffer-layout"))
 DIGEST = hashlib.sha256(bytes.fromhex("78563412efcdab90")).hexdigest()
 
 
@@ -40,6 +43,25 @@ def validate(case, adapter, status, output):
     passes = [line for line in output.splitlines() if line.lower().startswith(prefix.lower())]
     if status or len(passes) != 1 or any(marker not in passes[0].split() for marker in markers):
         return False, None
+    if case in ("buffer-import","buffer-import-reject"):
+        # Proton may insert another diagnostic between the provider prefix
+        # and its message. Accept an exact complete body, optionally prefixed.
+        records = re.findall(r"(?m)^(?:TuxBox d3d12_xs: )?buffer backing path="
+                             r"([a-z_]+) count=([0-9]+) source=place_virtual bytes=65536$", output)
+        expected = ([("pool_open", str(i)) for i in range(1,4)]
+                    + [("pool_hit", str(i)) for i in range(1,3)]
+                    + [("imported", str(i)) for i in range(1,6)]
+                    if case == "buffer-import" else [("strict_rejected", "1")])
+        if sorted(records) != sorted(expected):
+            return False, passes[0]
+    if case == "buffer-layout":
+        records = re.findall(r"(?m)^(?:TuxBox d3d12_xs: )?buffer backing path="
+                             r"([a-z_]+) count=([0-9]+) source=place_virtual_layout bytes=([0-9]+)$", output)
+        # The host may expose different tight alignment. Require both
+        # successful imports/retries and no stand-in, regardless of padding.
+        if sorted((path, count) for path,count,_ in records) != [
+            ("commit_retry","1"), ("commit_retry","2"), ("imported","1"), ("imported","2")]:
+            return False, passes[0]
     if case == "null-usage":
         # Driver output may interleave; only accept complete exact records.
         summaries = [line.split("TuxBox d3d12_xs: ",1)[1] for line in output.splitlines()
@@ -106,7 +128,7 @@ def main(argv=None):
             env={"WINEPREFIX":trial/"prefix","WINESERVER":files/"bin/wineserver",
                  "WINEDEBUG":"-all","VKD3D_DEBUG":"warn","WINEDLLOVERRIDES":"d3d12,d3d12core,dxgi=n,b",
                  "XDG_CACHE_HOME":trial/"cache","XDG_RUNTIME_DIR":trial/"runtime","TMPDIR":trial/"tmp",
-                 "VKD3D_SHADER_CACHE_PATH":trial,"TUXBOX_LOG":"stderr","TUXBOX_TRACE_PRESENT":"1"}
+                 "VKD3D_SHADER_CACHE_PATH":trial,"TUXBOX_LOG":"stderr","TUXBOX_TRACE_PRESENT":"1", "TUXBOX_REQUIRE_BUFFER_IMPORT":"1" if case.startswith("buffer-") else "0", "TUXBOX_TRACE_BUFFER_BACKING":"1" if case.startswith("buffer-") else "0"}
             cmd=["bwrap","--die-with-parent","--unshare-pid","--unshare-net","--ro-bind","/","/",
                  "--dev-bind","/dev","/dev","--proc","/proc","--tmpfs","/tmp","--bind",str(trial),str(trial),
                  "--unsetenv","WAYLAND_DISPLAY","--chdir",str(trial)]

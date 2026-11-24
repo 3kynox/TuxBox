@@ -258,7 +258,7 @@ def build_target(tools, target, dxc, d3d12_reference=None):
         tools.link(out / "d3d12-exports.exe", exports, "d3d12_xs.lib", "kernel32.lib")
         for name, source in (("features", "feature_guest.cpp"), ("queries", "query_guest.cpp"),
                              ("queues", "queue_guest.cpp"), ("heaps", "heap_guest.cpp"),
-                             ("placement", "placement_guest.cpp"), ("copy-resource", "copy_resource_guest.cpp"),
+                             ("placement", "placement_guest.cpp"), ("buffer-import", "buffer_import_guest.cpp"), ("copy-resource", "copy_resource_guest.cpp"),
                              ("frame-events", "frame_event_guest.cpp")):
             obj = tools.compile(src / source, out, "/W4", "/WX")
             tools.link(out / f"d3d12-{name}.exe", obj, "d3d12_xs.lib", "kernel32.lib", "dxgi.lib")
