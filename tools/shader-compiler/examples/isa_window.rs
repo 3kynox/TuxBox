@@ -10,6 +10,6 @@ fn main() {
     let insns = tuxbox_dxbc::rdna2::disassemble(&ex.isa);
     let i = insns.iter().position(|x| x.offset as u32 >= at).unwrap_or(0);
     for x in &insns[i.saturating_sub(before)..(i + after).min(insns.len())] {
-        println!("{:#06x} {:24} {:?} <- {:?} imm={} mask={}", x.offset, x.mnemonic, x.dst, x.src, x.aux.imm, x.aux.mask);
+        println!("{:#06x} {:24} {:?} <- {:?} imm={} mask={} raw={:08x?}", x.offset, x.mnemonic, x.dst, x.src, x.aux.imm, x.aux.mask, x.raw);
     }
 }

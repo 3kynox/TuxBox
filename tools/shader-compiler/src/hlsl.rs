@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 
 mod code_table;
+mod wave_alloc;
 mod group_extrema;
 mod compare;
 mod uniform_texel;
@@ -396,7 +397,9 @@ struct Emitter<'a> {
     img_ty: BTreeMap<(bool, u32), u8>,
     uses_heap_sampler: bool,
     resource_heap_base: Option<u8>,
-    /// The heap base comes from compute user data (FSSM class 5); see `compute_heap_base`.
+    /// The heap base comes from FSSM user-data class 5. Compute reads that
+    /// register directly (`compute_heap_base`); mesh adds the eight system SGPRs
+    /// (`mesh_heap_base`) and then uses this same lowering.
     compute_heap: bool,
     /// The root carries TuxBox's guest-to-host heap index map (root SRV t0, space32766).
     heap_map: bool,
@@ -792,7 +795,7 @@ fn lower_local_pc_transfers(insns: &mut [Insn]) -> Result<(), String> {
 // range, restore EXEC, broadcast the atomic result and add a per-lane prefix.
 // The two register allocations differ. Match the complete regions before changing
 // a saved EXEC mask from its usual per-invocation predicate into wave-uniform data.
-fn mark_wave_allocations(insns: &mut [Insn]) -> Result<bool, String> {
+fn mark_wave_allocations(insns: &mut [Insn], wave32_mask: bool) -> Result<bool, String> {
     const REGIONS: [&[u32]; 2] = [
         &[
         0xd7650007, 0x000100c1, 0xbe8e147e, 0xbe8c047e, 0xd7660007, 0x00020ec1,
@@ -810,12 +813,27 @@ fn mark_wave_allocations(insns: &mut [Insn]) -> Result<bool, String> {
     const COUNT: usize = 18;
     let mut found = false;
     for i in 0..insns.len() {
+        // Wave32 programs keep the previous lowering unless the election verifies.
+        // Modes that model EXEC as a whole-wave mask already lower it directly.
+        if !wave32_mask && insns[i].mnemonic == "s_ff1_i32_b32" && insns[i].src == [Opnd::ExecLo] {
+            let mut trial = insns.to_vec();
+            match verify_lane_election(&mut trial, i) {
+                Ok(()) => {
+                    trial[i].mnemonic = "tb_first_active_lane".into();
+                    insns.clone_from_slice(&trial);
+                }
+                Err(e) if std::env::var_os("TB_DFDEBUG").is_some() => eprintln!("{e}"),
+                Err(_) => {}
+            }
+            continue;
+        }
         if insns[i].mnemonic != "s_ff1_i32_b64" || insns[i].src != [Opnd::ExecLo] { continue; }
         let region = i.checked_sub(1).and_then(|first| insns.get(first..first + COUNT))
-            .ok_or("incomplete wave allocation sequence")?;
-        if !REGIONS.iter().any(|words| region.iter().flat_map(|op| op.raw.iter()).eq(words.iter())) {
-            return Err(format!("unverified EXEC election at {:#x}", insns[i].offset));
-        }
+            .filter(|region| REGIONS.iter().any(|words| region.iter().flat_map(|op| op.raw.iter()).eq(words.iter())));
+        let Some(region) = region else {
+            verify_lane_election(insns, i)?;
+            continue;
+        };
         let first = region[0].offset;
         let end = region[COUNT - 1].offset + 4;
         for branch in insns.iter().filter(|b| b.enc == Enc::Sopp && Emitter::branch_cond(b.op).is_some()) {
@@ -830,6 +848,117 @@ fn mark_wave_allocations(insns: &mut [Insn]) -> Result<bool, String> {
         found = true;
     }
     Ok(found)
+}
+
+/// True when `o` may name SGPR `n` as part of a 32- or 64-bit operand.
+fn may_touch_sgpr(o: &Opnd, n: u8) -> bool {
+    matches!(*o, Opnd::Sgpr(k) if u16::from(k) + 1 >= u16::from(n) && u16::from(k) <= u16::from(n) + 1)
+}
+
+/// Whether `ins` may read SGPR `n`, by operand width: scalar 64-bit operations,
+/// vector lane-mask sources, and descriptor or address bases of memory operations.
+fn reads_sgpr(ins: &Insn, n: u8) -> bool {
+    let m = ins.mnemonic.as_str();
+    let memory = if m.starts_with("image_") { 8 }
+        else if m.starts_with("s_buffer") || m.starts_with("buffer_") || m.starts_with("tbuffer_") { 4 }
+        else if m.starts_with("s_load") || m.starts_with("global_") { 2 } else { 0 };
+    ins.src.iter().enumerate().any(|(i, o)| {
+        let Opnd::Sgpr(k) = *o else { return false };
+        let width: u16 = if memory != 0 { memory } else if m.starts_with("s_") && (m.ends_with("64") || m.contains("saveexec_b64")) { 2 }
+            else if m.starts_with("v_") && i >= 2 { 2 } else { 1 };
+        u16::from(k) <= u16::from(n) && u16::from(n) < u16::from(k) + width
+    })
+}
+
+fn branch_targets(insns: &[Insn]) -> BTreeSet<i64> {
+    insns.iter()
+        .filter(|b| b.enc == Enc::Sopp && Emitter::branch_cond(b.op).is_some())
+        .map(|b| b.offset as i64 + 4 + 4 * b.aux.imm)
+        .collect()
+}
+
+/// The last instruction before `at` that writes VGPR `v`, if no branch enters between.
+fn vgpr_def(insns: &[Insn], targets: &BTreeSet<i64>, at: usize, v: u8) -> Option<usize> {
+    for j in (0..at).rev() {
+        if targets.contains(&(insns[j + 1].offset as i64)) { return None; }
+        if insns[j].dst.contains(&Opnd::Vgpr(v)) { return Some(j); }
+    }
+    None
+}
+
+/// Verify a first-active-lane election that the generic lowering already expresses:
+/// `s_ff1_i32_b64 s, exec` (or `_b32`) compared with the full-mask `v_mbcnt` lane index. The
+/// elected lane usually adds the number of active lanes to a counter; that count
+/// reads an EXEC copy as a wave mask, so capture the copy as a ballot.
+fn verify_lane_election(insns: &mut [Insn], ff1: usize) -> Result<(), String> {
+    let at = insns[ff1].offset;
+    let bad = |what: &str| format!("unverified EXEC election at {at:#x}: {what}");
+    let Some(&Opnd::Sgpr(lane)) = insns[ff1].dst.first() else { return Err(bad("no scalar destination")) };
+    let targets = branch_targets(insns);
+    // Two-source VOP3 forms decode an unused third source; ignore it.
+    let sources = |ins: &Insn| {
+        let two = ins.mnemonic.starts_with("v_cmp_") || ins.mnemonic.starts_with("v_mbcnt_");
+        ins.src.iter().take(if two { 2 } else { usize::MAX }).cloned().collect::<Vec<_>>()
+    };
+    let cmp = (ff1 + 1..insns.len())
+        .find(|&j| sources(&insns[j]).iter().chain(&insns[j].dst).any(|o| may_touch_sgpr(o, lane)))
+        .ok_or_else(|| bad("unused lane"))?;
+    if (ff1 + 1..=cmp).any(|j| targets.contains(&(insns[j].offset as i64))) {
+        return Err(bad("branch enters the election"));
+    }
+    let c = &insns[cmp];
+    if !matches!(c.mnemonic.as_str(), "v_cmp_eq_i32" | "v_cmp_eq_u32") || c.src.get(0) != Some(&Opnd::Sgpr(lane)) {
+        return Err(bad("lane is not compared for equality"));
+    }
+    let Some(&Opnd::Vgpr(index)) = c.src.get(1) else { return Err(bad("lane is not compared with a VGPR")) };
+    let bits = if insns[ff1].mnemonic.ends_with("_b32") { "b32" } else { "b64" };
+    let full_low = |l: &Insn| l.mnemonic == "v_mbcnt_lo_u32_b32" && l.aux.mask == 0
+        && l.src.get(..2) == Some(&[Opnd::ConstInt(-1), Opnd::ConstInt(0)][..]);
+    let last = vgpr_def(insns, &targets, cmp, index).ok_or_else(|| bad("no lane index"))?;
+    let h = &insns[last];
+    // Wave32 counts the low lanes only; wave64 adds the high half.
+    let lane_index = if bits == "b32" { full_low(h) } else {
+        let Some(&Opnd::Vgpr(low)) = h.src.get(1) else { return Err(bad("lane index is not v_mbcnt")) };
+        let lo = vgpr_def(insns, &targets, last, low).ok_or_else(|| bad("no low lane count"))?;
+        h.mnemonic == "v_mbcnt_hi_u32_b32" && h.src[0] == Opnd::ConstInt(-1) && h.aux.mask == 0 && full_low(&insns[lo])
+    };
+    if !lane_index {
+        return Err(bad("lane index is not a full-mask v_mbcnt"));
+    }
+    // Inside the elected branch, an active-lane count reads an EXEC copy made earlier.
+    let Some(save) = (cmp + 1..insns.len()).find(|&j| insns[j].mnemonic == format!("s_and_saveexec_{bits}")) else { return Ok(()) };
+    let Some(&Opnd::Sgpr(saved)) = insns[save].dst.first() else { return Ok(()) };
+    let restore = (save + 1..insns.len())
+        .find(|&j| insns[j].mnemonic == format!("s_mov_{bits}") && insns[j].dst.first() == Some(&Opnd::ExecLo)
+            && insns[j].src.first() == Some(&Opnd::Sgpr(saved)))
+        .ok_or_else(|| bad("elected branch does not restore EXEC"))?;
+    for count in save + 1..restore {
+        if insns[count].mnemonic != format!("s_bcnt1_i32_{bits}") { continue; }
+        let Some(&Opnd::Sgpr(mask)) = insns[count].src.first() else { return Err(bad("count of a non-SGPR mask")) };
+        let copy = (0..count).rev()
+            .find(|&j| insns[j].dst.iter().any(|o| may_touch_sgpr(o, mask)))
+            .ok_or_else(|| bad("counted mask has no definition"))?;
+        if insns[copy].mnemonic != format!("s_mov_{bits}") || insns[copy].dst != [Opnd::Sgpr(mask)] || insns[copy].src != [Opnd::ExecLo] {
+            return Err(bad("counted mask is not an EXEC copy"));
+        }
+        let entered = (copy + 1..=count).any(|j| targets.contains(&(insns[j].offset as i64)));
+        let read = (copy + 1..count).any(|j| sources(&insns[j]).iter().any(|o| may_touch_sgpr(o, mask)));
+        // Each half not overwritten by the count must die unread.
+        let later_read = |half: u8| (count + 1..insns.len())
+            .map(|j| &insns[j])
+            .take_while(|ins| !ins.dst.iter().any(|o| *o == Opnd::Sgpr(half)
+                || *o == Opnd::Sgpr(half.wrapping_sub(1)) && (ins.mnemonic.ends_with("_b64") || ins.mnemonic.starts_with("v_cmp"))
+                || *o == Opnd::Sgpr(half) && ins.mnemonic.starts_with("s_")))
+            .any(|ins| reads_sgpr(ins, half));
+        let counted_into = |half: u8| insns[count].dst == [Opnd::Sgpr(half)];
+        let halves: &[u8] = if bits == "b32" { &[mask] } else { &[mask, mask + 1] };
+        let live = halves.iter().any(|&half| !counted_into(half) && later_read(half));
+        if entered || read || live {
+            return Err(bad(&format!("EXEC copy has other uses (entered {entered}, read {read}, live {live})")));
+        }
+        insns[copy].mnemonic = if bits == "b32" { "tb_capture_allocation_mask32" } else { "tb_capture_allocation_mask" }.into();
+    }
+    Ok(())
 }
 
 fn compute_group(ex: &ShaderExtract) -> [u32; 3] {
@@ -940,7 +1069,8 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     let fspx_wave = fspx_wave::width(ex, &insns);
     let wave_cull = fspx_wave.is_some() || hair_multisample || wave_cull::recognize(ex);
     let page_waves = page_waves::recognize(ex);
-    let allocation_wave64 = !wave_cull && !page_waves && mark_wave_allocations(&mut insns)?;
+    let allocation_wave64 = !wave_cull && !page_waves && mark_wave_allocations(&mut insns, resolve_wave32)?;
+    if ex.stage == Stage::Pixel { wave_alloc::prepare(&mut insns); }
     let reflection = reflection_compact::prepare(ex, &mut insns);
     let group_extrema = group_extrema::prepare(ex, &mut insns);
     let required_wave_size = if wave_cull {
@@ -3678,6 +3808,14 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 self.line("GroupMemoryBarrierWithGroupSync();");
                 return Ok(());
             }
+            "tb_first_active_lane" => {
+                let dst = d.ok_or("missing elected lane register")?;
+                return self.ws(&dst, "WaveActiveMin((exec_lo & 1u) ? WaveGetLaneIndex() : 0xffffffffu)");
+            }
+            "tb_capture_allocation_mask32" => {
+                let dst = d.ok_or("missing mask register")?;
+                return self.ws(&dst, "WaveActiveBallot((exec_lo & 1u) != 0u).x");
+            }
             "tb_capture_allocation_mask" => {
                 let dst = d.ok_or("missing mask register")?;
                 let upper = hi(&dst);
@@ -3695,6 +3833,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             _ => {}
         }
+        if wave_alloc::emit(self, ins)? { return Ok(()); }
         if hair_cluster::emit(self, ins) { return Ok(()); }
         if hair_cluster_export::emit(self, ins) { return Ok(()); }
         if m == "tb_hidden_instance" {
@@ -5594,6 +5733,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 let a = if self.packed.as_ref().is_some_and(|p| p.scan_width == Some(64))
                     && matches!(s[0], Opnd::VccLo | Opnd::VccHi) {
                     format!("WaveActiveBallot((vcc_lo & 1u) != 0u).{}", if s[0] == Opnd::VccLo { "x" } else { "y" })
+                } else if matches!(s[0], Opnd::ExecLo | Opnd::ExecHi) && !self.resolve_wave32 {
+                    // Each invocation holds only its own EXEC bit; the guest reads the wave mask.
+                    format!("WaveActiveBallot((exec_lo & 1u) != 0u).{}", if s[0] == Opnd::ExecLo { "x" } else { "y" })
                 } else { a };
                 self.line(&format!("uint t{t} = countbits({a} & {});", low_mask(lane)));
                 self.line("#else");
@@ -7690,6 +7832,30 @@ fn compute_user_sgpr(ex: &ShaderExtract, class: u32) -> Option<u8> {
         return None;
     }
     u8::try_from(loc & 0xff).ok()
+}
+
+/// Mesh shaders index the resource descriptor heap through one FSSM class-5
+/// dword. User data sits above the eight system SGPRs, so the hardware register
+/// is `(location & 0xff) + 8`. The row is the shape captured on every mesh
+/// launch that failed only on this register: class 5, offset 0, width 1.
+fn mesh_heap_base(ex: &ShaderExtract) -> Option<u8> {
+    if ex.stage != Stage::Mesh || ex.required_features? & (1 << 25) == 0 {
+        return None;
+    }
+    let root = ex.root_sig.as_ref()?;
+    // Root flag 0x400 is RESOURCE_HEAP_DIRECTLY_INDEXED.
+    if root.flags & 0x400 == 0 {
+        return None;
+    }
+    let mut rows = tuxbox_dxbc::compute_table::user_data_records(&ex.fssm)?
+        .filter(|&[class, ..]| class == 5);
+    let Some([5, 0, 1, 0, loc]) = rows.next() else {
+        return None;
+    };
+    if rows.next().is_some() {
+        return None;
+    }
+    u8::try_from(loc & 0xff).ok()?.checked_add(8)
 }
 
 /// Compute shaders that index the resource descriptor heap receive its base in
