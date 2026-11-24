@@ -29,6 +29,8 @@ mod mubuf_offsets;
 #[cfg(test)]
 mod raw_width;
 #[cfg(test)]
+mod raw_idxen;
+#[cfg(test)]
 mod wide_atomic_test;
 #[cfg(test)]
 mod heap_resinfo;
@@ -6255,13 +6257,26 @@ uint tb_fmac_half(uint a, uint b, uint c) {
     }
 
     /// Resolve a raw buffer's byte address before any overlapping VGPR is overwritten.
-    /// OFFEN and SOFFSET are byte offsets. IDXEN uses the runtime descriptor stride,
-    /// which the PSV raw declaration does not encode.
+    ///
+    /// OFFEN and SOFFSET are byte offsets. A raw descriptor's stride is one byte,
+    /// the same stride a shader writes when it builds that descriptor and the size
+    /// recorded for a raw binding, so IDXEN is a byte offset too. With both enables
+    /// the first address VGPR is the index and the next is the byte offset.
     fn raw_address(&mut self, ins: &Insn) -> Result<String, String> {
-        if ins.aux.mask & 2 != 0 {
-            return Err("raw buffer IDXEN needs the console descriptor stride".into());
-        }
-        let vector = if ins.aux.mask & 1 != 0 { r(&ins.src[0])? } else { "0u".to_string() };
+        let offen = ins.aux.mask & 1 != 0;
+        let idxen = ins.aux.mask & 2 != 0;
+        let vector = if idxen && offen {
+            let Opnd::Vgpr(base) = ins.src[0] else {
+                return Err("raw buffer index needs a VGPR".into());
+            };
+            let offset = Opnd::Vgpr(base.checked_add(1).ok_or("raw buffer address register overflow")?);
+            self.touch(&offset);
+            format!("({}) + ({})", r(&ins.src[0])?, r(&offset)?)
+        } else if idxen || offen {
+            r(&ins.src[0])?
+        } else {
+            "0u".to_string()
+        };
         let address = format!("raw_addr{}", self.tmp);
         self.tmp += 1;
         self.line(&format!("uint {address} = {vector} + {} + {}u;", r(&ins.src[2])?, ins.aux.imm));
