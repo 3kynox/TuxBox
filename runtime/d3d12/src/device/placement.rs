@@ -456,6 +456,16 @@ impl Placements {
             .find_map(|alias| alias.texture.upgrade())
     }
 
+    /// Placed image whose guest range contains `[address, address + bytes)`.
+    pub(super) fn covering(&self, address: u64, bytes: u64) -> Option<Arc<Texture>> {
+        let end = address.checked_add(bytes)?;
+        let images = lock(&self.memory.images.0);
+        let (_, aliases) = images.range(..=address).next_back()?;
+        aliases.iter().filter_map(|alias| alias.texture.upgrade()).filter(|texture| {
+            texture.address <= address && end <= texture.address.saturating_add(texture.size)
+        }).min_by_key(|texture| texture.size)
+    }
+
     pub(super) fn texture(
         &self,
         device: &ID3D12Device,

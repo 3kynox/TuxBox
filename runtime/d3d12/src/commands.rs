@@ -22,6 +22,7 @@ mod depth;
 mod enhanced;
 mod descriptors;
 mod graphics;
+mod linear_upload;
 mod media;
 mod memory_wait;
 pub(crate) mod page_mapping;
@@ -53,6 +54,8 @@ struct Recording {
     media: Option<media::Recording>,
     placed_reads: Vec<Arc<Texture>>,
     placed_writes: Vec<Arc<Texture>>,
+    /// CPU bytes copied into upload heaps at ExecuteCommandLists.
+    uploads: Vec<linear_upload::Pending>,
     bound_placed_targets: Vec<Arc<Texture>>,
     resource_heap: Option<descriptors::ResourceHeap>,
     descriptor_arena: Option<Arc<device::descriptor_paging::Arena>>,
@@ -68,6 +71,13 @@ impl Recording {
         if !accesses.iter().any(|known| Arc::ptr_eq(known, texture)) {
             accesses.try_reserve(1).map_err(|_| E_OUTOFMEMORY)?;
             accesses.push(Arc::clone(texture));
+        }
+        Ok(())
+    }
+
+    fn snapshot_uploads(&self) -> Result<(), HRESULT> {
+        for upload in &self.uploads {
+            upload.snapshot().map_err(|error| error.code())?;
         }
         Ok(())
     }
@@ -394,6 +404,7 @@ unsafe extern "system" fn reset(
         )
     };
     if hr.is_ok() {
+        state.uploads.clear();
         state.phase = ListState::Open;
         state.resources = allocator.state.clone();
         state.timestamp_page = None;
@@ -1143,6 +1154,10 @@ static LIST_SLOTS: Slots<149> = {
     slots[54] = crate::slot!(depth::clear_uav::<true>);
     slots[55] = crate::slot!(discard);
     slots[59] = crate::slot!(execute_indirect);
+    // Scarlett video upload, title RVA 0x979650. The CPU buffer is filled
+    // after this returns, so the bytes are snapshotted at execute. Device11
+    // and extended lists copy this table.
+    slots[62] = crate::slot!(linear_upload::linear_upload);
     slots[67] = crate::slot!(flush_texture_cache);
     slots[68] = crate::slot!(graphics::depth_bounds);
     slots[71] = crate::slot!(write_marker);
@@ -1237,6 +1252,9 @@ unsafe fn execute_batch(queue: &Queue, count: u32, lists: *const *mut c_void, fr
         return;
     }
     let guest = unsafe { slice::from_raw_parts(lists, count as usize) };
+    // Mirrors exist only when a constant-buffer import failed. The count is
+    // zero for every boot that has not hit that path.
+    crate::device::snapshot_cbv_mirrors();
     let mut list_index = 0;
     let trace_samples = std::cell::RefCell::new(Vec::new());
     let result = translate_batch(
@@ -1271,6 +1289,7 @@ unsafe fn execute_batch(queue: &Queue, count: u32, lists: *const *mut c_void, fr
                     return Err(E_INVALIDARG);
                 }
             }
+            state.snapshot_uploads()?;
             splits.try_reserve(state.prefix.segments.len()).map_err(|_| E_OUTOFMEMORY)?;
             splits.extend(state.prefix.segments.iter().map(|s| (list_index, s.clone())));
             list_index += 1;
@@ -1601,6 +1620,7 @@ pub(crate) unsafe fn wrap_command_list(
             null_pipeline: false,
             placed_reads: Vec::new(),
             placed_writes: Vec::new(),
+            uploads: Vec::new(),
             bound_placed_targets: Vec::new(),
             resource_heap: None,
             descriptor_arena: None,
