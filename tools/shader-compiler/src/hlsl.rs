@@ -26,6 +26,7 @@ mod compare;
 mod uniform_texel;
 mod pixel_quad;
 mod mubuf_offsets;
+mod code_offset;
 mod scalar_bits;
 #[cfg(test)]
 mod raw_width;
@@ -3070,7 +3071,8 @@ impl<'a> Emitter<'a> {
                     // Read from an embedded constant table.
                     let n = 1u32 << ins.op;
                     let d = ins.dst.first().and_then(sg).ok_or("s_load: bad dst")?;
-                    if self.static_smem_offset(ins).is_none() {
+                    if self.static_smem_offset(ins).is_none()
+                        && self.dynamic_code_offset(idx).is_none() {
                         return Err(format!("s_load at {:#x}: code-table read with dynamic soffset unsupported", ins.offset));
                     }
                     self.uses_code = true;
@@ -4834,10 +4836,19 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                         let ndw = ((self.ex.isa_data.len().saturating_sub(self.ex.isa.len())) / 4).max(1);
                         let t = self.tmp;
                         self.tmp += 1;
-                        let offset = self.static_smem_offset(ins).ok_or("unverified code-table offset")?;
-                        self.line(&format!("uint t{t} = ({} + {offset:#x}u) >> 2;", r(&s[0])?));
-                        for k in 0..n {
-                            self.line(&format!("uint t{t}_{k} = tb_code[(t{t} + {k}u - {}u) % {ndw}u];", self.ex.isa.len() / 4));
+                        if let Some(offset) = self.static_smem_offset(ins) {
+                            self.line(&format!("uint t{t} = ({} + {offset:#x}u) >> 2;", r(&s[0])?));
+                            for k in 0..n {
+                                self.line(&format!("uint t{t}_{k} = tb_code[(t{t} + {k}u - {}u) % {ndw}u];", self.ex.isa.len() / 4));
+                            }
+                        } else {
+                            let reg = self.dynamic_code_offset(idx).ok_or("unverified dynamic code-table offset")?;
+                            let offset = Opnd::Sgpr(reg);
+                            self.touch(&offset);
+                            self.line(&format!("uint t{t} = ({} + {} + {:#x}u - {}u) >> 2;", r(&s[0])?, r(&offset)?, ins.aux.imm, self.ex.isa.len()));
+                            for k in 0..n {
+                                self.line(&format!("uint t{t}_{k} = tb_code[t{t} + {k}u];"));
+                            }
                         }
                         for k in 0..n {
                             let dst = sreg_opnd(base + k as u8);
@@ -6590,6 +6601,13 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
         }
         Ok(())
+    }
+
+    fn dynamic_code_offset(&self, idx: usize) -> Option<u8> {
+        if self.ex.stage != Stage::Compute || self.packed.is_some() || self.mesh_bindings.is_some() {
+            return None;
+        }
+        code_offset::prove(&self.insns, idx, self.ex.isa.len(), self.ex.isa_data.len())
     }
 
     fn static_smem_offset(&self, ins: &Insn) -> Option<u32> {
