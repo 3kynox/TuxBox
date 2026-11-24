@@ -17,6 +17,7 @@ except ImportError:
 
 from project_tuxbox.backend_log import check_log_path
 from project_tuxbox.game_log import game_log
+from project_tuxbox.graphics_profile import PROFILES, graphics_profile
 from project_tuxbox.host import Host
 from project_tuxbox.inspect import binary_file, image, launch_target, package, package_root
 from project_tuxbox.d3d12_status import d3d12_table
@@ -30,11 +31,24 @@ def launch_game(args):
     exe = launch_target(args.target.expanduser(), args.app_id)
     package_dir = package_root(args.target.expanduser(), exe)
     host = Host(args.backend, args.proton, args.prefix)
+    if not (args.graphics_menu or args.graphics_profile):
+        return run_game(args, exe, host)
+    if args.prepare_only:
+        raise ValueError("Graphics profiles apply to a game launch")
+    with graphics_profile(exe, host, args.graphics_profile, menu=args.graphics_menu) as profile:
+        if profile is None:
+            return 0
+        return run_game(args, exe, host, profile)
+
+
+def run_game(args, exe, host, profile=None):
     if args.log_file:
         check_log_path(host.backend, host.env, exe.parent, args.log_file.expanduser().resolve())
     with game_log(exe, args.log_file) as log:
         log.status(f"{exe.name} on {host.backend} ({host.version})")
         log.status(f"Executable: {exe}")
+        if profile:
+            log.status(f"Graphics profile: {profile}")
         if host.backend in ("wine", "proton"):
             log.status(f"Prefix: {host.env['WINEPREFIX']}")
         try:
@@ -79,6 +93,9 @@ def main():
                      help="show Vulkan performance metrics and record frame times beside the game log on Linux")
     run.add_argument("--profile-pipelines", action="store_true",
                      help="record vkd3d-proton pipeline creation times and keys beside the game log")
+    graphics = run.add_mutually_exclusive_group()
+    graphics.add_argument("--graphics-menu", action="store_true", help="choose a Project Scarlett graphics profile")
+    graphics.add_argument("--graphics-profile", choices=PROFILES, help="select a Project Scarlett graphics profile")
     preparation = run.add_mutually_exclusive_group()
     preparation.add_argument("--prepare-only", action="store_true", help="prepare supported shader caches and exit")
     preparation.add_argument("--no-shader-prep", action="store_true", help="skip shader preparation for this launch")

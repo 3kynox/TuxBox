@@ -16,6 +16,12 @@ Many calls an Xbox Series game makes already work through standard Windows APIs.
 
 **GTA VI (ProjectScarlett)** shows the player selection prompt at 3840×2160 on stock Proton Experimental. [Title progress](docs/PROGRESS.md)
 
+### Project Scarlett graphics trials
+
+On Linux, put `--graphics-menu` before the game path to choose the packaged settings or experimental Series S mode. Use `--graphics-profile series-s` to select it from a script. Series S mode uses Bubblewrap and a temporary copy of the Wine prefix. The copy is discarded at exit.
+
+The Series S trial requested a 1920×1080 render resource and stopped on a texture allocation before presenting. Use the packaged settings for the current playable startup path.
+
 ## Shader preparation
 
 On Linux, the launcher prepares shaders before opening Frosty and ProjectScarlett. Frosty uses a profile of its game files. ProjectScarlett records the shaders the game requests and prepares them before subsequent launches. New shaders can still compile as the game encounters them.
