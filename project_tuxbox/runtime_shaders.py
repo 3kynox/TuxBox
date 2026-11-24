@@ -154,7 +154,8 @@ def compile_request(source, key, tools, cache, session, *, remember=None):
             # Large skinning and edge-emit programs spend minutes in DXC's
             # optimiser. Unoptimised DXIL compiles in seconds, and the driver
             # optimises it again when it builds the pipeline.
-            run_tool([dxc, "-T", target, *entry, "-O0", "-Fo", output, hlsl], timeout=120)
+            output.unlink(missing_ok=True)
+            run_tool([dxc, "-T", target, *entry, "-O0", "-Fo", output, hlsl], timeout=15)
         run_tool([dxv, output], timeout=10)
         if not has_dxil_container(output.read_bytes()):
             raise ValueError("compiler returned an invalid DXIL container")
