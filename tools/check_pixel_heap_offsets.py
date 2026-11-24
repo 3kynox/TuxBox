@@ -36,7 +36,7 @@ def main(argv=None):
     with TemporaryDirectory(dir=a.work) as tmp:
         trial=Path(tmp)
         sources={"vertex":"float4 main(uint id:SV_VertexID):SV_Position { return float4(id==2?3:-1,id==1?3:-1,0.5,1); }"}
-        for v in ("scalar","copy","inplace"):
+        for v in ("scalar","copy","inplace","branch","loop"):
             sources[v]=subprocess.check_output([a.emitter,v],text=True,timeout=15)
         for name,source in sources.items():
             hlsl=trial/(name+".hlsl");hlsl.write_text(source)
@@ -44,13 +44,13 @@ def main(argv=None):
             subprocess.run([a.dxc,"-T","vs_6_0" if name=="vertex" else "ps_6_6","-E","main","-O3","-Fo",blob,hlsl],check=True,timeout=30)
             subprocess.run([a.dxv,blob],check=True,timeout=30)
             shaders[name]=sha(blob)
-        cases=[(f"{variant}_{tex}_{samp}",variant,tex,samp) for variant in ("scalar","copy","inplace") for tex in (0,1) for samp in (0,1)]
+        cases=[(f"{variant}_{tex}_{samp}",variant,tex,samp) for variant in ("scalar","copy","inplace","branch","loop") for tex in (0,1) for samp in (0,1)]
         (trial/"cases.txt").write_text("".join(f"{n} {v} {t} {s}\n" for n,v,t,s in cases))
         exe,status,fields=run_gpu_guest(ROOT/"tools/reference/independent-shaders/heap_offsets.cpp",
                 "pixel-heap-offsets.exe",trial,a.work,a.proton,a.prefix,a.provider,a.compiler_dir,
                 extra_env={"TUXBOX_NULL_PIPELINES":"0"})
         for n,v,t,s in cases:
-            want=expected(t,s);path=trial/(n+".bin")
+            want=expected(1-t if v=="loop" else s if v=="branch" and s else t,s);path=trial/(n+".bin")
             data=path.read_bytes() if path.is_file() else b""
             row=dict(case=n,texture=t,sampler=s,matched=data==want)
             if data==want:row["readback_sha256"]=sha(path)
