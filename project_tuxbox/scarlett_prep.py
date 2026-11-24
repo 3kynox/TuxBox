@@ -2,6 +2,7 @@
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
+import json
 from pathlib import Path
 import re
 import subprocess
@@ -12,6 +13,7 @@ from .inspect import digest
 from .prep_progress import PrepPhase, desktop_progress, report_progress
 from .runtime_shaders import REQUEST_PATTERNS, ShaderRefused, compile_request, snapshot_compiler_cache
 from .shader_prep import SOURCE_CACHE
+from .scarlett_report import aggregate, refusal_bucket, failure_bucket
 
 
 def scarlett_requests(executable, cache):
@@ -38,6 +40,7 @@ def prepare_scarlett(executable, host):
 
     started = monotonic()
     totals = Counter()
+    refusal_counts, failure_counts, request_counts = Counter(), Counter(), Counter()
     # Use the runtime toolchain and cache so the guest can load both translations
     # and deterministic refusals directly, including requests with a pipeline root.
     env = {"TUXBOX_SHADER_PREP_UI": "1", **host.env}
@@ -49,18 +52,23 @@ def prepare_scarlett(executable, host):
         def compile_one(source):
             try:
                 compiled = compile_request(source, source.stem, tools, cache, None)
-                return ("compiled" if compiled else "cached"), None
-            except ShaderRefused:
-                return "unsupported", None
+                return ("compiled" if compiled else "cached"), None, None, source.suffix
+            except ShaderRefused as exc:
+                return "unsupported", None, refusal_bucket(exc), source.suffix
             except (OSError, ValueError, subprocess.SubprocessError) as exc:
-                return "failed", f"{source.name}: {exc}"
+                return "failed", f"{source.name}: {exc}", failure_bucket(exc), source.suffix
 
         workers = ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 1))
         try:
             pending = [workers.submit(compile_one, source) for source in sources]
             for completed, result in enumerate(as_completed(pending), 1):
-                category, error = result.result()
+                category, error, bucket, suffix = result.result()
                 totals[category] += 1
+                request_counts[suffix] += 1
+                if category == "unsupported":
+                    refusal_counts[bucket] += 1
+                elif category == "failed":
+                    failure_counts[bucket] += 1
                 if error and totals["failed"] <= 3:
                     report_progress(progress, f"ProjectScarlett shader preparation: {error}", completed, len(sources))
                 phase.update(completed, totals["compiled"], unsupported=totals["unsupported"], failed=totals["failed"])
@@ -71,4 +79,7 @@ def prepare_scarlett(executable, host):
         report_progress(progress, f"ProjectScarlett shader preparation took {elapsed:.1f}s. "
                         f"{totals['compiled']} compiled, {totals['cached']} cached, "
                         f"{totals['unsupported']} unsupported, {totals['failed']} failed.", 1, 1)
+        receipt = aggregate(totals, refusal_counts, failure_counts, request_counts)
+        report_progress(None, "ProjectScarlett preparation aggregate: " +
+                        json.dumps(receipt, sort_keys=True, separators=(",", ":")))
     return True
