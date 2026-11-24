@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 
 
 ROOT = Path(__file__).resolve().parent
@@ -12,7 +13,7 @@ OUTPUT = ROOT / "build"
 TARGETS = ("bvh", "route", "graphics", "xmem", "acphal", "xapu", "xgameruntime", "xcrdapi", "dxc-utils", "xg", "gameinput",
            "d3d12", "lanes")
 # rustc --print native-static-libs for the Windows MSVC target with +crt-static.
-RUST_STD_LIBS = ("kernel32.lib", "ntdll.lib", "userenv.lib", "ws2_32.lib", "dbghelp.lib",
+RUST_STD_LIBS = ("kernel32.lib", "ntdll.lib", "userenv.lib", "ws2_32.lib", "dbghelp.lib", "synchronization.lib",
                  "/defaultlib:libcmt")
 
 
@@ -76,16 +77,32 @@ class Toolchain:
         print(output, flush=True)
 
 
+def check_dxc(dxc):
+    # Some distribution builds abort on every shader, so try a trivial one before the guest build needs it.
+    with tempfile.TemporaryDirectory(prefix="tuxbox-dxc-") as tmp:
+        source = Path(tmp) / "probe.hlsl"
+        source.write_text("RWStructuredBuffer<uint> r : register(u0);\n"
+                          "[numthreads(1, 1, 1)] void main(uint3 i : SV_DispatchThreadID) { r[i.x] = i.x; }\n")
+        run = subprocess.run([dxc, "-T", "cs_6_0", "-E", "main", "-Fo", str(source.with_suffix(".cso")), str(source)],
+                             capture_output=True, text=True)
+    if run.returncode != 0:
+        detail = (run.stderr or run.stdout).strip().splitlines()
+        raise ValueError(f"{dxc} could not compile a minimal compute shader (exit {run.returncode}"
+                         f"{': ' + detail[0] if detail else ''}). Use a Microsoft DXC release with --dxc PATH or DXC. "
+                         "https://github.com/microsoft/DirectXShaderCompiler/releases")
+    return dxc
+
+
 def find_dxc(override):
     if override or os.environ.get("DXC"):
         requested = Path(override or os.environ["DXC"]).expanduser()
-        return require_tool(requested.resolve() if requested.is_file() else requested)
+        return check_dxc(require_tool(requested.resolve() if requested.is_file() else requested))
     installed = shutil.which("dxc")
     if installed:
-        return installed
+        return check_dxc(installed)
     local = OUTPUT / "d3d12-smoke/toolchain/bin" / ("dxc.exe" if os.name == "nt" else "dxc")
     if local.is_file():
-        return require_tool(local)
+        return check_dxc(require_tool(local))
     raise ValueError("Install DirectX Shader Compiler (dxc), set DXC, or pass --dxc PATH")
 
 
