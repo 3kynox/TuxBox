@@ -1,6 +1,21 @@
 import unittest
+from unittest import mock
 
-from project_tuxbox.verify import lanes_imports
+from project_tuxbox.verify import lanes_imports, screen_capture_problem
+
+
+class ScreenCaptureTests(unittest.TestCase):
+    def test_only_an_x_display_on_linux_is_probed(self):
+        with mock.patch("project_tuxbox.verify.ctypes.CDLL") as load:
+            with mock.patch("project_tuxbox.verify.sys.platform", "win32"):
+                self.assertIsNone(screen_capture_problem(display=":0"))
+            with mock.patch("project_tuxbox.verify.sys.platform", "linux"):
+                self.assertIsNone(screen_capture_problem(display=""))
+            load.assert_not_called()
+
+    def test_a_missing_xlib_leaves_the_guest_check_to_report(self):
+        with mock.patch("project_tuxbox.verify.sys.platform", "linux"):
+            self.assertIsNone(screen_capture_problem(display=":0", library="/nonexistent/libX11.so"))
 
 
 class LanesImportsTests(unittest.TestCase):

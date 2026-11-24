@@ -1,6 +1,9 @@
 """Behavioral gates for the project-owned guest fixtures."""
+import ctypes
+import ctypes.util
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import platform
 import statistics
@@ -45,6 +48,55 @@ def lanes_imports(pe):
     if unexpected:
         raise ValueError(f"Lanes imports a library outside its Xbox title profile: {', '.join(unexpected)}")
     return modules
+
+
+ROOTLESS_X = ("the X server refuses to read its root window (rootless XWayland), so screen samples "
+              "read 0; run the present suite under xvfb-run or a rootful Xwayland")
+
+
+def screen_capture_problem(display=None, library=None):
+    """Why the present checks cannot sample the screen on this host, or None.
+
+    Wine backs GetDC(nullptr)/GetPixel with the X root window. The rootless XWayland of a
+    Plasma or GNOME Wayland session rejects GetImage on that window with BadMatch, so every
+    sample reads 0 even though the frames are presented. Only that refusal is reported;
+    anything else is left for the guest check to report.
+    """
+    display = os.environ.get("DISPLAY") if display is None else display
+    if not sys.platform.startswith("linux") or not display:
+        return None
+    try:
+        x11 = ctypes.CDLL(library or ctypes.util.find_library("X11") or "libX11.so.6")
+    except OSError:
+        return None
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XDefaultRootWindow.restype = ctypes.c_ulong
+    x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+    x11.XGetImage.restype = ctypes.c_void_p
+    x11.XGetImage.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int,
+                              ctypes.c_uint, ctypes.c_uint, ctypes.c_ulong, ctypes.c_int]
+    x11.XDestroyImage.argtypes = [ctypes.c_void_p]
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    handler_type = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
+    x11.XSetErrorHandler.restype = ctypes.c_void_p
+    x11.XSetErrorHandler.argtypes = [handler_type]
+    errors = []
+    # Xlib's default handler exits the process; record the error instead.
+    handler = handler_type(lambda _display, _event: errors.append(1) or 0)
+    connection = x11.XOpenDisplay(display.encode())
+    if not connection:
+        return None
+    previous = x11.XSetErrorHandler(handler)
+    try:
+        image = x11.XGetImage(connection, x11.XDefaultRootWindow(connection), 0, 0, 1, 1,
+                              0xFFFFFFFF, 2)  # ZPixmap
+        if image:
+            x11.XDestroyImage(image)
+    finally:
+        x11.XCloseDisplay(connection)
+        x11.XSetErrorHandler(ctypes.cast(previous, handler_type) if previous else handler_type())
+    return ROOTLESS_X if errors else None
 
 
 def verify(host, output, adapter, selected=None, samples=1):
@@ -116,6 +168,12 @@ def verify(host, output, adapter, selected=None, samples=1):
             except (OSError, ValueError, subprocess.TimeoutExpired) as error:
                 row["error"] = str(error)
             print(f"{'PASS' if row['passed'] else 'FAIL'}  {name}", flush=True)
+            return row
+
+        def unsampled(name, reason):
+            row = {"gate": name, "passed": False, "error": f"screen capture unavailable: {reason}"}
+            cases.append(row)
+            print(f"FAIL  {name}  ({row['error']})", flush=True)
             return row
 
         if "cpu" in selected:
@@ -298,16 +356,19 @@ def verify(host, output, adapter, selected=None, samples=1):
                   rf"xbox-frame-negative PASS pci={pci} foreign-parents=2 copy-errors=2 recovered=1 rejected-batches=3 compute-present-rejected=1",
                   providers=frame_provider, device_factory="xbox")
         if "present" in selected:
-            check("guest-present", "d3d12-smoke/xbox-frame.exe", [*gpu_args, "--present", "--report"],
-                  frame_match + r" displayed=2/2", providers=frame_provider, device_factory="xbox")
-            check("guest-present-rgb10", "d3d12-smoke/xbox-frame-rgb10.exe", [*gpu_args, "--present", "--report"],
-                  frame_match + r" format=rgb10a2 displayed=2/2", providers=frame_provider, device_factory="xbox")
+            # Fail fast with the cause instead of five timed-out all-zero screen samples.
+            capture = screen_capture_problem()
+            present = check if capture is None else (lambda name, *_args, **_kwargs: unsampled(name, capture))
+            present("guest-present", "d3d12-smoke/xbox-frame.exe", [*gpu_args, "--present", "--report"],
+                    frame_match + r" displayed=2/2", providers=frame_provider, device_factory="xbox")
+            present("guest-present-rgb10", "d3d12-smoke/xbox-frame-rgb10.exe", [*gpu_args, "--present", "--report"],
+                    frame_match + r" format=rgb10a2 displayed=2/2", providers=frame_provider, device_factory="xbox")
             for mode in ("owned", "oversized", "fit"):
-                check(f"guest-present-4k-{mode}", "d3d12-smoke/xbox-frame-4k.exe",
-                      [mode, *gpu_args, "--present", "--report"],
-                      rf"xbox-frame PASS pci={pci} submissions=2 snapshots=2 pixels=16588800/16588800 "
-                      r"inset=921600 guards=3 fence=2 compute_fence=7 format=rgb10a2 displayed=2/2 "
-                      r"client=\d+x\d+ origin=-?\d+,-?\d+ monitor=\d+x\d+", providers=frame_provider, device_factory="xbox")
+                present(f"guest-present-4k-{mode}", "d3d12-smoke/xbox-frame-4k.exe",
+                        [mode, *gpu_args, "--present", "--report"],
+                        rf"xbox-frame PASS pci={pci} submissions=2 snapshots=2 pixels=16588800/16588800 "
+                        r"inset=921600 guards=3 fence=2 compute_fence=7 format=rgb10a2 displayed=2/2 "
+                        r"client=\d+x\d+ origin=-?\d+,-?\d+ monitor=\d+x\d+", providers=frame_provider, device_factory="xbox")
         if "lanes" in selected:
             check("lanes-xbox-replay", "lanes/lanes.exe", ["--replay", *gpu_args, "--report"],
                   rf"lanes-replay PASS pci={pci} course=16/16 win=16/16 safe-miss=1 collision=1 frames=2 input=gameinput",
