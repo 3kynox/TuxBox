@@ -38,6 +38,8 @@ mod wide_atomic_test;
 mod heap_resinfo;
 #[cfg(test)]
 mod compute_swizzle;
+#[cfg(test)]
+mod sat_pk_u8_i16;
 mod fssm_bindings;
 mod micropoly;
 mod mesh;
@@ -6427,6 +6429,11 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             // Round toward zero (ISA: "ignore the current rounding mode"): finite values never
             // become infinity (|x| >= 65504 gives 65504).
             "v_cvt_pkrtz_f16_f32" => format!("(tb_f16_rtz({}) | (tb_f16_rtz({}) << 16))", fa()?, fb()?),
+            // Pack two signed 16-bit ints from the source into two unsigned 8-bit bytes in
+            // the low 16 bits of the destination (high 16 bits cleared). ISA: V_SAT_PK_U8_I16.
+            "v_sat_pk_u8_i16" => format!(
+                "((uint)clamp(asint({a} << 16) >> 16, 0, 255) | ((uint)clamp(asint({a}) >> 16, 0, 255) << 8))"
+            ),
             _ => return Err("unsupported vector op".into()),
         };
         self.wv(&d, &e)
