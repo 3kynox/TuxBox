@@ -83,6 +83,23 @@ class ProgressMapTests(unittest.TestCase):
                          render_map(root / "evidence"),
                          "Regenerate the map with python tuxbox.py status --svg docs/progress.svg")
 
+    def test_projectscarlett_shader_panel_uses_matching_capture_counts(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "projectscarlett-startup.json").write_text(json.dumps({"executable_sha256": "title"}))
+            report = root / "projectscarlett-shader-preparation.json"
+            run = {"executable_sha256": "title", "compiler_sha256": "compiler", "log_sha256": "log",
+                   "requests": {"total": 8, "compiled": 3, "unsupported": 4, "failed": 1}}
+            report.write_text(json.dumps(run))
+            graphic = render_map(root)
+            self.assertIn("3/8 captured requests compiled", graphic)
+            self.assertIn("4 unsupported · 1 failed", graphic)
+            self.assertIn(">37.5%<", graphic)
+            self.assertIn(">Unmeasured<", graphic)
+            for changed in (dict(executable_sha256="other"), dict(requests=dict(run["requests"], total=7))):
+                report.write_text(json.dumps(dict(run, **changed)))
+                self.assertNotIn(">Project Scarlett shader preparation<", render_map(root))
+
     def write_library_audit(self, root):
         dest = root / "matrix-awakens"
         dest.mkdir()

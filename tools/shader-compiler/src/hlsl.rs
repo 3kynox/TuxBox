@@ -3221,12 +3221,29 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             let mut active: Vec<usize> =
                 labels.iter().copied().filter(|&t| t > i && target.iter().any(|(&b, &bt)| bt == t && b < i)).collect();
             if self.page_waves || self.hoist_wave_exchanges {
-                let exchange = if self.page_waves { page_waves::rendezvous(i, ins)? } else { wave_cull::exchange(i, ins)? };
+                let exchange = if self.page_waves {
+                    page_waves::rendezvous(i, ins)?
+                } else {
+                    wave_cull::exchange(i, ins, self.ex.stage == Stage::Mesh)?
+                };
                 if let Some(code) = exchange {
                     if open { self.line("}"); open = false; }
                     cur.clear();
                     self.line(&code);
                 }
+            }
+            let mesh_condition = self.hoist_wave_exchanges && self.ex.stage == Stage::Mesh
+                && (ins.src.contains(&Opnd::Scc)
+                    || matches!(ins.mnemonic.as_str(), "s_cbranch_scc0" | "s_cbranch_scc1"
+                        | "s_cselect_b32" | "s_cselect_b64" | "s_addc_u32" | "s_subb_u32"
+                        | "s_cmov_b32" | "s_cmov_b64" | "s_cmovk_i32"));
+            if mesh_condition {
+                // Mask operations set SCC if any bit in the guest wave is
+                // set. Vote outside the forward branch guards so that every
+                // workgroup invocation reaches the barriers.
+                if open { self.line("}"); open = false; }
+                cur.clear();
+                self.line(&format!("uint2 mesh_scc{i} = tb_page_ballot(tb_wave_tid, scc != 0u);"));
             }
             // Exited guest waves no longer count towards S_BARRIER. Their host
             // threads still belong to the group and must participate in the HLSL
@@ -3305,6 +3322,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             for o in ins.src.iter().chain(ins.dst.iter()) {
                 self.touch(o);
+            }
+            if mesh_condition {
+                self.line(&format!("scc = uint(any(mesh_scc{i}));"));
             }
             if lds_waits.contains(&i) && !restored_waits.contains(&i) {
                 self.line("GroupMemoryBarrierWithGroupSync();");

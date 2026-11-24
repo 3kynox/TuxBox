@@ -50,7 +50,7 @@ Run `python tuxbox.py inspect /path/to/game` to see the executable TuxBox will l
 
 ## Compatibility
 
-[![Verified game behavior and Xbox Series shader translation measured on Frosty](docs/progress.svg)](docs/progress.svg)
+[![Compatibility and shader progress for Frosty and Project Scarlett](docs/progress.svg)](docs/progress.svg)
 
 [Current progress](docs/PROGRESS.md) · [Xbox libraries](docs/LIBRARIES.md) · [Shader coverage](docs/SHADERS.md) · [Test results](docs/RESULTS.md) · [Architecture](docs/ARCHITECTURE.md) · [Credits and references](docs/REFERENCES.md)
 

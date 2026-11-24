@@ -448,6 +448,37 @@ def draw_shaders(svg, y, data, rows, material_hits):
     return y + height + GAP
 
 
+def draw_projectscarlett_shaders(svg, y, evidence):
+    run = read_json(evidence / "projectscarlett-shader-preparation.json")
+    title = read_json(evidence / "projectscarlett-startup.json")
+    if (not title.get("executable_sha256") or run.get("executable_sha256") != title["executable_sha256"]
+            or not run.get("compiler_sha256") or not run.get("log_sha256")):
+        return y
+    counts = run.get("requests", {})
+    total, compiled, unsupported, failed = (counts.get(key) for key in ("total", "compiled", "unsupported", "failed"))
+    if (not all(type(n) is int and n >= 0 for n in (total, compiled, unsupported, failed))
+            or not total or compiled + unsupported + failed != total):
+        return y
+
+    group = section(svg, PAD, y, "Project Scarlett shader preparation")
+    share = compiled / total
+    pipelines = run.get("mesh_pipelines", {})
+    tested, created = pipelines.get("tested"), pipelines.get("created")
+    gpu_result = (type(tested) is int and type(created) is int and 0 <= created <= tested <= compiled
+                  and tested and pipelines.get("gpu") and pipelines.get("log_sha256"))
+    height = 110 if gpu_result else 88
+    rect(group, 0, 0, INNER, height, PANEL, stroke=LINE)
+    text(group, 18, 30, "Project Scarlett shader preparation", 23, AMBER, bold=True)
+    text(group, INNER-18, 30, f"{share:.1%}", 23, AQUA, bold=True, anchor="end")
+    rect(group, 18, 42, INNER-36, 7, LINE)
+    rect(group, 18, 42, (INNER-36)*share, 7, AQUA)
+    text(group, 18, 73, f"{compiled:,}/{total:,} captured requests compiled", 15)
+    text(group, INNER-18, 73, f"{unsupported:,} unsupported · {failed:,} failed", 14, MUTED, anchor="end")
+    if gpu_result:
+        text(group, 18, 96, f"{created:,}/{tested:,} new mesh pipelines created on {pipelines['gpu']}", 14, MUTED)
+    return y+height+GAP
+
+
 def draw_verification(svg, y, evidence):
     rows, _ = homebrew_matrix(evidence)
     if not rows:
@@ -467,6 +498,7 @@ def render_map(evidence):
     element(svg, "title", id="map-title").text = "TuxBox runtime compatibility"
     element(svg, "desc", id="map-description").text = (
         "Overall coverage gives equal weight to verified Frosty library behaviors and shader translation. "
+        "Project Scarlett shader preparation is measured on captured requests. "
         "Gameplay results identify the graphics settings used.")
     bg = rect(svg, 0, 0, WIDTH, 1, BG)
     rect(svg, 0, 0, WIDTH, 48, BAR)
@@ -482,6 +514,7 @@ def render_map(evidence):
     y = draw_overall(svg, 48+GAP, paths, inventory, shader_rows)
     material_hits = read_json(evidence / "matrix-awakens/material-hit-hlsl-survey.json")
     y = draw_shaders(svg, y, inventory, shader_rows, material_hits)
+    y = draw_projectscarlett_shaders(svg, y, evidence)
     y = draw_libraries(svg, y, paths)
     y = draw_frosty_target(svg, y, evidence)
     height = draw_verification(svg, y, evidence) + 6
