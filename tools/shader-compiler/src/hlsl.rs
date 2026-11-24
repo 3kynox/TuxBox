@@ -54,6 +54,7 @@ mod instance_cull_post;
 mod instance_cull_views;
 mod classify_materials;
 mod int16;
+mod int32;
 mod indexed_lane;
 mod particle_sort;
 mod persistent;
@@ -5758,6 +5759,12 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             return Err("unverified ordinary 16-bit integer shader stage".into());
         }
         if let Some(result) = int16::expression(ins)? {
+            return self.wv(&d, &result);
+        }
+        if int32::handles(ins) && self.ex.stage != Stage::Compute {
+            return Err("unverified ordinary 32-bit integer shader stage".into());
+        }
+        if let Some(result) = int32::expression(ins)? {
             return self.wv(&d, &result);
         }
         if m == "v_pack_b32_f16" {
