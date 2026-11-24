@@ -24,6 +24,21 @@ REFUSALS = (
     ("scalar_op", r"unsupported scalar op\b"),
     ("mesh", r"unverified mesh shader bindings\b"),
     ("mubuf", r"MUBUF\b"),
+    # Additional fixed labels for former other_refusal cases; existing
+    # primary buckets stay stable for comparisons with earlier receipts.
+    ("scalar_code_table_offset", r"s_load at 0x[0-9a-f]+: code-table read with dynamic soffset unsupported"),
+    ("mesh_launch", r"(?:unsupported mesh launch or output configuration|unsupported mesh launch register|missing mesh PSV runtime information)"),
+    ("mesh_root_layout", r"(?:mesh root signature missing|unrecognized mesh SRV/CBV root-table layout|unverified mesh descriptor|unverified mesh root SRV|mesh root SRV missing)"),
+    ("mesh_signature", r"(?:mesh stage requires a full position|unsupported mesh (?:clip-distance|output) signature|mesh primitive attribute exports do not match)"),
+    ("mesh_export", r"(?:unsupported (?:packed or masked mesh export|mesh triangle index encoding|mesh primitive attribute export)|missing mesh position export|truncated mesh export sequence|invalid branch in mesh exports)"),
+    ("descriptor_mapping", r"(?:unaligned descriptor table offset|descriptor register overflow|descriptor dataflow did not converge|unmapped descriptor|root table slot at .* conflicts)"),
+    ("lds_exchange", r"(?:LDS exchange with unverified branch convergence|single-wave LDS exchange inside a loop|guest LDS and exchange exceed the group shared budget|shared exchange requires the native guest LDS allocation)"),
+    ("compute_swizzle_other", r"(?:compute swizzle (?:requires complete blocks|following an early exit|inside a loop)|unsupported compute swizzle mode|backward permute requires a verified wave32 compute layout)"),
+    ("wave_width", r"(?:conflicting wave widths for ballot and reduction|wave operation requires complete \d+-lane compute waves|resolve Wave32 requires a compatible wave reduction)"),
+    ("lane_spill", r"(?:lane op at 0x[0-9a-f]+: non-constant lane operand|is used both as a lane spill area and as a vector|v_readlane at 0x[0-9a-f]+: unexpected destination)"),
+    ("heap_atomic", r"atomic through a heap descriptor unsupported"),
+    ("packed_root", r"(?:unsupported packed compute root parameter|packed root arguments exceed 64 dwords|root argument offset outside signature|unsupported mutation of a root address|root address or padding used as shader data)"),
+
 )
 
 def refusal_bucket(error):

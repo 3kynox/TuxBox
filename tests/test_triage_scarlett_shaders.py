@@ -41,6 +41,29 @@ class TriageScarlettShaders(unittest.TestCase):
         self.assertEqual(sum(t["count"] for t in report["transitions"]), 5)
         self.assertNotIn(str(self.root), json.dumps(report))
 
+    def test_new_fixed_buckets_never_expose_raw_diagnostics(self):
+        from project_tuxbox.scarlett_report import refusal_bucket
+        from project_tuxbox.runtime_shaders import ShaderRefused
+        cases = {
+            "s_load at 0x20: code-table read with dynamic soffset unsupported": "scalar_code_table_offset",
+            "unsupported mesh launch register s42": "mesh_launch",
+            "unverified mesh descriptor at s4 + 0x40": "mesh_root_layout",
+            "unsupported mesh output signature element secret": "mesh_signature",
+            "unsupported mesh triangle index encoding": "mesh_export",
+            "descriptor dataflow did not converge": "descriptor_mapping",
+            "LDS exchange with unverified branch convergence": "lds_exchange",
+            "compute swizzle inside a loop": "compute_swizzle_other",
+            "wave operation requires complete 64-lane compute waves": "wave_width",
+            "v4 is used both as a lane spill area and as a vector": "lane_spill",
+            "atomic through a heap descriptor unsupported": "heap_atomic",
+            "root argument offset outside signature": "packed_root",
+            "s_load at 0x20: dynamic soffset unsupported": "scalar_dynamic_offset",
+            "unverified mesh shader bindings": "mesh",
+            "secret filename": "other_refusal",
+        }
+        for message, expected in cases.items():
+            self.assertEqual(refusal_bucket(ShaderRefused(message, cached=False)), expected)
+
     def test_masks_counters_and_registers(self):
         self.assertEqual(normalize("warning\ns_load at 0xec: dynamic soffset unsupported\n"),
                          "s_load at 0x_: dynamic soffset unsupported")
