@@ -1285,6 +1285,13 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     stencil_target: Option<u32>) -> Result<Translated, String> {
     let first = translate_outputs_once(ex, feeds_ps, output_order, stencil_target);
     if first.is_ok() || ex.stage != Stage::Compute || stencil_target.is_some() { return first; }
+    // Once this exact exchange subset is recognized, a later binding or
+    // emitter error must not silently replace its collectives with copies.
+    let mut original = disassemble(&ex.isa);
+    if (ex.root_sig.is_some() || original.iter().all(|i| !matches!(i.enc, Enc::Smem | Enc::Mubuf)))
+        && wave_sum::straight_exchange(&mut original, compute_group(ex)) {
+        return first;
+    }
     // Appends only: each lane may allocate for itself.
     let alone = lone_lane::retry(|| translate_outputs_once(ex, feeds_ps, output_order, stencil_target))
         .and_then(|t| lone_lane::check(&t.hlsl).map(|()| t));
@@ -1372,9 +1379,14 @@ fn translate_outputs_once(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, ou
     if ex.stage == Stage::Pixel { wave_alloc::prepare(&mut insns); }
     let reflection = reflection_compact::prepare(ex, &mut insns);
     let group_extrema = group_extrema::prepare(ex, &mut insns);
+    let straight_exchange = ex.stage == Stage::Compute && !lone_lane::on()
+        && !wave_cull && !page_waves && !resolve_wave32 && !allocation_wave64
+        && (ex.root_sig.is_some() || insns.iter().all(|i| !matches!(i.enc, Enc::Smem | Enc::Mubuf)))
+        && wave_sum::straight_exchange(&mut insns, compute_group(ex));
     let required_wave_size = if wave_cull {
         fspx_wave.filter(|&width| width == 32)
-    } else { lower_wave_reductions(&mut insns)? };
+    } else if straight_exchange { None }
+      else { lower_wave_reductions(&mut insns)? };
     let required_wave_size = if resolve_wave32 {
         if matches!(required_wave_size, Some(64)) || insns.iter().any(is_quad_exchange) {
             return Err("resolve Wave32 requires a compatible wave reduction".into());
@@ -1517,8 +1529,9 @@ fn translate_outputs_once(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, ou
             return Err(format!("wave operation requires complete {width}-lane compute waves"));
         }
     }
-    em.portable_wave64 = required_wave_size == Some(64)
-        && ex.stage == Stage::Compute && compute_group(ex) == [64, 1, 1]
+    em.portable_wave64 = (straight_exchange || (required_wave_size == Some(64)
+        && compute_group(ex) == [64, 1, 1]))
+        && ex.stage == Stage::Compute
         && !wave_cull && !page_waves && !allocation_wave64 && !requires_ballot
         && !em.compute_swizzle && !em.indexed_lane && !em.compute_heap
         && em.packed.is_none() && !uses_quad_add && !uses_bpermute && !probe_trace
@@ -1526,7 +1539,10 @@ fn translate_outputs_once(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, ou
         && !instance_cull && !hzb_cull && view_cull.is_none() && !post_cull
         && !hair_visibility_indirect && !hair_visibility_single && hair_compact.is_none()
         && !subsurface_setup && !material_classify && !classify_tiles && !reflection && !group_extrema
-        && wave_sum::portable_single_wave(&em.insns);
+        && (straight_exchange || wave_sum::portable_single_wave(&em.insns));
+    if straight_exchange && !em.portable_wave64 {
+        return Err("straight DPP8 exchange conflicts with a specialized lowering".into());
+    }
     if is_ps {
         em.find_export_epilogs();
         em.classify_interpolation();
@@ -6004,6 +6020,24 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         }
         if matches!(m.as_str(), "v_interp_p1ll_f16" | "v_interp_p1lv_f16" | "v_interp_p2_f16") {
             return self.emit_f16_interp(ins);
+        }
+        if ins.enc == Enc::Vop2 && ins.op == wave_sum::DPP8_EXCHANGE {
+            if !self.portable_wave64 { return Err("DPP8 exchange without convergent group".into()); }
+            let a = r(&s[0])?;
+            let b = r(&s[1])?;
+            let selector = ins.aux.imm as u32;
+            let t = self.tmp;
+            self.tmp += 1;
+            self.line(&format!("uint t{t} = tb_reduction_read(gtid.x, {a}, (gtid.x & ~7u) | (({selector:#x}u >> (3u * (gtid.x & 7u))) & 7u));"));
+            let value = match m.as_str() {
+                "v_add_nc_u32" => format!("t{t} + {b}"),
+                "v_and_b32" => format!("t{t} & {b}"),
+                "v_or_b32" => format!("t{t} | {b}"),
+                "v_min_u32" => format!("min(t{t}, {b})"),
+                "v_max_u32" => format!("max(t{t}, {b})"),
+                _ => return Err("unsupported DPP8 exchange operation".into()),
+            };
+            return self.wv(&d, &value);
         }
         if ins.enc == Enc::Vop2 && ins.op == wave_sum::DPP_REDUCE {
             // Read the partner before the EXEC-guarded write, including when VDST aliases VSRC.
