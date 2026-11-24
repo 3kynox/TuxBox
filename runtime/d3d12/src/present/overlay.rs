@@ -1,5 +1,5 @@
 //! A MangoHud-style panel over the presented frame that shows shader
-//! translation progress.
+//! translation and pipeline building progress.
 //!
 //! The text is rasterized with GDI into a small bitmap, written into a
 //! per-frame upload buffer and copied onto the back buffer in the same command
@@ -43,7 +43,7 @@ pub(super) struct Overlay {
     origin: Option<(u32, u32)>,
     pixels: Vec<u32>,
     version: u64,
-    key: Option<([String; 3], u32)>,
+    key: Option<([String; 4], u32)>,
     uploads: [Option<Upload>; 2],
     started: Instant,
 }
@@ -101,8 +101,7 @@ impl Overlay {
         if !progress::visible(self.mode, &snapshot) {
             return None;
         }
-        let working = snapshot.in_flight > 0;
-        let phase = if working { ((self.started.elapsed().as_millis() / STEP_MS) % u128::from(PERIOD)) as u32 } else { 0 };
+        let phase = if snapshot.working() { ((self.started.elapsed().as_millis() / STEP_MS) % u128::from(PERIOD)) as u32 } else { 0 };
         let text = progress::lines(&snapshot);
         let key = (text.clone(), phase);
         if self.key.as_ref() != Some(&key) {
@@ -230,7 +229,7 @@ fn colorref(rgb: u32) -> COLORREF {
 }
 
 /// Render the panel to 0x00RRGGBB pixels, top row first.
-unsafe fn rasterize(size: (u32, u32), scale: u32, text: &[String; 3], snapshot: &Snapshot, phase: u32) -> Option<Vec<u32>> {
+unsafe fn rasterize(size: (u32, u32), scale: u32, text: &[String; 4], snapshot: &Snapshot, phase: u32) -> Option<Vec<u32>> {
     let (width, height) = size;
     let scale = scale as i32;
     // SAFETY: every handle below is created here, checked, and released
@@ -279,7 +278,7 @@ unsafe fn rasterize(size: (u32, u32), scale: u32, text: &[String; 3], snapshot: 
         let bar_y = height - 18 * scale as u32;
         let bar_height = 6 * scale as u32;
         fill(pad, bar_y, track_width, bar_height, TRACK);
-        if snapshot.in_flight > 0 {
+        if snapshot.working() {
             let (start, end) = layout::marching_block(track_width, phase, PERIOD);
             fill(pad + start, bar_y, end - start, bar_height, ACCENT);
         } else {
@@ -304,7 +303,8 @@ unsafe fn rasterize(size: (u32, u32), scale: u32, text: &[String; 3], snapshot: 
         );
         let old_font = SelectObject(dc, font.into());
         SetBkMode(dc, TRANSPARENT);
-        let colours = [ACCENT, TEXT, if snapshot.timed_out > 0 { WARNING } else { MUTED }];
+        let problems = if snapshot.shaders.timed_out > 0 { WARNING } else { MUTED };
+        let colours = [ACCENT, TEXT, problems, MUTED];
         for (index, (line, colour)) in text.iter().zip(colours).enumerate() {
             SetTextColor(dc, colorref(colour));
             let wide: Vec<u16> = line.encode_utf16().collect();

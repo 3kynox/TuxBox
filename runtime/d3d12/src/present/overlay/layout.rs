@@ -2,7 +2,7 @@
 //! functions with no platform calls.
 
 pub(super) const BASE_WIDTH: u32 = 380;
-pub(super) const BASE_HEIGHT: u32 = 92;
+pub(super) const BASE_HEIGHT: u32 = 110;
 const MARGIN: u32 = 16;
 
 /// Whole-number scale so the panel reads the same at 1080p and 4K.
@@ -113,15 +113,15 @@ mod tests {
         let screen = (1920, 1080);
         assert_eq!(origin(Corner::TopLeft, panel, screen, 1), Some((16, 16)));
         assert_eq!(origin(Corner::TopRight, panel, screen, 1), Some((1920 - 380 - 16, 16)));
-        assert_eq!(origin(Corner::BottomLeft, panel, screen, 1), Some((16, 1080 - 92 - 16)));
-        assert_eq!(origin(Corner::BottomRight, panel, screen, 1), Some((1920 - 380 - 16, 1080 - 92 - 16)));
+        assert_eq!(origin(Corner::BottomLeft, panel, screen, 1), Some((16, 1080 - BASE_HEIGHT - 16)));
+        assert_eq!(origin(Corner::BottomRight, panel, screen, 1), Some((1920 - 380 - 16, 1080 - BASE_HEIGHT - 16)));
     }
 
     #[test]
     fn panel_that_does_not_fit_is_skipped() {
         assert_eq!(origin(Corner::TopRight, panel_size(1), (400, 1080), 1), None);
         assert_eq!(origin(Corner::TopRight, panel_size(1), (1920, 100), 1), None);
-        assert!(origin(Corner::TopRight, panel_size(1), (380 + 32, 92 + 32), 1).is_some());
+        assert!(origin(Corner::TopRight, panel_size(1), (380 + 32, BASE_HEIGHT + 32), 1).is_some());
     }
 
     #[test]

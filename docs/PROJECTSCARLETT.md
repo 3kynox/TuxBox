@@ -82,6 +82,22 @@ Add `--mangohud` before the package path to record frame times. The prefix defau
 
 The first launch records each shader the game requests in the prefix. Before later launches, the launcher compiles the recorded requests and shows its progress, so the game reuses those translations instead of compiling them during play. Pass `--prepare-only` to prepare without starting the game, or `--no-shader-prep` to skip preparation for one launch. Place either option before the package path. [Preparation results](../evidence/projectscarlett-shader-preparation.json)
 
+### In-game progress panel
+
+TuxBox draws a small panel over the presented frame while the game is translating
+shaders or building pipelines. It shows how many translations are being waited
+on and pipelines are being built, how many distinct shaders the game has received
+in compiled form (and how many of those were translated during this run), how
+many were unsupported or timed out, and how many pipelines were built, failed or
+given an empty stand-in. It appears during that work, stays for four seconds
+afterwards, and then hides. It is drawn by the runtime itself with GDI
+and one D3D12 copy, so it needs no overlay software and works on Windows and
+Linux. It never modifies the game's own image.
+
+- `TUXBOX_PROGRESS_OVERLAY=always` keeps the panel on, `0` turns it off, and the
+  default shows it only while that work is happening.
+- `TUXBOX_PROGRESS_OVERLAY_POS` sets the corner: `tr` (default), `tl`, `bl` or `br`.
+
 ### Preparation speed and coverage
 
 Launch-time preparation runs one compiler job per available core, up to 8. Set
