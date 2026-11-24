@@ -482,6 +482,66 @@ struct Emitter<'a> {
     ps_in_interp: InputInterp,
     /// Stage feeding a pixel shader: modifiers to put on the matching outputs.
     out_interp: InputInterp,
+    /// One function-scoped resource for each heap view of an SGPR. The local
+    /// captures the descriptor at assignment.
+    heap_locals: BTreeSet<(HeapView, u16)>,
+    /// Views whose local still holds this SGPR's current heap index.
+    heap_bound: BTreeSet<(HeapView, u16)>,
+}
+
+/// HLSL resource view of one `ResourceDescriptorHeap` index.
+///
+/// The index at every current heap subscript is an SGPR (a scalar shift, or
+/// `v_readfirstlane` into an SGPR). That value is uniform for the lanes that
+/// execute the assignment, so the subscript is `ResourceDescriptorHeap[sN]`.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum HeapView {
+    Raw,
+    RawRw,
+    Constants,
+    Typed,
+    TypedRw,
+    Tex1D,
+    Tex2D,
+    Tex3D,
+    TexCube,
+    Tex1DArray,
+    Tex2DArray,
+}
+
+impl HeapView {
+    fn hlsl(self) -> &'static str {
+        match self {
+            HeapView::Raw => "ByteAddressBuffer",
+            HeapView::RawRw => "RWByteAddressBuffer",
+            HeapView::Constants => "ConstantBuffer<TBHeapConstants>",
+            HeapView::Typed => "Buffer<float4>",
+            HeapView::TypedRw => "RWBuffer<float4>",
+            HeapView::Tex1D => "Texture1D<float4>",
+            HeapView::Tex2D => "Texture2D<float4>",
+            HeapView::Tex3D => "Texture3D<float4>",
+            HeapView::TexCube => "TextureCube<float4>",
+            HeapView::Tex1DArray => "Texture1DArray<float4>",
+            HeapView::Tex2DArray => "Texture2DArray<float4>",
+        }
+    }
+
+    fn local(self, sgpr: u16) -> String {
+        let tag = match self {
+            HeapView::Raw => "raw",
+            HeapView::RawRw => "raww",
+            HeapView::Constants => "cb",
+            HeapView::Typed => "buf",
+            HeapView::TypedRw => "rwbuf",
+            HeapView::Tex1D => "t1",
+            HeapView::Tex2D => "t2",
+            HeapView::Tex3D => "t3",
+            HeapView::TexCube => "tc",
+            HeapView::Tex1DArray => "t1a",
+            HeapView::Tex2DArray => "t2a",
+        };
+        format!("tb_heap_{tag}_{sgpr}")
+    }
 }
 
 /// Synthetic opcode of the wave-reduction instruction produced by `lower_wave_reductions`.
@@ -1687,6 +1747,8 @@ impl<'a> Emitter<'a> {
             hoist_wave_exchanges: false,
             regs: if has_mode { BTreeSet::from(["tb_fp_mode".into()]) } else { BTreeSet::new() },
             body: String::new(),
+            heap_locals: BTreeSet::new(),
+            heap_bound: BTreeSet::new(),
             tmp: 0,
             // PS attribute slot k = the k-th input *register* that carries an interpolant and is
             // read. A register counts as read if any element packed into it is read — including
@@ -2825,8 +2887,9 @@ impl<'a> Emitter<'a> {
                     let heap = matches!(ins.src.first(), Some(Opnd::Vgpr(v)) if sym.get(&(2000 + *v as u16)) == Some(&Sym::HeapOffset));
                     if let Some(d) = ins.dst.first().and_then(sg) {
                         if heap {
-                            // Waterfall over per-lane heap descriptors: each thread
-                            // continues with its own descriptor (NonUniformResourceIndex).
+                            // readfirstlane copies one lane's byte offset into an SGPR.
+                            // Later uses index ResourceDescriptorHeap[sN]: the SGPR is
+                            // uniform until something writes it, which rebinds the handle.
                             sym.insert(d, Sym::HeapOffset);
                         } else if code {
                             sym.insert(d, Sym::Code);
@@ -3242,6 +3305,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn line(&mut self, s: &str) {
+        self.note_sgpr_stores(s);
         self.body.push_str("    ");
         // These are per-invocation EXEC guards in the emitter templates.
         // Scalar branches and mask-producing instructions select their
@@ -3252,6 +3316,82 @@ impl<'a> Emitter<'a> {
             self.body.push_str(s);
         }
         self.body.push('\n');
+    }
+
+    /// A store to `sN` (including `sN &= ...`) drops every heap handle captured
+    /// from that register. `sN ==` is a compare and keeps the handle.
+    fn note_sgpr_stores(&mut self, stmt: &str) {
+        if self.heap_bound.is_empty() {
+            return;
+        }
+        let bytes = stmt.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            let boundary = i == 0 || {
+                let prev = bytes[i - 1];
+                !prev.is_ascii_alphanumeric() && prev != b'_'
+            };
+            if boundary && bytes[i] == b's' {
+                let mut j = i + 1;
+                while j < bytes.len() && bytes[j].is_ascii_digit() {
+                    j += 1;
+                }
+                if j > i + 1 {
+                    let mut k = j;
+                    while k < bytes.len() && bytes[k] == b' ' {
+                        k += 1;
+                    }
+                    let compound = k + 1 < bytes.len()
+                        && matches!(bytes[k], b'+' | b'-' | b'&' | b'|' | b'^' | b'*')
+                        && bytes[k + 1] == b'=';
+                    let plain = bytes.get(k) == Some(&b'=') && bytes.get(k + 1) != Some(&b'=');
+                    if compound || plain {
+                        if let Ok(reg) = stmt[i + 1..j].parse::<u16>() {
+                            self.heap_bound.retain(|&(_, sgpr)| sgpr != reg);
+                        }
+                    }
+                    i = j;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+    }
+
+    /// The next heap use must assign its local again. A back edge, or a join
+    /// that may have skipped the last assignment, makes the captured handle stale.
+    fn drop_heap_handles(&mut self) {
+        self.heap_bound.clear();
+    }
+
+    fn end_guard(&mut self, open: &mut bool) {
+        if *open {
+            self.line("}");
+            *open = false;
+            self.drop_heap_handles();
+        }
+    }
+
+    /// Assign `ResourceDescriptorHeap[sN]` into one local of this view.
+    /// The same SGPR keeps that local until [`note_sgpr_stores`] or [`drop_heap_handles`].
+    fn bind_heap(&mut self, view: HeapView, sgpr: u16) -> String {
+        let local = view.local(sgpr);
+        self.heap_locals.insert((view, sgpr));
+        self.regs.insert(format!("s{sgpr}"));
+        if self.heap_bound.insert((view, sgpr)) {
+            self.line(&format!("{local} = ResourceDescriptorHeap[s{sgpr}];"));
+        }
+        local
+    }
+
+    /// Function-scoped declarations for [`bind_heap`]. Each local is assigned
+    /// before any method call. DXC accepts the declaration without an initializer.
+    fn heap_handle_decls(&self) -> String {
+        let mut out = String::new();
+        for &(view, sgpr) in &self.heap_locals {
+            let _ = writeln!(out, "    {} {};", view.hlsl(), view.local(sgpr));
+        }
+        out
     }
 
     fn push_helpers(&self, h: &mut String) {
@@ -3480,24 +3620,23 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                     if !back.is_empty() {
                         return Err("single-wave LDS exchange inside a loop".into());
                     }
-                    if open { self.line("}"); open = false; cur.clear(); }
+                    self.end_guard(&mut open); cur.clear();
                     self.line("GroupMemoryBarrierWithGroupSync();");
                 }
             }
             // Reconverge both host subgroups after each guest view, including
             // invocations whose guest EXEC mask branched over the queue append.
             if let Some(program) = view_cull.filter(|p| p.join == ins.offset) {
-                if open { self.line("}"); open = false; }
+                self.end_guard(&mut open);
                 cur.clear();
                 program.append(self);
             }
             if let Some(&b) = heads.get(&i) {
-                if open {
-                    self.line("}");
-                    open = false;
-                }
+                self.end_guard(&mut open);
                 cur.clear();
                 self.line("do {");
+                // The back edge can store the index after a use. Bind again inside the loop.
+                self.drop_heap_handles();
                 self.loop_depth += 1;
                 self.line(&format!("tb_c{b} = false;"));
             }
@@ -3510,7 +3649,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                     wave_cull::exchange(i, ins, self.ex.stage == Stage::Mesh)?
                 };
                 if let Some(code) = exchange {
-                    if open { self.line("}"); open = false; }
+                    self.end_guard(&mut open);
                     cur.clear();
                     self.line(&code);
                 }
@@ -3524,7 +3663,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 // Mask operations set SCC if any bit in the guest wave is
                 // set. Vote outside the forward branch guards so that every
                 // workgroup invocation reaches the barriers.
-                if open { self.line("}"); open = false; }
+                self.end_guard(&mut open);
                 cur.clear();
                 self.line(&format!("uint2 mesh_scc{i} = tb_page_ballot(tb_wave_tid, scc != 0u);"));
             }
@@ -3538,13 +3677,13 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 active.clear();
             }
             if self.compute_swizzle && ins.mnemonic == "ds_swizzle_b32" && !active.is_empty() {
-                if open { self.line("}"); open = false; }
+                self.end_guard(&mut open);
                 cur.clear();
                 self.emit_compute_swizzle(i, ins, &active)?;
                 self.hoisted_swizzle = Some(i);
             }
             if ins.mnemonic == "tb_first_exec_lane" {
-                if open { self.line("}"); open = false; }
+                self.end_guard(&mut open);
                 cur.clear();
                 let mut condition=String::from("(exec_lo & 1u) != 0u");
                 for t in &active { write!(condition," && !j{t}").unwrap(); }
@@ -3557,7 +3696,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 self.line("GroupMemoryBarrierWithGroupSync();");
             }
             if ins.mnemonic == "tb_indexed_readlane" && !active.is_empty() {
-                if open { self.line("}"); open = false; }
+                self.end_guard(&mut open);
                 cur.clear();
                 self.emit_indexed_read(i, ins)?;
                 self.hoisted_swizzle = Some(i);
@@ -3565,7 +3704,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             if self.micropoly_vote == Some(i) {
                 // Retired triangles contribute zero and still participate in both
                 // barriers. The count precedes either rasterization loop.
-                if open { self.line("}"); }
+                self.end_guard(&mut open);
                 micropoly::emit_vote(self, ins, &active)?;
                 return Ok(());
             }
@@ -3577,8 +3716,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 // host lanes must reach the exchange, including those skipping this
                 // block. Reapply the branch and EXEC guards to the destination write.
                 if open {
-                    self.line("}");
-                    open = false;
+                    self.end_guard(&mut open);
                     cur.clear();
                 }
                 let perm = ins.aux.imm;
@@ -3587,15 +3725,12 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 self.line(&format!("uint q{i} = WaveReadLaneAt({source}, (q{i}lane & ~3u) | (({perm}u >> (2u * (q{i}lane & 3u))) & 3u));"));
             }
             if restored_waits.contains(&i) {
-                if open { self.line("}"); open = false; }
+                self.end_guard(&mut open);
                 cur.clear();
                 self.line("GroupMemoryBarrierWithGroupSync();");
             }
             if active != cur || (open && heads.contains_key(&i)) {
-                if open {
-                    self.line("}");
-                    open = false;
-                }
+                self.end_guard(&mut open);
                 if !active.is_empty() {
                     let c: Vec<String> = active.iter().map(|t| format!("j{t}")).collect();
                     self.line(&format!("if (!({})) {{", c.join(" || ")));
@@ -3621,8 +3756,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             if open && target.get(&i).is_some_and(|t| cur.contains(t)) {
                 // Another branch to an enclosing target just updated its flag.
                 // The following instruction must reevaluate the guard.
-                self.line("}");
-                open = false;
+                self.end_guard(&mut open);
                 cur.clear();
             }
             if back.contains_key(&i) {
@@ -3633,10 +3767,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                     // A `continue` jumped here: iterate again regardless of the condition.
                     self.line(&format!("tb_c{i} = tb_c{i} || j{i};"));
                 }
-                if open {
-                    self.line("}");
-                    open = false;
-                }
+                self.end_guard(&mut open);
                 cur.clear();
                 // Clear the flags of labels inside this loop body for the next iteration.
                 let head = back[&i];
@@ -3658,10 +3789,11 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                     self.line(&format!("}} while (tb_c{i}{exit}{guard});"));
                 }
                 self.loop_depth = self.loop_depth.saturating_sub(1);
+                self.drop_heap_handles();
             }
         }
         if open {
-            self.line("}");
+            self.end_guard(&mut open);
         }
         Ok(())
     }
@@ -3715,6 +3847,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         for (b, &start) in starts.iter().enumerate() {
             let end = starts.get(b + 1).copied().unwrap_or(n);
             self.line(&format!("if (tb_sel == {start}u) {{"));
+            self.drop_heap_handles();
             for i in start..end {
                 let ins = &insns[i];
                 for o in ins.src.iter().chain(ins.dst.iter()) {
@@ -3744,6 +3877,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         // No block matched (cannot happen for a well-formed program): stop.
         self.line(&format!("if (tb_pc == 0xffffffffu) tb_pc = {n}u;"));
         self.line("}");
+        self.drop_heap_handles();
         self.loop_depth = self.loop_depth.saturating_sub(1);
         Ok(())
     }
@@ -3951,6 +4085,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 self.res.insert(idx, vec![*res]);
                 self.emit_insn(idx, ins, is_ps, br)?;
                 self.line("}");
+                self.drop_heap_handles();
             }
             self.bsel.insert(idx, (reg, cands));
             return Ok(());
@@ -3992,6 +4127,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                         self.res.insert(idx, v);
                         self.emit_mimg(idx, ins)?;
                         self.line("}");
+                        self.drop_heap_handles();
                     }
                 }
                 return Ok(());
@@ -4471,11 +4607,10 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                         let t = self.tmp;
                         self.tmp += 1;
                         let offset = if soff != 0x7d { format!(" + {}", ssrc_name(soff)?) } else { String::new() };
-                        self.regs.insert(format!("s{src}"));
-                        self.line(&format!("ByteAddressBuffer tb_hb{t} = ResourceDescriptorHeap[NonUniformResourceIndex(s{src})];"));
+                        let buf = self.bind_heap(HeapView::Raw, src);
                         self.line(&format!("uint tb_o{t} = ({}u{offset}) & ~3u;", ins.aux.imm as u32));
                         for k in 0..n {
-                            self.line(&format!("uint t{t}_{k} = tb_hb{t}.Load(tb_o{t} + {}u);", 4 * k));
+                            self.line(&format!("uint t{t}_{k} = {buf}.Load(tb_o{t} + {}u);", 4 * k));
                         }
                         for k in 0..n {
                             let dst = sreg_opnd(base + k as u8);
@@ -4488,11 +4623,10 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                         let t = self.tmp;
                         self.tmp += 1;
                         let offset = if soff != 0x7d { format!(" + {}", ssrc_name(soff)?) } else { String::new() };
-                        self.regs.insert(format!("s{src}"));
+                        let buf = self.bind_heap(HeapView::Constants, src);
                         self.line(&format!("uint tb_o{t} = ({}u{offset}) >> 2;", ins.aux.imm as u32));
-                        self.line(&format!("ConstantBuffer<TBHeapConstants> tb_c{t} = ResourceDescriptorHeap[NonUniformResourceIndex(s{src})];"));
                         for k in 0..n {
-                            self.line(&format!("uint t{t}_{k} = tb_c{t}.data[(tb_o{t}+{k}u) >> 2][(tb_o{t}+{k}u)&3u];"));
+                            self.line(&format!("uint t{t}_{k} = {buf}.data[(tb_o{t}+{k}u) >> 2][(tb_o{t}+{k}u)&3u];"));
                         }
                         for k in 0..n {
                             let dst = sreg_opnd(base + k as u8);
@@ -5916,13 +6050,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
     fn emit_mtbuf(&mut self, idx: usize, ins: &Insn) -> Result<(), String> {
         let buffer = match self.res.get(&idx).and_then(|r| r.first()).copied() {
             Some(Res::Raw(slot, false)) => format!("raw_sbuf{slot}"),
-            Some(Res::HeapRaw(src)) => {
-                let t = self.tmp;
-                self.tmp += 1;
-                self.regs.insert(format!("s{src}"));
-                self.line(&format!("ByteAddressBuffer tb_hr{t} = ResourceDescriptorHeap[NonUniformResourceIndex(s{src})];"));
-                format!("tb_hr{t}")
-            }
+            Some(Res::HeapRaw(src)) => self.bind_heap(HeapView::Raw, src),
             _ => return Err("typed buffer load has no verified linear root SRV".into()),
         };
         // Only formatted, full-width loads with a byte offset and no TFE.
@@ -5994,12 +6122,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
     /// writable view of the same descriptor.
     fn heap_raw_transfer(&mut self, ins: &Insn, src: u16) -> Result<(), String> {
         let store = ins.mnemonic.starts_with("buffer_store_");
-        let t = self.tmp;
-        self.tmp += 1;
-        self.regs.insert(format!("s{src}"));
-        let ty = if store { "RWByteAddressBuffer" } else { "ByteAddressBuffer" };
-        self.line(&format!("{ty} tb_hr{t} = ResourceDescriptorHeap[NonUniformResourceIndex(s{src})];"));
-        self.raw_transfer_on(ins, format!("tb_hr{t}"), store)
+        let view = if store { HeapView::RawRw } else { HeapView::Raw };
+        let buf = self.bind_heap(view, src);
+        self.raw_transfer_on(ins, buf, store)
     }
 
     /// `buffer_load_format_*` with IDXEN through a heap descriptor: a typed view,
@@ -6016,9 +6141,8 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         let index = r(&ins.src[0])?;
         let t = self.tmp;
         self.tmp += 1;
-        self.regs.insert(format!("s{src}"));
-        self.line(&format!("Buffer<float4> tb_tb{t} = ResourceDescriptorHeap[NonUniformResourceIndex(s{src})];"));
-        self.line(&format!("float4 t{t} = 0; if (exec_lo & 1u) t{t} = tb_tb{t}.Load({index});"));
+        let buf = self.bind_heap(HeapView::Typed, src);
+        self.line(&format!("float4 t{t} = 0; if (exec_lo & 1u) t{t} = {buf}.Load({index});"));
         for k in 0..channels {
             self.wv(&Opnd::Vgpr(vd + k), &format!("asuint(t{t}.{})", XYZW[k as usize]))?;
         }
@@ -6037,9 +6161,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         };
         let Opnd::Vgpr(vd) = ins.dst[0] else { return Err("bad vdata".into()) };
         let index = r(&ins.src[0])?;
-        let t = self.tmp;
-        self.tmp += 1;
-        self.regs.insert(format!("s{src}"));
+        let buf = self.bind_heap(HeapView::TypedRw, src);
         let mut value = Vec::new();
         for k in 0..4u8 {
             value.push(if k < channels {
@@ -6048,8 +6170,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 format!("asfloat({})", r(&o)?)
             } else if k == 3 { "1.0f".into() } else { "0.0f".into() });
         }
-        self.line(&format!("RWBuffer<float4> tb_tw{t} = ResourceDescriptorHeap[NonUniformResourceIndex(s{src})];"));
-        self.line(&format!("if (exec_lo & 1u) tb_tw{t}[{index}] = float4({});", value.join(", ")));
+        self.line(&format!("if (exec_lo & 1u) {buf}[{index}] = float4({});", value.join(", ")));
         Ok(())
     }
 
@@ -6636,9 +6757,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             if a16 || d16 {
                 return Err("A16/D16 heap texture load unsupported".into());
             }
-            let (ty, ncoord) = match dim {
-                0 => ("Texture1D", 1), 1 => ("Texture2D", 2), 2 => ("Texture3D", 3),
-                4 => ("Texture1DArray", 2), 5 => ("Texture2DArray", 3),
+            let (view, ncoord) = match dim {
+                0 => (HeapView::Tex1D, 1), 1 => (HeapView::Tex2D, 2), 2 => (HeapView::Tex3D, 3),
+                4 => (HeapView::Tex1DArray, 2), 5 => (HeapView::Tex2DArray, 3),
                 _ => return Err(format!("heap texture load dim {dim} unsupported")),
             };
             let mut c = vec![];
@@ -6653,9 +6774,8 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             let Opnd::Vgpr(vd) = ins.dst[0] else { return Err("bad vdata".into()) };
             let t = self.tmp;
             self.tmp += 1;
-            self.regs.insert(format!("s{src}"));
-            self.line(&format!("{ty}<float4> tb_texture{t} = ResourceDescriptorHeap[NonUniformResourceIndex(s{src})];"));
-            self.line(&format!("float4 t{t} = tb_texture{t}.Load(int{}({}));", c.len(), c.join(", ")));
+            let tex = self.bind_heap(view, src);
+            self.line(&format!("float4 t{t} = {tex}.Load(int{}({}));", c.len(), c.join(", ")));
             let mut n = 0u8;
             for ch in 0..4 {
                 if (ins.aux.mask >> ch) & 1 != 0 {
@@ -6853,11 +6973,12 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             Some(Res::Tex(slot, d)) => (format!("tex{slot}"), *d),
             Some(Res::HeapTexture(src, dim)) => {
                 let (src, dim) = (*src, *dim);
-                let ty = match dim { 1 => "Texture2D", 3 => "TextureCube", _ => "Texture2DArray" };
-                let name = format!("tb_texture{idx}");
-                self.regs.insert(format!("s{src}"));
-                self.line(&format!("{ty}<float4> {name} = ResourceDescriptorHeap[NonUniformResourceIndex(s{src})];"));
-                (name, dim)
+                let view = match dim {
+                    1 => HeapView::Tex2D,
+                    3 => HeapView::TexCube,
+                    _ => HeapView::Tex2DArray,
+                };
+                (self.bind_heap(view, src), dim)
             }
             _ => return Err("unresolved image".into()),
         };
@@ -7681,6 +7802,7 @@ void main(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {{");
             let _ = writeln!(h, "    s{} = gid.x; s{} = gid.y; s{} = gid.z;", g, g + 1, g + 2);
             sampler_heap::init_constants(ex, &self.regs, &mut h);
             if let Some(plan) = &self.packed { plan.init_args(&mut h); }
+            h.push_str(&self.heap_handle_decls());
             h.push_str(&self.body);
             h.push_str("}
 ");
@@ -7968,6 +8090,7 @@ void main(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {{");
             }
         }
         h.push_str(&init);
+        h.push_str(&self.heap_handle_decls());
         h.push_str(&self.body);
         // Native stencil reference export stores the low byte. An R8_UINT
         // render target instead saturates a 32-bit shader result at 255.
