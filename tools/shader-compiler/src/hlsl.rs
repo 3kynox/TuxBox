@@ -379,6 +379,21 @@ fn semantic(e: &SigElement) -> String {
     format!("{}{}", e.name, e.index)
 }
 
+/// HLSL expression for one channel of a typed buffer element in format
+/// 16_16_16_16_UINT (69): 8 bytes, 4 x 16-bit unsigned channels.
+fn tbuf_16_16_16_16_uint_channel(channel: u32, packed: &str, packed1: &str) -> String {
+    let word = if channel >= 2 { packed1 } else { packed };
+    format!("(({word} >> {}u) & 65535u)", (channel % 2) * 16)
+}
+
+/// HLSL expression for `s_ff1_i32_b64`: first set bit of a 64-bit value read
+/// through its two 32-bit words.
+fn ff1_b64_expr(lo: &str, hi: &str) -> String {
+    format!(
+        "({lo} != 0u ? uint(firstbitlow({lo})) : {hi} != 0u ? 32u + uint(firstbitlow({hi})) : 0xffffffffu)"
+    )
+}
+
 struct Emitter<'a> {
     lds_tile: Option<lds_tile::LdsTile>,
     packed: Option<PackedRoot>,
@@ -4528,6 +4543,13 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                     }
                     "s_flbit_i32_b32" => self.ws(&d, &format!("({a} == 0u ? ~0u : 31u - firstbithigh({a}))")),
                     "s_ff1_i32_b32" => self.ws(&d, &format!("firstbitlow({a})")),
+                    // s_ff1_i32_b64 is firstbitlow over the 64-bit value: the low word
+                    // decides when it is nonzero, otherwise the high word.
+                    "s_ff1_i32_b64" => {
+                        self.touch(&hi(&s[0]));
+                        let ah = r(&hi(&s[0]))?;
+                        self.ws(&d, &ff1_b64_expr(&a, &ah))
+                    }
                     "s_sext_i32_i8" => self.ws(&d, &format!("asuint(asint({a} << 24) >> 24)")),
                     "s_sext_i32_i16" => self.ws(&d, &format!("asuint(asint({a} << 16) >> 16)")),
                     "s_abs_i32" => {
@@ -6180,13 +6202,21 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             return Err("invalid MTBUF destination".into());
         };
         let address = self.raw_address(ins)?;
+        // The supported formats consume one naturally aligned dword, except
+        // 16_16_16_16_UINT, whose element is 8 bytes. Read them before updating
+        // VGPRs in case VADDR overlaps the result.
         let packed = format!("t{}", self.tmp);
-        self.tmp += 1;
-        // The supported formats all consume one naturally aligned dword. Read
-        // it before updating VGPRs in case VADDR overlaps the result.
-        self.line(&format!(
-            "uint {packed} = 0u; if (exec_lo & 1u) {packed} = {buffer}.Load({address});"
-        ));
+        let packed1 = format!("t{}", self.tmp + 1);
+        self.tmp += 2;
+        if ins.aux.imm2 == 69 {
+            self.line(&format!(
+                "uint {packed} = 0u; uint {packed1} = 0u; if (exec_lo & 1u) {{ {packed} = {buffer}.Load({address}); {packed1} = {buffer}.Load({address} + 4u); }}"
+            ));
+        } else {
+            self.line(&format!(
+                "uint {packed} = 0u; if (exec_lo & 1u) {packed} = {buffer}.Load({address});"
+            ));
+        }
         for channel in 0..=ins.op {
             let value = match ins.aux.imm2 {
                 // BUFFER_FORMAT_16_16_SNORM.
@@ -6209,6 +6239,8 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 // BUFFER_FORMAT_16_FLOAT.
                 13 if channel == 0 => format!("asuint(f16tof32({packed}))"),
                 13 => (if channel == 3 { "asuint(1.0f)" } else { "0u" }).to_string(),
+                // BUFFER_FORMAT_16_16_16_16_UINT: four 16-bit unsigned channels.
+                69 => tbuf_16_16_16_16_uint_channel(channel, &packed, &packed1),
                 // BUFFER_FORMAT_16_16_UNORM / UINT / FLOAT.
                 23 | 27 | 29 if channel >= 2 => (if channel == 3 { if ins.aux.imm2 == 27 { "1u" } else { "asuint(1.0f)" } } else { "0u" }).to_string(),
                 23 => format!("asuint(float(({packed} >> {}u) & 65535u) / 65535.0f)", channel * 16),
@@ -8285,4 +8317,35 @@ fn compute_heap_base(ex: &ShaderExtract) -> Option<u8> {
         return None;
     }
     u8::try_from(loc & 0xff).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typed_buffer_16_16_16_16_uint_channels_read_16_bit_words_from_two_dwords() {
+        // 8-byte element: [lo: ch0, ch1] [hi: ch2, ch3].
+        assert_eq!(tbuf_16_16_16_16_uint_channel(0, "packed", "packed1"), "((packed >> 0u) & 65535u)");
+        assert_eq!(tbuf_16_16_16_16_uint_channel(1, "packed", "packed1"), "((packed >> 16u) & 65535u)");
+        assert_eq!(tbuf_16_16_16_16_uint_channel(2, "packed", "packed1"), "((packed1 >> 0u) & 65535u)");
+        assert_eq!(tbuf_16_16_16_16_uint_channel(3, "packed", "packed1"), "((packed1 >> 16u) & 65535u)");
+    }
+
+    #[test]
+    fn ff1_b64_points_into_low_word_when_it_is_set() {
+        assert_eq!(
+            ff1_b64_expr("s2", "s3"),
+            "(s2 != 0u ? uint(firstbitlow(s2)) : s3 != 0u ? 32u + uint(firstbitlow(s3)) : 0xffffffffu)"
+        );
+    }
+
+    #[test]
+    fn typed_buffer_extraction_masks_to_16_bits() {
+        // Each channel is masked with 0xffff: no channel may leak into a wider one.
+        for channel in 0..4u32 {
+            let expr = tbuf_16_16_16_16_uint_channel(channel, "a", "b");
+            assert!(expr.contains("& 65535u"), "channel {channel}: {expr}");
+        }
+    }
 }
