@@ -571,9 +571,11 @@ impl HeapView {
 const OP_WAVE_REDUCE: u32 = 0x7ff0;
 const OP_QUAD_ADD_F32: u32 = 0x7ff5;
 const OP_QUAD_MOVE: u32 = 0x7fe1;
+const OP_ROW_MIRROR: u32 = 0x7fe2;
 
 fn is_quad_exchange(i: &Insn) -> bool {
-    (i.enc == Enc::Vop2 && i.op == OP_QUAD_ADD_F32) || (i.enc == Enc::Vop1 && i.op == OP_QUAD_MOVE)
+    (i.enc == Enc::Vop2 && i.op == OP_QUAD_ADD_F32)
+        || (i.enc == Enc::Vop1 && (i.op == OP_QUAD_MOVE || i.op == OP_ROW_MIRROR))
 }
 
 /// Whole-wave reductions (HLSL `WaveActiveMin` / `WaveActiveMax`; observed in
@@ -601,10 +603,30 @@ fn is_quad_exchange(i: &Insn) -> bool {
 fn lower_wave_reductions(insns: &mut [Insn]) -> Result<Option<u32>, String> {
     for op in insns.iter_mut().filter(|op| op.enc == Enc::Vop1 && op.mnemonic == "v_mov_b32" && op.src == [Opnd::Raw(250)]) {
         let ctrl = *op.raw.get(1).ok_or("missing DPP16 move controls")?;
-        if ctrl & 0xffff0000 != 0xff0c0000 { return Err(format!("unsupported DPP16 move at {:#x}", op.offset)); }
-        op.op = OP_QUAD_MOVE;
-        op.src[0] = Opnd::Vgpr(ctrl as u8);
-        op.aux.imm = ((ctrl >> 8) & 255) as i64;
+        // DPP16 control word: [src0_reg:8][ctrl:9][neg0:1][abs0:1][bc:1][fi:1][bank_m:4][row_m:4]
+        // (see Leonida rdna2_decode.py). Accept the exact shape the GPU emits for the two
+        // moves we lower: quad_perm with FI=1 and row_mirror with FI=0.
+        let src0_reg = ctrl & 0xff;
+        let ctrl_field = (ctrl >> 8) & 0x1ff;
+        let fi = (ctrl >> 18) & 1;
+        let bc = (ctrl >> 19) & 1;
+        let neg0 = (ctrl >> 20) & 1;
+        let abs0 = (ctrl >> 21) & 1;
+        let bank_m = (ctrl >> 24) & 0xf;
+        let row_m = (ctrl >> 28) & 0xf;
+        if ctrl_field <= 0xff && fi == 1 && bc == 1 && neg0 == 0 && abs0 == 0 && bank_m == 0xf && row_m == 0xf {
+            op.op = OP_QUAD_MOVE;
+            op.src[0] = Opnd::Vgpr(src0_reg as u8);
+            op.aux.imm = ((ctrl >> 8) & 255) as i64;
+            continue;
+        }
+        if ctrl_field == 0x140 && fi == 0 && bc == 1 && neg0 == 0 && abs0 == 0 && bank_m == 0xf && row_m == 0xf {
+            op.op = OP_ROW_MIRROR;
+            op.src[0] = Opnd::Vgpr(src0_reg as u8);
+            op.aux.imm = 0;
+            continue;
+        }
+        return Err(format!("unsupported DPP16 move at {:#x}", op.offset));
     }
     let mut width = None;
     let is_dpp = |i: &Insn| i.enc == Enc::Vop2 && matches!(i.src.first(), Some(Opnd::Raw(233 | 234 | 250)));
@@ -3826,19 +3848,28 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             if is_quad_exchange(ins) {
                 if self.loop_depth != 0 {
-                    return Err("DPP quad exchange inside backward control flow".into());
+                    return Err("DPP16 exchange inside backward control flow".into());
                 }
-                // FI=1 fetches the saved VGPR even from an EXEC-disabled lane. All
-                // host lanes must reach the exchange, including those skipping this
-                // block. Reapply the branch and EXEC guards to the destination write.
                 if open {
                     self.end_guard(&mut open);
                     cur.clear();
                 }
-                let perm = ins.aux.imm;
                 let source = r(&ins.src[0])?;
-                self.line(&format!("uint q{i}lane = WaveGetLaneIndex();"));
-                self.line(&format!("uint q{i} = WaveReadLaneAt({source}, (q{i}lane & ~3u) | (({perm}u >> (2u * (q{i}lane & 3u))) & 3u));"));
+                if ins.op == OP_ROW_MIRROR {
+                    // FI=0: a source lane inactive in EXEC contributes 0. row_mirror
+                    // mirrors local lanes within a 16-lane row.
+                    self.line(&format!("uint q{i}lane = WaveGetLaneIndex();"));
+                    self.line(&format!("uint q{i}src = (q{i}lane & ~15u) | (15u - (q{i}lane & 15u));"));
+                    self.line(&format!("uint q{i}act = q{i}src < 32u ? (exec_lo >> q{i}src) & 1u : (exec_hi >> (q{i}src - 32u)) & 1u;"));
+                    self.line(&format!("uint q{i} = q{i}act != 0u ? WaveReadLaneAt({source}, q{i}src) : 0u;"));
+                } else {
+                    // FI=1 fetches the saved VGPR even from an EXEC-disabled lane. All
+                    // host lanes must reach the exchange, including those skipping this
+                    // block. Reapply the branch and EXEC guards to the destination write.
+                    let perm = ins.aux.imm;
+                    self.line(&format!("uint q{i}lane = WaveGetLaneIndex();"));
+                    self.line(&format!("uint q{i} = WaveReadLaneAt({source}, (q{i}lane & ~3u) | (({perm}u >> (2u * (q{i}lane & 3u))) & 3u));"));
+                }
             }
             if restored_waits.contains(&i) {
                 self.end_guard(&mut open);
@@ -5313,7 +5344,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             return self.ws(&d, &format!("WaveReadLaneAt({}, {lane})", r(&s[0])?));
         }
         if is_quad_exchange(ins) {
-            if ins.op == OP_QUAD_MOVE { return self.wv(&d, &format!("q{}", self.cur_idx)); }
+            if ins.op != OP_QUAD_ADD_F32 { return self.wv(&d, &format!("q{}", self.cur_idx)); }
             return self.wv(&d, &format!("asuint(asfloat(q{}) + {})", self.cur_idx, f(&s[1])?));
         }
         if ins.op == OP_WAVE_REDUCE && ins.enc == Enc::Vop3 {
@@ -8322,6 +8353,66 @@ fn compute_heap_base(ex: &ShaderExtract) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dpp16_word(src0_reg: u32, ctrl: u32, fi: u32, bc: u32, bank_m: u32, row_m: u32) -> u32 {
+        // [src0_reg:8][ctrl:9][fi:1][bc:1][bank_m:4][row_m:4]
+        src0_reg | (ctrl << 8) | (fi << 18) | (bc << 19) | (bank_m << 24) | (row_m << 28)
+    }
+
+    fn dpp16_move_insn(ctrl: u32) -> Insn {
+        Insn {
+            offset: 0x062c,
+            dwords: 2,
+            enc: Enc::Vop1,
+            op: 0,
+            raw: vec![0x7e0802fa, ctrl],
+            mnemonic: "v_mov_b32".to_string(),
+            dst: vec![Opnd::Vgpr(4)],
+            src: vec![Opnd::Raw(250)],
+            aux: Default::default(),
+        }
+    }
+
+    #[test]
+    fn dpp16_row_mirror_fi0_is_accepted_as_row_mirror_move() {
+        let mut insns = vec![dpp16_move_insn(dpp16_word(2, 0x140, 0, 1, 0xf, 0xf))];
+        lower_wave_reductions(&mut insns).expect("row_mirror accepted");
+        assert_eq!(insns[0].op, OP_ROW_MIRROR);
+        assert_eq!(insns[0].src, vec![Opnd::Vgpr(2)]);
+        assert_eq!(insns[0].aux.imm, 0);
+    }
+
+    #[test]
+    fn dpp16_quad_perm_fi1_is_accepted_and_keeps_the_perm_in_aux_imm() {
+        let mut insns = vec![dpp16_move_insn(dpp16_word(0, 0x0, 1, 1, 0xf, 0xf))];
+        lower_wave_reductions(&mut insns).expect("quad_perm accepted");
+        assert_eq!(insns[0].op, OP_QUAD_MOVE);
+        assert_eq!(insns[0].src, vec![Opnd::Vgpr(0)]);
+        assert_eq!(insns[0].aux.imm, 0);
+    }
+
+    #[test]
+    fn dpp16_row_mirror_with_fi1_is_refused() {
+        // row_mirror with FI=1 reads the pre-existing value; not the accepted shape.
+        let mut insns = vec![dpp16_move_insn(dpp16_word(2, 0x140, 1, 1, 0xf, 0xf))];
+        let err = lower_wave_reductions(&mut insns).expect_err("refused");
+        assert!(err.contains("unsupported DPP16 move"));
+    }
+
+    #[test]
+    fn dpp16_unimplemented_control_is_refused() {
+        // row_half_mirror, and quad_perm with a negation modifier.
+        let mut insns = vec![dpp16_move_insn(dpp16_word(2, 0x141, 0, 1, 0xf, 0xf))];
+        assert!(lower_wave_reductions(&mut insns).is_err());
+        let mut insns = vec![dpp16_move_insn(dpp16_word(2, 0x0, 1, 1, 0xf, 0xf) | (1u32 << 20))];
+        assert!(lower_wave_reductions(&mut insns).is_err());
+    }
+
+    #[test]
+    fn dpp16_mov_missing_control_word_is_refused() {
+        let mut insns = vec![Insn { raw: vec![0x7e0802fa], ..dpp16_move_insn(0) }];
+        assert!(lower_wave_reductions(&mut insns).is_err());
+    }
 
     #[test]
     fn typed_buffer_16_16_16_16_uint_channels_read_16_bit_words_from_two_dwords() {
