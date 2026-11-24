@@ -18,6 +18,15 @@ class SelectProton(unittest.TestCase):
             self.assertEqual(proton_installation(str(runner)), install)
             self.assertEqual(proton_installation(str(install)), install)
 
+    @unittest.skipUnless(sys.platform == "linux", "Proton runner symlinks require Linux")
+    def test_explicit_runner_symlink_to_renamed_script(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            install = Path(tmp).resolve()
+            (install / "proton-launcher").touch()
+            runner = install / "proton"
+            runner.symlink_to("proton-launcher")
+            self.assertEqual(proton_installation(str(runner)), install)
+
     def test_registered_steam_library(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
