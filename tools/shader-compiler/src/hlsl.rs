@@ -408,6 +408,7 @@ struct Emitter<'a> {
     res: HashMap<usize, Vec<Res>>, // per-instruction resolved resources
     cb_size: BTreeMap<u32, u32>,   // slot -> dwords
     zero_buffer_offsets: std::cell::OnceCell<BTreeSet<(usize, u8)>>,
+    smem_constants: std::cell::OnceCell<BTreeMap<(usize, u8), u32>>,
     tex: BTreeMap<u32, u32>,       // slot -> dim
     samp: BTreeSet<u32>,
     samp_cmp: BTreeSet<u32>,
@@ -1019,10 +1020,15 @@ fn verify_lane_election(insns: &mut [Insn], ff1: usize) -> Result<(), String> {
         return Err(bad("branch enters the election"));
     }
     let c = &insns[cmp];
-    if !matches!(c.mnemonic.as_str(), "v_cmp_eq_i32" | "v_cmp_eq_u32") || c.src.get(0) != Some(&Opnd::Sgpr(lane)) {
+    if !matches!(c.mnemonic.as_str(), "v_cmp_eq_i32" | "v_cmp_eq_u32") {
         return Err(bad("lane is not compared for equality"));
     }
-    let Some(&Opnd::Vgpr(index)) = c.src.get(1) else { return Err(bad("lane is not compared with a VGPR")) };
+    // Equality is symmetric. The VOP3 encoding permits the elected scalar
+    // on either side; preserve all existing full-lane-index proof checks.
+    let index = match c.src.get(..2) {
+        Some([Opnd::Sgpr(reg), Opnd::Vgpr(v)]) | Some([Opnd::Vgpr(v), Opnd::Sgpr(reg)]) if *reg == lane => *v,
+        _ => return Err(bad("lane is not compared for equality with a VGPR")),
+    };
     let bits = if insns[ff1].mnemonic.ends_with("_b32") { "b32" } else { "b64" };
     let full_low = |l: &Insn| l.mnemonic == "v_mbcnt_lo_u32_b32" && l.aux.mask == 0
         && l.src.get(..2) == Some(&[Opnd::ConstInt(-1), Opnd::ConstInt(0)][..]);
@@ -1743,6 +1749,7 @@ impl<'a> Emitter<'a> {
             res: HashMap::new(),
             cb_size: BTreeMap::new(),
             zero_buffer_offsets: Default::default(),
+            smem_constants: Default::default(),
             tex: BTreeMap::new(),
             samp: BTreeSet::new(),
             samp_cmp: BTreeSet::new(),
@@ -3038,7 +3045,7 @@ impl<'a> Emitter<'a> {
                     // Read from an embedded constant table.
                     let n = 1u32 << ins.op;
                     let d = ins.dst.first().and_then(sg).ok_or("s_load: bad dst")?;
-                    if (ins.raw.get(1).copied().unwrap_or(0) >> 25) != 0x7d {
+                    if self.static_smem_offset(ins).is_none() {
                         return Err(format!("s_load at {:#x}: code-table read with dynamic soffset unsupported", ins.offset));
                     }
                     self.uses_code = true;
@@ -3069,7 +3076,9 @@ impl<'a> Emitter<'a> {
                         // SOFFSET is a heap fetch, however the byte offset was computed.
                         let heap_offset = sym.get(&soff) == Some(&Sym::HeapOffset)
                             || (self.compute_heap && soff < 106 && written.contains(&soff));
-                        if self.resource_heap_base == Some(table) && matches!(n, 4 | 8) && ins.aux.imm == 0 && heap_offset {
+                        if self.resource_heap_base == Some(table) && matches!(n, 4 | 8)
+                            && (ins.aux.imm == 0 || (ins.aux.imm >= 0 && ins.aux.imm % 32 == 0 && sym.get(&soff) == Some(&Sym::HeapOffset)))
+                            && heap_offset {
                             for k in 0..n as u16 {
                                 sym.remove(&(d + k));
                                 written.insert(d + k);
@@ -3105,16 +3114,19 @@ impl<'a> Emitter<'a> {
                                 continue;
                             }
                         }
-                        return Err(format!("s_load at {:#x}: dynamic soffset unsupported", ins.offset));
+                        // Preserve heap-specific lowering above. Only fold an ordinary
+                        // descriptor-table offset when every reaching path proves its value.
                     }
+                    let off = self.static_smem_offset(ins)
+                        .ok_or_else(|| format!("s_load at {:#x}: dynamic soffset unsupported", ins.offset))?;
                     if self.mesh_bindings.as_ref().is_some_and(|mesh| {
-                        n != 4 || !mesh.tables.contains_key(&(table, ins.aux.imm as u32))
+                        n != 4 || !mesh.tables.contains_key(&(table, off))
                     }) {
                         return Err(format!("unverified mesh descriptor load at {:#x}", ins.offset));
                     }
                     for k in 0..n {
-                        sym.insert(d + k as u16, Sym::Desc { table, off: ins.aux.imm as u32, k });
-                        self.dsel_loads.insert(idx, (d, ((table as u32) << 24) | ins.aux.imm as u32));
+                        sym.insert(d + k as u16, Sym::Desc { table, off, k });
+                        self.dsel_loads.insert(idx, (d, ((table as u32) << 24) | off));
                         written.insert(d + k as u16);
                     }
                 }
@@ -4767,7 +4779,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                         self.regs.insert(value.clone());
                         let dst = d.ok_or("missing direct descriptor destination")?;
                         self.touch(&dst);
-                        self.ws(&dst, &format!("tb_heap_index({value} >> 5)"))?;
+                        let byte_offset = if ins.aux.imm == 0 { value }
+                            else { format!("({value} + {:#x}u)", ins.aux.imm as u32) };
+                        self.ws(&dst, &format!("tb_heap_index({byte_offset} >> 5)"))?;
                         return Ok(());
                     }
                     if let Some(Res::HeapSamplerLoad(offset)) = self.res.get(&idx).and_then(|v| v.first()).copied() {
@@ -4788,7 +4802,8 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                         let ndw = ((self.ex.isa_data.len().saturating_sub(self.ex.isa.len())) / 4).max(1);
                         let t = self.tmp;
                         self.tmp += 1;
-                        self.line(&format!("uint t{t} = ({} + {:#x}u) >> 2;", r(&s[0])?, ins.aux.imm as u32));
+                        let offset = self.static_smem_offset(ins).ok_or("unverified code-table offset")?;
+                        self.line(&format!("uint t{t} = ({} + {offset:#x}u) >> 2;", r(&s[0])?));
                         for k in 0..n {
                             self.line(&format!("uint t{t}_{k} = tb_code[(t{t} + {k}u - {}u) % {ndw}u];", self.ex.isa.len() / 4));
                         }
@@ -6449,6 +6464,28 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
         }
         Ok(())
+    }
+
+    fn static_smem_offset(&self, ins: &Insn) -> Option<u32> {
+        let imm = u32::try_from(ins.aux.imm).ok()?;
+        if ins.raw.get(1).copied()? >> 25 == 0x7d { return Some(imm); }
+        if self.proven_zero_smem_offset(ins) { return Some(imm); }
+        let reg = ins.raw.get(1).copied()? >> 25;
+        if reg > 105 { return None; }
+        let offset = *self.smem_constants
+            .get_or_init(|| mubuf_offsets::proven_smem_constants(&disassemble(&self.ex.isa)))
+            .get(&(ins.offset, reg as u8))?;
+        let combined = imm.checked_add(offset)?;
+        // Static table selectors encode the table in the upper byte.
+        // Do not turn unaligned or out-of-range addresses into descriptors.
+        (combined <= 0x00ff_ffff && combined % 4 == 0).then_some(combined)
+    }
+
+    fn proven_zero_smem_offset(&self, ins: &Insn) -> bool {
+        let reg = ins.raw.get(1).copied().unwrap_or(u32::MAX) >> 25;
+        reg <= 105 && self.zero_buffer_offsets
+            .get_or_init(|| mubuf_offsets::proven_zero(&disassemble(&self.ex.isa)))
+            .contains(&(ins.offset, reg as u8))
     }
 
     fn zero_buffer_offset(&self, ins: &Insn) -> bool {
@@ -8511,5 +8548,29 @@ mod tests {
             let expr = tbuf_16_16_16_16_uint_channel(channel, "a", "b");
             assert!(expr.contains("& 65535u"), "channel {channel}: {expr}");
         }
+    }
+}
+
+#[cfg(test)]
+mod election_order_regression {
+    use super::*;
+    fn op(name: &str, enc: Enc, dst: Vec<Opnd>, src: Vec<Opnd>, offset: usize) -> Insn {
+        Insn { offset, dwords: 1, enc, op: 0, raw: vec![0], mnemonic: name.into(), dst, src, aux: Default::default() }
+    }
+    #[test]
+    fn symmetric_equality_still_requires_full_lane_count() {
+        let mut ops = vec![
+            op("v_mbcnt_lo_u32_b32", Enc::Vop3, vec![Opnd::Vgpr(2)], vec![Opnd::ConstInt(-1), Opnd::ConstInt(0)], 0),
+            op("s_ff1_i32_b32", Enc::Sop1, vec![Opnd::Sgpr(7)], vec![Opnd::ExecLo], 4),
+            op("v_cmp_eq_u32", Enc::Vop3, vec![Opnd::VccLo], vec![Opnd::Vgpr(2), Opnd::Sgpr(7)], 8),
+        ];
+        assert!(verify_lane_election(&mut ops, 1).is_ok());
+        ops[2].src.swap(0, 1);
+        assert!(verify_lane_election(&mut ops, 1).is_ok());
+        ops[2].mnemonic = "v_cmp_ne_u32".into();
+        assert!(verify_lane_election(&mut ops, 1).is_err());
+        ops[2].mnemonic = "v_cmp_eq_u32".into();
+        ops[0].src[0] = Opnd::ConstInt(0);
+        assert!(verify_lane_election(&mut ops, 1).is_err());
     }
 }
