@@ -5,9 +5,19 @@
 //! recurses deeply on large translated shaders. Xbox titles create pipelines
 //! on worker threads with 1 MiB stacks, so those threads overflowed their stack
 //! inside the compiler and died (ProjectScarlett stayed on a black screen).
+//!
+//! A cold NVIDIA disk cache then spends minutes inside that same call, turning
+//! DXIL into a GPU binary. An untranslated compute shader waits a bounded time
+//! and, if the driver is still compiling, returns so the title can substitute
+//! a null pipeline. A translated shader waits for the real pipeline: a null
+//! stand-in has no descriptor-heap layout, and the title's dispatch is then
+//! dropped. The compile keeps the device, root signature, and shader bytes.
 
 /// Reserved, not committed: untouched pages cost only address space.
 const STACK_BYTES: usize = 64 << 20;
+
+/// `0` means the cap has not been chosen yet. Tests store a small cap here.
+static MAX_LIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 struct AssertSend<T>(T);
 // SAFETY: D3D12 devices and the descriptors they read are free-threaded, and
@@ -44,6 +54,274 @@ pub(crate) fn run_logged<R, F: FnOnce() -> R>(label: &str, job: F) -> R {
     match result {
         Some(value) => value,
         None => (slot.take().expect("pipeline job already taken"))(),
+    }
+}
+
+/// The compile finished, or it is still running after the deadline.
+pub(crate) enum PipelineWait<T> {
+    Ready(T),
+    /// The title can substitute a null pipeline. The driver compile continues
+    /// on a helper thread and still records its GPU binary.
+    Deferred,
+}
+
+/// Wait up to `TUXBOX_PIPELINE_DEADLINE` seconds (default 20). `0` waits until
+/// the driver returns. Past the deadline the helper is detached, not cancelled.
+pub(crate) fn run_deadline<R, F>(label: &str, job: F) -> PipelineWait<R>
+where
+    R: Send + 'static,
+    F: FnOnce() -> R + Send + 'static,
+{
+    let deadline = pipeline_deadline();
+    static ANNOUNCED: std::sync::Once = std::sync::Once::new();
+    if deadline.is_zero() {
+        crate::diagnostics::log_once(&ANNOUNCED, || {
+            "compute pipelines wait for the driver compile".to_string()
+        });
+    } else {
+        crate::diagnostics::log_once(&ANNOUNCED, || {
+            format!(
+                "compute pipelines wait {}s, then return a null pipeline while the driver compile continues ({} at a time)",
+                deadline.as_secs(),
+                max_live()
+            )
+        });
+    }
+    run_for(label, deadline, job)
+}
+
+fn pipeline_deadline() -> std::time::Duration {
+    static DEADLINE: std::sync::OnceLock<std::time::Duration> = std::sync::OnceLock::new();
+    *DEADLINE.get_or_init(|| parse_deadline(std::env::var("TUXBOX_PIPELINE_DEADLINE").ok().as_deref()))
+}
+
+fn parse_deadline(text: Option<&str>) -> std::time::Duration {
+    match text {
+        None => std::time::Duration::from_secs(20),
+        Some(text) => match text.parse::<u64>() {
+            Ok(seconds) => std::time::Duration::from_secs(seconds),
+            Err(_) => std::time::Duration::from_secs(20),
+        },
+    }
+}
+
+fn max_live() -> usize {
+    let current = MAX_LIVE.load(std::sync::atomic::Ordering::Relaxed);
+    if current != 0 {
+        return current;
+    }
+    // Each live compile reserves a 64 MiB stack and occupies a driver thread.
+    // One per CPU, capped, so a title that keeps submitting cannot pile up
+    // hundreds of detached compiles.
+    let chosen = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8).clamp(2, 16);
+    match MAX_LIVE.compare_exchange(0, chosen, std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Acquire) {
+        Ok(_) => chosen,
+        Err(existing) => existing,
+    }
+}
+
+fn run_for<R, F>(label: &str, deadline: std::time::Duration, job: F) -> PipelineWait<R>
+where
+    R: Send + 'static,
+    F: FnOnce() -> R + Send + 'static,
+{
+    if deadline.is_zero() {
+        return PipelineWait::Ready(run_logged(label, job));
+    }
+    if !reserve_slot() {
+        enqueue(label, job);
+        // A slot may have freed between the reservation attempt and the push.
+        on_slot_released();
+        note_deferred(label, None);
+        return PipelineWait::Deferred;
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let shared = std::sync::Arc::new(std::sync::Mutex::new(Some(job)));
+    let for_thread = std::sync::Arc::clone(&shared);
+    let label_owned = label.to_string();
+    // Owned by the closure so a failed spawn releases the reservation.
+    let slot = Slot;
+    let spawned = spawn_pipeline(move || {
+        let _slot = slot;
+        let _watch = PipelineWatch::start(&label_owned);
+        let job = take_job(&for_thread);
+        let value = job();
+        // The caller may already have dropped the receiver. That is the deadline.
+        let _ = tx.send(value);
+    });
+    let handle = match spawned {
+        Ok(handle) => handle,
+        Err(_) => return PipelineWait::Ready(run_logged(label, take_job(&shared))),
+    };
+    match rx.recv_timeout(deadline) {
+        Ok(value) => {
+            join_or_resume(handle);
+            PipelineWait::Ready(value)
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => match rx.try_recv() {
+            Ok(value) => {
+                join_or_resume(handle);
+                PipelineWait::Ready(value)
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                drop(rx);
+                note_deferred(label, Some(deadline));
+                // Detach. The helper keeps running until the driver returns.
+                drop(handle);
+                PipelineWait::Deferred
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                join_or_resume(handle);
+                panic!("pipeline compile ended without a result");
+            }
+        },
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            join_or_resume(handle);
+            panic!("pipeline compile ended without a result");
+        }
+    }
+}
+
+fn note_deferred(label: &str, waited: Option<std::time::Duration>) {
+    match waited {
+        None => crate::diagnostics::log(&format!("CreatePipelineState {label} queued; compile continues")),
+        Some(waited) => crate::diagnostics::log(&format!(
+            "CreatePipelineState {label} deferred after {}s; compile continues",
+            waited.as_secs()
+        )),
+    }
+}
+
+fn enqueue<R, F>(label: &str, job: F)
+where
+    R: Send + 'static,
+    F: FnOnce() -> R + Send + 'static,
+{
+    let label = label.to_string();
+    queue().push_back(Queued {
+        label,
+        job: Box::new(move || {
+            let _ = job();
+        }),
+    });
+}
+
+fn spawn_pipeline<F>(job: F) -> std::io::Result<std::thread::JoinHandle<()>>
+where
+    F: FnOnce() + Send + 'static,
+{
+    std::thread::Builder::new()
+        .name("tuxbox-pipeline".into())
+        .stack_size(STACK_BYTES)
+        .spawn(job)
+}
+
+fn take_job<T>(slot: &std::sync::Mutex<Option<T>>) -> T {
+    slot.lock().unwrap_or_else(|error| error.into_inner()).take().expect("pipeline job already taken")
+}
+
+fn join_or_resume(handle: std::thread::JoinHandle<()>) {
+    if let Err(panic) = handle.join() {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+struct Queued {
+    label: String,
+    job: Box<dyn FnOnce() + Send>,
+}
+
+fn queue() -> std::sync::MutexGuard<'static, std::collections::VecDeque<Queued>> {
+    static QUEUE: std::sync::Mutex<std::collections::VecDeque<Queued>> =
+        std::sync::Mutex::new(std::collections::VecDeque::new());
+    QUEUE.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+fn reserve_slot() -> bool {
+    let live = live_counter();
+    let mut current = live.load(std::sync::atomic::Ordering::Relaxed);
+    loop {
+        if current >= max_live() {
+            return false;
+        }
+        match live.compare_exchange_weak(
+            current,
+            current + 1,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+        ) {
+            Ok(_) => return true,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+fn live_counter() -> &'static std::sync::atomic::AtomicUsize {
+    static LIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    &LIVE
+}
+
+#[cfg(test)]
+fn inflight() -> usize {
+    live_counter().load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Releases one reserved compile slot and starts a queued compile if one fits.
+struct Slot;
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        live_counter().fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        on_slot_released();
+    }
+}
+
+/// Stops a failed `spawn` from recursively trying to spawn again.
+static PUMP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn on_slot_released() {
+    if PUMP.fetch_add(1, std::sync::atomic::Ordering::AcqRel) != 0 {
+        PUMP.fetch_sub(1, std::sync::atomic::Ordering::Release);
+        return;
+    }
+    let look_again = start_one_queued();
+    PUMP.fetch_sub(1, std::sync::atomic::Ordering::Release);
+    // `start_one_queued` may have observed an empty queue just before a push.
+    if look_again && live_counter().load(std::sync::atomic::Ordering::Acquire) < max_live() && !queue().is_empty() {
+        on_slot_released();
+    }
+}
+
+/// `true` when the caller should check the queue again. `false` when a helper
+/// thread could not be created, so retrying would recurse.
+fn start_one_queued() -> bool {
+    if !reserve_slot() {
+        return true;
+    }
+    let Some(queued) = queue().pop_front() else {
+        live_counter().fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        return true;
+    };
+    let shared = std::sync::Arc::new(std::sync::Mutex::new(Some(queued)));
+    let for_thread = std::sync::Arc::clone(&shared);
+    let slot = Slot;
+    match spawn_pipeline(move || {
+        let _slot = slot;
+        let queued = take_job(&for_thread);
+        let _watch = PipelineWatch::start(&queued.label);
+        (queued.job)();
+    }) {
+        Ok(handle) => {
+            drop(handle);
+            true
+        }
+        Err(error) => {
+            crate::diagnostics::log(&format!("pipeline compile thread was not created: {error}"));
+            if let Some(queued) = shared.lock().unwrap_or_else(|error| error.into_inner()).take() {
+                queue().push_front(queued);
+            }
+            false
+        }
     }
 }
 
@@ -140,5 +418,116 @@ mod tests {
     fn returns_borrowed_results() {
         let text = String::from("pso");
         assert_eq!(super::run_logged("test", || text.len()), 3);
+    }
+
+    #[test]
+    fn deadline_text_uses_twenty_seconds_unless_zero_or_invalid() {
+        use std::time::Duration;
+        assert_eq!(super::parse_deadline(None), Duration::from_secs(20));
+        assert_eq!(super::parse_deadline(Some("0")), Duration::ZERO);
+        assert_eq!(super::parse_deadline(Some("20")), Duration::from_secs(20));
+        assert_eq!(super::parse_deadline(Some("nope")), Duration::from_secs(20));
+    }
+
+    #[test]
+    fn a_zero_deadline_waits_for_the_compile() {
+        let _guard = lock();
+        let wait = super::run_for("block", std::time::Duration::ZERO, || {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            4
+        });
+        assert!(matches!(wait, super::PipelineWait::Ready(4)));
+        assert_eq!(super::inflight(), 0);
+    }
+
+    #[test]
+    fn a_finished_compile_releases_its_slot() {
+        let _guard = lock();
+        let wait = super::run_for("fast", std::time::Duration::from_secs(2), || 5);
+        assert!(matches!(wait, super::PipelineWait::Ready(5)));
+        assert_eq!(super::inflight(), 0);
+    }
+
+    #[test]
+    fn a_slow_compile_is_detached_and_still_finishes() {
+        let _guard = lock();
+        let gate = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let gate_in_job = std::sync::Arc::clone(&gate);
+        let done_in_job = std::sync::Arc::clone(&done);
+        let started = std::time::Instant::now();
+        let wait = super::run_for("slow", std::time::Duration::from_millis(40), move || {
+            let (lock, wake) = &*gate_in_job;
+            let mut open = lock.lock().unwrap_or_else(|error| error.into_inner());
+            while !*open {
+                open = wake.wait(open).unwrap_or_else(|error| error.into_inner());
+            }
+            done_in_job.store(true, std::sync::atomic::Ordering::SeqCst);
+            7
+        });
+        assert!(matches!(wait, super::PipelineWait::Deferred));
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
+        assert!(!done.load(std::sync::atomic::Ordering::SeqCst));
+        {
+            let (lock, wake) = &*gate;
+            *lock.lock().unwrap_or_else(|error| error.into_inner()) = true;
+            wake.notify_one();
+        }
+        wait_until(|| done.load(std::sync::atomic::Ordering::SeqCst));
+        wait_until(|| super::inflight() == 0);
+    }
+
+    #[test]
+    fn compiles_past_the_cap_are_queued_and_still_run() {
+        let _guard = lock();
+        let previous = super::MAX_LIVE.swap(2, std::sync::atomic::Ordering::SeqCst);
+        struct Restore(usize);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                super::MAX_LIVE.store(self.0, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let _restore = Restore(previous);
+        let gate = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        for _ in 0..2 {
+            let gate_in_job = std::sync::Arc::clone(&gate);
+            let wait = super::run_for("hold", std::time::Duration::from_millis(30), move || {
+                let (lock, wake) = &*gate_in_job;
+                let mut open = lock.lock().unwrap_or_else(|error| error.into_inner());
+                while !*open {
+                    open = wake.wait(open).unwrap_or_else(|error| error.into_inner());
+                }
+            });
+            assert!(matches!(wait, super::PipelineWait::Deferred));
+        }
+        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ran_in_job = std::sync::Arc::clone(&ran);
+        let started = std::time::Instant::now();
+        let wait = super::run_for("ninth", std::time::Duration::from_secs(5), move || {
+            ran_in_job.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        assert!(matches!(wait, super::PipelineWait::Deferred));
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+        {
+            let (lock, wake) = &*gate;
+            *lock.lock().unwrap_or_else(|error| error.into_inner()) = true;
+            wake.notify_all();
+        }
+        wait_until(|| ran.load(std::sync::atomic::Ordering::SeqCst));
+        wait_until(|| super::inflight() == 0);
+    }
+
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn wait_until(done: impl Fn() -> bool) {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !done() {
+            assert!(std::time::Instant::now() < end, "pipeline helper did not finish");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 }

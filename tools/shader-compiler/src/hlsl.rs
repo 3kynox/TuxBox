@@ -28,6 +28,14 @@ mod pixel_quad;
 mod mubuf_offsets;
 #[cfg(test)]
 mod raw_width;
+#[cfg(test)]
+mod raw_idxen;
+#[cfg(test)]
+mod wide_atomic_test;
+#[cfg(test)]
+mod heap_resinfo;
+#[cfg(test)]
+mod compute_swizzle;
 mod fssm_bindings;
 mod micropoly;
 mod mesh;
@@ -380,6 +388,36 @@ fn semantic(e: &SigElement) -> String {
     format!("{}{}", e.name, e.index)
 }
 
+/// HLSL expression for one channel of a typed buffer element in format
+/// 16_16_16_16_UINT (69): 8 bytes, 4 x 16-bit unsigned channels.
+fn tbuf_16_16_16_16_uint_channel(channel: u32, packed: &str, packed1: &str) -> String {
+    let word = if channel >= 2 { packed1 } else { packed };
+    format!("(({word} >> {}u) & 65535u)", (channel % 2) * 16)
+}
+
+/// HLSL expression for `s_ff1_i32_b64`: first set bit of a 64-bit value read
+/// through its two 32-bit words.
+fn ff1_b64_expr(lo: &str, hi: &str) -> String {
+    format!(
+        "({lo} != 0u ? uint(firstbitlow({lo})) : {hi} != 0u ? 32u + uint(firstbitlow({hi})) : 0xffffffffu)"
+    )
+}
+
+/// HLSL expression for `s_flbit_i32_b64`: first set bit from MSB to LSB over a 64-bit value.
+fn flbit_b64_expr(lo: &str, hi: &str) -> String {
+    format!("({hi} != 0u ? 31u - firstbithigh({hi}) : {lo} != 0u ? 63u - firstbithigh({lo}) : ~0u)")
+}
+
+/// HLSL expression for `s_ff0_i32_b32`: first zero bit from LSB to MSB over a 32-bit value.
+fn ff0_b32_expr(val: &str) -> String {
+    format!("firstbitlow(~{val})")
+}
+
+/// HLSL expression for `s_ff0_i32_b64`: first zero bit from LSB to MSB over a 64-bit value.
+fn ff0_b64_expr(lo: &str, hi: &str) -> String {
+    format!("(~{lo} != 0u ? uint(firstbitlow(~{lo})) : ~{hi} != 0u ? 32u + uint(firstbitlow(~{hi})) : 0xffffffffu)")
+}
+
 struct Emitter<'a> {
     lds_tile: Option<lds_tile::LdsTile>,
     packed: Option<PackedRoot>,
@@ -388,6 +426,7 @@ struct Emitter<'a> {
     res: HashMap<usize, Vec<Res>>, // per-instruction resolved resources
     cb_size: BTreeMap<u32, u32>,   // slot -> dwords
     zero_buffer_offsets: std::cell::OnceCell<BTreeSet<(usize, u8)>>,
+    smem_constants: std::cell::OnceCell<BTreeMap<(usize, u8), u32>>,
     tex: BTreeMap<u32, u32>,       // slot -> dim
     samp: BTreeSet<u32>,
     samp_cmp: BTreeSet<u32>,
@@ -454,6 +493,7 @@ struct Emitter<'a> {
     view_cull: Option<instance_cull_views::ViewProgram>,
     /// The shader uses wave intrinsics (needs shader model 6: DXC only).
     required_wave_size: Option<u32>,
+    portable_wave64: bool,
     msel: HashMap<usize, MSel>,
     /// Buffer ops (MUBUF, s_buffer_load) whose descriptor register holds one of several
     /// descriptors: (register key, candidates as (descriptor id, resource)).
@@ -559,9 +599,11 @@ impl HeapView {
 const OP_WAVE_REDUCE: u32 = 0x7ff0;
 const OP_QUAD_ADD_F32: u32 = 0x7ff5;
 const OP_QUAD_MOVE: u32 = 0x7fe1;
+const OP_ROW_MIRROR: u32 = 0x7fe2;
 
 fn is_quad_exchange(i: &Insn) -> bool {
-    (i.enc == Enc::Vop2 && i.op == OP_QUAD_ADD_F32) || (i.enc == Enc::Vop1 && i.op == OP_QUAD_MOVE)
+    (i.enc == Enc::Vop2 && i.op == OP_QUAD_ADD_F32)
+        || (i.enc == Enc::Vop1 && (i.op == OP_QUAD_MOVE || i.op == OP_ROW_MIRROR))
 }
 
 /// Whole-wave reductions (HLSL `WaveActiveMin` / `WaveActiveMax`; observed in
@@ -589,10 +631,30 @@ fn is_quad_exchange(i: &Insn) -> bool {
 fn lower_wave_reductions(insns: &mut [Insn]) -> Result<Option<u32>, String> {
     for op in insns.iter_mut().filter(|op| op.enc == Enc::Vop1 && op.mnemonic == "v_mov_b32" && op.src == [Opnd::Raw(250)]) {
         let ctrl = *op.raw.get(1).ok_or("missing DPP16 move controls")?;
-        if ctrl & 0xffff0000 != 0xff0c0000 { return Err(format!("unsupported DPP16 move at {:#x}", op.offset)); }
-        op.op = OP_QUAD_MOVE;
-        op.src[0] = Opnd::Vgpr(ctrl as u8);
-        op.aux.imm = ((ctrl >> 8) & 255) as i64;
+        // DPP16 control word: [src0_reg:8][ctrl:9][neg0:1][abs0:1][bc:1][fi:1][bank_m:4][row_m:4]
+        // (see Leonida rdna2_decode.py). Accept the exact shape the GPU emits for the two
+        // moves we lower: quad_perm with FI=1 and row_mirror with FI=0.
+        let src0_reg = ctrl & 0xff;
+        let ctrl_field = (ctrl >> 8) & 0x1ff;
+        let fi = (ctrl >> 18) & 1;
+        let bc = (ctrl >> 19) & 1;
+        let neg0 = (ctrl >> 20) & 1;
+        let abs0 = (ctrl >> 21) & 1;
+        let bank_m = (ctrl >> 24) & 0xf;
+        let row_m = (ctrl >> 28) & 0xf;
+        if ctrl_field <= 0xff && fi == 1 && bc == 1 && neg0 == 0 && abs0 == 0 && bank_m == 0xf && row_m == 0xf {
+            op.op = OP_QUAD_MOVE;
+            op.src[0] = Opnd::Vgpr(src0_reg as u8);
+            op.aux.imm = ((ctrl >> 8) & 255) as i64;
+            continue;
+        }
+        if ctrl_field == 0x140 && fi == 0 && bc == 1 && neg0 == 0 && abs0 == 0 && bank_m == 0xf && row_m == 0xf {
+            op.op = OP_ROW_MIRROR;
+            op.src[0] = Opnd::Vgpr(src0_reg as u8);
+            op.aux.imm = 0;
+            continue;
+        }
+        return Err(format!("unsupported DPP16 move at {:#x}", op.offset));
     }
     let mut width = None;
     let is_dpp = |i: &Insn| i.enc == Enc::Vop2 && matches!(i.src.first(), Some(Opnd::Raw(233 | 234 | 250)));
@@ -978,10 +1040,15 @@ fn verify_lane_election(insns: &mut [Insn], ff1: usize) -> Result<(), String> {
         return Err(bad("branch enters the election"));
     }
     let c = &insns[cmp];
-    if !matches!(c.mnemonic.as_str(), "v_cmp_eq_i32" | "v_cmp_eq_u32") || c.src.get(0) != Some(&Opnd::Sgpr(lane)) {
+    if !matches!(c.mnemonic.as_str(), "v_cmp_eq_i32" | "v_cmp_eq_u32") {
         return Err(bad("lane is not compared for equality"));
     }
-    let Some(&Opnd::Vgpr(index)) = c.src.get(1) else { return Err(bad("lane is not compared with a VGPR")) };
+    // Equality is symmetric. The VOP3 encoding permits the elected scalar
+    // on either side; preserve all existing full-lane-index proof checks.
+    let index = match c.src.get(..2) {
+        Some([Opnd::Sgpr(reg), Opnd::Vgpr(v)]) | Some([Opnd::Vgpr(v), Opnd::Sgpr(reg)]) if *reg == lane => *v,
+        _ => return Err(bad("lane is not compared for equality with a VGPR")),
+    };
     let bits = if insns[ff1].mnemonic.ends_with("_b32") { "b32" } else { "b64" };
     let full_low = |l: &Insn| l.mnemonic == "v_mbcnt_lo_u32_b32" && l.aux.mask == 0
         && l.src.get(..2) == Some(&[Opnd::ConstInt(-1), Opnd::ConstInt(0)][..]);
@@ -1266,6 +1333,16 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
             return Err(format!("wave operation requires complete {width}-lane compute waves"));
         }
     }
+    em.portable_wave64 = required_wave_size == Some(64)
+        && ex.stage == Stage::Compute && compute_group(ex) == [64, 1, 1]
+        && !wave_cull && !page_waves && !allocation_wave64 && !requires_ballot
+        && !em.compute_swizzle && !em.indexed_lane && !em.compute_heap
+        && em.packed.is_none() && !uses_quad_add && !uses_bpermute && !probe_trace
+        && scan_width.is_none() && !particle_sort && !hair_cluster_export && !hair_cluster
+        && !instance_cull && !hzb_cull && view_cull.is_none() && !post_cull
+        && !hair_visibility_indirect && !hair_visibility_single && hair_compact.is_none()
+        && !subsurface_setup && !material_classify && !classify_tiles && !reflection && !group_extrema
+        && wave_sum::portable_single_wave(&em.insns);
     if is_ps {
         em.find_export_epilogs();
         em.classify_interpolation();
@@ -1327,7 +1404,7 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
         em.uav_uint.insert(1);
     }
     if let Some(program) = view_cull { program.resources(&mut em)?; }
-    if (ex.stage == Stage::Compute || (ex.stage == Stage::Pixel && ex.entry.as_deref() == Some("HWRasterizePS")))
+    if matches!(ex.stage, Stage::Compute | Stage::Pixel)
         && em.packed.is_none() && !em.uav_uint.is_empty() {
         em.resolve_wide_image_atomics()?;
     }
@@ -1376,6 +1453,7 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
         hlsl.insert_str(0, instance_cull_hzb::HIDDEN_DECLARATIONS);
     }
     if light_grid { hlsl.insert_str(0, light_grid::DECLARATIONS); }
+    if em.portable_wave64 { hlsl.insert_str(0, wave_sum::PORTABLE_DECLARATIONS); }
     if page_waves || wave_cull {
         if fspx_wave == Some(32) {
             hlsl.insert_str(0, fspx_wave::WAVE32);
@@ -1420,8 +1498,8 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
         needs_barycentrics: !em.pulled_attrs.is_empty(),
         packed_dot_product: fspx_wave.is_some(),
         typed_int64_atomics: !em.wide_visibility_uavs.is_empty() || em.packed.as_ref().is_some_and(|p| !p.wide_images.is_empty()),
-        required_wave_size,
-        portable_compute_group: portable_compute_group.or(light_grid.then(|| compute_group(ex))),
+        required_wave_size: if em.portable_wave64 { None } else { required_wave_size },
+        portable_compute_group: portable_compute_group.or((light_grid || em.portable_wave64).then(|| compute_group(ex))),
         ps_input_interp: std::mem::take(&mut em.ps_in_interp),
     })
 }
@@ -1691,6 +1769,7 @@ impl<'a> Emitter<'a> {
             res: HashMap::new(),
             cb_size: BTreeMap::new(),
             zero_buffer_offsets: Default::default(),
+            smem_constants: Default::default(),
             tex: BTreeMap::new(),
             samp: BTreeSet::new(),
             samp_cmp: BTreeSet::new(),
@@ -1753,6 +1832,7 @@ impl<'a> Emitter<'a> {
             micropoly_vote: None,
             view_cull: None,
             required_wave_size: None,
+            portable_wave64: false,
             msel: HashMap::new(),
             bsel: HashMap::new(),
             dsel_loads: HashMap::new(),
@@ -2987,7 +3067,7 @@ impl<'a> Emitter<'a> {
                     // Read from an embedded constant table.
                     let n = 1u32 << ins.op;
                     let d = ins.dst.first().and_then(sg).ok_or("s_load: bad dst")?;
-                    if (ins.raw.get(1).copied().unwrap_or(0) >> 25) != 0x7d {
+                    if self.static_smem_offset(ins).is_none() {
                         return Err(format!("s_load at {:#x}: code-table read with dynamic soffset unsupported", ins.offset));
                     }
                     self.uses_code = true;
@@ -3018,7 +3098,9 @@ impl<'a> Emitter<'a> {
                         // SOFFSET is a heap fetch, however the byte offset was computed.
                         let heap_offset = sym.get(&soff) == Some(&Sym::HeapOffset)
                             || (self.compute_heap && soff < 106 && written.contains(&soff));
-                        if self.resource_heap_base == Some(table) && matches!(n, 4 | 8) && ins.aux.imm == 0 && heap_offset {
+                        if self.resource_heap_base == Some(table) && matches!(n, 4 | 8)
+                            && (ins.aux.imm == 0 || (ins.aux.imm >= 0 && ins.aux.imm % 32 == 0 && sym.get(&soff) == Some(&Sym::HeapOffset)))
+                            && heap_offset {
                             for k in 0..n as u16 {
                                 sym.remove(&(d + k));
                                 written.insert(d + k);
@@ -3054,16 +3136,19 @@ impl<'a> Emitter<'a> {
                                 continue;
                             }
                         }
-                        return Err(format!("s_load at {:#x}: dynamic soffset unsupported", ins.offset));
+                        // Preserve heap-specific lowering above. Only fold an ordinary
+                        // descriptor-table offset when every reaching path proves its value.
                     }
+                    let off = self.static_smem_offset(ins)
+                        .ok_or_else(|| format!("s_load at {:#x}: dynamic soffset unsupported", ins.offset))?;
                     if self.mesh_bindings.as_ref().is_some_and(|mesh| {
-                        n != 4 || !mesh.tables.contains_key(&(table, ins.aux.imm as u32))
+                        n != 4 || !mesh.tables.contains_key(&(table, off))
                     }) {
                         return Err(format!("unverified mesh descriptor load at {:#x}", ins.offset));
                     }
                     for k in 0..n {
-                        sym.insert(d + k as u16, Sym::Desc { table, off: ins.aux.imm as u32, k });
-                        self.dsel_loads.insert(idx, (d, ((table as u32) << 24) | ins.aux.imm as u32));
+                        sym.insert(d + k as u16, Sym::Desc { table, off, k });
+                        self.dsel_loads.insert(idx, (d, ((table as u32) << 24) | off));
                         written.insert(d + k as u16);
                     }
                 }
@@ -3212,8 +3297,11 @@ impl<'a> Emitter<'a> {
                     if sym.get(&rs) == Some(&Sym::HeapDescriptor(8)) {
                         let load = self.compute_heap && matches!(ins.mnemonic.as_str(), "image_load" | "image_load_mip")
                             && matches!(dim, 0 | 1 | 2 | 4 | 5);
+                        // 2D image_get_resinfo is Texture2D.GetDimensions. A16, D16, and a
+                        // depth component stay refused in the emitter.
+                        let resinfo = self.compute_heap && ins.mnemonic == "image_get_resinfo" && dim == 1;
                         let cube = self.compute_heap && dim == 3;
-                        if !load && (!ins.mnemonic.starts_with("image_sample") || !(matches!(dim, 1 | 5) || cube)) {
+                        if !load && !resinfo && (!ins.mnemonic.starts_with("image_sample") || !(matches!(dim, 1 | 5) || cube)) {
                             return Err(format!("unsupported direct heap texture operation {} dim {dim}", ins.mnemonic));
                         }
                         tex_res.push((0, Res::HeapTexture(rs, dim)));
@@ -3328,6 +3416,19 @@ impl<'a> Emitter<'a> {
         for (&i, resources) in &self.res {
             let op = &self.insns[i];
             if op.enc != Enc::Mimg {
+                if let Some((_, candidates)) = self.bsel.get(&i) {
+                    for (_, resource) in candidates {
+                        if let Res::Raw(slot, true) | Res::Buf(slot, true) | Res::TBuf(slot, true) = resource {
+                            other.insert(*slot);
+                        }
+                    }
+                }
+                for resource in resources {
+                    if let Res::Uav(slot, _) | Res::Raw(slot, true) | Res::Buf(slot, true)
+                        | Res::TBuf(slot, true) = resource {
+                        other.insert(*slot);
+                    }
+                }
                 continue;
             }
             if let Some(selection) = self.msel.get(&i) {
@@ -3342,8 +3443,14 @@ impl<'a> Emitter<'a> {
                 continue;
             };
             if matches!(op.raw.as_slice(), [0xf05c1308, flags] if flags & 0xc000_0000 == 0)
+                && self.ex.resources.iter().filter(|r| {
+                    matches!(r.res_type, 6..=9)
+                        && r.space == self.binding_spaces.get(&(1, *slot)).copied().unwrap_or(0)
+                        && r.lower <= *slot && *slot <= r.upper
+                }).count() == 1
                 && self.ex.resources.iter().any(|r| {
-                    (r.res_type, r.space, r.lower, r.upper) == (6, 0, *slot, *slot)
+                    (r.res_type, r.space, r.lower, r.upper) ==
+                        (6, self.binding_spaces.get(&(1, *slot)).copied().unwrap_or(0), *slot, *slot)
                 })
             {
                 wide.insert(*slot);
@@ -3369,7 +3476,7 @@ impl<'a> Emitter<'a> {
             }
             // Packed FMAC accumulates in its destination. A subword FMA also
             // reads that register to preserve the half outside its write mask.
-            let old_dst = matches!(ins.mnemonic.as_str(), "v_pk_fmac_f16" | "v_fma_f16" | "v_rcp_f16")
+            let old_dst = (matches!(ins.mnemonic.as_str(), "v_pk_fmac_f16" | "v_fma_f16" | "v_rcp_f16") || int16::new_half(ins))
                 .then(|| ins.dst.first()).flatten();
             for o in ins.src.iter().chain(old_dst) {
                 if let Opnd::Sgpr(n) | Opnd::Vgpr(n) = o {
@@ -3822,19 +3929,28 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             if is_quad_exchange(ins) {
                 if self.loop_depth != 0 {
-                    return Err("DPP quad exchange inside backward control flow".into());
+                    return Err("DPP16 exchange inside backward control flow".into());
                 }
-                // FI=1 fetches the saved VGPR even from an EXEC-disabled lane. All
-                // host lanes must reach the exchange, including those skipping this
-                // block. Reapply the branch and EXEC guards to the destination write.
                 if open {
                     self.end_guard(&mut open);
                     cur.clear();
                 }
-                let perm = ins.aux.imm;
                 let source = r(&ins.src[0])?;
-                self.line(&format!("uint q{i}lane = WaveGetLaneIndex();"));
-                self.line(&format!("uint q{i} = WaveReadLaneAt({source}, (q{i}lane & ~3u) | (({perm}u >> (2u * (q{i}lane & 3u))) & 3u));"));
+                if ins.op == OP_ROW_MIRROR {
+                    // FI=0: a source lane inactive in EXEC contributes 0. row_mirror
+                    // mirrors local lanes within a 16-lane row.
+                    self.line(&format!("uint q{i}lane = WaveGetLaneIndex();"));
+                    self.line(&format!("uint q{i}src = (q{i}lane & ~15u) | (15u - (q{i}lane & 15u));"));
+                    self.line(&format!("uint q{i}act = q{i}src < 32u ? (exec_lo >> q{i}src) & 1u : (exec_hi >> (q{i}src - 32u)) & 1u;"));
+                    self.line(&format!("uint q{i} = q{i}act != 0u ? WaveReadLaneAt({source}, q{i}src) : 0u;"));
+                } else {
+                    // FI=1 fetches the saved VGPR even from an EXEC-disabled lane. All
+                    // host lanes must reach the exchange, including those skipping this
+                    // block. Reapply the branch and EXEC guards to the destination write.
+                    let perm = ins.aux.imm;
+                    self.line(&format!("uint q{i}lane = WaveGetLaneIndex();"));
+                    self.line(&format!("uint q{i} = WaveReadLaneAt({source}, (q{i}lane & ~3u) | (({perm}u >> (2u * (q{i}lane & 3u))) & 3u));"));
+                }
             }
             if restored_waits.contains(&i) {
                 self.end_guard(&mut open);
@@ -4538,7 +4654,25 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                         Ok(())
                     }
                     "s_flbit_i32_b32" => self.ws(&d, &format!("({a} == 0u ? ~0u : 31u - firstbithigh({a}))")),
+                    "s_flbit_i32_b64" => {
+                        self.touch(&hi(&s[0]));
+                        let ah = r(&hi(&s[0]))?;
+                        self.ws(&d, &flbit_b64_expr(&a, &ah))
+                    }
+                    "s_ff0_i32_b32" => self.ws(&d, &ff0_b32_expr(&a)),
+                    "s_ff0_i32_b64" => {
+                        self.touch(&hi(&s[0]));
+                        let ah = r(&hi(&s[0]))?;
+                        self.ws(&d, &ff0_b64_expr(&a, &ah))
+                    }
                     "s_ff1_i32_b32" => self.ws(&d, &format!("firstbitlow({a})")),
+                    // s_ff1_i32_b64 is firstbitlow over the 64-bit value: the low word
+                    // decides when it is nonzero, otherwise the high word.
+                    "s_ff1_i32_b64" => {
+                        self.touch(&hi(&s[0]));
+                        let ah = r(&hi(&s[0]))?;
+                        self.ws(&d, &ff1_b64_expr(&a, &ah))
+                    }
                     "s_sext_i32_i8" => self.ws(&d, &format!("asuint(asint({a} << 24) >> 24)")),
                     "s_sext_i32_i16" => self.ws(&d, &format!("asuint(asint({a} << 16) >> 16)")),
                     "s_abs_i32" => {
@@ -4684,7 +4818,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                         self.regs.insert(value.clone());
                         let dst = d.ok_or("missing direct descriptor destination")?;
                         self.touch(&dst);
-                        self.ws(&dst, &format!("tb_heap_index({value} >> 5)"))?;
+                        let byte_offset = if ins.aux.imm == 0 { value }
+                            else { format!("({value} + {:#x}u)", ins.aux.imm as u32) };
+                        self.ws(&dst, &format!("tb_heap_index({byte_offset} >> 5)"))?;
                         return Ok(());
                     }
                     if let Some(Res::HeapSamplerLoad(offset)) = self.res.get(&idx).and_then(|v| v.first()).copied() {
@@ -4705,7 +4841,8 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                         let ndw = ((self.ex.isa_data.len().saturating_sub(self.ex.isa.len())) / 4).max(1);
                         let t = self.tmp;
                         self.tmp += 1;
-                        self.line(&format!("uint t{t} = ({} + {:#x}u) >> 2;", r(&s[0])?, ins.aux.imm as u32));
+                        let offset = self.static_smem_offset(ins).ok_or("unverified code-table offset")?;
+                        self.line(&format!("uint t{t} = ({} + {offset:#x}u) >> 2;", r(&s[0])?));
                         for k in 0..n {
                             self.line(&format!("uint t{t}_{k} = tb_code[(t{t} + {k}u - {}u) % {ndw}u];", self.ex.isa.len() / 4));
                         }
@@ -5234,7 +5371,11 @@ uint tb_fmac_half(uint a, uint b, uint c) {
     }
 
     fn emit_compute_swizzle(&mut self, idx: usize, ins: &Insn, active: &[usize]) -> Result<(), String> {
-        if ins.raw[0] & 0x3_8000 != 0 {
+        let mode = ins.aux.imm as u32;
+        // RDNA2 ISA DS_SWIZZLE_B32: offset[15] selects QDMode, which permutes
+        // within each quad by offset[7:0]. Other high offset bits and GDS stay refused.
+        let quad = mode & 0x8000 != 0;
+        if ins.raw[0] & 0x3_0000 != 0 || (quad && mode & 0xff00 != 0x8000) {
             return Err("unsupported compute DS swizzle encoding".into());
         }
         // Skipped and EXEC-masked lanes contribute zero. Rendezvous before
@@ -5244,14 +5385,93 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         let value = r(&ins.src[0])?;
         self.line(&format!("tb_swizzle[tb_lane] = ({predicate}) ? {value} : 0u;"));
         self.line("GroupMemoryBarrierWithGroupSync();");
-        let mode = ins.aux.imm as u32;
-        self.line(&format!("uint swizzle{idx} = tb_swizzle[(tb_lane & ~31u) | (((tb_lane & {}u) | {}u) ^ {}u)];",
-            mode & 31, (mode >> 5) & 31, (mode >> 10) & 31));
+        if quad {
+            self.line(&format!("uint swizzle{idx} = tb_swizzle[(tb_lane & ~3u) | (({:#x}u >> (2u * (tb_lane & 3u))) & 3u)];",
+                mode & 255));
+        } else {
+            self.line(&format!("uint swizzle{idx} = tb_swizzle[(tb_lane & ~31u) | (((tb_lane & {}u) | {}u) ^ {}u)];",
+                mode & 31, (mode >> 5) & 31, (mode >> 10) & 31));
+        }
         self.line("GroupMemoryBarrierWithGroupSync();");
         Ok(())
     }
 
 
+
+    /// Decode the packed SRC0 attribute descriptor of a Vop3 f16-interpolation
+    /// instruction: (attr, channel, high).
+    fn f16_interp_descriptor(second: u32) -> (usize, usize, bool) {
+        ((second & 0x3f) as usize, ((second >> 6) & 3) as usize, (second >> 8) & 1 != 0)
+    }
+
+    /// Emit a Vop3-encoded f16-interpolation instruction.
+    ///
+    /// SRC0 in the second word packs the attribute descriptor: attr (6 bits),
+    /// channel (2 bits), and the `high` bit (1 bit). SRC1 is the barycentric
+    /// weight; for p2_f16, SRC2 is the p1ll's f32 partial register. An attribute
+    /// packed in a 32-bit word holds two 16-bit halves, so each vertex's raw
+    /// word is decoded per vertex and the halves are interpolated (mirroring
+    /// the pulled-attribute path), which is also what Mesa ACO does.
+    fn emit_f16_interp(&mut self, ins: &Insn) -> Result<(), String> {
+        if self.ex.stage != Stage::Pixel {
+            return Err("v_interp outside a pixel shader".into());
+        }
+        if ins.enc != Enc::Vop3 || ins.raw.len() < 2 {
+            return Err("invalid f16 interpolation encoding".into());
+        }
+        let m = ins.mnemonic.as_str();
+        let is_p2 = m == "v_interp_p2_f16";
+        let (attr, chan, high) = Self::f16_interp_descriptor(ins.raw[1]);
+        let clamp = (ins.raw[0] >> 15) & 1 != 0;
+        let reg = *self.ps_attrs.get(attr).ok_or_else(|| format!("PS attr{attr} has no signature register"))?;
+        let (ei, k) = sig_lookup(&self.ex.input_sig, reg, chan)
+            .ok_or_else(|| format!("PS attr{attr} has no signature register"))?;
+        if matches!(self.ex.input_sig[ei].comp_type, 1 | 2) {
+            return Err("v_interp f16 with a typed signature element unsupported".into());
+        }
+        let (_, n) = sig_type(&self.ex.input_sig[ei]);
+        let field = if n == 1 { format!("i.i{ei}") } else { format!("i.i{ei}.{}", XYZW[k]) };
+        let raw = |index: usize| -> String {
+            format!("asuint(GetAttributeAtVertex({field}, {index}))")
+        };
+        let half = |index: usize| -> String {
+            let h = raw(index);
+            if high { format!("(({h} >> 16u) & 0xffffu)") } else { format!("({h} & 0xffffu)") }
+        };
+        let p0 = format!("f16tof32({})", half(0));
+        let p1 = format!("f16tof32({})", half(1));
+        let p2v = format!("f16tof32({})", half(2));
+        let dst = ins.dst.first().cloned().ok_or("no dst")?;
+        let name_d = name(&dst)?;
+        // SM5 fallback: the raw smooth read (best-effort; the per-vertex path is SM6+).
+        let fallback = format!("asuint({field})");
+        if !is_p2 {
+            // p1ll/p1lv: the f32 partial P0 + I*(P1-P0), consumed by p2_f16.
+            let i = f(&ins.src[1])?;
+            let expr = format!("{p0} + {i} * ({p1} - {p0})");
+            self.line("#if __SHADER_TARGET_MAJOR >= 6");
+            self.wv(&dst, &format!("asuint({expr})"))?;
+            self.line("#else");
+            self.wv(&dst, &fallback)?;
+            self.line("#endif");
+            Ok(())
+        } else {
+            if ins.src.len() < 3 {
+                return Err("missing p2_f16 partial register".into());
+            }
+            let j = f(&ins.src[1])?;
+            let partial = r(&ins.src[2])?;
+            let full = format!("(asfloat({partial}) + {j} * ({p2v} - {p0}))");
+            let full = if clamp { format!("saturate({full})") } else { full };
+            let bits = format!("tb_f16_rne({full})");
+            self.line("#if __SHADER_TARGET_MAJOR >= 6");
+            self.wv(&dst, &format!("(({name_d} & 0xffff0000u) | {bits})"))?;
+            self.line("#else");
+            self.wv(&dst, &fallback)?;
+            self.line("#endif");
+            Ok(())
+        }
+    }
 
     fn emit_vec(&mut self, ins: &Insn) -> Result<(), String> {
         let mut m = ins.mnemonic.clone();
@@ -5266,6 +5486,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         if m == "v_nop" {
             return Ok(());
         }
+        if matches!(m.as_str(), "v_interp_p1ll_f16" | "v_interp_p1lv_f16" | "v_interp_p2_f16") {
+            return self.emit_f16_interp(ins);
+        }
         if ins.enc == Enc::Vop2 && ins.op == wave_sum::DPP_REDUCE {
             // Read the partner before the EXEC-guarded write, including when VDST aliases VSRC.
             let lane = match ins.aux.imm {
@@ -5278,7 +5501,10 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             let t = self.tmp;
             self.tmp += 1;
             let acc = r(&s[0])?;
-            let partner = format!("WaveReadLaneAt({acc}, {lane})");
+            let partner = if self.portable_wave64 {
+                let lane = lane.replace("WaveGetLaneIndex()", "gtid.x");
+                format!("tb_reduction_read(gtid.x, {acc}, {lane})")
+            } else { format!("WaveReadLaneAt({acc}, {lane})") };
             let combined = match m.as_str() {
                 "v_add_nc_u32" => format!("{partner} + {acc}"),
                 "v_and_b32" => format!("{partner} & {acc}"),
@@ -5299,10 +5525,14 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 let width = self.required_wave_size.ok_or("missing width for scan lane read")?;
                 format!("({lane} & {}u)", width - 1)
             } else { lane };
-            return self.ws(&d, &format!("WaveReadLaneAt({}, {lane})", r(&s[0])?));
+            let value = r(&s[0])?;
+            let read = if self.portable_wave64 {
+                format!("tb_reduction_read(gtid.x, {value}, {lane})")
+            } else { format!("WaveReadLaneAt({value}, {lane})") };
+            return self.ws(&d, &read);
         }
         if is_quad_exchange(ins) {
-            if ins.op == OP_QUAD_MOVE { return self.wv(&d, &format!("q{}", self.cur_idx)); }
+            if ins.op != OP_QUAD_ADD_F32 { return self.wv(&d, &format!("q{}", self.cur_idx)); }
             return self.wv(&d, &format!("asuint(asfloat(q{}) + {})", self.cur_idx, f(&s[1])?));
         }
         if ins.op == OP_WAVE_REDUCE && ins.enc == Enc::Vop3 {
@@ -5477,6 +5707,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 format!("tb_dot4_i8({lhs}, {rhs}, {acc})")
             };
             return self.wv(&d, &value);
+        }
+        if int16::new_half(ins) && self.ex.stage != Stage::Compute {
+            return Err("unverified ordinary 16-bit integer shader stage".into());
         }
         if let Some(result) = int16::expression(ins)? {
             return self.wv(&d, &result);
@@ -5918,6 +6151,17 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 return Err("permlanex16 modifiers unsupported".into());
             }
             let (value, lo, hi) = (r(&s[0])?, r(&s[1])?, r(&s[2])?);
+            if self.portable_wave64 {
+                // portable_single_wave permits only the recognized cross-row
+                // exchange inside a full-EXEC reduction with selectors zero.
+                if s[1..] != [Opnd::ConstInt(0), Opnd::ConstInt(0)] {
+                    return Err("unverified portable wave64 cross-row selectors".into());
+                }
+                let t = self.tmp;
+                self.tmp += 1;
+                self.line(&format!("uint t{t} = tb_reduction_read(gtid.x, {value}, (gtid.x & ~15u) ^ 16u);"));
+                return self.wv(&d, &format!("t{t}"));
+            }
             let t = self.tmp;
             self.tmp += 1;
             self.line(&format!("uint t{t}lane = WaveGetLaneIndex(); uint t{t}sel = (t{t}lane & 8u) ? {hi} : {lo};"));
@@ -6156,8 +6400,11 @@ uint tb_fmac_half(uint a, uint b, uint c) {
     }
 
     /// Resolve a raw buffer's byte address before any overlapping VGPR is overwritten.
-    /// OFFEN and SOFFSET are byte offsets. IDXEN uses the runtime descriptor stride,
-    /// which the PSV raw declaration does not encode.
+    ///
+    /// OFFEN and SOFFSET are byte offsets. A raw descriptor's stride is one byte,
+    /// the same stride a shader writes when it builds that descriptor and the size
+    /// recorded for a raw binding, so IDXEN is a byte offset too. With both enables
+    /// the first address VGPR is the index and the next is the byte offset.
     fn raw_address(&mut self, ins: &Insn) -> Result<String, String> {
         let (indexed, offset) = (ins.aux.mask & 2 != 0, ins.aux.mask & 1 != 0);
         let vector = if indexed {
@@ -6202,13 +6449,21 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             return Err("invalid MTBUF destination".into());
         };
         let address = self.raw_address(ins)?;
+        // The supported formats consume one naturally aligned dword, except
+        // 16_16_16_16_UINT, whose element is 8 bytes. Read them before updating
+        // VGPRs in case VADDR overlaps the result.
         let packed = format!("t{}", self.tmp);
-        self.tmp += 1;
-        // The supported formats all consume one naturally aligned dword. Read
-        // it before updating VGPRs in case VADDR overlaps the result.
-        self.line(&format!(
-            "uint {packed} = 0u; if (exec_lo & 1u) {packed} = {buffer}.Load({address});"
-        ));
+        let packed1 = format!("t{}", self.tmp + 1);
+        self.tmp += 2;
+        if ins.aux.imm2 == 69 {
+            self.line(&format!(
+                "uint {packed} = 0u; uint {packed1} = 0u; if (exec_lo & 1u) {{ {packed} = {buffer}.Load({address}); {packed1} = {buffer}.Load({address} + 4u); }}"
+            ));
+        } else {
+            self.line(&format!(
+                "uint {packed} = 0u; if (exec_lo & 1u) {packed} = {buffer}.Load({address});"
+            ));
+        }
         for channel in 0..=ins.op {
             let value = match ins.aux.imm2 {
                 // BUFFER_FORMAT_16_16_SNORM.
@@ -6231,6 +6486,8 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 // BUFFER_FORMAT_16_FLOAT.
                 13 if channel == 0 => format!("asuint(f16tof32({packed}))"),
                 13 => (if channel == 3 { "asuint(1.0f)" } else { "0u" }).to_string(),
+                // BUFFER_FORMAT_16_16_16_16_UINT: four 16-bit unsigned channels.
+                69 => tbuf_16_16_16_16_uint_channel(channel, &packed, &packed1),
                 // BUFFER_FORMAT_16_16_UNORM / UINT / FLOAT.
                 23 | 27 | 29 if channel >= 2 => (if channel == 3 { if ins.aux.imm2 == 27 { "1u" } else { "asuint(1.0f)" } } else { "0u" }).to_string(),
                 23 => format!("asuint(float(({packed} >> {}u) & 65535u) / 65535.0f)", channel * 16),
@@ -6340,6 +6597,28 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
         }
         Ok(())
+    }
+
+    fn static_smem_offset(&self, ins: &Insn) -> Option<u32> {
+        let imm = u32::try_from(ins.aux.imm).ok()?;
+        if ins.raw.get(1).copied()? >> 25 == 0x7d { return Some(imm); }
+        if self.proven_zero_smem_offset(ins) { return Some(imm); }
+        let reg = ins.raw.get(1).copied()? >> 25;
+        if reg > 105 { return None; }
+        let offset = *self.smem_constants
+            .get_or_init(|| mubuf_offsets::proven_smem_constants(&disassemble(&self.ex.isa)))
+            .get(&(ins.offset, reg as u8))?;
+        let combined = imm.checked_add(offset)?;
+        // Static table selectors encode the table in the upper byte.
+        // Do not turn unaligned or out-of-range addresses into descriptors.
+        (combined <= 0x00ff_ffff && combined % 4 == 0).then_some(combined)
+    }
+
+    fn proven_zero_smem_offset(&self, ins: &Insn) -> bool {
+        let reg = ins.raw.get(1).copied().unwrap_or(u32::MAX) >> 25;
+        reg <= 105 && self.zero_buffer_offsets
+            .get_or_init(|| mubuf_offsets::proven_zero(&disassemble(&self.ex.isa)))
+            .contains(&(ins.offset, reg as u8))
     }
 
     fn zero_buffer_offset(&self, ins: &Insn) -> bool {
@@ -6991,10 +7270,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 // operand in and the previous value out.
                 if ins.aux.mask == 3 && as_uint && dim == 1 {
                     let visibility = match (self.ex.stage, ins.raw.as_slice()) {
-                        (Stage::Pixel, [0xf05c1308, _]) =>
-                            self.ex.entry.as_deref() == Some("HWRasterizePS")
-                                && self.wide_visibility_uavs.contains(&slot),
-                        (Stage::Compute, [0xf05c1308, _]) => self.wide_visibility_uavs.contains(&slot),
+                        (Stage::Pixel | Stage::Compute, [0xf05c1308, flags])
+                            if flags & 0xc000_0000 == 0 =>
+                                self.wide_visibility_uavs.contains(&slot),
                         _ => false,
                     };
                     if !visibility {
@@ -7921,7 +8199,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             if self.compute_swizzle || self.indexed_lane {
                 writeln!(h, "groupshared uint tb_swizzle[{}];", tx * ty_ * tz).unwrap();
             }
-            if let Some(width) = self.required_wave_size { writeln!(h, "[WaveSize({width})]").unwrap(); }
+            if let Some(width) = self.required_wave_size.filter(|_| !self.portable_wave64) {
+                writeln!(h, "[WaveSize({width})]").unwrap();
+            }
             // These kernels enable all 64 lanes for a reduction. Start the extra
             // rows inactive so they never participate in the guest's memory work.
             let padded = self.wave_cull && matches!([tx, ty_, tz], [4, 4, 1] | [32, 1, 1]);
@@ -8311,4 +8591,150 @@ fn compute_heap_base(ex: &ShaderExtract) -> Option<u8> {
         return None;
     }
     u8::try_from(loc & 0xff).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dpp16_word(src0_reg: u32, ctrl: u32, fi: u32, bc: u32, bank_m: u32, row_m: u32) -> u32 {
+        // [src0_reg:8][ctrl:9][fi:1][bc:1][bank_m:4][row_m:4]
+        src0_reg | (ctrl << 8) | (fi << 18) | (bc << 19) | (bank_m << 24) | (row_m << 28)
+    }
+
+    fn dpp16_move_insn(ctrl: u32) -> Insn {
+        Insn {
+            offset: 0x062c,
+            dwords: 2,
+            enc: Enc::Vop1,
+            op: 0,
+            raw: vec![0x7e0802fa, ctrl],
+            mnemonic: "v_mov_b32".to_string(),
+            dst: vec![Opnd::Vgpr(4)],
+            src: vec![Opnd::Raw(250)],
+            aux: Default::default(),
+        }
+    }
+
+    #[test]
+    fn dpp16_row_mirror_fi0_is_accepted_as_row_mirror_move() {
+        let mut insns = vec![dpp16_move_insn(dpp16_word(2, 0x140, 0, 1, 0xf, 0xf))];
+        lower_wave_reductions(&mut insns).expect("row_mirror accepted");
+        assert_eq!(insns[0].op, OP_ROW_MIRROR);
+        assert_eq!(insns[0].src, vec![Opnd::Vgpr(2)]);
+        assert_eq!(insns[0].aux.imm, 0);
+    }
+
+    #[test]
+    fn dpp16_quad_perm_fi1_is_accepted_and_keeps_the_perm_in_aux_imm() {
+        let mut insns = vec![dpp16_move_insn(dpp16_word(0, 0x0, 1, 1, 0xf, 0xf))];
+        lower_wave_reductions(&mut insns).expect("quad_perm accepted");
+        assert_eq!(insns[0].op, OP_QUAD_MOVE);
+        assert_eq!(insns[0].src, vec![Opnd::Vgpr(0)]);
+        assert_eq!(insns[0].aux.imm, 0);
+    }
+
+    #[test]
+    fn dpp16_row_mirror_with_fi1_is_refused() {
+        // row_mirror with FI=1 reads the pre-existing value; not the accepted shape.
+        let mut insns = vec![dpp16_move_insn(dpp16_word(2, 0x140, 1, 1, 0xf, 0xf))];
+        let err = lower_wave_reductions(&mut insns).expect_err("refused");
+        assert!(err.contains("unsupported DPP16 move"));
+    }
+
+    #[test]
+    fn dpp16_unimplemented_control_is_refused() {
+        // row_half_mirror, and quad_perm with a negation modifier.
+        let mut insns = vec![dpp16_move_insn(dpp16_word(2, 0x141, 0, 1, 0xf, 0xf))];
+        assert!(lower_wave_reductions(&mut insns).is_err());
+        let mut insns = vec![dpp16_move_insn(dpp16_word(2, 0x0, 1, 1, 0xf, 0xf) | (1u32 << 20))];
+        assert!(lower_wave_reductions(&mut insns).is_err());
+    }
+
+    #[test]
+    fn dpp16_mov_missing_control_word_is_refused() {
+        let mut insns = vec![Insn { raw: vec![0x7e0802fa], ..dpp16_move_insn(0) }];
+        assert!(lower_wave_reductions(&mut insns).is_err());
+    }
+
+    #[test]
+    fn f16_interp_descriptor_decodes_attr_channel_and_high() {
+        // attr=1, chan=0, high=1 (0b00000001 01_00 00_01)
+        assert_eq!(Emitter::f16_interp_descriptor(0x00020101), (1, 0, true));
+        // attr=1, chan=1, high=0
+        assert_eq!(Emitter::f16_interp_descriptor(0x00020041), (1, 1, false));
+        // attr=1, chan=0, high=0
+        assert_eq!(Emitter::f16_interp_descriptor(0x00020001), (1, 0, false));
+    }
+
+    #[test]
+    fn typed_buffer_16_16_16_16_uint_channels_read_16_bit_words_from_two_dwords() {
+        // 8-byte element: [lo: ch0, ch1] [hi: ch2, ch3].
+        assert_eq!(tbuf_16_16_16_16_uint_channel(0, "packed", "packed1"), "((packed >> 0u) & 65535u)");
+        assert_eq!(tbuf_16_16_16_16_uint_channel(1, "packed", "packed1"), "((packed >> 16u) & 65535u)");
+        assert_eq!(tbuf_16_16_16_16_uint_channel(2, "packed", "packed1"), "((packed1 >> 0u) & 65535u)");
+        assert_eq!(tbuf_16_16_16_16_uint_channel(3, "packed", "packed1"), "((packed1 >> 16u) & 65535u)");
+    }
+
+    #[test]
+    fn ff1_b64_points_into_low_word_when_it_is_set() {
+        assert_eq!(
+            ff1_b64_expr("s2", "s3"),
+            "(s2 != 0u ? uint(firstbitlow(s2)) : s3 != 0u ? 32u + uint(firstbitlow(s3)) : 0xffffffffu)"
+        );
+    }
+
+    #[test]
+    fn flbit_b64_checks_high_word_before_low_word() {
+        assert_eq!(
+            flbit_b64_expr("s2", "s3"),
+            "(s3 != 0u ? 31u - firstbithigh(s3) : s2 != 0u ? 63u - firstbithigh(s2) : ~0u)"
+        );
+    }
+
+    #[test]
+    fn typed_buffer_extraction_masks_to_16_bits() {
+        // Each channel is masked with 0xffff: no channel may leak into a wider one.
+        for channel in 0..4u32 {
+            let expr = tbuf_16_16_16_16_uint_channel(channel, "a", "b");
+            assert!(expr.contains("& 65535u"), "channel {channel}: {expr}");
+        }
+    }
+
+    #[test]
+    fn ff0_b32_inverts_operand_for_firstbitlow() {
+        assert_eq!(ff0_b32_expr("s2"), "firstbitlow(~s2)");
+    }
+
+    #[test]
+    fn ff0_b64_checks_low_word_before_high_word() {
+        assert_eq!(
+            ff0_b64_expr("s2", "s3"),
+            "(~s2 != 0u ? uint(firstbitlow(~s2)) : ~s3 != 0u ? 32u + uint(firstbitlow(~s3)) : 0xffffffffu)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod election_order_regression {
+    use super::*;
+    fn op(name: &str, enc: Enc, dst: Vec<Opnd>, src: Vec<Opnd>, offset: usize) -> Insn {
+        Insn { offset, dwords: 1, enc, op: 0, raw: vec![0], mnemonic: name.into(), dst, src, aux: Default::default() }
+    }
+    #[test]
+    fn symmetric_equality_still_requires_full_lane_count() {
+        let mut ops = vec![
+            op("v_mbcnt_lo_u32_b32", Enc::Vop3, vec![Opnd::Vgpr(2)], vec![Opnd::ConstInt(-1), Opnd::ConstInt(0)], 0),
+            op("s_ff1_i32_b32", Enc::Sop1, vec![Opnd::Sgpr(7)], vec![Opnd::ExecLo], 4),
+            op("v_cmp_eq_u32", Enc::Vop3, vec![Opnd::VccLo], vec![Opnd::Vgpr(2), Opnd::Sgpr(7)], 8),
+        ];
+        assert!(verify_lane_election(&mut ops, 1).is_ok());
+        ops[2].src.swap(0, 1);
+        assert!(verify_lane_election(&mut ops, 1).is_ok());
+        ops[2].mnemonic = "v_cmp_ne_u32".into();
+        assert!(verify_lane_election(&mut ops, 1).is_err());
+        ops[2].mnemonic = "v_cmp_eq_u32".into();
+        ops[0].src[0] = Opnd::ConstInt(0);
+        assert!(verify_lane_election(&mut ops, 1).is_err());
+    }
 }

@@ -77,6 +77,24 @@ class RuntimeShaderLinks(unittest.TestCase):
                     path.write_bytes(old)
                 self.assertEqual(pipeline.call_count, 4)
 
+    def test_compile_request_accepts_profile_with_trailing_whitespace(self):
+        result = portable_program(0, b"main")
+        key, source = self.request(portable_program(0, b"r0.z"))
+
+        def run(args, *, timeout):
+            if args[0] == "xshader":
+                args[args.index("--hlsl-out") + 1].write_bytes(b"void main() {}")
+                args[args.index("--profile-out") + 1].write_text("gs_6_0\r\n")
+            elif args[0] == "dxc":
+                self.assertEqual(args[args.index("-T") + 1], "gs_6_0")
+                args[args.index("-Fo") + 1].write_bytes(result)
+            else:
+                self.assertEqual(args[0], "dxv")
+
+        with patch("project_tuxbox.runtime_shaders.run_tool", side_effect=run):
+            self.assertTrue(compile_request(source, key, self.tools, self.cache, self.session))
+            self.assertEqual((self.session / (key + ".cso")).read_bytes(), result)
+
     def test_rejects_native_code_non_pixel_dxil_and_non_regular_input(self):
         for program in [b"Xbox-native shader", portable_program(1, b"r0.z")]:
             key, source = self.request(program)
@@ -224,6 +242,7 @@ class RuntimeShaderLinks(unittest.TestCase):
         with (
             patch("project_tuxbox.runtime_shaders.run_tool", side_effect=run) as compiler,
             patch("project_tuxbox.scarlett_prep.snapshot_compiler_cache", return_value=(self.tools, self.cache)),
+            patch("project_tuxbox.scarlett_prep.report_progress") as prep_report,
         ):
             self.assertTrue(compile_request(source, key, self.tools, old_cache, self.session, remember=remember))
             with self.assertRaises(ShaderRefused):
@@ -236,6 +255,17 @@ class RuntimeShaderLinks(unittest.TestCase):
             self.assertTrue((self.cache / f"{unsupported.stem}.unsupported").is_file())
             self.assertTrue(prepare_for_launch(title, host))
             self.assertEqual(compiler.call_count, 5)
+            import json
+            prefix = "ProjectScarlett preparation aggregate: "
+            reports = [json.loads(call.args[1][len(prefix):])
+                       for call in prep_report.call_args_list if call.args[1].startswith(prefix)]
+            self.assertEqual(len(reports), 2)
+            self.assertEqual(reports[0]["totals"], {"compiled": 1, "cached": 0, "unsupported": 1, "failed": 0})
+            self.assertEqual(reports[0]["refusal_buckets"], {"other_refusal": 1})
+            self.assertEqual(reports[1]["totals"], {"compiled": 0, "cached": 1, "unsupported": 1, "failed": 0})
+            self.assertEqual(reports[1]["refusal_buckets"], {"cached_reason_unavailable": 1})
+            self.assertEqual(reports[1]["request_types"], {".dxbc": 1, ".link": 1})
+            self.assertNotIn(str(directory), json.dumps(reports))
             title.write_bytes(b"a different title build")
             self.assertTrue(prepare_for_launch(title, host))
             self.assertEqual(compiler.call_count, 5)
@@ -247,7 +277,7 @@ class RuntimeShaderLinks(unittest.TestCase):
         pending.mkdir()
         stop = Event()
         with patch("project_tuxbox.runtime_shaders.compiler_tools", side_effect=ValueError("compiler unavailable")):
-            serve(self.session, stop, lambda line: stop.set())
+            serve(self.session, stop, lambda line: stop.set() if 'compiler unavailable' in line else None)
         self.assertTrue((self.session / (key + ".failed")).is_file())
         self.assertFalse(completed.exists())
         self.assertTrue(pending.is_dir())

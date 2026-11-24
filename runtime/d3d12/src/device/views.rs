@@ -49,18 +49,29 @@ pub(super) unsafe extern "system" fn cbv(
     device.state.blas.views.store(handle.ptr, None);
     // Xbox uses the actual constant data length. A desktop CBV's size is in
     // 256-byte units. Keep the address at the start chosen by the guest.
+    // A failed import used to fail-fast (Scarlett 0xbb305ff70). Mirror that
+    // one view into an upload buffer instead of failing the call.
     let mut aligned = unsafe { desc.as_ref() }.copied();
     let mut owner = None;
     if let Some(value) = &mut aligned {
-        if value.SizeInBytes <= D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * 16 {
-            value.SizeInBytes = value.SizeInBytes.next_multiple_of(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT);
-        }
+        let guest_bytes = value.SizeInBytes;
+        value.SizeInBytes = desktop_cbv_bytes(guest_bytes);
         let address = value.BufferLocation;
         if address != 0 && value.SizeInBytes != 0 {
-            owner = buffer_at(device, address, u64::from(value.SizeInBytes), 1, false)
-                .unwrap_or_else(|e| fail_call(format_args!("CBV buffer {address:#x}, {} bytes: {:?}", value.SizeInBytes, e.code())));
-            if let Some(buffer) = &owner {
-                value.BufferLocation = unsafe { buffer.native.GetGPUVirtualAddress() } + buffer.offset(address);
+            match buffer_at(device, address, u64::from(value.SizeInBytes), 1, false) {
+                Ok(found) => {
+                    if let Some(buffer) = &found {
+                        value.BufferLocation = unsafe { buffer.native.GetGPUVirtualAddress() } + buffer.offset(address);
+                    }
+                    owner = found;
+                }
+                Err(error) => match cbv_mirror(device, address, guest_bytes, value.SizeInBytes) {
+                    Ok(created) => value.BufferLocation = created.gpu_address(),
+                    Err(mirror_error) => fail_call(format_args!(
+                        "CBV buffer {address:#x}, {} bytes: {:?} (import {:?})",
+                        value.SizeInBytes, mirror_error.code(), error.code()
+                    )),
+                },
             }
         }
     }
@@ -123,6 +134,291 @@ impl Drop for TextureAddress {
             if self.owns_address { let _ = unsafe { VirtualFree(self.base as _, 0, MEM_RELEASE) }; }
         }
     }
+}
+
+fn desktop_cbv_bytes(guest: u32) -> u32 {
+    if guest <= D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * 16 {
+        guest.next_multiple_of(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT)
+    } else {
+        guest
+    }
+}
+
+// A guest CBV that ends too close to a 64 KiB page cannot be a desktop view
+// in place: vkd3d requires a 256-byte size, and that window crosses into the
+// next page. The upload buffer is 256-byte aligned and fully mapped. Execute
+// copies the desktop window into it before the GPU reads the descriptor.
+// Bytes past the guest length stay in that window, so the copy is the whole
+// rounded size. Only the unreadable tail is left zero.
+pub(super) struct CbvMirror {
+    guest: u64,
+    mapped: usize,
+    capacity: usize,
+    buffer: ID3D12Resource,
+}
+
+impl CbvMirror {
+    fn gpu_address(&self) -> u64 {
+        unsafe { self.buffer.GetGPUVirtualAddress() }
+    }
+
+    fn snapshot(&self) -> usize {
+        if self.mapped == 0 || self.capacity == 0 {
+            return 0;
+        }
+        let readable = readable_prefix(self.guest, self.capacity);
+        // SAFETY: readable_prefix stopped at the first page that is not a
+        // committed readable guest mapping. `mapped` covers `capacity` bytes.
+        // The tail past `readable` is cleared so an earlier, longer prefix
+        // cannot linger in the desktop window.
+        unsafe {
+            let dst = self.mapped as *mut u8;
+            if readable < self.capacity {
+                core::ptr::write_bytes(dst.add(readable), 0, self.capacity - readable);
+            }
+            if readable > 0 {
+                core::ptr::copy_nonoverlapping(self.guest as *const u8, dst, readable);
+            }
+        }
+        readable
+    }
+}
+
+impl Drop for CbvMirror {
+    fn drop(&mut self) {
+        if self.mapped != 0 {
+            // SAFETY: Map succeeded and snapshot copies have finished. The
+            // last Arc is dropping, so no descriptor still reads this mapping.
+            unsafe { self.buffer.Unmap(0, None) };
+            self.mapped = 0;
+        }
+    }
+}
+
+fn readable_prefix(address: u64, bytes: usize) -> usize {
+    use windows::Win32::System::Memory::{MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_GUARD, PAGE_NOACCESS, VirtualQuery};
+    let mut got = 0usize;
+    while got < bytes {
+        let mut info = MEMORY_BASIC_INFORMATION::default();
+        let at = address.saturating_add(got as u64);
+        // SAFETY: VirtualQuery only reads the process memory map.
+        let queried = unsafe { VirtualQuery(Some(at as _), &mut info, size_of_val(&info)) };
+        let protect = info.Protect.0;
+        if queried == 0 || info.State != MEM_COMMIT || protect & PAGE_GUARD.0 != 0 || protect & 0xff == PAGE_NOACCESS.0 {
+            break;
+        }
+        let region_end = (info.BaseAddress as u64).saturating_add(info.RegionSize as u64);
+        if region_end <= at {
+            break;
+        }
+        let room = (region_end - at) as usize;
+        got += room.min(bytes - got);
+    }
+    got
+}
+
+fn cbv_mirrors() -> &'static std::sync::Mutex<Vec<std::sync::Arc<CbvMirror>>> {
+    static MIRRORS: std::sync::LazyLock<std::sync::Mutex<Vec<std::sync::Arc<CbvMirror>>>> =
+        std::sync::LazyLock::new(Default::default);
+    &MIRRORS
+}
+
+fn cbv_mirror(device: &Device, address: u64, guest_bytes: u32, desktop_bytes: u32) -> windows::core::Result<std::sync::Arc<CbvMirror>> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
+    static NOTED: AtomicU32 = AtomicU32::new(0);
+    let desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+        Width: u64::from(desktop_bytes),
+        Height: 1,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+        ..Default::default()
+    };
+    let heap = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_UPLOAD,
+        CreationNodeMask: 1,
+        VisibleNodeMask: 1,
+        ..Default::default()
+    };
+    let mut native: Option<ID3D12Resource> = None;
+    // SAFETY: D3D12 borrows the descriptors only for this call.
+    unsafe {
+        device.native.CreateCommittedResource(
+            &heap,
+            D3D12_HEAP_FLAG_NONE,
+            &desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            None,
+            &mut native,
+        )?;
+    }
+    let Some(buffer) = native else {
+        return Err(windows::Win32::Foundation::E_FAIL.into());
+    };
+    let mut mapped = core::ptr::null_mut();
+    let unread = D3D12_RANGE { Begin: 0, End: 0 };
+    // SAFETY: the upload buffer has `desktop_bytes` bytes and is not mapped yet.
+    unsafe { buffer.Map(0, Some(&unread), Some(&mut mapped))? };
+    if mapped.is_null() {
+        return Err(windows::Win32::Foundation::E_FAIL.into());
+    }
+    let capacity = desktop_bytes as usize;
+    // SAFETY: Map returned a writable pointer of the committed width.
+    unsafe { core::ptr::write_bytes(mapped.cast::<u8>(), 0, capacity) };
+    let mirror = std::sync::Arc::new(CbvMirror {
+        guest: address,
+        mapped: mapped as usize,
+        capacity,
+        buffer,
+    });
+    let copied = mirror.snapshot();
+    if NOTED.fetch_add(1, Ordering::Relaxed) < 4 {
+        crate::diagnostics::log(&format!(
+            "CBV mirror {address:#x} guest={guest_bytes} desktop={desktop_bytes} copied={copied}"
+        ));
+    }
+    cbv_mirrors().lock().unwrap_or_else(|error| error.into_inner()).push(mirror.clone());
+    mirror_count().fetch_add(1, Ordering::Release);
+    Ok(mirror)
+}
+
+fn mirror_count() -> &'static std::sync::atomic::AtomicU32 {
+    static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    &COUNT
+}
+
+/// Refresh upload mirrors before a queue submission. The list is process-global
+/// so the device object's layout stays unchanged. No mirrors means no lock:
+/// an empty refresh on every submit was suspected in the account-picker stall,
+/// and a boot with this call removed still stalled there.
+pub(crate) fn snapshot_cbv_mirrors() {
+    if mirror_count().load(std::sync::atomic::Ordering::Acquire) == 0 {
+        return;
+    }
+    let mirrors = cbv_mirrors().lock().unwrap_or_else(|error| error.into_inner());
+    let live: Vec<_> = mirrors.iter().cloned().collect();
+    drop(mirrors);
+    for mirror in live {
+        mirror.snapshot();
+    }
+    let mirrors = srv_mirrors().lock().unwrap_or_else(|error| error.into_inner());
+    let live: Vec<_> = mirrors.iter().cloned().collect();
+    drop(mirrors);
+    for mirror in live {
+        mirror.snapshot();
+    }
+}
+
+// Boot 190327 abort: an address SRV at 0xbbee8f770 lies in a reserved region,
+// so the placed-buffer import returns E_INVALIDARG and fail_call aborts the
+// title. Keep the view alive on an upload buffer, and refresh it before
+// submit once the guest actually commits those pages.
+struct SrvMirror {
+    guest: u64,
+    mapped: usize,
+    capacity: usize,
+    buffer: ID3D12Resource,
+}
+
+impl Drop for SrvMirror {
+    fn drop(&mut self) {
+        if self.mapped != 0 {
+            // SAFETY: Map succeeded and snapshot copies have finished.
+            unsafe { self.buffer.Unmap(0, None) };
+            self.mapped = 0;
+        }
+    }
+}
+
+impl SrvMirror {
+    fn snapshot(&self) -> usize {
+        if self.mapped == 0 || self.capacity == 0 {
+            return 0;
+        }
+        let readable = readable_prefix(self.guest, self.capacity);
+        unsafe {
+            let dst = self.mapped as *mut u8;
+            if readable < self.capacity {
+                core::ptr::write_bytes(dst.add(readable), 0, self.capacity - readable);
+            }
+            if readable > 0 {
+                core::ptr::copy_nonoverlapping(self.guest as *const u8, dst, readable);
+            }
+        }
+        readable
+    }
+}
+
+fn srv_mirrors() -> &'static std::sync::Mutex<Vec<std::sync::Arc<SrvMirror>>> {
+    static MIRRORS: std::sync::LazyLock<std::sync::Mutex<Vec<std::sync::Arc<SrvMirror>>>> =
+        std::sync::LazyLock::new(Default::default);
+    &MIRRORS
+}
+
+fn srv_mirror(device: &Device, address: u64, bytes: u64) -> windows::core::Result<std::sync::Arc<TextureAddress>> {
+    use std::sync::atomic::Ordering;
+    use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
+    // A multi-gigabyte view of uncommitted VA is not a mirror candidate.
+    if bytes == 0 || bytes > 1 << 30 {
+        return Err(windows::Win32::Foundation::E_INVALIDARG.into());
+    }
+    let desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+        Width: bytes,
+        Height: 1,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+        ..Default::default()
+    };
+    let heap = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_UPLOAD,
+        CreationNodeMask: 1,
+        VisibleNodeMask: 1,
+        ..Default::default()
+    };
+    let mut native: Option<ID3D12Resource> = None;
+    unsafe {
+        device.native.CreateCommittedResource(
+            &heap,
+            D3D12_HEAP_FLAG_NONE,
+            &desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            None,
+            &mut native,
+        )?;
+    }
+    let Some(buffer) = native else {
+        return Err(windows::Win32::Foundation::E_FAIL.into());
+    };
+    let mut mapped = core::ptr::null_mut();
+    let unread = D3D12_RANGE { Begin: 0, End: 0 };
+    unsafe { buffer.Map(0, Some(&unread), Some(&mut mapped))? };
+    if mapped.is_null() {
+        return Err(windows::Win32::Foundation::E_FAIL.into());
+    }
+    let capacity = bytes as usize;
+    unsafe { core::ptr::write_bytes(mapped.cast::<u8>(), 0, capacity) };
+    let mirror = std::sync::Arc::new(SrvMirror {
+        guest: address,
+        mapped: mapped as usize,
+        capacity,
+        buffer: buffer.clone(),
+    });
+    let copied = mirror.snapshot();
+    static NOTED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if NOTED.fetch_add(1, Ordering::Relaxed) < 4 {
+        crate::diagnostics::log(&format!(
+            "SRV mirror {address:#x} bytes={bytes} copied={copied}"
+        ));
+    }
+    srv_mirrors().lock().unwrap_or_else(|error| error.into_inner()).push(mirror);
+    mirror_count().fetch_add(1, Ordering::Release);
+    Ok(TextureAddress::at(device, &buffer, address as usize, false, None))
 }
 
 // An address-only descriptor can be the sole owner of its backing resource.
@@ -213,6 +509,68 @@ pub(crate) unsafe fn command_buffer_address(device: *mut c_void, address: u64, b
     Ok((Some(buffer.native.clone()), host))
 }
 
+/// Where a linear CPU upload should land. Textures are resolved before buffers
+/// so a placed image is not imported as a buffer over its guest pages.
+pub(crate) enum LinearResource {
+    Buffer { resource: ID3D12Resource, offset: u64 },
+    Texture {
+        resource: ID3D12Resource,
+        placed: Option<std::sync::Arc<super::placement::Texture>>,
+        offset: u64,
+    },
+}
+
+fn texture_address_covering(device: &Device, address: u64, bytes: u64) -> Option<LinearResource> {
+    let entry = device.state.texture_addresses.preceding(address as usize)?;
+    let desc = unsafe { entry.native.GetDesc() };
+    if desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER || address < entry.base as u64 {
+        return None;
+    }
+    let offset = address - entry.base as u64;
+    let end = offset.checked_add(bytes)?;
+    let info = unsafe { device.native.GetResourceAllocationInfo(0, std::slice::from_ref(&desc)) };
+    let covers = if info.SizeInBytes != 0 && info.SizeInBytes != u64::MAX {
+        end <= info.SizeInBytes
+    } else {
+        offset == 0
+    };
+    covers.then(|| LinearResource::Texture {
+        resource: entry.native.clone(),
+        placed: None,
+        offset,
+    })
+}
+
+pub(crate) unsafe fn linear_resource(device_ptr: *mut c_void, address: u64, bytes: u64) -> windows::core::Result<LinearResource> {
+    use windows::Win32::Foundation::E_INVALIDARG;
+    if address == 0 || bytes == 0 {
+        return Err(E_INVALIDARG.into());
+    }
+    let device = unsafe { &*device_ptr.cast::<Device>() };
+    if let Some(texture) = device.state.placements.covering(address, bytes) {
+        return Ok(LinearResource::Texture {
+            offset: address - texture.address,
+            resource: texture.native.clone(),
+            placed: Some(texture),
+        });
+    }
+    if let Some(texture) = texture_address_covering(device, address, bytes) {
+        return Ok(texture);
+    }
+    let (buffer, host) = unsafe { command_buffer_address(device_ptr, address, bytes)? };
+    let Some(buffer) = buffer else {
+        crate::diagnostics::recording_error(format_args!(
+            "slot 62 destination {address:#x} ({bytes:#x} bytes) is not a buffer or texture"
+        ));
+        return Err(E_INVALIDARG.into());
+    };
+    let base = unsafe { buffer.GetGPUVirtualAddress() };
+    let Some(offset) = host.checked_sub(base) else {
+        return Err(E_INVALIDARG.into());
+    };
+    Ok(LinearResource::Buffer { resource: buffer, offset })
+}
+
 fn buffer_stride(view: &D3D12_SHADER_RESOURCE_VIEW_DESC) -> Option<u32> {
     let buffer = unsafe { view.Anonymous.Buffer };
     element_stride(view.Format.0, buffer.StructureByteStride)
@@ -295,10 +653,21 @@ pub(super) unsafe extern "system" fn address_srv(
             unsafe { VirtualQuery(Some(desc.address as _), &mut r, size_of_val(&r)) };
             (r.AllocationBase.addr(), r.BaseAddress.addr(), r.RegionSize, r.State.0, r.Protect.0)
         };
-        let entry = buffer_at(device, desc.address, resource_desc.Width, placement_stride, true)
-            .unwrap_or_else(|e| fail_call(format_args!("import SRV at {:#x}, {} bytes stride={stride} fmt={} first={} count={} failed {:?} ({}; region {:#x?}, placement stride {})",
-                desc.address, resource_desc.Width, view.Format.0, buffer.FirstElement, buffer.NumElements, e.code(), mode.name(), region(), placement_stride)))
-            .expect("required buffer import");
+        let entry = match buffer_at(device, desc.address, resource_desc.Width, placement_stride, true) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => fail_call(format_args!(
+                "import SRV at {:#x} produced no buffer ({} bytes)",
+                desc.address, resource_desc.Width
+            )),
+            Err(error) => match srv_mirror(device, desc.address, resource_desc.Width) {
+                Ok(created) => created,
+                Err(mirror_error) => fail_call(format_args!(
+                    "import SRV at {:#x}, {} bytes stride={stride} fmt={} first={} count={} failed {:?} (mirror {:?}; {}; region {:#x?}, placement stride {})",
+                    desc.address, resource_desc.Width, view.Format.0, buffer.FirstElement, buffer.NumElements,
+                    error.code(), mirror_error.code(), mode.name(), region(), placement_stride
+                )),
+            },
+        };
         let offset = entry.offset(desc.address);
         if offset.is_multiple_of(u64::from(stride)) {
             view.Anonymous.Buffer.FirstElement = buffer.FirstElement + offset / u64::from(stride);
@@ -658,4 +1027,20 @@ pub(super) unsafe extern "system" fn sampler_x(
         BorderColor: [w[17], w[18], w[19], w[20]].map(f32::from_bits),
     };
     unsafe { sampler(device, &host, handle) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::desktop_cbv_bytes;
+
+    #[test]
+    fn desktop_cbv_size_is_a_256_byte_multiple_up_to_the_limit() {
+        assert_eq!(desktop_cbv_bytes(0), 0);
+        assert_eq!(desktop_cbv_bytes(1), 256);
+        assert_eq!(desktop_cbv_bytes(144), 256);
+        assert_eq!(desktop_cbv_bytes(256), 256);
+        assert_eq!(desktop_cbv_bytes(257), 512);
+        assert_eq!(desktop_cbv_bytes(65536), 65536);
+        assert_eq!(desktop_cbv_bytes(65537), 65537);
+    }
 }
