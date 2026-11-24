@@ -1,7 +1,37 @@
 import unittest
 from unittest import mock
 
-from project_tuxbox.verify import lanes_imports, screen_capture_problem
+import struct
+import tempfile
+
+from project_tuxbox.verify import lanes_imports, private_x_server, screen_capture_problem, xauthority_entry
+
+
+class PrivateXServerTests(unittest.TestCase):
+    def test_cookie_record_matches_any_host_and_display(self):
+        cookie = bytes(range(16))
+        record = xauthority_entry(cookie)
+        self.assertEqual(struct.unpack(">H", record[:2])[0], 0xFFFF)  # FamilyWild
+        fields, at = [], 2
+        while at < len(record):
+            (size,) = struct.unpack(">H", record[at:at + 2])
+            fields.append(record[at + 2:at + 2 + size])
+            at += 2 + size
+        self.assertEqual(fields, [b"", b"", b"MIT-MAGIC-COOKIE-1", cookie])
+
+    def test_no_server_without_a_wayland_session_or_xwayland(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch("project_tuxbox.verify.sys.platform", "linux"), \
+             mock.patch("project_tuxbox.verify.subprocess.Popen") as start:
+            with mock.patch.dict("project_tuxbox.verify.os.environ", {}, clear=True), \
+                 mock.patch("project_tuxbox.verify.shutil.which", return_value="/usr/bin/Xwayland"):
+                with private_x_server(directory) as server:
+                    self.assertIsNone(server)
+            with mock.patch.dict("project_tuxbox.verify.os.environ", {"WAYLAND_DISPLAY": "wayland-0"}), \
+                 mock.patch("project_tuxbox.verify.shutil.which", return_value=None):
+                with private_x_server(directory) as server:
+                    self.assertIsNone(server)
+            start.assert_not_called()
 
 
 class ScreenCaptureTests(unittest.TestCase):

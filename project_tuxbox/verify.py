@@ -1,4 +1,5 @@
 """Behavioral gates for the project-owned guest fixtures."""
+from contextlib import contextmanager, nullcontext
 import ctypes
 import ctypes.util
 from datetime import datetime, timezone
@@ -6,9 +7,11 @@ import json
 import os
 from pathlib import Path
 import platform
+import select
 import statistics
 import re
 import shutil
+import struct
 import sys
 import subprocess
 import tempfile
@@ -54,7 +57,58 @@ ROOTLESS_X = ("the X server refuses to read its root window (rootless XWayland),
               "read 0; run the present suite under xvfb-run or a rootful Xwayland")
 
 
-def screen_capture_problem(display=None, library=None):
+def xauthority_entry(cookie):
+    """One MIT-MAGIC-COOKIE-1 Xauthority record that matches any host and display number."""
+    fields = (b"", b"", b"MIT-MAGIC-COOKIE-1", cookie)  # FamilyWild: empty address and number
+    return struct.pack(">H", 0xFFFF) + b"".join(struct.pack(">H", len(f)) + f for f in fields)
+
+
+@contextmanager
+def private_x_server(directory, geometry="2560x1440", timeout=10):
+    """Yield (DISPLAY, XAUTHORITY) for a temporary rootful Xwayland, or None if one can't start.
+
+    The rootful server draws into its own Wayland window and keeps a readable root window, so
+    Wine's screen samples work on a Wayland desktop. It accepts only its own random cookie,
+    picks a free display number itself (-displayfd) and is stopped when the block exits.
+    """
+    xwayland = shutil.which("Xwayland")
+    if not sys.platform.startswith("linux") or not xwayland or not os.environ.get("WAYLAND_DISPLAY"):
+        yield None
+        return
+    auth = Path(directory) / "Xauthority"
+    descriptor = os.open(auth, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(xauthority_entry(os.urandom(16)))
+    read, write = os.pipe()
+    try:
+        server = subprocess.Popen([xwayland, "-displayfd", str(write), "-geometry", geometry, "-noreset",
+                                   "-auth", str(auth)], pass_fds=(write,), stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        os.close(read)
+        os.close(write)
+        yield None
+        return
+    os.close(write)
+    try:
+        number = b""
+        while not number.endswith(b"\n") and select.select([read], [], [], timeout)[0]:
+            chunk = os.read(read, 16)
+            if not chunk:
+                break
+            number += chunk
+        yield (f":{int(number)}", str(auth)) if number.strip().isdigit() else None
+    finally:
+        os.close(read)
+        server.terminate()
+        try:
+            server.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait()
+
+
+def screen_capture_problem(display=None, library=None, xauthority=None):
     """Why the present checks cannot sample the screen on this host, or None.
 
     Wine backs GetDC(nullptr)/GetPixel with the X root window. The rootless XWayland of a
@@ -84,7 +138,17 @@ def screen_capture_problem(display=None, library=None):
     errors = []
     # Xlib's default handler exits the process; record the error instead.
     handler = handler_type(lambda _display, _event: errors.append(1) or 0)
-    connection = x11.XOpenDisplay(display.encode())
+    saved = os.environ.get("XAUTHORITY")
+    if xauthority is not None:
+        os.environ["XAUTHORITY"] = xauthority  # Xlib reads the cookie file when it connects
+    try:
+        connection = x11.XOpenDisplay(display.encode())
+    finally:
+        if xauthority is not None:
+            if saved is None:
+                os.environ.pop("XAUTHORITY", None)
+            else:
+                os.environ["XAUTHORITY"] = saved
     if not connection:
         return None
     previous = x11.XSetErrorHandler(handler)
@@ -107,6 +171,7 @@ def verify(host, output, adapter, selected=None, samples=1):
                                    if (BUILD / provider).is_file()))
     cases = []
     builds = {}
+    present_display = None
     BUILD.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="guest-check-", dir=BUILD) as tmp:
         work = Path(tmp)
@@ -356,19 +421,36 @@ def verify(host, output, adapter, selected=None, samples=1):
                   rf"xbox-frame-negative PASS pci={pci} foreign-parents=2 copy-errors=2 recovered=1 rejected-batches=3 compute-present-rejected=1",
                   providers=frame_provider, device_factory="xbox")
         if "present" in selected:
-            # Fail fast with the cause instead of five timed-out all-zero screen samples.
+            # The desktop's rootless XWayland can't be sampled; present into a private rootful
+            # Xwayland instead, and fail fast with the cause if that isn't possible either.
             capture = screen_capture_problem()
-            present = check if capture is None else (lambda name, *_args, **_kwargs: unsampled(name, capture))
-            present("guest-present", "d3d12-smoke/xbox-frame.exe", [*gpu_args, "--present", "--report"],
-                    frame_match + r" displayed=2/2", providers=frame_provider, device_factory="xbox")
-            present("guest-present-rgb10", "d3d12-smoke/xbox-frame-rgb10.exe", [*gpu_args, "--present", "--report"],
-                    frame_match + r" format=rgb10a2 displayed=2/2", providers=frame_provider, device_factory="xbox")
-            for mode in ("owned", "oversized", "fit"):
-                present(f"guest-present-4k-{mode}", "d3d12-smoke/xbox-frame-4k.exe",
-                        [mode, *gpu_args, "--present", "--report"],
-                        rf"xbox-frame PASS pci={pci} submissions=2 snapshots=2 pixels=16588800/16588800 "
-                        r"inset=921600 guards=3 fence=2 compute_fence=7 format=rgb10a2 displayed=2/2 "
-                        r"client=\d+x\d+ origin=-?\d+,-?\d+ monitor=\d+x\d+", providers=frame_provider, device_factory="xbox")
+            server = private_x_server(work) if capture else nullcontext()
+            saved = {key: host.env.get(key) for key in ("DISPLAY", "XAUTHORITY")}
+            with server as private:
+                if private:
+                    capture = screen_capture_problem(display=private[0], xauthority=private[1])
+                    if capture is None:
+                        host.env.update(DISPLAY=private[0], XAUTHORITY=private[1])
+                        present_display = "private rootful Xwayland"
+                        print(f"present: sampling a private rootful Xwayland on {private[0]}", flush=True)
+                try:
+                    present = check if capture is None else (lambda name, *_args, **_kwargs: unsampled(name, capture))
+                    present("guest-present", "d3d12-smoke/xbox-frame.exe", [*gpu_args, "--present", "--report"],
+                            frame_match + r" displayed=2/2", providers=frame_provider, device_factory="xbox")
+                    present("guest-present-rgb10", "d3d12-smoke/xbox-frame-rgb10.exe", [*gpu_args, "--present", "--report"],
+                            frame_match + r" format=rgb10a2 displayed=2/2", providers=frame_provider, device_factory="xbox")
+                    for mode in ("owned", "oversized", "fit"):
+                        present(f"guest-present-4k-{mode}", "d3d12-smoke/xbox-frame-4k.exe",
+                                [mode, *gpu_args, "--present", "--report"],
+                                rf"xbox-frame PASS pci={pci} submissions=2 snapshots=2 pixels=16588800/16588800 "
+                                r"inset=921600 guards=3 fence=2 compute_fence=7 format=rgb10a2 displayed=2/2 "
+                                r"client=\d+x\d+ origin=-?\d+,-?\d+ monitor=\d+x\d+", providers=frame_provider, device_factory="xbox")
+                finally:
+                    for key, value in saved.items():
+                        if value is None:
+                            host.env.pop(key, None)
+                        else:
+                            host.env[key] = value
         if "lanes" in selected:
             check("lanes-xbox-replay", "lanes/lanes.exe", ["--replay", *gpu_args, "--report"],
                   rf"lanes-replay PASS pci={pci} course=16/16 win=16/16 safe-miss=1 collision=1 frames=2 input=gameinput",
@@ -397,6 +479,8 @@ def verify(host, output, adapter, selected=None, samples=1):
               "host": platform.system(), "os_release": platform.release(), "cpu": cpu_model(),
               "machine": platform.machine(), "backend": host.backend,
               "provider": host.version, "binaries_sha256": builds, "checks": cases}
+    if present_display:
+        report["present_display"] = present_display
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=output.parent, delete=False) as tmp:
         json.dump(report, tmp, indent=2)
