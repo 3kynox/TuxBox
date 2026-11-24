@@ -678,7 +678,8 @@ fn lower_wave_reductions(insns: &mut [Insn]) -> Result<Option<u32>, String> {
             continue;
         }
         let saved_extrema = matches!(red.as_str(), "v_min_f32" | "v_max_f32")
-            && first.checked_sub(3).is_some_and(|p| matches!(insns[p].mnemonic.as_str(), "s_or_saveexec_b32" | "s_or_saveexec_b64"));
+            && (first.checked_sub(3).is_some_and(|p| matches!(insns[p].mnemonic.as_str(), "s_or_saveexec_b32" | "s_or_saveexec_b64"))
+                || wave_sum::masked_floating(insns, first));
         if matches!(red.as_str(), "v_add_nc_u32" | "v_min_u32" | "v_max_u32" | "v_add_f32" | "v_and_b32" | "v_or_b32") || saved_extrema {
             let (required, next) = wave_sum::lower(insns, first).map_err(bad)?;
             if width.replace(required).is_some_and(|w| w != required) {
@@ -8706,6 +8707,151 @@ mod tests {
             "(~s2 != 0u ? uint(firstbitlow(~s2)) : ~s3 != 0u ? 32u + uint(firstbitlow(~s3)) : 0xffffffffu)"
         );
     }
+
+    // --- Masked prologue decode paths (int and floating) -------------------
+
+    fn masked_insn(mnemonic: &str, enc: Enc, dst: Vec<Opnd>, src: Vec<Opnd>) -> Insn {
+        Insn {
+            offset: 0x100,
+            dwords: 1,
+            enc,
+            op: 0,
+            raw: vec![0],
+            mnemonic: mnemonic.to_string(),
+            dst,
+            src,
+            aux: Default::default(),
+        }
+    }
+
+    fn masked_shuffle(mnemonic: &str, selector: u32, acc: u8, ctrl: u32) -> Insn {
+        let mut ins = masked_insn(mnemonic, Enc::Vop2, vec![Opnd::Vgpr(acc)], vec![Opnd::Raw(selector as u16), Opnd::Vgpr(acc)]);
+        ins.raw = vec![0x4a0606e9, ctrl << 8 | u32::from(acc)];
+        ins
+    }
+
+    fn masked_readlane(acc: u8, lane: u32, dst: u8) -> Insn {
+        let mut ins = masked_insn(
+            "v_readlane_b32",
+            Enc::Vop3,
+            vec![Opnd::Vgpr(dst)],
+            vec![Opnd::Vgpr(acc), Opnd::ConstInt(lane as i64), Opnd::Sgpr(0)],
+        );
+        ins.raw = vec![0xd760_0000 | u32::from(dst), ((128 + lane) << 9) | 256 | u32::from(acc)];
+        ins
+    }
+
+    fn masked_cross_row(mnemonic: &str, acc: u8, tmp: u8) -> Insn {
+        masked_insn(mnemonic, Enc::Vop2, vec![Opnd::Vgpr(acc)], vec![Opnd::Vgpr(tmp), Opnd::Vgpr(acc)])
+    }
+
+    fn masked_perm(acc: u8, tmp: u8) -> Insn {
+        masked_insn("v_permlanex16_b32", Enc::Vop3, vec![Opnd::Vgpr(tmp)], vec![Opnd::Vgpr(acc), Opnd::ConstInt(0), Opnd::ConstInt(0)])
+    }
+
+    fn masked_reduction_insns(
+        width: u32,
+        op: &str,
+        data_reg: u8,
+        float_bits: Option<u32>,
+        ident_reg: u8,
+    ) -> Vec<Insn> {
+        let is_float = float_bits.is_some();
+        let acc = 1u8;
+        let ctrl = [0xde54c1u32, 0x936012, 0x000924, 0xff0940];
+        let selector = [233u32, 233, 233, 250];
+        let mut insns = Vec::new();
+        // Prologue: saveexec + (literal identity move | AND) + CNDMASK.
+        if width == 32 {
+            insns.push(masked_insn("s_or_saveexec_b32", Enc::Sop1, vec![Opnd::Sgpr(0)], vec![Opnd::ConstInt(-1)]));
+        } else {
+            insns.push(masked_insn("s_or_saveexec_b64", Enc::Sop1, vec![Opnd::Sgpr(0)], vec![Opnd::ConstInt(-1)]));
+        }
+        if let Some(bits) = float_bits {
+            insns.push(masked_insn("v_mov_b32", Enc::Vop1, vec![Opnd::Vgpr(ident_reg)], vec![Opnd::Literal(bits)]));
+        }
+        if width == 32 {
+            insns.push(masked_insn("s_and_b32", Enc::Sopc, vec![Opnd::Sgpr(2)], vec![Opnd::Sgpr(26), Opnd::Sgpr(0)]));
+        } else {
+            insns.push(masked_insn("s_and_b64", Enc::Sopc, vec![Opnd::Sgpr(2)], vec![Opnd::Sgpr(80), Opnd::Sgpr(0)]));
+        }
+        let cndmask_src = if is_float {
+            vec![Opnd::Vgpr(ident_reg), Opnd::Vgpr(data_reg), Opnd::Sgpr(2)]
+        } else {
+            vec![Opnd::ConstInt(0), Opnd::Vgpr(data_reg), Opnd::Sgpr(2)]
+        };
+        insns.push(masked_insn("v_cndmask_b32", Enc::Vop2, vec![Opnd::Vgpr(acc)], cndmask_src));
+        for (i, (&c, &s)) in ctrl.iter().zip(selector.iter()).enumerate() {
+            let _ = i;
+            insns.push(masked_shuffle(op, s, acc, c));
+        }
+        insns.push(masked_perm(acc, ident_reg + 4));
+        insns.push(masked_cross_row(op, acc, ident_reg + 4));
+        if width == 64 {
+            insns.push(masked_readlane(acc, 32, ident_reg + 3));
+            insns.push(masked_insn(op, Enc::Vop2, vec![Opnd::Vgpr(acc)], vec![Opnd::Sgpr(ident_reg + 3), Opnd::Vgpr(acc)]));
+        }
+        insns.push(masked_readlane(acc, 0, ident_reg + 2));
+        if width == 32 {
+            insns.push(masked_insn("s_mov_b32", Enc::Sop1, vec![Opnd::ExecLo], vec![Opnd::Sgpr(0)]));
+        } else {
+            insns.push(masked_insn("s_mov_b64", Enc::Sop1, vec![Opnd::ExecLo], vec![Opnd::Sgpr(0)]));
+        }
+        insns
+    }
+
+    #[test]
+    fn int_masked_add_prologue_lowers_full_block() {
+        let mut insns = masked_reduction_insns(32, "v_add_nc_u32", 3, None, 1);
+        lower_wave_reductions(&mut insns).expect("int masked prologue lowered");
+        for ins in insns.iter().skip(3).take(4) {
+            assert_eq!(ins.op, wave_sum::DPP_REDUCE, "shuffled instruction {ins:?}");
+        }
+        assert_eq!(insns[9].op, wave_sum::READ_LANE);
+        assert_eq!(insns[9].mnemonic, "v_readlane_b32");
+        assert_eq!(insns[9].dst, vec![Opnd::Sgpr(3)]);
+    }
+
+    #[test]
+    fn floating_min_masked_prologue_with_register_identity_lowers() {
+        // +inf held in a VGPR materialized by a literal move.
+        let mut insns = masked_reduction_insns(64, "v_min_f32", 4, Some(f32::INFINITY.to_bits()), 2);
+        lower_wave_reductions(&mut insns).expect("floating masked prologue lowered");
+        assert_eq!(insns[4].op, wave_sum::DPP_REDUCE);
+        // Both readlanes became READ_LANE and returned scalars.
+        assert_eq!(insns[10].op, wave_sum::READ_LANE);
+        assert_eq!(insns[10].dst, vec![Opnd::Sgpr(5)]);
+        assert_eq!(insns[12].op, wave_sum::READ_LANE);
+        assert_eq!(insns[12].dst, vec![Opnd::Sgpr(4)]);
+    }
+
+    #[test]
+    fn floating_max_masked_prologue_with_register_identity_lowers() {
+        // -inf held in a VGPR materialized by a literal move.
+        let mut insns = masked_reduction_insns(32, "v_max_f32", 4, Some(f32::NEG_INFINITY.to_bits()), 2);
+        lower_wave_reductions(&mut insns).expect("floating masked prologue lowered");
+        assert_eq!(insns[4].op, wave_sum::DPP_REDUCE);
+        assert_eq!(insns[10].op, wave_sum::READ_LANE);
+        assert_eq!(insns[10].dst, vec![Opnd::Sgpr(4)]);
+    }
+
+    #[test]
+    fn floating_masked_prologue_rejects_unrelated_identity_register() {
+        // The identity move lives in a different register than the CNDMASK
+        // operand: must refuse, not guess.
+        let mut insns = masked_reduction_insns(32, "v_min_f32", 4, Some(f32::INFINITY.to_bits()), 2);
+        insns[1].dst = vec![Opnd::Vgpr(9)]; // identity materialized in the wrong register
+        assert!(lower_wave_reductions(&mut insns).is_err());
+    }
+
+    #[test]
+    fn floating_max_masked_prologue_rejects_immediate_select_identity() {
+        // A select with an immediate identity does not match the register-held
+        // floating shape.
+        let mut insns = masked_reduction_insns(32, "v_max_f32", 4, Some(f32::NEG_INFINITY.to_bits()), 2);
+        insns[3].src[0] = Opnd::ConstInt(f32::NEG_INFINITY.to_bits() as i64);
+        assert!(lower_wave_reductions(&mut insns).is_err());
+    }
 }
 
 #[cfg(test)]
@@ -8731,3 +8877,4 @@ mod election_order_regression {
         assert!(verify_lane_election(&mut ops, 1).is_err());
     }
 }
+
