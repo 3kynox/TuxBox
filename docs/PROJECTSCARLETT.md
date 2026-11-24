@@ -79,3 +79,48 @@ The game opens its Americas window, loads its archives and presents 3840×2160 f
 In a new prefix, the game stops at a breakpoint during System Init because it reads its package through the `G:` drive, as on the console, and the launcher doesn't map that drive yet. A fix is in review. [Pull request #6](https://github.com/brcly/TuxBox/pull/6)
 
 When you report a run, include the package version, executable hash, GPU and driver, Proton build, and the log printed in the first line of the launcher's output.
+
+
+### Packed integer compute controls
+
+The ordinary VOP3P path supports five additional forms:
+`v_pk_add_i16`, `v_pk_mad_i16`, `v_pk_mad_u16`,
+`v_pk_max_u16` and `v_pk_min_u16`. The low/high selectors are
+independent, including the third operand's high selector in bit 14 of
+the first word. Signed and unsigned arithmetic without clamp is modulo
+2^16 per half. These new forms require ordinary VGPR inputs; negation and other
+sources remain refused. Saturating arithmetic is described below.
+
+[Validation receipt](../evidence/scarlett-packed-integers.json):
+22 synthetic compute programs (all refused on the prior emitter),
+176 selector combinations, with a source aliasing the destination,
+16 independent dynamic inputs per combination, 2,816 calculated
+results and 8,448 total readback words including input/guard values.
+All matched the independent Python model on RTX 4080 and stock
+Proton Experimental. Ten negative controls were refused in the original wrapping-only revision. This is
+not a measurement of ProjectScarlett's actual shader coverage.
+
+Build the test emitter with
+`cargo build --manifest-path tools/shader-compiler/Cargo.toml --example packed_integer --target x86_64-unknown-linux-gnu`.
+Use `python tools/check_packed_integer_gpu.py --help` for the local
+LLVM gfx1030 assembler, emitter, DXC/DXV, provider and offline Proton
+template arguments. An optional baseline binary built with the same
+example and the original integer emitter enables the before/after
+gate. No game files are used.
+
+
+The follow-up also accepts CLAMP for seven packed add/subtract/multiply/MAD
+forms with ordinary VGPR inputs. Each signed half clamps to -32768..32767;
+unsigned halves clamp to 0..65535. Unsigned subtraction clamps before
+underflow. Other modifiers, min/max/shift clamp, and special sources
+are not broadened. AMD RDNA2 ISA sections 6.5 and 12.10 define these
+integer limits and arithmetic operations.
+
+[Follow-up receipt](../evidence/scarlett-packed-integer-clamp.json):
+26 additional synthetic programs refused by the previous PR66 revision
+now pass (208 selector combinations, 3,328 calculated results, 9,984
+guarded readback words). The 22 original wrapping programs were rerun
+and all 8,448 readback words still match. Seven new scalar-source clamp
+controls remain refused. Run the same GPU control with `--clamp` to
+exercise the added forms, and use the previous PR66 emitter as the
+baseline. No real title or AMD hardware validation.
