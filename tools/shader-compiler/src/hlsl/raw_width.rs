@@ -180,3 +180,40 @@ fn exact_nonzero_scalar_offset_matches_static_descriptor_and_unknown_refuses() {
     let mut em = Emitter::new(&ex, disassemble(&ex.isa));
     assert!(em.resolve_resources().unwrap_err().contains("dynamic soffset"));
 }
+
+#[test]
+fn bounded_runtime_code_offset_uses_real_table_index_without_modulo() {
+    // llvm-mc gfx1030: getpc s[8:9]; and s10,s12,3; lshl s10,s10,2;
+    // s_load_dword s16,s[8:9],s10 offset:20; endpgm.
+    let words = [0xbe881f00, 0x870a830c, 0x8f0a820a, 0xf4000404, 0x14000014, 0xbf810000];
+    let mut ex = compute_extract(&words);
+    ex.isa_data.extend([11u32,22,33,44].iter().flat_map(|v| v.to_le_bytes()));
+    let ops = disassemble(&ex.isa);
+    assert_eq!(super::code_offset::prove(&ops,3,24,40), Some(10));
+    let translated = super::translate(&ex).unwrap();
+    assert!(translated.hlsl.contains("tb_code[t"), "{}", translated.hlsl);
+    assert!(!translated.hlsl.contains("% 4u]"), "{}", translated.hlsl);
+    assert!(translated.hlsl.contains("s8 + s10 + 0x14u - 24u"), "{}", translated.hlsl);
+    println!("BEGIN_HLSL\n{}\nEND_HLSL",translated.hlsl);
+    assert_eq!(super::code_offset::prove(&ops,3,24,36),None); // final dword would exceed table
+    assert_eq!(super::code_offset::prove(&ops,3,24,24),None); // empty table
+    let mut bad = ops.clone();
+    bad[2].src[1] = crate::rdna2::Opnd::ConstInt(1);
+    assert_eq!(super::code_offset::prove(&bad,3,24,40),None); // unaligned
+    let mut bad = ops.clone();
+    bad[1].src[1] = crate::rdna2::Opnd::ConstInt(7);
+    assert_eq!(super::code_offset::prove(&bad,3,24,40),None); // mask too large
+    let mut bad = ops.clone();
+    bad[1].dst[0] = crate::rdna2::Opnd::Sgpr(9);
+    assert_eq!(super::code_offset::prove(&bad,3,24,40),None); // PC high clobber
+    let mut bad = ops.clone();
+    bad[3].op = 1; // two dwords: the last possible load crosses the table end
+    assert_eq!(super::code_offset::prove(&bad,3,24,40),None);
+    let mut bad = ops.clone();
+    // A branch entering directly at the load invalidates both proofs.
+    let branch = disassemble(&0xbf82_fffcu32.to_le_bytes()).remove(0);
+    let mut branch = branch;
+    branch.offset = 24;
+    bad.push(branch);
+    assert_eq!(super::code_offset::prove(&bad,3,24,40),None);
+}
