@@ -17,6 +17,8 @@ from time import monotonic
 CASES = {
     "tables": ("d3d12-tables", (), "d3d12-tables", ("words=16/16", "placed-srv=16/16")),
     "heaps": ("d3d12-heaps", (), "d3d12-heaps", ("words=256/256", "volume=45/45")),
+    "alias-deferred": ("d3d12-copy-resource", ("--alias-deferred",), "d3d12-alias-deferred", ("overlaps=2", "old=verified", "refreshed=verified", "no_cpu_wait=1")),
+    "copy-resource": ("d3d12-copy-resource", (), "d3d12-copy-resource", ("placed_dst=verified", "cpu_writeback=verified", "overlap_mips=4", "pending_reader=verified")),
     "placement": ("d3d12-placement", (), "d3d12-placement", ("R8-texels=262144", "rejected=3")),
     "stream": ("d3d12-draw", ("--stream",), "d3d12-stream", ("slot=86", "rejected=4")),
     "mesh": ("d3d12-mesh", (), "d3d12-mesh", ("pixels=256/256", "guards=32", "rejected=5")),
@@ -29,7 +31,7 @@ CASES = {
     "buffer-import-reject": ("d3d12-buffer-import", ("--reject",), "d3d12-buffer-import-reject", ("rejected=1",)),
     "null-usage": ("d3d12-null-usage", (), "d3d12-null-usage", ("words=64/64", "recorded=64", "valid=2")),
 }
-DEFAULT = tuple(name for name in CASES if name not in ("indirect-scarlett", "mesh", "buffer-import", "buffer-import-reject", "buffer-layout", "buffer-remap"))
+DEFAULT = tuple(name for name in CASES if name not in ("alias-deferred", "copy-resource", "indirect-scarlett", "mesh", "buffer-import", "buffer-import-reject", "buffer-layout", "buffer-remap"))
 DIGEST = hashlib.sha256(bytes.fromhex("78563412efcdab90")).hexdigest()
 
 
@@ -67,6 +69,14 @@ def validate(case, adapter, status, output):
         # successful imports/retries and no stand-in, regardless of padding.
         if sorted((path, count) for path,count,_ in records) != [
             ("commit_retry","1"), ("commit_retry","2"), ("imported","1"), ("imported","2")]:
+            return False, passes[0]
+    if case == "alias-deferred":
+        times = re.findall(r"(?m)^alias deferred observed ms=([0-9]+)$", output)
+        if len(times)!=1 or int(times[0])>1000:
+            return False, passes[0]
+        if output.count("placed texture refresh deferred until an overlapping write is published")!=2:
+            return False, passes[0]
+        if "Failed to signal event" in output or "Failed to set event" in output:
             return False, passes[0]
     if case == "null-usage":
         # Driver output may interleave; only accept complete exact records.

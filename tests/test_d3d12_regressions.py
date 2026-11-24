@@ -51,3 +51,12 @@ class D3D12RegressionTests(unittest.TestCase):
         self.assertFalse(validate("buffer-remap","10de:2704",0,"\n".join(logs[:-1]))[0])
         self.assertFalse(validate("buffer-remap","10de:2704",0,output.replace("pool_open count=2","pool_hit count=2"))[0])
         self.assertFalse(validate("buffer-remap","10de:2704",0,output+"\n"+logs[-1])[0])
+
+    def test_deferred_alias_refresh_requires_both_overlaps(self):
+        receipt="d3d12-alias-deferred PASS pci=10de:2704 overlaps=2 old=verified refreshed=verified no_cpu_wait=1"
+        line="placed texture refresh deferred until an overlapping write is published"
+        output="\n".join([receipt,line,line,"alias deferred observed ms=0"])
+        self.assertTrue(validate("alias-deferred","10de:2704",0,output)[0])
+        self.assertFalse(validate("alias-deferred","10de:2704",0,output.replace("ms=0","ms=1999"))[0])
+        self.assertFalse(validate("alias-deferred","10de:2704",0,output.replace(line,"unrelated",1))[0])
+        self.assertFalse(validate("alias-deferred","10de:2704",0,output+"\nFailed to signal event")[0])
