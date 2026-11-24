@@ -55,6 +55,7 @@ mod instance_cull_views;
 mod classify_materials;
 mod int16;
 mod int32;
+mod float64;
 mod indexed_lane;
 mod particle_sort;
 mod persistent;
@@ -3801,6 +3802,9 @@ impl<'a> Emitter<'a> {
                     for d in &ins.dst {
                         if let Opnd::Vgpr(v) = d {
                             sym.remove(&(2000 + *v as u16));
+                            if float64::pair_result(&ins.mnemonic) {
+                                sym.remove(&(2001 + *v as u16));
+                            }
                         }
                         if let Some(n) = sg(d) {
                             sym.remove(&n);
@@ -3895,6 +3899,11 @@ impl<'a> Emitter<'a> {
                     }
                 }
             }
+            if let Some(high) = float64::pair_source_highs(ins) {
+                if !written.contains(&format!("v{high}")) {
+                    live.insert((1, high));
+                }
+            }
             let atomic = ins.mnemonic.starts_with("image_atomic_");
             if ins.mnemonic.starts_with("image_store") || atomic {
                 if let Some(Opnd::Vgpr(base)) = ins.dst.first() {
@@ -3916,6 +3925,7 @@ impl<'a> Emitter<'a> {
                 Enc::Mubuf if ins.mnemonic.starts_with("buffer_load_dword") =>
                     Self::mubuf_dwords(&ins.mnemonic).unwrap_or(1) - 1,
                 _ if wide_bit_result(&ins.mnemonic) => 1,
+                _ if float64::pair_result(&ins.mnemonic) => 1,
                 _ => 0,
             };
             for o in &ins.dst {
@@ -4029,6 +4039,9 @@ impl<'a> Emitter<'a> {
         h.push_str(HALF_HELPERS);
         if self.insns.iter().any(|i| i.mnemonic.starts_with("v_cmp") && (i.mnemonic.ends_with("_f64") || i.mnemonic.ends_with("_f32") || i.mnemonic.ends_with("_f16"))) {
             h.push_str(compare::FLOAT_HELPERS);
+        }
+        if self.insns.iter().any(|i| float64::handles(&i.mnemonic)) {
+            h.push_str(float64::HELPERS);
         }
         if self.insns.iter().any(|i| matches!(i.mnemonic.as_str(), "s_lshr_b64" | "s_ashr_i64" | "s_bfe_u64" | "s_bfe_i64")) {
             h.push_str(r#"
@@ -6226,6 +6239,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         }
         if let Some(result) = int16::expression(ins)? {
             return self.wv(&d, &result);
+        }
+        if self.lower_f64(ins)? {
+            return Ok(());
         }
         if int32::handles(ins) && self.ex.stage != Stage::Compute {
             return Err("unverified ordinary 32-bit integer shader stage".into());

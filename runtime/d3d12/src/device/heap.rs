@@ -28,6 +28,27 @@ fn trace_import_failure(source: &'static str, api: &'static str, size: u64, stat
     }
 }
 
+// Distinguish a successful import from a successful but unrelated device
+// allocation. Keep default behaviour unchanged; strict mode is for diagnosis.
+fn trace_buffer_path(path: &'static str, count: &std::sync::atomic::AtomicU64, source: &'static str, bytes: u64) {
+    use std::sync::atomic::Ordering;
+    static ENABLED: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+        std::env::var("TUXBOX_TRACE_BUFFER_BACKING").as_deref() == Ok("1")
+    });
+    if !*ENABLED || !crate::diagnostics::logging() { return; }
+    let n = count.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+    if n <= 8 || n.is_power_of_two() {
+        crate::diagnostics::log(&format!("buffer backing path={path} count={n} source={source} bytes={bytes}"));
+    }
+}
+
+fn strict_buffer_import() -> bool {
+    static STRICT: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+        std::env::var("TUXBOX_REQUIRE_BUFFER_IMPORT").as_deref() == Ok("1")
+    });
+    *STRICT
+}
+
 const IMPORTED_HEAP: GUID = GUID::from_u128(0xc2a3c751_1d00_470c_8efd_5da145efd165);
 
 // This holder is also the key for the weak single-page import cache. Its
@@ -297,16 +318,6 @@ pub(super) unsafe extern "system" fn place(
 
 // Slot 44 places a tiled resource at a title-selected virtual address. An
 // unrelated allocation would lose texture contents and subsequent page remaps.
-pub(super) fn import_buffer(
-    device: &Device,
-    address: u64,
-    desc: &D3D12_RESOURCE_DESC,
-    state: D3D12_RESOURCE_STATES,
-    source: &'static str,
-) -> windows::core::Result<ID3D12Resource> {
-    import_buffer_with_heap(device, address, desc, state, source).map(|(resource, _)| resource)
-}
-
 pub(super) fn import_buffer_with_heap(
     device: &Device, address: u64, desc: &D3D12_RESOURCE_DESC, state: D3D12_RESOURCE_STATES,
     source: &'static str,
@@ -358,6 +369,8 @@ pub(super) fn import_buffer_with_heap(
     // Placed resources borrow their heap. Keep the imported CPU allocation's
     // heap alive through the final native resource reference (including views).
     attach_import(&resource, &heap)?;
+    static IMPORTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    trace_buffer_path("imported", &IMPORTED, source, desc.Width);
     Ok((resource, heap))
 }
 
@@ -387,29 +400,73 @@ fn device_buffer(device: &Device, desc: &D3D12_RESOURCE_DESC, state: D3D12_RESOU
     native.ok_or(E_POINTER.into())
 }
 
-fn import_or_back(device: &Device, address: u64, desc: &D3D12_RESOURCE_DESC, state: D3D12_RESOURCE_STATES, source: &'static str)
-    -> windows::core::Result<ID3D12Resource> {
-    match import_buffer(device, address, desc, state, source) {
-        Ok(native) => Ok(native),
+// A late commitment must return the heap as well as the resource. The
+// layout-based guest address registry uses that heap to reject stale imports.
+fn import_with_commit(device: &Device, address: u64, desc: &D3D12_RESOURCE_DESC, state: D3D12_RESOURCE_STATES, source: &'static str)
+    -> windows::core::Result<(ID3D12Resource, Arc<ImportedHeap>)> {
+    match import_buffer_with_heap(device, address, desc, state, source) {
+        Ok(import) => Ok(import),
         Err(error) => {
-            let info = unsafe { device.native.GetResourceAllocationInfo(0, std::slice::from_ref(desc)) };
-            let bytes = if info.SizeInBytes == u64::MAX { desc.Width } else { info.SizeInBytes };
             let base = address & !0xffff;
-            let end = address.saturating_add(bytes).saturating_add(0xffff) & !0xffff;
-            if commit_guest_pages(base, end.saturating_sub(base))
-                && let Ok(native) = import_buffer(device, address, desc, state, source) {
+            let offset = address - base;
+            // Match the native import's size/alignment query. Do not commit
+            // guessed ranges for invalid descriptors or overflowing addresses.
+            let tight = if offset != 0 { D3D12_RESOURCE_FLAGS(0x400) } else { D3D12_RESOURCE_FLAG_NONE };
+            let host = D3D12_RESOURCE_DESC {
+                Flags: desc.Flags | D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER | tight,
+                ..*desc
+            };
+            let info = unsafe { device.native.GetResourceAllocationInfo(0, &[host]) };
+            let size = (info.SizeInBytes != u64::MAX && info.Alignment != 0
+                && offset.is_multiple_of(info.Alignment))
+                .then(|| offset.checked_add(info.SizeInBytes)?.checked_next_multiple_of(65536))
+                .flatten()
+                .or_else(|| {
+                    // Preserve the legacy commitment attempt for stand-in
+                    // compatibility when host import alignment is unavailable.
+                    // Strict diagnostic mode never commits a guessed span.
+                    if strict_buffer_import() { return None; }
+                    let info = unsafe { device.native.GetResourceAllocationInfo(0, std::slice::from_ref(desc)) };
+                    let bytes = if info.SizeInBytes == u64::MAX { desc.Width } else { info.SizeInBytes };
+                    offset.checked_add(bytes)?.checked_next_multiple_of(65536)
+                });
+            if let Some(size) = size
+                && commit_guest_pages(base, size)
+                && let Ok(import) = import_buffer_with_heap(device, address, desc, state, source) {
                 static COMMITTED: std::sync::Once = std::sync::Once::new();
                 crate::diagnostics::log_once(&COMMITTED, || format!(
                     "placed buffer at {address:#x} bytes={} committed reserved guest pages", desc.Width));
-                return Ok(native);
+                static RETRIED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                trace_buffer_path("commit_retry", &RETRIED, source, desc.Width);
+                return Ok(import);
             }
-            let native = device_buffer(device, desc, state)?;
-            static DEVICE: std::sync::Once = std::sync::Once::new();
-            crate::diagnostics::log_once(&DEVICE, || format!(
-                "placed buffer at {address:#x} bytes={} is not importable guest memory ({:?}); using a device buffer",
-                desc.Width, error.code()));
-            Ok(native)
+            Err(error)
         }
+    }
+}
+
+fn buffer_standin(device: &Device, address: u64, desc: &D3D12_RESOURCE_DESC, state: D3D12_RESOURCE_STATES,
+                  source: &'static str, error: windows::core::Error) -> windows::core::Result<ID3D12Resource> {
+    static FALLBACK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    static REJECTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    if strict_buffer_import() {
+        trace_buffer_path("strict_rejected", &REJECTED, source, desc.Width);
+        return Err(error);
+    }
+    let native = device_buffer(device, desc, state)?;
+    trace_buffer_path("device_standin", &FALLBACK, source, desc.Width);
+    static DEVICE: std::sync::Once = std::sync::Once::new();
+    crate::diagnostics::log_once(&DEVICE, || format!(
+        "placed buffer at {address:#x} bytes={} is not importable guest memory ({:?}); using a device buffer",
+        desc.Width, error.code()));
+    Ok(native)
+}
+
+fn import_or_back(device: &Device, address: u64, desc: &D3D12_RESOURCE_DESC, state: D3D12_RESOURCE_STATES, source: &'static str)
+    -> windows::core::Result<ID3D12Resource> {
+    match import_with_commit(device, address, desc, state, source) {
+        Ok((native, _)) => Ok(native),
+        Err(error) => buffer_standin(device, address, desc, state, source, error),
     }
 }
 
@@ -578,10 +635,22 @@ pub(super) unsafe extern "system" fn place_virtual_layout(
     } else { (address, 0) };
     let Some(width) = host.Width.checked_add(delta) else { return E_INVALIDARG };
     host.Width = width;
-    let (native, heap) = match import_buffer_with_heap(device, base, &host, D3D12_RESOURCE_STATE_COMMON, "place_virtual_layout") {
-        Ok(resource) => resource,
+    let (native, heap, delta) = match import_with_commit(device, base, &host, D3D12_RESOURCE_STATE_COMMON, "place_virtual_layout") {
+        Ok((native, heap)) => (native, heap, delta),
         Err(error) => {
-            let native = match import_or_back(device, address, desc, D3D12_RESOURCE_STATE_COMMON, "place_virtual_layout") {
+            // If the widened import is unavailable, keep the old direct
+            // import as a fallback. A real import must never be registered
+            // as the zero-address device-local stand-in.
+            if base != address || host.Flags != desc.Flags {
+                if let Ok((native, heap)) = import_with_commit(device, address, desc, D3D12_RESOURCE_STATE_COMMON, "place_virtual_layout") {
+                    let buffer = super::views::TextureAddress::with_heap(
+                        device, &native, address as usize, false, None, None, None, 0, Some(heap),
+                    );
+                    return unsafe { wrap_pageable(Ok(native), &RESOURCE, device,
+                        super::ResourceState::from(super::Backing::Addressed(buffer, *desc)), out) };
+                }
+            }
+            let native = match buffer_standin(device, address, desc, D3D12_RESOURCE_STATE_COMMON, "place_virtual_layout", error.clone()) {
                 Ok(native) => native,
                 Err(fallback) => {
                     crate::diagnostics::log(&format!(
@@ -923,7 +992,23 @@ impl PagePools {
             if let Some(pool) = pools.values_mut().find(|pool| pool.start <= base && base + size <= pool.end) {
                 // Interleaved allocations can revisit a page whose heap is
                 // still owned by a resource. Reuse only that exact live import.
-                return pool.pages.get_or_open(base, ImportedHeap::is_live, open);
+                let mut opened = false;
+                let result = pool.pages.get_or_open(base, ImportedHeap::is_live, || {
+                    opened = true;
+                    open()
+                });
+                // The native resource owns the Arc; the cache is weak.
+                // Count only successful imports and hits, not failed opens.
+                if result.is_ok() {
+                    static OPEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                    static HIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                    if opened {
+                        trace_buffer_path("pool_open", &OPEN, source, size);
+                    } else {
+                        trace_buffer_path("pool_hit", &HIT, source, size);
+                    }
+                }
+                return result;
             }
         }
         open()
