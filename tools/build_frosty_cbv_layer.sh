@@ -9,6 +9,11 @@ if [[ -n "${VULKAN_HEADERS_INCLUDE:-}" ]]; then
     include=(-I "$VULKAN_HEADERS_INCLUDE")
 elif [[ ! -f /usr/include/vulkan/vk_layer.h && -f "$repo/build/vulkan-headers/usr/include/vulkan/vk_layer.h" ]]; then
     include=(-I "$repo/build/vulkan-headers/usr/include")
+elif [[ ! -f /usr/include/vulkan/vk_layer.h ]]; then
+    echo "The TuxBox constant-buffer Vulkan layer needs vulkan/vk_layer.h." \
+         "Install the Vulkan headers (vulkan-headers on Arch and Fedora, libvulkan-dev on Debian and Ubuntu)," \
+         "or set VULKAN_HEADERS_INCLUDE to a Vulkan-Headers include directory." >&2
+    exit 1
 fi
 mkdir -p -- "$out"
 stage=$(mktemp -d -- "$out/.build.XXXXXXXX")

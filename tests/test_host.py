@@ -7,7 +7,44 @@ import unittest
 from unittest.mock import Mock, patch
 
 from project_tuxbox.console_cbv import configure_console_cbv, console_cbv_layer
-from project_tuxbox.host import Host, claim_package_drive, configure_nvidia_shader_cache, proton_installation
+from project_tuxbox.host import Host, claim_package_drive, configure_nvidia_shader_cache, proton_installation, warn_scarlett_dxc
+
+
+class ScarlettWindowsDxc(unittest.TestCase):
+    def test_warns_only_for_scarlett_and_does_not_modify_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report = Mock()
+            warn_scarlett_dxc(root / "other.exe", report)
+            report.assert_not_called()
+            exe = root / "game_scarlett_master.exe"
+            warn_scarlett_dxc(exe, report)
+            self.assertIn("dxcompiler.dll missing", report.call_args.args[0])
+            self.assertIn("dxil.dll missing", report.call_args.args[0])
+            self.assertEqual(list(root.iterdir()), [])
+            (root / "dxcompiler.dll").write_bytes(b"not PE")
+            report.reset_mock()
+            warn_scarlett_dxc(exe, report)
+            self.assertIn("unreadable or not a valid PE", report.call_args.args[0])
+            self.assertEqual((root / "dxcompiler.dll").read_bytes(), b"not PE")
+
+    def test_requires_x64_dll_headers(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("dxcompiler.dll", "dxil.dll"):
+                (root / name).touch()
+            report = Mock()
+            pe = Mock()
+            pe.FILE_HEADER = SimpleNamespace(Machine=0x8664, Characteristics=0x2000)
+            pe.OPTIONAL_HEADER = SimpleNamespace(Magic=0x20b)
+            with patch("pefile.PE", return_value=pe):
+                warn_scarlett_dxc(root / "game_scarlett_master.exe", report)
+                report.assert_not_called()
+                self.assertEqual(pe.close.call_count, 2)
+                pe.FILE_HEADER.Machine = 0x14c
+                warn_scarlett_dxc(root / "game_scarlett_master.exe", report)
+                self.assertIn("not an x64 Windows DLL", report.call_args.args[0])
 
 
 class SelectProton(unittest.TestCase):
@@ -209,7 +246,7 @@ class ConsoleConstantBuffers(unittest.TestCase):
             self.assertEqual(env["VK_LAYER_PATH"], layer + ":/user/layers")
             self.assertEqual(env["VK_ADD_LAYER_PATH"], "/user/extra")
             self.assertEqual(env["VK_INSTANCE_LAYERS"], "VK_LAYER_TUXBOX_console_cbv:overlay")
-            self.assertEqual(env["VKD3D_DISABLE_EXTENSIONS"], "VK_EXT_descriptor_buffer,first;second")
+            self.assertEqual(env["VKD3D_DISABLE_EXTENSIONS"], "first;second")
             self.assertEqual(env["VKD3D_CONFIG"], "force_static_cbv")
             self.assertEqual(env["PRESSURE_VESSEL_FILESYSTEMS_RO"], layer + ":/user/mount")
             before = env.copy()
@@ -236,6 +273,10 @@ class ConsoleConstantBuffers(unittest.TestCase):
             configure_console_cbv("wine", wine, self.exe, self.log.status)
             self.assertEqual(wine["VK_ADD_LAYER_PATH"], self.layer)
             self.assertNotIn("VKD3D_CONFIG", wine)
+            self.assertNotIn("VKD3D_DISABLE_EXTENSIONS", wine)
+            fork = {"PROTONPATH": str(self.root)}
+            configure_console_cbv("proton", fork, self.exe, self.log.status)
+            self.assertEqual(fork["VKD3D_DISABLE_EXTENSIONS"], "VK_EXT_descriptor_buffer")
             self.assertNotIn("PRESSURE_VESSEL_FILESYSTEMS_RO", wine)
 
     def test_native_foreign_missing_and_explicit_comparison(self):

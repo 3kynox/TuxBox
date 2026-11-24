@@ -40,8 +40,11 @@ def configure_console_cbv(backend, env, executable, report):
     marker = Path(installation) / "tuxbox-features" if installation else None
     if marker and marker.is_file() and feature in marker.read_text().splitlines():
         prepend(env, "VKD3D_CONFIG", feature, ",")
+        # The fork binds 16-byte offsets as storage buffers on its descriptor-set path.
+        prepend(env, "VKD3D_DISABLE_EXTENSIONS", "VK_EXT_descriptor_buffer", ",")
         report("Constant-buffer alignment: selected Proton build feature")
     else:
+        # The layer hides VK_EXT_descriptor_buffer itself, only on GPUs that need it.
         layer = console_cbv_layer(env)
         path_key = "VK_LAYER_PATH" if env.get("VK_LAYER_PATH") else "VK_ADD_LAYER_PATH"
         prepend(env, path_key, layer, ":")
@@ -49,5 +52,3 @@ def configure_console_cbv(backend, env, executable, report):
         if backend == "proton":
             prepend(env, "PRESSURE_VESSEL_FILESYSTEMS_RO", layer, ":")
         report("Constant-buffer alignment: TuxBox Vulkan layer")
-    # Stock vkd3d can bind 16-byte offsets as storage buffers on its descriptor-set path.
-    prepend(env, "VKD3D_DISABLE_EXTENSIONS", "VK_EXT_descriptor_buffer", ",")

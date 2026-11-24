@@ -22,6 +22,7 @@ mod depth;
 mod enhanced;
 mod descriptors;
 mod graphics;
+mod linear_upload;
 mod media;
 mod memory_wait;
 pub(crate) mod page_mapping;
@@ -29,6 +30,7 @@ mod queries;
 mod ray_dispatch;
 mod raytracing;
 pub(crate) mod serialized_blas;
+mod standard;
 mod stencil;
 
 enum ListState {
@@ -53,6 +55,8 @@ struct Recording {
     media: Option<media::Recording>,
     placed_reads: Vec<Arc<Texture>>,
     placed_writes: Vec<Arc<Texture>>,
+    /// CPU bytes copied into upload heaps at ExecuteCommandLists.
+    uploads: Vec<linear_upload::Pending>,
     bound_placed_targets: Vec<Arc<Texture>>,
     resource_heap: Option<descriptors::ResourceHeap>,
     descriptor_arena: Option<Arc<device::descriptor_paging::Arena>>,
@@ -68,6 +72,13 @@ impl Recording {
         if !accesses.iter().any(|known| Arc::ptr_eq(known, texture)) {
             accesses.try_reserve(1).map_err(|_| E_OUTOFMEMORY)?;
             accesses.push(Arc::clone(texture));
+        }
+        Ok(())
+    }
+
+    fn snapshot_uploads(&self) -> Result<(), HRESULT> {
+        for upload in &self.uploads {
+            upload.snapshot().map_err(|error| error.code())?;
         }
         Ok(())
     }
@@ -394,6 +405,7 @@ unsafe extern "system" fn reset(
         )
     };
     if hr.is_ok() {
+        state.uploads.clear();
         state.phase = ListState::Open;
         state.resources = allocator.state.clone();
         state.timestamp_page = None;
@@ -1014,7 +1026,7 @@ unsafe extern "system" fn copy_resource(
     static FIRST_COPY: std::sync::Once = std::sync::Once::new();
     crate::diagnostics::log_once(&FIRST_COPY, || {
         format!(
-            "recorded slot 84 CopyResource (dimension {}, {} x {} x {}, {} mips)",
+            "recorded CopyResource (dimension {}, {} x {} x {}, {} mips)",
             s.Dimension.0, s.Width, s.Height, s.DepthOrArraySize, s.MipLevels
         )
     });
@@ -1104,10 +1116,15 @@ static LIST_SLOTS: Slots<149> = {
     slots[8] = crate::slot!(get_type);
     slots[9] = crate::slot!(close);
     slots[10] = crate::slot!(reset);
+    slots[11] = crate::slot!(standard::clear_state);
     slots[12] = crate::slot!(graphics::draw);
     slots[13] = crate::slot!(graphics::draw_indexed);
     slots[14] = crate::slot!(compute::dispatch);
     slots[15] = crate::slot!(compute::copy_buffer);
+    slots[16] = crate::slot!(standard::copy_texture_region);
+    slots[17] = crate::slot!(standard::copy_whole_resource);
+    slots[18] = crate::slot!(standard::copy_tiles);
+    slots[19] = crate::slot!(standard::resolve_subresource);
     slots[20] = crate::slot!(graphics::topology);
     slots[21] = crate::slot!(graphics::viewports);
     slots[22] = crate::slot!(graphics::scissors);
@@ -1115,9 +1132,11 @@ static LIST_SLOTS: Slots<149> = {
     slots[24] = crate::slot!(graphics::stencil_ref);
     slots[25] = crate::slot!(graphics::pipeline);
     slots[26] = crate::slot!(transition);
+    slots[27] = crate::slot!(standard::execute_bundle);
     slots[28] = crate::slot!(queries::query::<true>);
     slots[29] = crate::slot!(queries::query::<false>);
     slots[30] = crate::slot!(queries::resolve);
+    slots[31] = crate::slot!(standard::set_predication);
     // The Xbox root binding slots after ResourceBarrier are shifted by four.
     slots[32] = crate::slot!(descriptors::bind_heaps);
     slots[33] = crate::slot!(compute::bind_root);
@@ -1136,13 +1155,23 @@ static LIST_SLOTS: Slots<149> = {
     slots[46] = crate::slot!(compute::unordered_access::<false>);
     slots[47] = crate::slot!(graphics::index_buffer);
     slots[48] = crate::slot!(graphics::vertex_buffers);
+    slots[49] = crate::slot!(standard::stream_output);
     slots[50] = crate::slot!(graphics::targets);
     slots[51] = crate::slot!(depth::clear);
     slots[52] = crate::slot!(clear_rtv);
     slots[53] = crate::slot!(depth::clear_uav::<false>);
     slots[54] = crate::slot!(depth::clear_uav::<true>);
     slots[55] = crate::slot!(discard);
+    slots[56] = crate::slot!(standard::set_marker);
+    slots[57] = crate::slot!(standard::begin_event);
+    slots[58] = crate::slot!(standard::end_event);
+    // Slots after EndEvent differ between Xbox generations. Keep traced
+    // assignments, including slot 59 and the slot 62 upload.
     slots[59] = crate::slot!(execute_indirect);
+    // Scarlett video upload, title RVA 0x979650. The CPU buffer is filled
+    // after this returns, so the bytes are snapshotted at execute. Device11
+    // and extended lists copy this table.
+    slots[62] = crate::slot!(linear_upload::linear_upload);
     slots[67] = crate::slot!(flush_texture_cache);
     slots[68] = crate::slot!(graphics::depth_bounds);
     slots[71] = crate::slot!(write_marker);
@@ -1188,6 +1217,15 @@ static EXTENDED_LIST_SLOTS: Slots<149> = {
     slots[132] = crate::slot!(extended_cache_barrier);
     slots
 };
+
+unsafe fn guest_list<'a>(object: *mut c_void, device: *mut c_void) -> Option<&'a List> {
+    unsafe {
+        unwrap(object, device, &LIST_SLOTS)
+            .or_else(|| unwrap(object, device, &DEVICE11_LIST_SLOTS))
+            .or_else(|| unwrap(object, device, &EXTENDED_LIST_SLOTS))
+            .or_else(|| unwrap(object, device, &media::SLOTS))
+    }
+}
 
 fn reject(queue: &Queue, error: HRESULT) {
     let _ = queue.state.placement.error.compare_exchange(
@@ -1237,19 +1275,16 @@ unsafe fn execute_batch(queue: &Queue, count: u32, lists: *const *mut c_void, fr
         return;
     }
     let guest = unsafe { slice::from_raw_parts(lists, count as usize) };
+    // Mirrors exist only when a constant-buffer import failed. The count is
+    // zero for every boot that has not hit that path.
+    crate::device::snapshot_cbv_mirrors();
     let mut list_index = 0;
     let trace_samples = std::cell::RefCell::new(Vec::new());
     let result = translate_batch(
         guest,
         (Vec::new(), Vec::new(), Vec::new(), Vec::new(), memory_wait::Splits::new()),
         |&item, (textures, writes, shader_views, scene_lists, splits)| {
-            let list: &List = unsafe {
-                unwrap(item, parent(&queue.parent), &LIST_SLOTS)
-                    .or_else(|| unwrap(item, parent(&queue.parent), &DEVICE11_LIST_SLOTS))
-                    .or_else(|| unwrap(item, parent(&queue.parent), &EXTENDED_LIST_SLOTS))
-                    .or_else(|| unwrap(item, parent(&queue.parent), &media::SLOTS))
-            }
-            .ok_or(E_INVALIDARG)?;
+            let list = unsafe { guest_list(item, parent(&queue.parent)) }.ok_or(E_INVALIDARG)?;
             let state = recording(list);
             if !matches!(state.phase, ListState::Closed)
                 || state.error.is_err()
@@ -1271,6 +1306,7 @@ unsafe fn execute_batch(queue: &Queue, count: u32, lists: *const *mut c_void, fr
                     return Err(E_INVALIDARG);
                 }
             }
+            state.snapshot_uploads()?;
             splits.try_reserve(state.prefix.segments.len()).map_err(|_| E_OUTOFMEMORY)?;
             splits.extend(state.prefix.segments.iter().map(|s| (list_index, s.clone())));
             list_index += 1;
@@ -1601,6 +1637,7 @@ pub(crate) unsafe fn wrap_command_list(
             null_pipeline: false,
             placed_reads: Vec::new(),
             placed_writes: Vec::new(),
+            uploads: Vec::new(),
             bound_placed_targets: Vec::new(),
             resource_heap: None,
             descriptor_arena: None,
