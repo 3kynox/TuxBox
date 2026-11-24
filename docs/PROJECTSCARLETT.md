@@ -72,7 +72,7 @@ Add `--mangohud` before the package path to record frame times. The prefix defau
 
 The first launch records each shader the game requests in the prefix. Before later launches, the launcher compiles the recorded requests and shows its progress, so the game reuses those translations instead of compiling them during play. Pass `--prepare-only` to prepare without starting the game, or `--no-shader-prep` to skip preparation for one launch. Place either option before the package path. [Preparation results](../evidence/projectscarlett-shader-preparation.json)
 
-Preparation also reports the ten most frequent refusal reasons for newly attempted requests, grouped without register numbers and program counters. Cached refusals are counted separately because their reasons are not stored. For a full breakdown including cached refusals, run the read-only `tools/triage_scarlett_shaders.py` on the recorded request directory.
+Preparation also reports the ten most frequent refusal reasons for newly attempted requests, grouped without register numbers and program counters. Cached refusals are counted separately because their reasons are not stored. For a full breakdown including cached refusals, run the read-only `tools/triage_scarlett_shaders.py` on the recorded request directory. When the request files are unavailable, the same tool can rank newly refused keys and literal sampler states from an existing runtime log: `python tools/triage_scarlett_shaders.py --log build/scarlett.log`. This log-only result is not a coverage estimate.
 
 ## What to expect
 
