@@ -527,29 +527,6 @@ impl Texture {
     }
 }
 
-/// How long a batch waits for an earlier overlapping write to reach guest
-/// memory before it uses the stale image instead.
-const PUBLICATION_WAIT_MS: u32 = 2000;
-
-/// Wait on the CPU for `value`. False if the device was lost, the wait failed
-/// or it timed out; the caller then falls back without failing the queue.
-fn wait_for_publication(fence: &ID3D12Fence, value: u64) -> bool {
-    use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
-    use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
-    let reached = |fence: &ID3D12Fence| {
-        let done = unsafe { fence.GetCompletedValue() };
-        done != u64::MAX && done >= value
-    };
-    if reached(fence) {
-        return true;
-    }
-    let Ok(event) = (unsafe { CreateEventW(None, false, false, None) }) else { return false };
-    let signalled = unsafe { fence.SetEventOnCompletion(value, event) }.is_ok()
-        && unsafe { WaitForSingleObject(event, PUBLICATION_WAIT_MS) } == WAIT_OBJECT_0;
-    let _ = unsafe { CloseHandle(event) };
-    signalled && reached(fence)
-}
-
 /// Report an aliasing case that is handled by degrading, a bounded number of times.
 fn report_alias(what: &str) {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -634,12 +611,13 @@ pub(crate) unsafe fn submit(
         {
             if Arc::as_ptr(texture) != write.texture.as_ptr() {
                 // Another image wrote this memory and has not published it yet.
-                // Wait for the publication so the refresh below reads the
-                // written bytes. If it does not arrive, keep the current image.
-                if wait_for_publication(&write.published, write.tick) {
-                    continue;
-                }
-                report_alias("placed texture layout alias before GPU write publication timed out");
+                // Refreshing now would read the old guest bytes, and waiting
+                // here for the publication can deadlock: that write may sit
+                // behind GPU work that waits on a fence this thread signals
+                // only after submit returns. Keep the current image for this
+                // batch; the next batch refreshes it once the write has landed
+                // and left `submission.writes`.
+                report_alias("placed texture refresh deferred until an overlapping write is published");
                 pending = true;
                 continue;
             }
