@@ -1775,7 +1775,12 @@ impl<'a> Emitter<'a> {
             return Ok((Some(binding.kind), binding.register, binding.space));
         }
         let index = offset / stride;
-        let Some(ranges) = self.root_table(sgpr) else { return Ok((None, index, 0)); };
+        let Some(ranges) = self.root_table(sgpr) else {
+            if let Some(found) = self.rootless_fssm_descriptor(sgpr, offset, stride) {
+                return Ok(found);
+            }
+            return Ok((None, index, 0));
+        };
         // Existing FSSM single-range layouts may address beyond the declared range.
         if let [range] = ranges {
             if range.base_register == 0 && range.space == 0 && matches!(range.offset_in_table, 0 | u32::MAX) {
@@ -1805,6 +1810,37 @@ impl<'a> Emitter<'a> {
             }
         }
         Err(format!("unmapped descriptor at s{sgpr} + {offset:#x}"))
+    }
+
+    /// Root-less programs (most RAGE shaders) carry no RTS0, so no root table names their
+    /// descriptors. FSSM used-resource rows still give each descriptor's table SGPR
+    /// (location bits 8..16), dword offset and register; PSV gives its space. Accept a
+    /// load only when exactly one row sits at this SGPR and offset and exactly one PSV
+    /// binding of the matching class names its register.
+    fn rootless_fssm_descriptor(&self, sgpr: u8, offset: u32, stride: u32) -> Option<(Option<u32>, u32, u32)> {
+        if self.ex.root_sig.is_some() || stride != 32 || offset % 32 != 0 {
+            return None;
+        }
+        let mut rows = tuxbox_dxbc::compute_table::records(&self.ex.fssm)?.filter(|&[class, pos, _, _, loc]| {
+            matches!(class, 0x300 | 0x302 | 0x303) && (loc >> 8) & 0xff == u32::from(sgpr) && pos.checked_mul(4) == Some(offset)
+        });
+        let [class, _, register, _, _] = rows.next()?;
+        if rows.next().is_some() {
+            return None;
+        }
+        let (kind, types): (u32, &[u32]) = match class {
+            0x300 => (0, &[3, 4, 5]),
+            0x303 => (1, &[6, 7, 8]),
+            _ => (2, &[2]),
+        };
+        let mut spaces = self.ex.resources.iter()
+            .filter(|p| types.contains(&p.res_type) && p.lower <= register && register <= p.upper)
+            .map(|p| p.space);
+        let space = spaces.next()?;
+        if spaces.next().is_some() {
+            return None;
+        }
+        Some((Some(kind), register, space))
     }
 
     fn uncovered_fssm_descriptor(&self, sgpr: u8, offset: u32) -> Option<(u32, u32, u32)> {
@@ -2574,6 +2610,7 @@ impl<'a> Emitter<'a> {
         let mut dbg_prev: Option<Sym> = dbg_reg.and_then(|r| sym.get(&r).copied());
         let block_start = range.start;
         let inline_samplers = self.resource_heap_base.is_some()
+            || (self.ex.root_sig.is_none() && self.ex.resources.iter().any(|r| r.res_type == 1))
             || (self.ex.stage == Stage::Compute && self.ex.root_sig.as_ref().is_some_and(|r| !r.static_samplers.is_empty())
                 && self.ex.resources.iter().filter(|r| r.res_type == 1).count() > 1);
         for idx in range {
@@ -2587,7 +2624,8 @@ impl<'a> Emitter<'a> {
             let ins = &insns[idx];
             // A compute-heap byte offset held in a VGPR (key 2000 + v) lasts until the
             // VGPR is written again; `v_lshlrev_b32 v, 5, x` below re-marks it.
-            if self.compute_heap {
+            // v_nop writes nothing; its encoding can still carry stale VDST/SRC0 fields.
+            if self.compute_heap && ins.mnemonic != "v_nop" {
                 for d in &ins.dst {
                     if let Opnd::Vgpr(v) = d {
                         if sym.get(&(2000 + *v as u16)) == Some(&Sym::HeapOffset) {
@@ -2752,6 +2790,20 @@ impl<'a> Emitter<'a> {
                 // `v_readfirstlane sBase, v` and `s_load [sBase]` is a constant-table lookup
                 // with a run-time index (ColorDeficiencyMain, cc45bda725a0f774). VGPRs are
                 // tracked under keys 2000+ for exactly this.
+                // A copy of, or a per-lane select between, heap byte offsets is still one.
+                Enc::Vop1 | Enc::Vop2 | Enc::Vop3
+                    if self.compute_heap
+                        && matches!(ins.mnemonic.as_str(), "v_mov_b32" | "v_cndmask_b32")
+                        && matches!(ins.dst.first(), Some(Opnd::Vgpr(_)))
+                        && {
+                            let n = if ins.mnemonic == "v_mov_b32" { 1 } else { 2 };
+                            ins.src.len() >= n && ins.src[..n].iter().all(|o| matches!(o, Opnd::Vgpr(v) if sym.get(&(2000 + *v as u16)) == Some(&Sym::HeapOffset)))
+                        } =>
+                {
+                    if let Some(Opnd::Vgpr(v)) = ins.dst.first() {
+                        sym.insert(2000 + *v as u16, Sym::HeapOffset);
+                    }
+                }
                 Enc::Vop2 | Enc::Vop3
                     if self.compute_heap && ins.mnemonic == "v_lshlrev_b32" && ins.src.first() == Some(&Opnd::ConstInt(5)) =>
                 {
@@ -2834,7 +2886,12 @@ impl<'a> Emitter<'a> {
                     };
                     if (ins.raw.get(1).copied().unwrap_or(0) >> 25) != 0x7d {
                         let soff = (ins.raw[1] >> 25) as u16;
-                        if self.resource_heap_base == Some(table) && matches!(n, 4 | 8) && ins.aux.imm == 0 && sym.get(&soff) == Some(&Sym::HeapOffset) {
+                        // In compute the heap pointer itself is verified (the one FSSM class-5
+                        // user record), so any descriptor-sized load from it at a run-time
+                        // SOFFSET is a heap fetch, however the byte offset was computed.
+                        let heap_offset = sym.get(&soff) == Some(&Sym::HeapOffset)
+                            || (self.compute_heap && soff < 106 && written.contains(&soff));
+                        if self.resource_heap_base == Some(table) && matches!(n, 4 | 8) && ins.aux.imm == 0 && heap_offset {
                             for k in 0..n as u16 {
                                 sym.remove(&(d + k));
                                 written.insert(d + k);
@@ -3066,6 +3123,7 @@ impl<'a> Emitter<'a> {
                     }
                     self.res.insert(idx, v);
                 }
+                Enc::Vop1 if ins.mnemonic == "v_nop" => {}
 
                 _ => {
                     for d in &ins.dst {
@@ -5967,6 +6025,34 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         Ok(())
     }
 
+    /// `buffer_store_format_*` with IDXEN through a heap descriptor: the typed UAV's
+    /// desktop descriptor supplies the element format, so store the float channels.
+    fn heap_typed_store(&mut self, ins: &Insn, src: u16) -> Result<(), String> {
+        if ins.aux.mask & 1 != 0 || ins.aux.imm != 0 || !self.zero_buffer_offset(ins) {
+            return Err("typed heap buffer store with a byte offset unsupported".into());
+        }
+        let channels = match ins.mnemonic.rsplit('_').next() {
+            Some("x") => 1u8, Some("xy") => 2, Some("xyz") => 3, Some("xyzw") => 4,
+            _ => return Err(format!("unsupported typed heap store {}", ins.mnemonic)),
+        };
+        let Opnd::Vgpr(vd) = ins.dst[0] else { return Err("bad vdata".into()) };
+        let index = r(&ins.src[0])?;
+        let t = self.tmp;
+        self.tmp += 1;
+        self.regs.insert(format!("s{src}"));
+        let mut value = Vec::new();
+        for k in 0..4u8 {
+            value.push(if k < channels {
+                let o = Opnd::Vgpr(vd + k);
+                self.touch(&o);
+                format!("asfloat({})", r(&o)?)
+            } else if k == 3 { "1.0f".into() } else { "0.0f".into() });
+        }
+        self.line(&format!("RWBuffer<float4> tb_tw{t} = ResourceDescriptorHeap[NonUniformResourceIndex(s{src})];"));
+        self.line(&format!("if (exec_lo & 1u) tb_tw{t}[{index}] = float4({});", value.join(", ")));
+        Ok(())
+    }
+
     fn raw_transfer_on(&mut self, ins: &Insn, buffer: String, is_uav: bool) -> Result<(), String> {
         let load = ins.mnemonic.starts_with("buffer_load_");
         if !load && (!is_uav || !ins.mnemonic.starts_with("buffer_store_")) {
@@ -6059,6 +6145,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             if ins.mnemonic.starts_with("buffer_load_format_") && ins.aux.mask & 2 != 0 {
                 return self.heap_typed_load(ins, src);
+            }
+            if ins.mnemonic.starts_with("buffer_store_format_") && ins.aux.mask & 2 != 0 {
+                return self.heap_typed_store(ins, src);
             }
             return self.heap_raw_transfer(ins, src);
         }
@@ -7012,6 +7101,45 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 let taps = ["0,1", "1,1", "1,0", "0,0"].map(|xy|
                     format!("{tex}.SampleLevel({smp}, (base{t} + float2({xy}))/sz{t}, l{t}).r"));
                 self.line(&format!("float4 t{t} = float4({});", taps.join(", ")));
+                for (k, channel) in XYZW.iter().enumerate() {
+                    self.wv(&Opnd::Vgpr(vd + k as u8), &format!("asuint(t{t}.{channel})"))?;
+                }
+                return Ok(());
+            }
+            if modi == 4 && zref.is_none() && matches!(dim, 1 | 5) {
+                // gather4_l: SM 6.x Gather has no LOD operand. Sample the four texel
+                // centres of the footprint at the requested mip instead. A sample exactly at
+                // a texel centre returns that texel under point or bilinear filtering, and
+                // keeps the bound sampler's address mode. The mip rounds to the nearest level.
+                let chan = match ins.aux.mask {
+                    1 => "r",
+                    2 => "g",
+                    4 => "b",
+                    8 => "a",
+                    m => return Err(format!("gather4 with dmask {m:#x} unsupported")),
+                };
+                let lod = lod.as_ref().ok_or("missing gather4_l lod")?;
+                let (uv, slice, dims, ext) = if dim == 5 {
+                    (format!("({cvec}).xy"), Some(format!("({cvec}).z")), format!("w{t}, h{t}, e{t}, m{t}"), format!("uint e{t};"))
+                } else {
+                    (cvec.clone(), None, format!("w{t}, h{t}, m{t}"), String::new())
+                };
+                self.line(&format!("uint w{t}, h{t}, m{t}; {ext} {tex}.GetDimensions(0u, {dims});"));
+                self.line(&format!("uint l{t} = (uint)clamp(round({lod}), 0.0, float(max(1u, m{t}) - 1u));"));
+                self.line(&format!("{tex}.GetDimensions(l{t}, {dims}); float2 sz{t} = max(float2(w{t}, h{t}), 1.0);"));
+                let off2 = offset.as_ref().map(|o| format!(" + float2({o})")).unwrap_or_default();
+                self.line(&format!("float2 base{t} = floor({uv} * sz{t} - 0.5) + 0.5{off2};"));
+                // D3D gather order: (0,1), (1,1), (1,0), (0,0) relative to the top-left texel.
+                let taps = ["0,1", "1,1", "1,0", "0,0"].map(|xy| {
+                    let p = format!("(base{t} + float2({xy})) / sz{t}");
+                    let p = match &slice { Some(s) => format!("float3({p}, {s})"), None => p };
+                    format!("{tex}.SampleLevel({smp}, {p}, l{t}).{chan}")
+                });
+                self.line(&format!("float4 t{t} = float4({});", taps.join(", ")));
+                if d16 {
+                    let chans: Vec<String> = XYZW.iter().map(|c| format!("t{t}.{c}")).collect();
+                    return self.write_d16(vd, &chans);
+                }
                 for (k, channel) in XYZW.iter().enumerate() {
                     self.wv(&Opnd::Vgpr(vd + k as u8), &format!("asuint(t{t}.{channel})"))?;
                 }
