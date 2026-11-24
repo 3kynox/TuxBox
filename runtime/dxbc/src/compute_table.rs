@@ -143,7 +143,11 @@ fn read_bindings(
     let mut resolve_constants = None;
     for [class, offset, register, shape, location] in records {
         let table = if stage == 5 { location >> 16 } else { 0 };
-        let (kind, psv_type) = match (class, location) {
+        // Root-less raster programs (RAGE) can receive their descriptor table in
+        // s9 instead of s8. The descriptor encodings are otherwise identical.
+        let descriptor_location = if stage <= 1 && matches!(class, 0x300 | 0x302 | 0x303)
+            && (location >> 8) & 0xff == 9 { 0x800 | (location & 0xff) } else { location };
+        let (kind, psv_type) = match (class, descriptor_location) {
             (0x300, 0x408 | 0x10508) if stage == 5 => (0, 3), // typed SRV
             // A four-dword buffer descriptor represents typed, raw or structured
             // views. PSV distinguishes those encodings, and FSSM gives the stride.
@@ -386,6 +390,8 @@ fn descriptor_class(
     register: u32,
     resources: &[[u32; 4]],
 ) -> Option<(u32, u32)> {
+    let location = if stage <= 1 && matches!(class, 0x300 | 0x302 | 0x303)
+        && (location >> 8) & 0xff == 9 { 0x800 | (location & 0xff) } else { location };
     Some(match (class, location) {
         (0x300, 0x408 | 0x10508) if stage == 5 => (0, 3),
         (0x300 | 0x303, 0x404 | 0x10504) if stage == 5 => {
@@ -791,6 +797,14 @@ mod tests {
         assert_eq!(corroborated_descriptor(&sampler, &[[1, 0, 3, 3]], 5, 5, 0), None);
         let image = program(&[[3, 0xc8, 1, 28, 0x105]], &[[0x302, 0xc8, 28, 0, 0x10504]]);
         assert_eq!(corroborated_descriptor(&image, &[[2, 1, 28, 28]], 5, 5, 0x324), None);
+    }
+
+    #[test]
+    fn raster_descriptor_in_s9_table_is_recognized() {
+        let (kind, psv) = descriptor_class(0x300, 0x908, 0, 0, 5, &[]).unwrap();
+        assert_eq!((kind, psv), (0, 3));
+        let (kind, psv) = descriptor_class(0x302, 0x904, 0, 1, 8, &[]).unwrap();
+        assert_eq!((kind, psv), (2, 2));
     }
 
     #[test]
