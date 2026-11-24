@@ -30,7 +30,7 @@ from project_tuxbox.verify import SUITES, verify, status
 def launch_game(args):
     exe = launch_target(args.target.expanduser(), args.app_id)
     package_dir = package_root(args.target.expanduser(), exe)
-    host = Host(args.backend, args.proton, args.prefix)
+    host = Host(args.backend, args.proton, args.prefix, offline=args.offline)
     if not (args.graphics_menu or args.graphics_profile):
         return run_game(args, exe, host, package_dir)
     if args.prepare_only:
@@ -51,6 +51,8 @@ def run_game(args, exe, host, package_dir, profile=None):
             log.status(f"Graphics profile: {profile}")
         if host.backend in ("wine", "proton"):
             log.status(f"Prefix: {host.env['WINEPREFIX']}")
+        if host.offline:
+            log.status("Network: offline. The game cannot reach servers or upload crash reports.")
         try:
             if args.prepare_only or (not args.no_shader_prep and os.environ.get("TUXBOX_SHADER_PREP") != "0"
                                      and "-nullrhi" not in (arg.lower() for arg in args.arguments)):
@@ -96,6 +98,8 @@ def main():
     graphics = run.add_mutually_exclusive_group()
     graphics.add_argument("--graphics-menu", action="store_true", help="choose a Project Scarlett graphics profile")
     graphics.add_argument("--graphics-profile", choices=PROFILES, help="select a Project Scarlett graphics profile")
+    run.add_argument("--offline", action="store_true",
+                     help="on Linux, launch without network access so the game cannot upload crash reports")
     preparation = run.add_mutually_exclusive_group()
     preparation.add_argument("--prepare-only", action="store_true", help="prepare supported shader caches and exit")
     preparation.add_argument("--no-shader-prep", action="store_true", help="skip shader preparation for this launch")
