@@ -1796,7 +1796,35 @@ impl<'a> Emitter<'a> {
                 return Ok((Some(range.range_type), register, range.space));
             }
         }
+        // The root table does not cover this 32-byte slot. Accept the load only
+        // when one FSSM user record, its used-resource row and PSV name the same
+        // register, and that register is not already declared elsewhere.
+        if stride == 32 {
+            if let Some((kind, register, space)) = self.uncovered_fssm_descriptor(sgpr, offset) {
+                return Ok((Some(kind), register, space));
+            }
+        }
         Err(format!("unmapped descriptor at s{sgpr} + {offset:#x}"))
+    }
+
+    fn uncovered_fssm_descriptor(&self, sgpr: u8, offset: u32) -> Option<(u32, u32, u32)> {
+        if self.ex.stage != Stage::Compute {
+            return None;
+        }
+        let resources: Vec<[u32; 4]> = self
+            .ex
+            .resources
+            .iter()
+            .map(|resource| [resource.res_type, resource.space, resource.lower, resource.upper])
+            .collect();
+        tuxbox_dxbc::compute_table::uncovered_descriptor(
+            &self.ex.fssm,
+            &resources,
+            5,
+            sgpr,
+            offset,
+            self.ex.root_sig.as_ref()?,
+        )
     }
 
     /// Standard adjacent P1/P2 pairs consume the rasterizer's interpolant. A shader
