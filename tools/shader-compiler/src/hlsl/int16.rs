@@ -56,7 +56,16 @@ pub(super) fn expression(ins: &Insn) -> Result<Option<String>, String> {
         return Err("unsupported packed integer source or encoding".into());
     }
     let (w0, w1) = (ins.raw[0], ins.raw[1]);
-    if w0 & 0x8700 != 0
+    // RDNA2 ISA sections 6.5 and 12.10: clamp arithmetic to the
+    // representable signed/unsigned 16-bit interval, independently per half.
+    let clamped = w0 & 0x8000 != 0;
+    let saturating_arithmetic = packed && matches!(op,
+        Operation::Add | Operation::Subtract | Operation::Multiply | Operation::MultiplyAdd);
+    if clamped && (!saturating_arithmetic
+        || !ins.src[..arity].iter().all(|s| matches!(s, Opnd::Vgpr(_)))) {
+        return Err("unsupported packed integer clamp form or source".into());
+    }
+    if w0 & 0x0700 != 0
         || w1 >> (if packed { 29 } else { 27 }) != 0
         || ins.src[..arity].iter().any(|s| matches!(s, Opnd::ConstF32(_)))
     {
@@ -66,6 +75,36 @@ pub(super) fn expression(ins: &Insn) -> Result<Option<String>, String> {
         let a = half(&ins.src[0], selectors & 1)?;
         let b = half(&ins.src[1], (selectors >> 1) & 1)?;
         let signed = |x: &str| format!("(asint({x} << 16) >> 16)");
+        if clamped {
+            let signed_op = matches!(ins.mnemonic.as_str(),
+                "v_pk_add_i16" | "v_pk_sub_i16" | "v_pk_mad_i16");
+            if signed_op {
+                let (a, b) = (signed(&a), signed(&b));
+                let value = match op {
+                    Operation::Add => format!("({a} + {b})"),
+                    Operation::Subtract => format!("({a} - {b})"),
+                    Operation::MultiplyAdd => {
+                        let c = signed(&half(&ins.src[2], (selectors >> 2) & 1)?);
+                        format!("({a} * {b} + {c})")
+                    }
+                    _ => unreachable!("signed clamp arithmetic"),
+                };
+                return Ok(format!("asuint(clamp({value}, -32768, 32767))"));
+            }
+            // 65535*65535+65535 fits in uint32, and unsigned subtract
+            // must clamp at zero before any modular underflow.
+            let value = match op {
+                Operation::Add => format!("({a} + {b})"),
+                Operation::Subtract => format!("(max({a}, {b}) - {b})"),
+                Operation::Multiply => format!("({a} * {b})"),
+                Operation::MultiplyAdd => {
+                    let c = half(&ins.src[2], (selectors >> 2) & 1)?;
+                    format!("({a} * {b} + {c})")
+                }
+                _ => unreachable!("unsigned clamp arithmetic"),
+            };
+            return Ok(format!("min({value}, 65535u)"));
+        }
         Ok(match op {
             Operation::Add => format!("({a} + {b})"),
             Operation::Subtract => format!("({a} - {b})"),
@@ -123,7 +162,12 @@ mod tests {
             let ins = native(first,second);
             assert_eq!(ins.mnemonic, name);
             assert!(expression(&ins).unwrap().is_some());
-            assert!(expression(&native(first | 0x8000, second)).is_err());
+            if matches!(name, "v_pk_max_u16" | "v_pk_min_u16") {
+                assert!(expression(&native(first | 0x8000, second)).is_err());
+            } else {
+                assert!(expression(&native(first | 0x8000, second)).unwrap().is_some());
+            }
+            assert!(expression(&native(first | 0x8000, (second & !511) | 4)).is_err());
             assert!(expression(&native(first, (second & !511) | 4)).is_err());
             assert!(expression(&native(first | 0x100, second)).is_err());
         }

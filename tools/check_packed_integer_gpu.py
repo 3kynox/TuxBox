@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """LLVM-assembled VOP3P ordinary integer controls on a D3D12 GPU.
 
-All low/high source selectors for five instructions, wrapping arithmetic
-only; each result aliases one source. Synthetic dynamic inputs and guards.
+All low/high source selectors for five ordinary forms or seven saturating
+arithmetic forms; each result aliases one source. Synthetic dynamic inputs and guards.
 """
 import argparse
 import hashlib
@@ -22,6 +22,7 @@ from frosty_gpu_guest import run_gpu_guest
 
 OPS={"v_pk_add_i16":2,"v_pk_mad_i16":3,"v_pk_mad_u16":3,
      "v_pk_max_u16":2,"v_pk_min_u16":2}
+CLAMP_OPS={"v_pk_add_i16":2,"v_pk_sub_i16":2,"v_pk_mad_i16":3,"v_pk_add_u16":2,"v_pk_sub_u16":2,"v_pk_mul_lo_u16":2,"v_pk_mad_u16":3}
 INIT=(0x12345678,0x23456789,0x3456789a)
 STRIDE=11
 GROUPS=16
@@ -42,17 +43,33 @@ def assemble(lines,llvm):
 def source_select(sel,n):
     return "["+",".join(str((sel>>j)&1) for j in range(n))+"]"
 
-def variant(name,n,lo,hi,reg,alias):
+def variant(name,n,lo,hi,reg,alias,clamped=False):
     sources=[f"v{4+j}" for j in range(n)]
     lines=[f"v_mov_b32_e32 v{reg}, {sources[alias]}"]
     sources[alias]=f"v{reg}"
     lines.append(f"{name} v{reg}, "+", ".join(sources)+
-                 f" op_sel:{source_select(lo,n)} op_sel_hi:{source_select(hi,n)}")
+                 f" op_sel:{source_select(lo,n)} op_sel_hi:{source_select(hi,n)}"+(" clamp" if clamped else ""))
     return lines
 
-def reference(name,values,lo,hi):
+def reference(name,values,lo,hi,clamped=False):
     def half(sel):
-        a,b,*c=[(v>>(16*((sel>>j)&1)))&0xffff for j,v in enumerate(values[:OPS[name]])]
+        a,b,*c=[(v>>(16*((sel>>j)&1)))&0xffff for j,v in enumerate(values[:(CLAMP_OPS if clamped else OPS)[name]])]
+        if clamped:
+            signed_op=name.endswith("_i16")
+            if signed_op:
+                a,b,*c=[x-65536 if x>=32768 else x for x in [a,b,*c]]
+            if "_add_" in name:
+                result=a+b
+            elif "_sub_" in name:
+                result=a-b
+            elif "_mad_" in name:
+                result=a*b+c[0]
+            elif "_mul_" in name:
+                result=a*b
+            else:
+                raise ValueError(name)
+            lower,upper=(-32768,32767) if signed_op else (0,65535)
+            return max(lower,min(upper,result)) & 65535
         if name=="v_pk_add_i16":
             return (a+b)&0xffff
         if "mad" in name:
@@ -87,6 +104,7 @@ def main():
     for n in ("emitter","llvm-mc","dxc","dxv","provider","proton","prefix","compiler-dir","work","output"):
         ap.add_argument("--"+n,type=Path,required=True)
     ap.add_argument("--baseline",type=Path)
+    ap.add_argument("--clamp",action="store_true",help="test seven saturating arithmetic forms")
     ap.add_argument("--adapter",required=True)
     a=ap.parse_args()
     if a.output.exists():
@@ -95,6 +113,7 @@ def main():
     rng=random.Random(0x5041434b)
     tool_hashes={n:digest(getattr(a,n)) for n in ("emitter","dxc","dxv","provider")}
     if a.baseline:tool_hashes["baseline"]=digest(a.baseline)
+    ops=CLAMP_OPS if a.clamp else OPS
     rows=[]
     negatives=[]
     with TemporaryDirectory(dir=a.work) as td:
@@ -103,13 +122,13 @@ def main():
         (trial/"guest.cpp").write_text(guest.read_text())
         (trial/"context.h").write_text((guest.parent/"context.h").read_text().replace('"../compute_buffers.h"','"'+str(ROOT/"tools/reference/compute_buffers.h")+'"'))
         expected={}
-        for name,n in OPS.items():
+        for name,n in ops.items():
             variants=[(lo,hi) for lo in range(1<<n) for hi in range(1<<n)]
             for start in range(0,len(variants),8):
                 chunk=variants[start:start+8]
                 lines=[f"v_mov_b32_e32 v{4+j}, 0x{v:x}" for j,v in enumerate(INIT)]
                 for j,(lo,hi) in enumerate(chunk):
-                    lines+=variant(name,n,lo,hi,7+j,(start+j)%n)
+                    lines+=variant(name,n,lo,hi,7+j,(start+j)%n,a.clamp)
                 lines+=["s_endpgm"]
                 words=assemble(lines,a.llvm_mc)
                 if a.baseline:
@@ -129,10 +148,12 @@ def main():
                 edge=[0,1,0xffff,0x10000,0x7fff8000,0x80007fff,0xffff0001,0xffffffff]
                 for lane in range(GROUPS):
                     vals=[edge[(lane+j*3)%len(edge)] for j in range(3)] if lane<8 else [rng.getrandbits(32) for _ in range(3)]
+                    if a.clamp and lane in (8,9,10,11):
+                        vals=[[0xffffffff]*3,[0x80008000]*3,[0x7fff7fff]*3,[0,0xffffffff,0]][lane-8]
                     offset=96+STRIDE*lane
                     seed[offset:offset+3]=vals
                     want[offset:offset+3]=vals
-                    want[offset+3:offset+3+len(chunk)]=[reference(name,vals,lo,hi) for lo,hi in chunk]
+                    want[offset+3:offset+3+len(chunk)]=[reference(name,vals,lo,hi,a.clamp) for lo,hi in chunk]
                 (trial/(label+".seed")).write_bytes(struct.pack("<384I",*seed))
                 expected[label]=struct.pack("<384I",*want)
                 rows.append({"case":label,"opcode":name,"selectors":chunk,
@@ -142,8 +163,10 @@ def main():
                              "instrumented_sha256":digest(shader),"dxil_sha256":digest(blob)})
             # Clamp and non-ordinary sources remain unsupported by this patch.
             operands=", ".join(f"v{4+j}" for j in range(n))
-            for kind,inst in [("clamp",f"{name} v7, {operands} clamp"),
-                              ("scalar_source",f"{name} v7, s4, "+", ".join(f"v{4+j}" for j in range(1,n)))]:
+            controls=[("scalar_source",f"{name} v7, s4, "+", ".join(f"v{4+j}" for j in range(1,n))+(" clamp" if a.clamp else ""))]
+            if not a.clamp and name in ("v_pk_max_u16","v_pk_min_u16"):
+                controls.append(("clamp",f"{name} v7, {operands} clamp"))
+            for kind,inst in controls:
                 words=assemble([inst,"s_endpgm"],a.llvm_mc)
                 bad=translate(a.emitter,words)
                 if bad.returncode!=65:
@@ -162,7 +185,7 @@ def main():
             row["readback_sha256"]=digest(actual)
         receipt={"scope":"Synthetic LLVM-assembled packed integer instructions; dynamic instrumented inputs and observed outputs, no game",
                  "adapter":fields["adapter"],"proton":(a.proton/"version").read_text().strip(),
-                 "seed":0x5041434b,"instructions":len(OPS),"shader_cases":len(rows),
+                 "seed":0x5041434b,"clamped":a.clamp,"instructions":len(ops),"shader_cases":len(rows),
                  "selector_combinations":sum(len(r["selectors"]) for r in rows),
                  "result_words":GROUPS*sum(len(r["selectors"]) for r in rows),
                  "compared_words":384*len(rows),"mismatches":0,

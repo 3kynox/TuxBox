@@ -88,8 +88,8 @@ The ordinary VOP3P path supports five additional forms:
 `v_pk_max_u16` and `v_pk_min_u16`. The low/high selectors are
 independent, including the third operand's high selector in bit 14 of
 the first word. Signed and unsigned arithmetic without clamp is modulo
-2^16 per half. These new forms require ordinary VGPR inputs; clamp,
-negation and other sources remain refused.
+2^16 per half. These new forms require ordinary VGPR inputs; negation and other
+sources remain refused. Saturating arithmetic is described below.
 
 [Validation receipt](../evidence/scarlett-packed-integers.json):
 22 synthetic compute programs (all refused on the prior emitter),
@@ -97,7 +97,7 @@ negation and other sources remain refused.
 16 independent dynamic inputs per combination, 2,816 calculated
 results and 8,448 total readback words including input/guard values.
 All matched the independent Python model on RTX 4080 and stock
-Proton Experimental. Ten negative controls remain refused. This is
+Proton Experimental. Ten negative controls were refused in the original wrapping-only revision. This is
 not a measurement of ProjectScarlett's actual shader coverage.
 
 Build the test emitter with
@@ -107,3 +107,20 @@ LLVM gfx1030 assembler, emitter, DXC/DXV, provider and offline Proton
 template arguments. An optional baseline binary built with the same
 example and the original integer emitter enables the before/after
 gate. No game files are used.
+
+
+The follow-up also accepts CLAMP for seven packed add/subtract/multiply/MAD
+forms with ordinary VGPR inputs. Each signed half clamps to -32768..32767;
+unsigned halves clamp to 0..65535. Unsigned subtraction clamps before
+underflow. Other modifiers, min/max/shift clamp, and special sources
+are not broadened. AMD RDNA2 ISA sections 6.5 and 12.10 define these
+integer limits and arithmetic operations.
+
+[Follow-up receipt](../evidence/scarlett-packed-integer-clamp.json):
+26 additional synthetic programs refused by the previous PR66 revision
+now pass (208 selector combinations, 3,328 calculated results, 9,984
+guarded readback words). The 22 original wrapping programs were rerun
+and all 8,448 readback words still match. Seven new scalar-source clamp
+controls remain refused. Run the same GPU control with `--clamp` to
+exercise the added forms, and use the previous PR66 emitter as the
+baseline. No real title or AMD hardware validation.
