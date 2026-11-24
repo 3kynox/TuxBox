@@ -26,6 +26,7 @@ mod compare;
 mod uniform_texel;
 mod pixel_quad;
 mod mubuf_offsets;
+mod scalar_bits;
 #[cfg(test)]
 mod raw_width;
 #[cfg(test)]
@@ -426,6 +427,7 @@ struct Emitter<'a> {
     res: HashMap<usize, Vec<Res>>, // per-instruction resolved resources
     cb_size: BTreeMap<u32, u32>,   // slot -> dwords
     zero_buffer_offsets: std::cell::OnceCell<BTreeSet<(usize, u8)>>,
+    ordinary_bit_sites: std::cell::OnceCell<BTreeSet<usize>>,
     smem_constants: std::cell::OnceCell<BTreeMap<(usize, u8), u32>>,
     tex: BTreeMap<u32, u32>,       // slot -> dim
     samp: BTreeSet<u32>,
@@ -1769,6 +1771,7 @@ impl<'a> Emitter<'a> {
             res: HashMap::new(),
             cb_size: BTreeMap::new(),
             zero_buffer_offsets: Default::default(),
+            ordinary_bit_sites: Default::default(),
             smem_constants: Default::default(),
             tex: BTreeMap::new(),
             samp: BTreeSet::new(),
@@ -4361,6 +4364,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 return Ok(());
             }
         }
+        if scalar_bits::emit(self, idx, ins)? { return Ok(()); }
         match ins.enc {
             Enc::Sopp if matches!(ins.op, 0x24 | 0x25) => {
                 // MODE[7:0] exposes the guest round and denorm settings to S_GETREG.
@@ -4654,17 +4658,6 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                         Ok(())
                     }
                     "s_flbit_i32_b32" => self.ws(&d, &format!("({a} == 0u ? ~0u : 31u - firstbithigh({a}))")),
-                    "s_flbit_i32_b64" => {
-                        self.touch(&hi(&s[0]));
-                        let ah = r(&hi(&s[0]))?;
-                        self.ws(&d, &flbit_b64_expr(&a, &ah))
-                    }
-                    "s_ff0_i32_b32" => self.ws(&d, &ff0_b32_expr(&a)),
-                    "s_ff0_i32_b64" => {
-                        self.touch(&hi(&s[0]));
-                        let ah = r(&hi(&s[0]))?;
-                        self.ws(&d, &ff0_b64_expr(&a, &ah))
-                    }
                     "s_ff1_i32_b32" => self.ws(&d, &format!("firstbitlow({a})")),
                     // s_ff1_i32_b64 is firstbitlow over the 64-bit value: the low word
                     // decides when it is nonzero, otherwise the high word.
