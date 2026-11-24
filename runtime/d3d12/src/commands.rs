@@ -32,6 +32,7 @@ mod raytracing;
 pub(crate) mod serialized_blas;
 mod standard;
 mod stencil;
+mod tiles;
 
 enum ListState {
     Fresh(ID3D12CommandAllocator, Option<ID3D12PipelineState>),
@@ -110,6 +111,10 @@ impl Recording {
             return;
         }
         if self.descriptor_arena.is_some() && !self.bindings.supports_paged_draw::<true>() {
+            static FIRST: std::sync::Once = std::sync::Once::new();
+            crate::diagnostics::log_once(&FIRST, || {
+                "compute dispatch dropped: descriptor heap is bound and this pipeline has no paged layout".to_string()
+            });
             self.error = E_NOTIMPL;
             return;
         }
@@ -1275,8 +1280,8 @@ unsafe fn execute_batch(queue: &Queue, count: u32, lists: *const *mut c_void, fr
         return;
     }
     let guest = unsafe { slice::from_raw_parts(lists, count as usize) };
-    // Mirrors exist only when a constant-buffer import failed. The count is
-    // zero for every boot that has not hit that path.
+    // Mirrors exist only when a constant-buffer or address-SRV import failed.
+    // The count is zero for every boot that has not hit that path.
     crate::device::snapshot_cbv_mirrors();
     let mut list_index = 0;
     let trace_samples = std::cell::RefCell::new(Vec::new());
@@ -1567,6 +1572,9 @@ unsafe fn present_planes(
 
 static QUEUE_SLOTS: Slots<64> = {
     let mut slots = child_slots::<ID3D12CommandQueue, QueueState, 64>();
+    // Tile mapping sits before the marker methods, so both queue generations share it.
+    slots[8] = crate::slot!(tiles::update);
+    slots[9] = crate::slot!(tiles::copy);
     slots[10] = crate::slot!(execute);
     slots[14] = crate::slot!(queue_fence::<false>);
     slots[15] = crate::slot!(queue_fence::<true>);
@@ -1579,6 +1587,8 @@ static QUEUE_SLOTS: Slots<64> = {
 
 static DEVICE11_QUEUE_SLOTS: Slots<64> = {
     let mut slots = child_slots::<ID3D12CommandQueue, QueueState, 64>();
+    slots[8] = crate::slot!(tiles::update);
+    slots[9] = crate::slot!(tiles::copy);
     slots[10] = crate::slot!(execute);
     slots[16] = crate::slot!(queue_fence::<false>);
     slots[17] = crate::slot!(queue_fence::<true>);
