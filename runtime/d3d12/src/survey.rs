@@ -41,11 +41,35 @@ pub(crate) fn enabled() -> bool {
 /// ProjectScarlett 1.0.2.1, RVA `0x4ffd879`: the tile-heap mapper asserts when a
 /// request is shorter than a whole flagged page run (8 KiB against a 16 KiB
 /// run). The continue path maps `min(run, remaining)`, which is the request.
-const RECOVERABLE: [(usize, [u8; 9]); 1] =
-    [(0x4ffd879, [0xcc, 0x48, 0x8b, 0x1f, 0xe9, 0xf0, 0xfd, 0xff, 0xff])];
+///
+/// RVA `0x4ffd859`, same function: the run walk's cursor equals the table end
+/// (`cmp r12, end; je`). The continue path reads the last table entry, which is
+/// valid memory, and rejoins the walk at `0x4ffd604`.
+const RECOVERABLE: [(usize, [u8; 9]); 2] = [
+    (0x4ffd879, [0xcc, 0x48, 0x8b, 0x1f, 0xe9, 0xf0, 0xfd, 0xff, 0xff]),
+    (0x4ffd859, [0xcc, 0xe9, 0xa5, 0xfd, 0xff, 0xff, 0xcc, 0x48, 0x8b]),
+];
 
 fn is_recoverable(rva: usize, bytes: &[u8]) -> bool {
     RECOVERABLE.iter().any(|&(site, expected)| rva == site && bytes == expected)
+}
+
+/// Asserts in a leaf function that has no stack frame, where stepping over the
+/// `int3` would scan past the end of the title's table. Execution resumes at
+/// the function's `ret`, which returns the value found so far. Matched by RVA
+/// and exact bytes; the third field is the distance back to that `ret`.
+///
+/// ProjectScarlett 1.0.2.1, RVA `0x51d251e`: counts the page runs that cover a
+/// byte range of the tile heap. It reaches the end of the run table with
+/// 4 KiB still uncovered. The count so far (in `eax`) is the runs that exist.
+const RETURN_EARLY: [(usize, [u8; 9], usize); 1] =
+    [(0x51d251e, [0xcc, 0xeb, 0xc5, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc], 0x10)];
+
+fn early_return_distance(rva: usize, bytes: &[u8]) -> Option<usize> {
+    RETURN_EARLY
+        .iter()
+        .find(|&&(site, expected, _)| rva == site && bytes == expected)
+        .map(|&(_, _, back)| back)
 }
 
 /// Register the vectored exception handler once. Safe to call from `DllMain`
@@ -160,6 +184,19 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
         }
         // SAFETY: int3..int3+9 is inside the mapped title image.
         let bytes = unsafe { core::slice::from_raw_parts(int3 as *const u8, 9) };
+        if let Some(back) = early_return_distance(int3 - start, bytes) {
+            let ret = int3 - back;
+            // SAFETY: ret lies within the mapped title image before int3.
+            if ret < start || unsafe { *(ret as *const u8) } != 0xc3 {
+                return CONTINUE_SEARCH;
+            }
+            context.Rip = ret as u64;
+            let hits = record(&ASSERTS, int3 - start);
+            if hits.is_power_of_two() {
+                log(format!("returned early from title assert RVA {:#x} (hit {hits})", int3 - start));
+            }
+            return CONTINUE_EXECUTION;
+        }
         if !is_recoverable(int3 - start, bytes) {
             return CONTINUE_SEARCH;
         }
@@ -266,9 +303,29 @@ fn describe_fault(context: &windows::Win32::System::Diagnostics::Debug::CONTEXT)
 
 #[cfg(test)]
 mod tests {
-    use super::is_recoverable;
+    use super::{early_return_distance, is_recoverable};
 
     const SCARLETT_TILE_HEAP: [u8; 9] = [0xcc, 0x48, 0x8b, 0x1f, 0xe9, 0xf0, 0xfd, 0xff, 0xff];
+
+    #[test]
+    fn run_walk_end_iterator_assert_is_recoverable_on_exact_bytes() {
+        let site = [0xcc, 0xe9, 0xa5, 0xfd, 0xff, 0xff, 0xcc, 0x48, 0x8b];
+        assert!(is_recoverable(0x4ffd859, &site));
+        assert!(!is_recoverable(0x4ffd85a, &site));
+        let mut other = site;
+        other[2] = 0xa6;
+        assert!(!is_recoverable(0x4ffd859, &other));
+    }
+
+    #[test]
+    fn run_table_walk_assert_returns_early_only_on_exact_bytes() {
+        let site = [0xcc, 0xeb, 0xc5, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc];
+        assert_eq!(early_return_distance(0x51d251e, &site), Some(0x10));
+        assert_eq!(early_return_distance(0x51d251f, &site), None);
+        let mut other = site;
+        other[2] = 0xc6;
+        assert_eq!(early_return_distance(0x51d251e, &other), None);
+    }
 
     #[test]
     fn only_the_scarlett_tile_heap_assert_is_recoverable() {
