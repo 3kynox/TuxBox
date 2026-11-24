@@ -5361,6 +5361,81 @@ uint tb_fmac_half(uint a, uint b, uint c) {
 
 
 
+    /// Decode the packed SRC0 attribute descriptor of a Vop3 f16-interpolation
+    /// instruction: (attr, channel, high).
+    fn f16_interp_descriptor(second: u32) -> (usize, usize, bool) {
+        ((second & 0x3f) as usize, ((second >> 6) & 3) as usize, (second >> 8) & 1 != 0)
+    }
+
+    /// Emit a Vop3-encoded f16-interpolation instruction.
+    ///
+    /// SRC0 in the second word packs the attribute descriptor: attr (6 bits),
+    /// channel (2 bits), and the `high` bit (1 bit). SRC1 is the barycentric
+    /// weight; for p2_f16, SRC2 is the p1ll's f32 partial register. An attribute
+    /// packed in a 32-bit word holds two 16-bit halves, so each vertex's raw
+    /// word is decoded per vertex and the halves are interpolated (mirroring
+    /// the pulled-attribute path), which is also what Mesa ACO does.
+    fn emit_f16_interp(&mut self, ins: &Insn) -> Result<(), String> {
+        if self.ex.stage != Stage::Pixel {
+            return Err("v_interp outside a pixel shader".into());
+        }
+        if ins.enc != Enc::Vop3 || ins.raw.len() < 2 {
+            return Err("invalid f16 interpolation encoding".into());
+        }
+        let m = ins.mnemonic.as_str();
+        let is_p2 = m == "v_interp_p2_f16";
+        let (attr, chan, high) = Self::f16_interp_descriptor(ins.raw[1]);
+        let clamp = (ins.raw[0] >> 15) & 1 != 0;
+        let reg = *self.ps_attrs.get(attr).ok_or_else(|| format!("PS attr{attr} has no signature register"))?;
+        let (ei, k) = sig_lookup(&self.ex.input_sig, reg, chan)
+            .ok_or_else(|| format!("PS attr{attr} has no signature register"))?;
+        if matches!(self.ex.input_sig[ei].comp_type, 1 | 2) {
+            return Err("v_interp f16 with a typed signature element unsupported".into());
+        }
+        let (_, n) = sig_type(&self.ex.input_sig[ei]);
+        let field = if n == 1 { format!("i.i{ei}") } else { format!("i.i{ei}.{}", XYZW[k]) };
+        let raw = |index: usize| -> String {
+            format!("asuint(GetAttributeAtVertex({field}, {index}))")
+        };
+        let half = |index: usize| -> String {
+            let h = raw(index);
+            if high { format!("(({h} >> 16u) & 0xffffu)") } else { format!("({h} & 0xffffu)") }
+        };
+        let p0 = format!("f16tof32({})", half(0));
+        let p1 = format!("f16tof32({})", half(1));
+        let p2v = format!("f16tof32({})", half(2));
+        let dst = ins.dst.first().cloned().ok_or("no dst")?;
+        let name_d = name(&dst)?;
+        // SM5 fallback: the raw smooth read (best-effort; the per-vertex path is SM6+).
+        let fallback = format!("asuint({field})");
+        if !is_p2 {
+            // p1ll/p1lv: the f32 partial P0 + I*(P1-P0), consumed by p2_f16.
+            let i = f(&ins.src[1])?;
+            let expr = format!("{p0} + {i} * ({p1} - {p0})");
+            self.line("#if __SHADER_TARGET_MAJOR >= 6");
+            self.wv(&dst, &format!("asuint({expr})"))?;
+            self.line("#else");
+            self.wv(&dst, &fallback)?;
+            self.line("#endif");
+            Ok(())
+        } else {
+            if ins.src.len() < 3 {
+                return Err("missing p2_f16 partial register".into());
+            }
+            let j = f(&ins.src[1])?;
+            let partial = r(&ins.src[2])?;
+            let full = format!("(asfloat({partial}) + {j} * ({p2v} - {p0}))");
+            let full = if clamp { format!("saturate({full})") } else { full };
+            let bits = format!("tb_f16_rne({full})");
+            self.line("#if __SHADER_TARGET_MAJOR >= 6");
+            self.wv(&dst, &format!("(({name_d} & 0xffff0000u) | {bits})"))?;
+            self.line("#else");
+            self.wv(&dst, &fallback)?;
+            self.line("#endif");
+            Ok(())
+        }
+    }
+
     fn emit_vec(&mut self, ins: &Insn) -> Result<(), String> {
         let mut m = ins.mnemonic.clone();
         let s = &ins.src;
@@ -5373,6 +5448,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         }
         if m == "v_nop" {
             return Ok(());
+        }
+        if matches!(m.as_str(), "v_interp_p1ll_f16" | "v_interp_p1lv_f16" | "v_interp_p2_f16") {
+            return self.emit_f16_interp(ins);
         }
         if ins.enc == Enc::Vop2 && ins.op == wave_sum::DPP_REDUCE {
             // Read the partner before the EXEC-guarded write, including when VDST aliases VSRC.
@@ -8535,6 +8613,16 @@ mod tests {
     fn dpp16_mov_missing_control_word_is_refused() {
         let mut insns = vec![Insn { raw: vec![0x7e0802fa], ..dpp16_move_insn(0) }];
         assert!(lower_wave_reductions(&mut insns).is_err());
+    }
+
+    #[test]
+    fn f16_interp_descriptor_decodes_attr_channel_and_high() {
+        // attr=1, chan=0, high=1 (0b00000001 01_00 00_01)
+        assert_eq!(Emitter::f16_interp_descriptor(0x00020101), (1, 0, true));
+        // attr=1, chan=1, high=0
+        assert_eq!(Emitter::f16_interp_descriptor(0x00020041), (1, 1, false));
+        // attr=1, chan=0, high=0
+        assert_eq!(Emitter::f16_interp_descriptor(0x00020001), (1, 0, false));
     }
 
     #[test]
