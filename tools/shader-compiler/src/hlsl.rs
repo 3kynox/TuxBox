@@ -3429,7 +3429,7 @@ impl<'a> Emitter<'a> {
             }
             // Packed FMAC accumulates in its destination. A subword FMA also
             // reads that register to preserve the half outside its write mask.
-            let old_dst = matches!(ins.mnemonic.as_str(), "v_pk_fmac_f16" | "v_fma_f16" | "v_rcp_f16")
+            let old_dst = (matches!(ins.mnemonic.as_str(), "v_pk_fmac_f16" | "v_fma_f16" | "v_rcp_f16") || int16::new_half(ins))
                 .then(|| ins.dst.first()).flatten();
             for o in ins.src.iter().chain(old_dst) {
                 if let Opnd::Sgpr(n) | Opnd::Vgpr(n) = o {
@@ -5560,6 +5560,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 format!("tb_dot4_i8({lhs}, {rhs}, {acc})")
             };
             return self.wv(&d, &value);
+        }
+        if int16::new_half(ins) && self.ex.stage != Stage::Compute {
+            return Err("unverified ordinary 16-bit integer shader stage".into());
         }
         if let Some(result) = int16::expression(ins)? {
             return self.wv(&d, &result);

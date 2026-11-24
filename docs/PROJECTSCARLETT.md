@@ -124,3 +124,36 @@ and all 8,448 readback words still match. Seven new scalar-source clamp
 controls remain refused. Run the same GPU control with `--clamp` to
 exercise the added forms, and use the previous PR66 emitter as the
 baseline. No real title or AMD hardware validation.
+
+
+### CPU differential verification of integer halves
+
+The independent packed-integer Python model now covers 14 wrapping packed
+forms, seven saturating forms and ten single-half forms (31 variants).
+The latter preserve the other half of the destination. Three additional
+ordinary compute forms are supported: `v_mul_lo_u16`, `v_max_u16`,
+`v_min_u16`. Their old destination is recorded as an input for the
+partial write. New forms refuse non-compute stages, non-VGPR sources
+and unsupported modifiers.
+
+The CPU harness generates boundary and random inputs, all half selectors,
+source/destination aliases and mixed dependent chains. LLVM gfx1030
+assembles the synthetic native instructions, the full translator emits
+HLSL, and DXC/DXV constant-fold/validate it. Only the final six observable
+register stores are added by the harness. Missing, extra, duplicate or
+nonconstant stores are failures, not successful comparisons.
+
+[CPU receipt](../evidence/scarlett-packed-integer-cpu.json): before the
+three additions 3,379/4,480 programs passed and 1,101 were refused; after
+all 4,480 pass, with 26,880 observed values. A second seed with 4,096
+mixed chains passes another 6,528 programs (39,168 values). No numerical
+mismatches. A deliberate wrapping-add-to-subtract mutation is detected
+in 30/608 cases and then removed. Six new negative controls still refuse
+scalar operands and clamp. 264 unit tests pass (including latest main).
+
+Build the `packed_integer` example as above and run
+`python tools/check_packed_integer_cpu.py --help` for the LLVM, emitter,
+DXC/DXV and fresh work/output arguments. Defaults use two CPU workers,
+four input samples per selector pair and 2,048 mixed chains. No Wine,
+Proton, game or GPU is required. This is not a replacement for subsequent
+dynamic GPU and title-level validation.
