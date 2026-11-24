@@ -112,6 +112,26 @@ class SelectProton(unittest.TestCase):
             host.backend = "native"
             self.assertIsNone(launch(package))
 
+    @unittest.skipUnless(sys.platform == "linux", "Wine prefix drive links require Linux")
+    def test_linux_package_drive_record_is_removed_when_setup_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp).resolve()
+            drive = prefix / "dosdevices/g:"
+            drive.parent.mkdir()
+            drive.symlink_to("../user-g")
+            host = Host.__new__(Host)
+            host.backend, host.command = "proton", ["umu-run"]
+            host.env = {"WINEPREFIX": str(prefix)}
+            log = Mock()
+
+            with patch("project_tuxbox.host.configure_console_cbv", side_effect=OSError("CBV setup failed")):
+                with self.assertRaisesRegex(OSError, "CBV setup failed"):
+                    host.run_game(prefix / "game.exe", [], log, package=prefix / "package")
+
+            log.run.assert_not_called()
+            self.assertEqual(os.readlink(drive), "../user-g")
+            self.assertFalse((prefix / "tuxbox-package-drive.json").exists())
+
 
 class ConsoleConstantBuffers(unittest.TestCase):
     def setUp(self):
