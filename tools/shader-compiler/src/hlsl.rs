@@ -147,6 +147,8 @@ struct MSel {
 enum Res {
     HeapLoad(u16),
     HeapBuffer(u16),
+    /// Byte-address buffer named by a heap index held in this SGPR (compute heap).
+    HeapRaw(u16),
     HeapTexture(u16, u32),
     Cb(u32),
     Tex(u32, u32), // slot, dim
@@ -394,6 +396,14 @@ struct Emitter<'a> {
     img_ty: BTreeMap<(bool, u32), u8>,
     uses_heap_sampler: bool,
     resource_heap_base: Option<u8>,
+    /// The heap base comes from compute user data (FSSM class 5); see `compute_heap_base`.
+    compute_heap: bool,
+    /// The root carries TuxBox's guest-to-host heap index map (root SRV t0, space32766).
+    heap_map: bool,
+    /// Compute sampler heap base SGPR (FSSM user-data class 6).
+    sampler_heap_base: Option<u8>,
+    /// Sampler slots read from that heap: bound from SamplerDescriptorHeap in main.
+    heap_sampler_slots: BTreeSet<u32>,
     private_samplers: BTreeMap<usize, u32>,
     binding_spaces: BTreeMap<(u32, u32), u32>,
     mesh_bindings: Option<mesh_bindings::MeshBindings>,
@@ -1191,6 +1201,8 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     // SM5.1 has no such rule, and D3D12 accepts SM5.1 bytecode.
     let profile = if em.compute_derivatives || em.resolve_wave32 {
         "cs_6_6"
+    } else if em.compute_heap {
+        "cs_6_6"
     } else if em.uses_heap_sampler || em.resource_heap_base.is_some() {
         "ps_6_6"
     } else if probe_trace {
@@ -1491,9 +1503,16 @@ impl<'a> Emitter<'a> {
             tbuf_ty: BTreeMap::new(),
             img_ty: BTreeMap::new(),
             uses_heap_sampler: false,
-            resource_heap_base: sampler_heap::resource_base(ex),
+            resource_heap_base: sampler_heap::resource_base(ex).or_else(|| compute_heap_base(ex)),
+            compute_heap: sampler_heap::resource_base(ex).is_none() && compute_heap_base(ex).is_some(),
+            sampler_heap_base: compute_heap_base(ex).and_then(|_| compute_user_sgpr(ex, 6)),
+            heap_sampler_slots: BTreeSet::new(),
+            heap_map: ex.root_sig.as_ref().is_some_and(|root| root.params.iter().any(|p| matches!(p.kind,
+                crate::meta::RootParamKind::Descriptor { kind: 3, register: 0, space: 32766 }))),
             private_samplers: ex.root_sig.as_ref().filter(|r| matches!(ex.stage, Stage::Compute | Stage::Pixel)
-                && ex.required_features.is_some_and(|flags| flags & (3 << 25) == 0)
+                // Literal samplers in heap-indexing compute shaders are recovered the same
+                // way; samplers read from the sampler heap stay unresolved and fail.
+                && ex.required_features.is_some_and(|flags| flags & (3 << 25) == 0 || ex.stage == Stage::Compute)
                 && r.static_samplers.iter().any(|s| s[11] == 32765))
                 .and_then(|r| {
                     let recovered = tuxbox_dxbc::inline_sampler::sites(&ex.isa, if ex.stage == Stage::Pixel { 5 } else { 0 })?;
@@ -1794,6 +1813,9 @@ impl<'a> Emitter<'a> {
             budget -= 1;
             let (mut sym, mut written) = states[b].clone().unwrap();
             if let Err(e) = self.res_block(&program, &mut sym, &mut written, ranges[b].clone()) {
+                if std::env::var_os("TB_DFDEBUG").is_some() {
+                    eprintln!("block {b} analysis error: {e}");
+                }
                 // Unknown effect: forget everything and treat every SGPR as written. Keep
                 // the first failure — it is the root cause if the recording pass fails too.
                 first_err.get_or_insert(e);
@@ -2405,6 +2427,17 @@ impl<'a> Emitter<'a> {
                 dbg_prev = cur;
             }
             let ins = &insns[idx];
+            // A compute-heap byte offset held in a VGPR (key 2000 + v) lasts until the
+            // VGPR is written again; `v_lshlrev_b32 v, 5, x` below re-marks it.
+            if self.compute_heap {
+                for d in &ins.dst {
+                    if let Opnd::Vgpr(v) = d {
+                        if sym.get(&(2000 + *v as u16)) == Some(&Sym::HeapOffset) {
+                            sym.remove(&(2000 + *v as u16));
+                        }
+                    }
+                }
+            }
             // Dataflow key of a scalar location: SGPR number, or 1000+ for a lane-spill slot.
             let sg = |o: &Opnd| match o {
                 Opnd::Sgpr(n) => Some(*n as u16),
@@ -2562,6 +2595,14 @@ impl<'a> Emitter<'a> {
                 // with a run-time index (ColorDeficiencyMain, cc45bda725a0f774). VGPRs are
                 // tracked under keys 2000+ for exactly this.
                 Enc::Vop2 | Enc::Vop3
+                    if self.compute_heap && ins.mnemonic == "v_lshlrev_b32" && ins.src.first() == Some(&Opnd::ConstInt(5)) =>
+                {
+                    // Per-lane heap byte offset (32-byte descriptors), see v_readfirstlane.
+                    if let Some(Opnd::Vgpr(v)) = ins.dst.first() {
+                        sym.insert(2000 + *v as u16, Sym::HeapOffset);
+                    }
+                }
+                Enc::Vop2 | Enc::Vop3
                     if matches!(ins.mnemonic.as_str(), "v_add_co_u32" | "v_add_nc_u32")
                         && ins.src.iter().any(|o| sg(o).map(|s| sym.get(&s) == Some(&Sym::Code)).unwrap_or(false)) =>
                 {
@@ -2571,8 +2612,13 @@ impl<'a> Emitter<'a> {
                 }
                 Enc::Vop1 if ins.mnemonic == "v_readfirstlane_b32" => {
                     let code = matches!(ins.src.first(), Some(Opnd::Vgpr(v)) if sym.get(&(2000 + *v as u16)) == Some(&Sym::Code));
+                    let heap = matches!(ins.src.first(), Some(Opnd::Vgpr(v)) if sym.get(&(2000 + *v as u16)) == Some(&Sym::HeapOffset));
                     if let Some(d) = ins.dst.first().and_then(sg) {
-                        if code {
+                        if heap {
+                            // Waterfall over per-lane heap descriptors: each thread
+                            // continues with its own descriptor (NonUniformResourceIndex).
+                            sym.insert(d, Sym::HeapOffset);
+                        } else if code {
                             sym.insert(d, Sym::Code);
                         } else {
                             sym.remove(&d);
@@ -2729,6 +2775,10 @@ impl<'a> Emitter<'a> {
                 }
                 Enc::Mtbuf => {
                     let rs = ins.src.get(1).and_then(sg).ok_or("mtbuf: bad srsrc")?;
+                    if self.compute_heap && sym.get(&rs) == Some(&Sym::HeapDescriptor(4)) {
+                        self.res.insert(idx, vec![Res::HeapRaw(rs)]);
+                        continue;
+                    }
                     let raw = self.mesh_raw_descriptor(sym, rs)?
                         .ok_or("typed buffer load requires a verified linear root SRV")?;
                     self.res.insert(idx, vec![raw]);
@@ -2743,6 +2793,10 @@ impl<'a> Emitter<'a> {
                     }
                     if let Some(Sym::DirectRaw(slot)) = sym.get(&rs) {
                         self.res.insert(idx, vec![Res::Raw(*slot, false)]);
+                        continue;
+                    }
+                    if self.compute_heap && sym.get(&rs) == Some(&Sym::HeapDescriptor(4)) {
+                        self.res.insert(idx, vec![Res::HeapRaw(rs)]);
                         continue;
                     }
                     let cands = self.desc_candidates(sym.get(&rs)).ok_or_else(|| {
@@ -2770,8 +2824,11 @@ impl<'a> Emitter<'a> {
                     let dim = ins.aux.imm as u32;
                     let mut tex_res: Vec<(u32, Res)> = Vec::new();
                     if sym.get(&rs) == Some(&Sym::HeapDescriptor(8)) {
-                        if !ins.mnemonic.starts_with("image_sample") || !matches!(dim, 1 | 5) {
-                            return Err("unsupported direct heap texture operation".into());
+                        let load = self.compute_heap && matches!(ins.mnemonic.as_str(), "image_load" | "image_load_mip")
+                            && matches!(dim, 0 | 1 | 2 | 4 | 5);
+                        let cube = self.compute_heap && dim == 3;
+                        if !load && (!ins.mnemonic.starts_with("image_sample") || !(matches!(dim, 1 | 5) || cube)) {
+                            return Err(format!("unsupported direct heap texture operation {} dim {dim}", ins.mnemonic));
                         }
                         tex_res.push((0, Res::HeapTexture(rs, dim)));
                     } else {
@@ -2797,6 +2854,15 @@ impl<'a> Emitter<'a> {
                     if ins.mnemonic.starts_with("image_sample") || ins.mnemonic.starts_with("image_gather") || ins.mnemonic == "image_get_lod" {
                         if let Some(candidates) = self.desc_candidates(sym.get(&ss)) {
                             for (table, offset) in candidates {
+                                if Some(table) == self.sampler_heap_base {
+                                    // Static index into the sampler descriptor heap.
+                                    if offset % 16 != 0 {
+                                        return Err("unaligned sampler heap offset".into());
+                                    }
+                                    self.heap_sampler_slots.insert(offset / 16);
+                                    samp_res.push((((table as u32) << 24) | offset, Res::Samp(offset / 16)));
+                                    continue;
+                                }
                                 let (_, slot) = self.table_binding(table, offset, 16)?;
                                 samp_res.push((((table as u32) << 24) | offset, Res::Samp(slot)));
                             }
@@ -2813,14 +2879,15 @@ impl<'a> Emitter<'a> {
                             let words = (|| Some([word(0)?, word(1)?, word(2)?, word(3)?]))().or_else(|| {
                                 (self.ex.stage == Stage::Compute).then(|| sampler_heap::guarded_words(insns, idx, ss as u8, compute_group(self.ex))).flatten()
                             });
-                            words.and_then(|w| sampler_heap::inline_sampler(self.ex, w))
+                            words.and_then(|w| sampler_heap::inline_sampler(self.ex, w, ins.op & 8 != 0))
                         } else { self.static_sampler() } {
                             if self.binding_spaces.insert((3, slot), space).is_some_and(|old| old != space) {
                                 return Err(format!("static sampler s{slot} overlaps another space"));
                             }
                             samp_res.push((0, Res::Samp(slot)));
                         } else {
-                            return Err(format!("mimg at {:#x}: s{ss} not a sampler descriptor ({:?})", ins.offset, sym.get(&ss)));
+                            let words: Vec<_> = (0..4).map(|n| match sym.get(&(ss + n)) { Some(Sym::InlineWord(w)) => format!("{w:#x}"), other => format!("{other:?}") }).collect();
+                            return Err(format!("mimg at {:#x}: s{ss} not a sampler descriptor ({:?}) words [{}]", ins.offset, sym.get(&ss), words.join(", ")));
                         }
                         for &(_, sampler) in &samp_res {
                             let Res::Samp(sslot) = sampler else { continue };
@@ -4173,6 +4240,25 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 let base = sreg_num(&d.ok_or("no dst")?).ok_or("bad dst")?;
                 let soff = ins.raw.get(1).copied().unwrap_or(0) >> 25;
                 let slot = match self.res.get(&idx).and_then(|v| v.first()).copied() {
+                    Some(Res::HeapBuffer(src)) if self.compute_heap => {
+                        // A compute heap descriptor names a raw SRV (geometry and instance
+                        // data read by both scalar and vector loads), not a CBV.
+                        let t = self.tmp;
+                        self.tmp += 1;
+                        let offset = if soff != 0x7d { format!(" + {}", ssrc_name(soff)?) } else { String::new() };
+                        self.regs.insert(format!("s{src}"));
+                        self.line(&format!("ByteAddressBuffer tb_hb{t} = ResourceDescriptorHeap[NonUniformResourceIndex(s{src})];"));
+                        self.line(&format!("uint tb_o{t} = ({}u{offset}) & ~3u;", ins.aux.imm as u32));
+                        for k in 0..n {
+                            self.line(&format!("uint t{t}_{k} = tb_hb{t}.Load(tb_o{t} + {}u);", 4 * k));
+                        }
+                        for k in 0..n {
+                            let dst = sreg_opnd(base + k as u8);
+                            self.touch(&dst);
+                            self.ws(&dst, &format!("t{t}_{k}"))?;
+                        }
+                        return Ok(());
+                    }
                     Some(Res::HeapBuffer(src)) => {
                         let t = self.tmp;
                         self.tmp += 1;
@@ -5600,8 +5686,16 @@ uint tb_fmac_half(uint a, uint b, uint c) {
     }
 
     fn emit_mtbuf(&mut self, idx: usize, ins: &Insn) -> Result<(), String> {
-        let Some(Res::Raw(slot, false)) = self.res.get(&idx).and_then(|r| r.first()).copied() else {
-            return Err("typed buffer load has no verified linear root SRV".into());
+        let buffer = match self.res.get(&idx).and_then(|r| r.first()).copied() {
+            Some(Res::Raw(slot, false)) => format!("raw_sbuf{slot}"),
+            Some(Res::HeapRaw(src)) => {
+                let t = self.tmp;
+                self.tmp += 1;
+                self.regs.insert(format!("s{src}"));
+                self.line(&format!("ByteAddressBuffer tb_hr{t} = ResourceDescriptorHeap[NonUniformResourceIndex(s{src})];"));
+                format!("tb_hr{t}")
+            }
+            _ => return Err("typed buffer load has no verified linear root SRV".into()),
         };
         // Only formatted, full-width loads with a byte offset and no TFE.
         let [first, second] = ins.raw[..] else {
@@ -5624,7 +5718,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         // The supported formats all consume one naturally aligned dword. Read
         // it before updating VGPRs in case VADDR overlaps the result.
         self.line(&format!(
-            "uint {packed} = 0u; if (exec_lo & 1u) {packed} = raw_sbuf{slot}.Load({address});"
+            "uint {packed} = 0u; if (exec_lo & 1u) {packed} = {buffer}.Load({address});"
         ));
         for channel in 0..=ins.op {
             let value = match ins.aux.imm2 {
@@ -5642,6 +5736,17 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 // BUFFER_FORMAT_8_8_8_8_UNORM / UINT.
                 56 => format!("asuint(float(({packed} >> {}u) & 255u) / 255.0f)", channel * 8),
                 60 => format!("(({packed} >> {}u) & 255u)", channel * 8),
+                // BUFFER_FORMAT_32_UINT / 32_FLOAT: X only, then (0, 0, 1).
+                20 | 22 if channel == 0 => packed.clone(),
+                20 | 22 => (if channel == 3 { if ins.aux.imm2 == 22 { "asuint(1.0f)" } else { "1u" } } else { "0u" }).to_string(),
+                // BUFFER_FORMAT_16_FLOAT.
+                13 if channel == 0 => format!("asuint(f16tof32({packed}))"),
+                13 => (if channel == 3 { "asuint(1.0f)" } else { "0u" }).to_string(),
+                // BUFFER_FORMAT_16_16_UNORM / UINT / FLOAT.
+                23 | 27 | 29 if channel >= 2 => (if channel == 3 { if ins.aux.imm2 == 27 { "1u" } else { "asuint(1.0f)" } } else { "0u" }).to_string(),
+                23 => format!("asuint(float(({packed} >> {}u) & 65535u) / 65535.0f)", channel * 16),
+                27 => format!("(({packed} >> {}u) & 65535u)", channel * 16),
+                29 => format!("asuint(f16tof32({packed} >> {}u))", channel * 16),
                 _ => return Err(format!("unsupported typed buffer format {}", ins.aux.imm2)),
             };
             let dst = base
@@ -5654,6 +5759,45 @@ uint tb_fmac_half(uint a, uint b, uint c) {
 
     fn raw_transfer(&mut self, ins: &Insn, slot: u32, is_uav: bool) -> Result<(), String> {
         let buffer = if is_uav { format!("raw_ubuf{slot}") } else { format!("raw_sbuf{slot}") };
+        self.raw_transfer_on(ins, buffer, is_uav)
+    }
+
+    /// Raw transfer through a heap index held in `src` (compute heap). Stores use the
+    /// writable view of the same descriptor.
+    fn heap_raw_transfer(&mut self, ins: &Insn, src: u16) -> Result<(), String> {
+        let store = ins.mnemonic.starts_with("buffer_store_");
+        let t = self.tmp;
+        self.tmp += 1;
+        self.regs.insert(format!("s{src}"));
+        let ty = if store { "RWByteAddressBuffer" } else { "ByteAddressBuffer" };
+        self.line(&format!("{ty} tb_hr{t} = ResourceDescriptorHeap[NonUniformResourceIndex(s{src})];"));
+        self.raw_transfer_on(ins, format!("tb_hr{t}"), store)
+    }
+
+    /// `buffer_load_format_*` with IDXEN through a heap descriptor: a typed view,
+    /// whose desktop descriptor supplies the element format and stride.
+    fn heap_typed_load(&mut self, ins: &Insn, src: u16) -> Result<(), String> {
+        if ins.aux.mask & 1 != 0 || ins.aux.imm != 0 || !self.zero_buffer_offset(ins) {
+            return Err("typed heap buffer load with a byte offset unsupported".into());
+        }
+        let channels = match ins.mnemonic.rsplit('_').next() {
+            Some("x") => 1u8, Some("xy") => 2, Some("xyz") => 3, Some("xyzw") => 4,
+            _ => return Err(format!("unsupported typed heap load {}", ins.mnemonic)),
+        };
+        let Opnd::Vgpr(vd) = ins.dst[0] else { return Err("bad vdata".into()) };
+        let index = r(&ins.src[0])?;
+        let t = self.tmp;
+        self.tmp += 1;
+        self.regs.insert(format!("s{src}"));
+        self.line(&format!("Buffer<float4> tb_tb{t} = ResourceDescriptorHeap[NonUniformResourceIndex(s{src})];"));
+        self.line(&format!("float4 t{t} = 0; if (exec_lo & 1u) t{t} = tb_tb{t}.Load({index});"));
+        for k in 0..channels {
+            self.wv(&Opnd::Vgpr(vd + k), &format!("asuint(t{t}.{})", XYZW[k as usize]))?;
+        }
+        Ok(())
+    }
+
+    fn raw_transfer_on(&mut self, ins: &Insn, buffer: String, is_uav: bool) -> Result<(), String> {
         let load = ins.mnemonic.starts_with("buffer_load_");
         if !load && (!is_uav || !ins.mnemonic.starts_with("buffer_store_")) {
             return Err("unsupported write to raw buffer".into());
@@ -5739,6 +5883,15 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             return Ok(());
         }
         let resolved = self.res.get(&idx).and_then(|v| v.first()).copied();
+        if let Some(Res::HeapRaw(src)) = resolved {
+            if ins.mnemonic.contains("_atomic_") {
+                return Err("atomic through a heap descriptor unsupported".into());
+            }
+            if ins.mnemonic.starts_with("buffer_load_format_") && ins.aux.mask & 2 != 0 {
+                return self.heap_typed_load(ins, src);
+            }
+            return self.heap_raw_transfer(ins, src);
+        }
         if let Some(Res::Raw(slot, is_uav)) = resolved {
             if !ins.mnemonic.contains("_atomic_") {
                 return self.raw_transfer(ins, slot, is_uav);
@@ -6214,6 +6367,45 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             "image_atomic_or" => Some("InterlockedOr"),
             _ => None,
         };
+        let heap_load = match rs.first().copied() {
+            Some(Res::HeapTexture(src, dim)) if matches!(ins.mnemonic.as_str(), "image_load" | "image_load_mip") => Some((src, dim)),
+            _ => None,
+        };
+        if let Some((src, dim)) = heap_load {
+            // Texel load through a heap image descriptor (compute heap). The view's
+            // component type is not known statically; float views are assumed.
+            if a16 || d16 {
+                return Err("A16/D16 heap texture load unsupported".into());
+            }
+            let (ty, ncoord) = match dim {
+                0 => ("Texture1D", 1), 1 => ("Texture2D", 2), 2 => ("Texture3D", 3),
+                4 => ("Texture1DArray", 2), 5 => ("Texture2DArray", 3),
+                _ => return Err(format!("heap texture load dim {dim} unsupported")),
+            };
+            let mut c = vec![];
+            for i in 0..ncoord + usize::from(ins.mnemonic == "image_load_mip") {
+                let o = addr_reg(i);
+                self.touch(&o);
+                c.push(format!("(int){}", r(&o)?));
+            }
+            if ins.mnemonic == "image_load" {
+                c.push("0".into());
+            }
+            let Opnd::Vgpr(vd) = ins.dst[0] else { return Err("bad vdata".into()) };
+            let t = self.tmp;
+            self.tmp += 1;
+            self.regs.insert(format!("s{src}"));
+            self.line(&format!("{ty}<float4> tb_texture{t} = ResourceDescriptorHeap[NonUniformResourceIndex(s{src})];"));
+            self.line(&format!("float4 t{t} = tb_texture{t}.Load(int{}({}));", c.len(), c.join(", ")));
+            let mut n = 0u8;
+            for ch in 0..4 {
+                if (ins.aux.mask >> ch) & 1 != 0 {
+                    self.wv(&Opnd::Vgpr(vd + n), &format!("asuint(t{t}.{})", XYZW[ch]))?;
+                    n += 1;
+                }
+            }
+            return Ok(());
+        }
         if atomic.is_some() || matches!(ins.mnemonic.as_str(), "image_load" | "image_load_mip" | "image_store" | "image_store_mip") {
             let with_mip = ins.mnemonic == "image_load_mip";
             let (slot, dim, is_uav) = match rs.first() {
@@ -6402,7 +6594,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             Some(Res::Tex(slot, d)) => (format!("tex{slot}"), *d),
             Some(Res::HeapTexture(src, dim)) => {
                 let (src, dim) = (*src, *dim);
-                let ty = if dim == 1 { "Texture2D" } else { "Texture2DArray" };
+                let ty = match dim { 1 => "Texture2D", 3 => "TextureCube", _ => "Texture2DArray" };
                 let name = format!("tb_texture{idx}");
                 self.regs.insert(format!("s{src}"));
                 self.line(&format!("{ty}<float4> {name} = ResourceDescriptorHeap[NonUniformResourceIndex(s{src})];"));
@@ -6998,8 +7190,11 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             let width = if count == 1 { String::new() } else { count.to_string() };
             writeln!(h, "cbuffer TBIndex{slot}_{space} : register(b{slot}, space{space}) {{ uint{width} tb_index{slot}_{space}; }};").unwrap();
         }
-        if self.resource_heap_base.is_some() {
+        if self.resource_heap_base.is_some() && (self.heap_map || !self.compute_heap) {
             h.push_str("ByteAddressBuffer tb_heap_map : register(t0, space32766);\nstruct TBHeapConstants { uint4 data[4096]; };\nuint tb_heap_index(uint i) { return tb_heap_map.Load(0) == 0u ? i : tb_heap_map.Load(4u+i*4u); }\n");
+        } else if self.compute_heap {
+            // Without TuxBox's index map the guest heap index is the host heap index.
+            h.push_str("struct TBHeapConstants { uint4 data[4096]; };\nuint tb_heap_index(uint i) { return i; }\n");
         }
         for (slot, dwords) in &self.cb_size {
             let space = self.space_suffix(2, *slot);
@@ -7024,7 +7219,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             let space = self.space_suffix(0, *slot);
             let _ = writeln!(h, "{ty}<{e}> tex{slot} : register(t{slot}{space});");
         }
-        for slot in &self.samp {
+        for slot in self.samp.iter().filter(|s| !self.heap_sampler_slots.contains(s)) {
             let space = self.space_suffix(3, *slot);
             let _ = writeln!(h, "SamplerState samp{slot} : register(s{slot}{space});");
         }
@@ -7032,6 +7227,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             let space = self.space_suffix(3, *slot);
             if self.samp.contains(slot) {
                 return Err(format!("sampler s{slot} used both as a regular and a comparison sampler"));
+            }
+            if self.heap_sampler_slots.contains(slot) {
+                continue;
             }
             let _ = writeln!(h, "SamplerComparisonState scmp{slot} : register(s{slot}{space});");
         }
@@ -7156,6 +7354,14 @@ void main(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {{");
             let active = if self.resolve_wave32 { "0xffffffffu".to_owned() }
                 else if padded { format!("uint(gtid.y < {ty_}u)") } else { "1u".to_owned() };
             let _ = writeln!(h, "    uint exec_lo = {active}, exec_hi = 0u, vcc_lo = 0u, vcc_hi = 0u, scc = 0u, m0 = 0u, nul = 0u;");
+            // Samplers indexed statically from the sampler descriptor heap.
+            for slot in &self.heap_sampler_slots {
+                if self.samp_cmp.contains(slot) {
+                    let _ = writeln!(h, "    SamplerComparisonState scmp{slot} = SamplerDescriptorHeap[{slot}];");
+                } else {
+                    let _ = writeln!(h, "    SamplerState samp{slot} = SamplerDescriptorHeap[{slot}];");
+                }
+            }
             for r in ["v0", "v1", "v2"] {
                 self.regs.insert(r.to_string());
             }
@@ -7473,4 +7679,33 @@ void main(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {{");
         h.push_str(if no_out || self.is_gs { "}\n" } else { "    return o;\n}\n" });
         Ok(h)
     }
+}
+
+/// User SGPR of a single FSSM user-data record of `class` (5: resource heap base,
+/// 6: sampler heap base).
+fn compute_user_sgpr(ex: &ShaderExtract, class: u32) -> Option<u8> {
+    let mut rows = tuxbox_dxbc::compute_table::user_data_records(&ex.fssm)?.filter(|&[c, ..]| c == class);
+    let [_, _, _, _, loc] = rows.next()?;
+    if rows.next().is_some() {
+        return None;
+    }
+    u8::try_from(loc & 0xff).ok()
+}
+
+/// Compute shaders that index the resource descriptor heap receive its base in
+/// the user SGPR named by FSSM user-data class 5 (class 6 is the sampler heap).
+fn compute_heap_base(ex: &ShaderExtract) -> Option<u8> {
+    if ex.stage != Stage::Compute || ex.required_features? & (1 << 25) == 0 {
+        return None;
+    }
+    if ex.root_sig.as_ref().is_some_and(|root| root.flags & 0x400 == 0) {
+        return None;
+    }
+    let mut rows = tuxbox_dxbc::compute_table::user_data_records(&ex.fssm)?
+        .filter(|&[class, ..]| class == 5);
+    let [_, _, _, _, loc] = rows.next()?;
+    if rows.next().is_some() {
+        return None;
+    }
+    u8::try_from(loc & 0xff).ok()
 }
