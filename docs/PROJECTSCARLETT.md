@@ -108,3 +108,66 @@ programs and a deliberately malformed input. Pass
 `--expect-candidate /path/to/new-directory/expected.json` when testing the
 verified patches to fail if any expected status changes. For a real request
 set use `--require-no-failures` to fail on any inconclusive tool/input error.
+
+
+### Prioritize, replay and protect shader coverage
+
+Rank distinct observed refusals from a runtime log, preserving an instruction
+name when the emitter supplies one and exact literal sampler variants:
+
+```sh
+python tools/scarlett_worklist.py --log scarlett.log --json worklist.json \
+    --manifest next-group.json --group 1
+```
+
+A worklist reports observed requests, not the number a proposed patch will
+recover. An absent log entry does not establish a fix. The replay manifest
+contains request names, not shader bytes. The owner must already have the
+matching recorded inputs; missing requests fail before compilation. Replay
+one or more groups using the existing production compiler comparison:
+
+```sh
+python tools/compare_scarlett_shaders.py /path/to/requests \
+    --baseline /path/to/old/xshader --candidate /path/to/new/xshader \
+    --dxc /path/to/dxc --dxv /path/to/dxv --jobs 2 \
+    --select next-group.json --require-no-failures --json comparison.json
+```
+
+Convert a paired comparison into a new worklist. This distinguishes recovered
+requests from unchanged refusals, different refusal reasons or sampler
+variants, and inconclusive tool/input failures. Changed successful output
+digests are flagged for review, not assumed to be incorrect rendering.
+
+```sh
+python tools/scarlett_worklist.py --comparison comparison.json \
+    --json remaining.json --manifest protected.json --protect-compiled
+```
+
+The protected manifest records every successful candidate in that comparison
+as an absolute compilation expectation. Pass it to `--select` on a later
+comparison (using a fresh report path). A lost success fails even if the
+new baseline also refuses it. Keep a full-corpus comparison for broad
+coverage; a selected replay does not replace that check.
+
+To coordinate work, optionally pass `--claims claims.json` to the worklist.
+The file contains explicit, manually maintained ownership hints, for example:
+
+```json
+[
+  {"ref": "#example", "opcode": "buffer_load_dword"},
+  {"ref": "#another", "reason": "wave reduction at 0x_ may execute in divergent control flow"}
+]
+```
+
+Use a reason, opcode, or both (exact match, combined with AND). The report
+lists unclaimed ranks, overlapping claims, and claims not observed in the
+input. A claim is not evidence of a fix; refresh it as PRs change. This
+tool does not infer ownership from GitHub titles or generate native shader
+code from an error message. Reports can contain request digests and emitter
+diagnostics; review them before sharing. All operations above use CPU only.
+
+[Validation receipt](../evidence/scarlett-worklist-control.json): 836 distinct
+refusals from the public #39 log; real compiler comparisons of nine synthetic
+requests; five protected successes, three deliberately lost successes
+detected on downgrade, and three overlapping ownership hints in a synthetic
+coordination control. No title data or game execution was needed.

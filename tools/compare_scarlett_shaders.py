@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from project_tuxbox.inspect import digest
 from project_tuxbox.runtime_shaders import compile_request, ShaderRefused, ToolFailure
-from project_tuxbox.shader_diagnostics import normalize_refusal
+from project_tuxbox.shader_diagnostics import normalize_refusal, refusal_detail
 from tools.triage_scarlett_shaders import requests
 
 
@@ -31,7 +31,7 @@ def compile_one(source, tools):
                 raise ValueError("unexpected hit in a fresh cache")
             return {"status": "compiled", "dxil_sha256": digest(cache / (source.stem + ".cso"))}
         except ShaderRefused as exc:
-            return {"status": "refused", "reason": normalize_refusal(str(exc))}
+            return {"status": "refused", **refusal_detail(str(exc))}
         except (OSError, ValueError, ToolFailure, subprocess.SubprocessError) as exc:
             return {"status": "failed", "reason": normalize_refusal(str(exc))}
 
@@ -86,6 +86,7 @@ def main(argv=None):
     parser.add_argument("--require-no-failures", action="store_true", help="fail if either compiler has an inconclusive request")
     parser.add_argument("--jobs", type=int, default=2)
     parser.add_argument("--limit", type=int, default=0, help="first N requests, zero for all")
+    parser.add_argument("--select", type=Path, help="exact local request names from a worklist manifest")
     args = parser.parse_args(argv)
     if args.jobs < 1 or args.limit < 0:
         parser.error("--jobs must be positive and --limit nonnegative")
@@ -95,13 +96,27 @@ def main(argv=None):
         parser.error("write the report outside the recorded request directory")
     if args.json.exists():
         parser.error("report already exists; choose a new output path")
-    sources = requests(args.requests)[:args.limit or None]
+    sources = requests(args.requests)
+    selection = None
+    if args.select:
+        if args.limit:
+            parser.error("--select cannot be combined with --limit")
+        try:
+            from tools.scarlett_worklist import selected_sources
+            selection = json.loads(args.select.read_text())
+            sources = selected_sources(sources, selection)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+    else:
+        sources = sources[:args.limit or None]
     if not sources:
         parser.error("no recorded requests")
     expected = None
-    if args.expect_candidate:
+    if args.expect_candidate or (selection is not None and "expected" in selection):
         try:
-            expected = json.loads(args.expect_candidate.read_text())
+            if args.expect_candidate and selection is not None and "expected" in selection:
+                raise ValueError("selection already contains regression expectations")
+            expected = json.loads(args.expect_candidate.read_text()) if args.expect_candidate else selection["expected"]
             if not isinstance(expected, dict) or set(expected) != {source.name for source in sources}:
                 raise ValueError("expectations must cover exactly the selected requests")
             if any(not isinstance(row, dict) or row.get("status") not in ("compiled", "refused", "failed")
