@@ -55,6 +55,8 @@ fn inputs_known(known: &[bool; 106], ins: &Insn, form: Shape) -> bool {
 fn ordinary_sites(em: &Emitter<'_>) -> BTreeSet<usize> {
     let mut sites = BTreeSet::new();
     let mut known = [false; 106];
+    let mut known_scc = false;
+    let compute = em.ex.stage == crate::Stage::Compute;
     let ops = &em.insns;
     // Private packed and mesh paths can replace native scalar operations
     // with ABI-specific logic. Their provenance requires a separate proof.
@@ -66,10 +68,11 @@ fn ordinary_sites(em: &Emitter<'_>) -> BTreeSet<usize> {
     }
     let targets = branch_targets(ops);
     for (at, ins) in ops.iter().enumerate() {
-        if targets.contains(&(ins.offset as i64)) { known.fill(false); }
+        if targets.contains(&(ins.offset as i64)) { known.fill(false); known_scc = false; }
         if ins.mnemonic.starts_with("tb_") || ins.enc == Enc::Sopp
             && (Emitter::branch_cond(ins.op).is_some() || ins.op == 1) {
             known.fill(false);
+            known_scc = false;
             continue;
         }
         let m = ins.mnemonic.as_str();
@@ -95,11 +98,56 @@ fn ordinary_sites(em: &Emitter<'_>) -> BTreeSet<usize> {
                     if src(0, 1) && src(1, 1) => 1,
                 "s_and_b64" | "s_or_b64" | "s_xor_b64" | "s_andn2_b64" | "s_orn2_b64"
                 | "s_nand_b64" | "s_nor_b64" | "s_xnor_b64" if src(0, 2) && src(1, 2) => 2,
+                // Extend only the ordinary compute path, where these
+                // scalar operations are not pixel-quad or mesh substitutes.
+                "s_min_i32" | "s_min_u32" | "s_max_i32" | "s_max_u32"
+                    if compute && src(0,1) && src(1,1) => 1,
+                "s_lshl_b64" | "s_lshr_b64" | "s_ashr_i64"
+                    if compute && src(0,2) && src(1,1) => 2,
+                "s_bitset0_b32" | "s_bitset1_b32"
+                    if compute && src(0,1) && ins.dst.first().is_some_and(|o| ordinary(&known,o,1)) => 1,
+                "s_addc_u32" | "s_subb_u32" | "s_cselect_b32"
+                    if compute && known_scc && src(0,1) && src(1,1) => 1,
+                "s_cselect_b64" if compute && known_scc && src(0,2) && src(1,2) => 2,
+                "s_cmov_b32" if compute && known_scc && src(0,1)
+                    && ins.dst.first().is_some_and(|o| ordinary(&known,o,1)) => 1,
+                "s_cmov_b64" if compute && known_scc && src(0,2)
+                    && ins.dst.first().is_some_and(|o| ordinary(&known,o,2)) => 2,
                 _ if ins.enc == Enc::Smem
                     && matches!(em.res.get(&at).map(Vec::as_slice), Some([Res::Cb(_) | Res::CodeTbl]))
                     && (ins.op <= 4 || (8..=12).contains(&ins.op)) => 1usize << (ins.op & 7),
                 _ => 0,
             }
+        };
+        // SCC is a separate reaching definition. Never trust a condition
+        // derived from EXEC/VCC or an unrecognized write. An explicit list
+        // of flag-preserving forms is safer than assuming unknown ops preserve SCC.
+        known_scc = compute && ins.is_complete() && match m {
+            "s_cmp_eq_i32" | "s_cmp_lg_i32" | "s_cmp_gt_i32" | "s_cmp_ge_i32"
+            | "s_cmp_lt_i32" | "s_cmp_le_i32" | "s_cmp_eq_u32" | "s_cmp_lg_u32"
+            | "s_cmp_gt_u32" | "s_cmp_ge_u32" | "s_cmp_lt_u32" | "s_cmp_le_u32"
+            | "s_bitcmp0_b32" | "s_bitcmp1_b32" => src(0,1) && src(1,1),
+            "s_bitcmp0_b64" | "s_bitcmp1_b64" => sites.contains(&at),
+            "s_add_u32" | "s_sub_u32" | "s_add_i32" | "s_sub_i32"
+            | "s_addc_u32" | "s_subb_u32" | "s_min_i32" | "s_max_i32"
+            | "s_min_u32" | "s_max_u32"
+            | "s_and_b32" | "s_or_b32" | "s_xor_b32" | "s_andn2_b32" | "s_orn2_b32"
+            | "s_nand_b32" | "s_nor_b32" | "s_xnor_b32"
+            | "s_and_b64" | "s_or_b64" | "s_xor_b64" | "s_andn2_b64" | "s_orn2_b64"
+            | "s_nand_b64" | "s_nor_b64" | "s_xnor_b64"
+            | "s_lshl_b32" | "s_lshr_b32" | "s_ashr_i32" | "s_lshl_b64" | "s_lshr_b64"
+            | "s_ashr_i64" | "s_not_b32" | "s_not_b64" | "s_bcnt1_i32_b32"
+            | "s_bcnt1_i32_b64" | "s_bcnt0_i32_b32" | "s_bcnt0_i32_b64"
+            | "s_abs_i32" | "s_bfe_u32" | "s_bfe_i32" =>
+                width>0 && ins.dst.first().and_then(|d| register(d,width)).is_some(),
+            "s_mov_b32" | "s_mov_b64" | "s_movk_i32" | "s_cmov_b32" | "s_cmov_b64"
+            | "s_cselect_b32" | "s_cselect_b64" | "s_brev_b32" | "s_brev_b64"
+            | "s_ff0_i32_b32" | "s_ff0_i32_b64" | "s_ff1_i32_b32"
+            | "s_flbit_i32_b32" | "s_flbit_i32_b64" | "s_flbit_i32" | "s_flbit_i32_i64"
+            | "s_sext_i32_i8" | "s_sext_i32_i16" | "s_bitset0_b32" | "s_bitset1_b32"
+            | "s_bitset0_b64" | "s_bitset1_b64" | "s_mul_i32" =>
+                known_scc && width>0 && ins.dst.first().and_then(|d| register(d,width)).is_some(),
+            _ => false,
         };
         // Compute provenance before invalidating destinations, including in-place ops.
         let dest = if width > 0 {
@@ -274,6 +322,34 @@ mod tests {
             let mut emitter = Emitter::new(&ex, ops.clone());
             assert!(emit(&mut emitter, at, &ops[at]).is_err(), "{words:x?}");
         }
+    }
+
+    #[test]
+    fn dependent_scalar_chains_do_not_promote_unknown_flags_or_halves() {
+        // Compare ordinary data, conditional-select and then first-zero.
+        // Unknown SCC, including an EXEC-derived comparison, must not
+        // establish provenance for the destination of the conditional select.
+        for (prefix, accepted) in [
+            (vec![0xbe82_0381, 0xbe83_0382, 0xbf06_8080], true),
+            (vec![0xbe82_0381, 0xbe83_0382], false),
+            (vec![0xbe82_0381, 0xbe83_0382, 0xbf06_807e], false),
+        ] {
+            let mut words = prefix;
+            words.extend([0x8504_0302, 0xbe85_1104, 0xbf81_0000]);
+            let ex = extract(&words);
+            let ops = disassemble(&ex.isa);
+            assert_eq!(ops[ops.len()-3].mnemonic, "s_cselect_b32");
+            let em = Emitter::new(&ex, ops.clone());
+            assert_eq!(ordinary_sites(&em).contains(&(ops.len()-2)), accepted, "{words:x?}");
+        }
+        // A known low half plus an unproven high half must not become
+        // ordinary after a 64-bit shift.
+        let words = [0xbe82_0381, 0x8f84_8102, 0xbe86_0c04, 0xbf81_0000];
+        let ex = extract(&words);
+        let ops = disassemble(&ex.isa);
+        assert_eq!(ops[1].mnemonic, "s_lshl_b64");
+        let em = Emitter::new(&ex, ops);
+        assert!(!ordinary_sites(&em).contains(&2));
     }
 
     #[test]
