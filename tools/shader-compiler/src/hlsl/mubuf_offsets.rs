@@ -4,10 +4,25 @@ use super::{writes_scalar, Emitter};
 use crate::rdna2::{Enc, Insn, Opnd};
 use std::collections::{BTreeSet, VecDeque};
 
+// Track only ordinary SGPR offsets; special scalar encodings are not SGPRs.
+fn offset_register(ins: &Insn) -> Option<u8> {
+    match ins.enc {
+        Enc::Mubuf => match ins.src.get(2) {
+            Some(Opnd::Sgpr(reg @ 0..=105)) => Some(*reg),
+            _ => None,
+        },
+        Enc::Smem if ins.op <= 4 => {
+            let reg = ins.raw.get(1)? >> 25;
+            (reg <= 105).then_some(reg as u8)
+        }
+        _ => None,
+    }
+}
+
 pub(super) fn proven_zero(insns: &[Insn]) -> BTreeSet<(usize, u8)> {
     let mut used = 0u128;
-    for ins in insns.iter().filter(|i| i.enc == Enc::Mubuf) {
-        if let Some(Opnd::Sgpr(reg)) = ins.src.get(2) {
+    for ins in insns {
+        if let Some(reg) = offset_register(ins) {
             used |= 1u128 << reg;
         }
     }
@@ -32,13 +47,29 @@ pub(super) fn proven_zero(insns: &[Insn]) -> BTreeSet<(usize, u8)> {
     {
         return BTreeSet::new();
     }
+    // Include ordinary SGPRs that feed a tracked offset through scalar copies.
+    // The closure is bounded by the 106 ordinary scalar registers.
+    loop {
+        let before = used;
+        for ins in insns {
+            if let ("s_mov_b32", [Opnd::Sgpr(dst @ 0..=105)], [Opnd::Sgpr(src @ 0..=105)]) =
+                (ins.mnemonic.as_str(), ins.dst.as_slice(), ins.src.as_slice())
+            {
+                if used & (1u128 << dst) != 0 {
+                    used |= 1u128 << src;
+                }
+            }
+        }
+        if used == before { break; }
+    }
     let registers: Vec<_> = (0..106).filter(|&r| used & (1u128 << r) != 0).collect();
     let mut input = vec![None; insns.len()];
     let mut work = VecDeque::from([0]);
     input[0] = Some(0u128);
     while let Some(index) = work.pop_front() {
         let ins = &insns[index];
-        let mut zero = input[index].expect("queued reachable instruction");
+        let incoming_zero = input[index].expect("queued reachable instruction");
+        let mut zero = incoming_zero;
         for &reg in &registers {
             if writes_scalar(ins, reg) {
                 zero &= !(1u128 << reg);
@@ -68,6 +99,16 @@ pub(super) fn proven_zero(insns: &[Insn]) -> BTreeSet<(usize, u8)> {
             zero |= used & (1u128 << reg);
         }
 
+        // Read the incoming source before killing destination bits (self-copies
+        // and overlapping definitions must not use the outgoing lattice state).
+        if let ("s_mov_b32", [Opnd::Sgpr(dst @ 0..=105)], [Opnd::Sgpr(src @ 0..=105)]) =
+            (ins.mnemonic.as_str(), ins.dst.as_slice(), ins.src.as_slice())
+        {
+            if incoming_zero & (1u128 << src) != 0 {
+                zero |= used & (1u128 << dst);
+            }
+        }
+
         let mut merge = |next: usize| {
             let Some(slot) = input.get_mut(next) else {
                 return;
@@ -94,9 +135,9 @@ pub(super) fn proven_zero(insns: &[Insn]) -> BTreeSet<(usize, u8)> {
     }
     let mut offsets = BTreeSet::new();
     for (ins, zero) in insns.iter().zip(input) {
-        if let (Enc::Mubuf, Some(Opnd::Sgpr(reg))) = (ins.enc, ins.src.get(2)) {
+        if let Some(reg) = offset_register(ins) {
             if zero.unwrap_or(0) & (1u128 << reg) != 0 {
-                offsets.insert((ins.offset, *reg));
+                offsets.insert((ins.offset, reg));
             }
         }
     }
@@ -133,6 +174,31 @@ mod tests {
         assert!(tracked(&[branch, ZERO, USE[0], USE[1], END]).is_empty());
         // s_cbranch_scc0 -4 returns to the buffer instruction with s66 now equal to 1.
         assert!(tracked(&[ZERO, USE[0], USE[1], ONE, 0xbf84fffc, END]).is_empty());
+    }
+
+    #[test]
+    fn copied_offsets_require_proven_sources_on_every_path() {
+        let zero65 = 0xbec10380; // s_mov_b32 s65, 0
+        let copy = 0xbec20341;   // s_mov_b32 s66, s65
+        let self_copy = 0xbec20342;
+        let load = [0xf4081000, 66u32 << 25];
+        assert_eq!(tracked(&[zero65, copy, self_copy, load[0], load[1], END]),
+                   BTreeSet::from([(12, 66)]));
+        assert!(tracked(&[copy, load[0], load[1], END]).is_empty());
+        let branch = 0xbf840001;
+        assert!(tracked(&[branch, zero65, copy, load[0], load[1], END]).is_empty());
+    }
+
+    #[test]
+    fn scalar_load_offset_must_be_zero_on_all_paths() {
+        let load = [0xf4081000, 66u32 << 25];
+        let branch = 0xbf840001;
+        assert_eq!(tracked(&[ZERO, load[0], load[1], END]), BTreeSet::from([(4, 66)]));
+        assert!(tracked(&[ONE, load[0], load[1], END]).is_empty());
+        assert!(tracked(&[ZERO, branch, ONE, load[0], load[1], END]).is_empty());
+        assert!(tracked(&[branch, ZERO, load[0], load[1], END]).is_empty());
+        assert!(tracked(&[ZERO, load[0], load[1], load[0], load[1], END]).contains(&(4, 66)));
+        assert!(!tracked(&[ZERO, load[0], load[1], load[0], load[1], END]).contains(&(12, 66)));
     }
 
     #[test]

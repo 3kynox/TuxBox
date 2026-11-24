@@ -59,3 +59,28 @@ fn raw_buffer_transfers_are_emitted_one_dword_at_a_time() {
         }
     }
 }
+
+#[test]
+fn static_zero_scalar_offset_matches_immediate_descriptor_load() {
+    // s_mov_b32 s66, 0; s_load_dwordx4 s[64:67], s[0:1], 0.
+    // The offset register overlaps the destination, so the proof must use
+    // the value BEFORE the load, not the outgoing dataflow state.
+    let variants = [
+        [0xbec2_0380, 0xf408_1000, 0xfa00_0000, 0xbf81_0000],
+        [0xbec2_0380, 0xf408_1000, 66u32 << 25, 0xbf81_0000],
+    ];
+    let mut loads = Vec::new();
+    for words in variants {
+        let ex = compute_extract(&words);
+        let insns = disassemble(&ex.isa);
+        let mut em = Emitter::new(&ex, insns);
+        em.resolve_resources().unwrap();
+        loads.push(em.dsel_loads.clone());
+    }
+    assert_eq!(loads[0], loads[1]);
+    assert!(!loads[0].is_empty());
+    let ex = compute_extract(&[0xbec2_0381, 0xf408_1000, 66u32 << 25, 0xbf81_0000]);
+    let mut em = Emitter::new(&ex, disassemble(&ex.isa));
+    let reason = em.resolve_resources().unwrap_err();
+    assert!(reason.contains("dynamic soffset unsupported"), "{reason}");
+}

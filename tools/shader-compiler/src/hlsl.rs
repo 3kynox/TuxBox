@@ -3036,7 +3036,8 @@ impl<'a> Emitter<'a> {
                     // Read from an embedded constant table.
                     let n = 1u32 << ins.op;
                     let d = ins.dst.first().and_then(sg).ok_or("s_load: bad dst")?;
-                    if (ins.raw.get(1).copied().unwrap_or(0) >> 25) != 0x7d {
+                    if (ins.raw.get(1).copied().unwrap_or(0) >> 25) != 0x7d
+                        && !self.proven_zero_smem_offset(ins) {
                         return Err(format!("s_load at {:#x}: code-table read with dynamic soffset unsupported", ins.offset));
                     }
                     self.uses_code = true;
@@ -3103,7 +3104,11 @@ impl<'a> Emitter<'a> {
                                 continue;
                             }
                         }
-                        return Err(format!("s_load at {:#x}: dynamic soffset unsupported", ins.offset));
+                        // Preserve heap-specific lowering above. Only fold an ordinary
+                        // descriptor-table offset when every reaching path proves zero.
+                        if !self.proven_zero_smem_offset(ins) {
+                            return Err(format!("s_load at {:#x}: dynamic soffset unsupported", ins.offset));
+                        }
                     }
                     if self.mesh_bindings.as_ref().is_some_and(|mesh| {
                         n != 4 || !mesh.tables.contains_key(&(table, ins.aux.imm as u32))
@@ -6434,6 +6439,13 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
         }
         Ok(())
+    }
+
+    fn proven_zero_smem_offset(&self, ins: &Insn) -> bool {
+        let reg = ins.raw.get(1).copied().unwrap_or(u32::MAX) >> 25;
+        reg <= 105 && self.zero_buffer_offsets
+            .get_or_init(|| mubuf_offsets::proven_zero(&disassemble(&self.ex.isa)))
+            .contains(&(ins.offset, reg as u8))
     }
 
     fn zero_buffer_offset(&self, ins: &Insn) -> bool {

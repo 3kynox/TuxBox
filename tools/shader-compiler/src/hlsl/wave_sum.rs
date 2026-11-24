@@ -236,11 +236,21 @@ fn uniform_forward_guard(
         match src {
             Opnd::ConstInt(_) | Opnd::Literal(_) => (),
             Opnd::Sgpr(_) => {
-                let Some(read) = previous_read else { return false };
-                if insns[read].dst.as_slice() != [*src] {
-                    return false;
+                if let Some(read) = previous_read.filter(|&read| insns[read].dst.as_slice() == [*src]) {
+                    proof_start = proof_start.min(insns[read].offset as i64);
+                } else {
+                    // A directly preceding scalar literal move is unconditionally
+                    // emitted per participating invocation. Extend the protected
+                    // interval to the move so no branch can bypass its definition.
+                    let Some(def) = compare_index.checked_sub(1).map(|i| &insns[i]) else { return false };
+                    if def.enc != Enc::Sop1 || def.mnemonic != "s_mov_b32"
+                        || def.dst.as_slice() != [*src]
+                        || !matches!(def.src.as_slice(), [Opnd::ConstInt(_) | Opnd::Literal(_)])
+                    {
+                        return false;
+                    }
+                    proof_start = proof_start.min(def.offset as i64);
                 }
-                proof_start = insns[read].offset as i64;
             }
             _ => return false,
         }
@@ -515,6 +525,25 @@ mod tests {
     }
 
     #[test]
+    fn native_literal_scalar_guard_translates_and_unknown_source_refuses() {
+        for width in [32, 64] {
+            let (mut ex, mut words, cmp) = fixture::shader(width);
+            // s_mov_b32 s7, 1; the following comparison and branch are unchanged.
+            words.insert(cmp, 0xbe87_0381);
+            ex.isa = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+            ex.isa_data = ex.isa.clone();
+            let translated = super::super::translate(&ex).unwrap();
+            assert!(translated.hlsl.contains("s7 = 1u;") || translated.hlsl.contains("s7 = 0x1u;") || translated.hlsl.contains("s7 = 0x00000001u;"), "{}", translated.hlsl);
+            // s_mov_b32 s7, s8 (unknown input) must still be rejected.
+            words[cmp] = 0xbe87_0308;
+            ex.isa = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+            ex.isa_data = ex.isa.clone();
+            let reason = super::super::translate(&ex).err().unwrap();
+            assert!(reason.contains("divergent control flow"), "{reason}");
+        }
+    }
+
+    #[test]
     fn portable_wave64_requires_a_single_group_and_no_other_wave_operations() {
         let (mut ex, _, _) = fixture::shader(64);
         let mut insns = crate::rdna2::disassemble(&ex.isa);
@@ -558,6 +587,26 @@ mod tests {
             edge(&mut ops, 1, after - 1, 4);
             assert!(check_control_flow(&ops, width).is_err());
             edge(&mut ops, 1, after, 8); // EXEC is a per-invocation mask
+            assert!(check_control_flow(&ops, width).is_err());
+        }
+    }
+
+    #[test]
+    fn literal_scalar_definition_proves_forward_guard_only_without_bypass() {
+        for width in [32, 64] {
+            let mut ops = vec![nop(), insn("s_mov_b32", Enc::Sop1, 0,
+                vec![Opnd::Sgpr(9)], vec![Opnd::ConstInt(1)]),
+                compare(vec![Opnd::Sgpr(9), Opnd::ConstInt(0)]), branch(4)];
+            ops.extend(reduction(width, 7));
+            let after = ops.len();
+            ops.push(nop());
+            edge(&mut ops, 3, after, 4);
+            assert!(check_control_flow(&ops, width).is_ok());
+            edge(&mut ops, 0, 2, 8);
+            assert!(check_control_flow(&ops, width).is_err());
+            ops[0] = nop();
+            offsets(&mut ops);
+            ops[1].src[0] = Opnd::Sgpr(10);
             assert!(check_control_flow(&ops, width).is_err());
         }
     }
