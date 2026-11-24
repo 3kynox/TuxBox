@@ -27,11 +27,11 @@ std::string run(const wchar_t* requested,bool) {
     ComPtr<ID3D12PipelineState> pipeline;
     check(method<Pipeline>(device.Get(),62)(device.Get(),&ps,0,nullptr,IID_PPV_ARGS(&pipeline)),"pipeline");
     struct Memory {
-        UINT* data=static_cast<UINT*>(VirtualAlloc(nullptr,2*page,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE));
+        UINT* data=static_cast<UINT*>(VirtualAlloc(nullptr,3*page,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE));
         ~Memory(){if(data)VirtualFree(data,0,MEM_RELEASE);}
     } memory;
     if(!memory.data)throw std::runtime_error("CBV pages");
-    for(UINT i=0;i<2*page/4;++i)memory.data[i]=0x12340000u+i*13u;
+    for(UINT i=0;i<3*page/4;++i)memory.data[i]=0x12340000u+i*13u;
     D3D12_COMMAND_QUEUE_DESC q{};q.Type=D3D12_COMMAND_LIST_TYPE_COMPUTE;
     ComPtr<ID3D12CommandQueue> queue;check(device->CreateCommandQueue(&q,IID_PPV_ARGS(&queue)),"queue");
     ComPtr<ID3D12Fence> fence;check(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&fence)),"fence");
@@ -42,7 +42,7 @@ std::string run(const wchar_t* requested,bool) {
     auto result=buffer(device.Get(),D3D12_HEAP_TYPE_DEFAULT,sizeof(initial),D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
     auto readback=buffer(device.Get(),D3D12_HEAP_TYPE_READBACK,sizeof(initial),D3D12_RESOURCE_STATE_COPY_DEST);
     UINT pass=0;
-    for(UINT offset:{0u,256u,page-256u}){
+    for(UINT offset:{0u,256u,page-256u,page,page+256u}){
         ComPtr<ID3D12CommandAllocator> allocator;
         check(device->CreateCommandAllocator(q.Type,IID_PPV_ARGS(&allocator)),"allocator");
         const UINT desc[]{D3D12_COMMAND_LIST_TYPE_COMPUTE,0,1,0};
@@ -72,7 +72,7 @@ std::string run(const wchar_t* requested,bool) {
         if(!equal)throw std::runtime_error("root CBV mismatch at offset "+std::to_string(offset));
     }
     char receipt[160];
-    std::snprintf(receipt,sizeof(receipt),"d3d12-root-cbv-window PASS pci=%04x:%04x words=72/72 window=65536 offsets=0,256,65280",selected.VendorId,selected.DeviceId);
+    std::snprintf(receipt,sizeof(receipt),"d3d12-root-cbv-window PASS pci=%04x:%04x words=120/120 window=65536 offsets=0,256,65280,65536,65792",selected.VendorId,selected.DeviceId);
     return receipt;
 }
 }
