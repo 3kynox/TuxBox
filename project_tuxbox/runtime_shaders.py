@@ -32,7 +32,8 @@ class ShaderRefused(ValueError):
 
 
 def verified_input(path, expected):
-    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW), "rb") as stream:
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    with os.fdopen(os.open(path, flags), "rb") as stream:
         info = os.fstat(stream.fileno())
         if not stat.S_ISREG(info.st_mode):
             raise ValueError(f"{path.name} is not a regular shader file")
@@ -75,6 +76,12 @@ def archive_request(archive, source, inputs):
     except OSError as exc:
         if exc.errno not in (errno.EEXIST, errno.ENOTEMPTY):
             raise
+
+
+# Unoptimised DXC is the last resort for a shader. The largest ProjectScarlett
+# compute program (CS_Emit_Dynamic_Model_Edge, 7,813 instructions) needs
+# about 18 s at -O0, so a 15 s cap refused it on every boot.
+O0_TIMEOUT = 90
 
 
 def compile_request(source, key, tools, cache, session, *, remember=None):
@@ -154,13 +161,13 @@ def compile_request(source, key, tools, cache, session, *, remember=None):
         # compile at -O0 in a few seconds, and the driver optimises that DXIL
         # again when it builds the pipeline.
         if target == "cs_6_6":
-            run_tool([dxc, "-T", target, *entry, "-O0", "-Fo", output, hlsl], timeout=15)
+            run_tool([dxc, "-T", target, *entry, "-O0", "-Fo", output, hlsl], timeout=O0_TIMEOUT)
         else:
             try:
                 run_tool([dxc, "-T", target, *entry, "-Fo", output, hlsl], timeout=15)
             except subprocess.TimeoutExpired:
                 output.unlink(missing_ok=True)
-                run_tool([dxc, "-T", target, *entry, "-O0", "-Fo", output, hlsl], timeout=15)
+                run_tool([dxc, "-T", target, *entry, "-O0", "-Fo", output, hlsl], timeout=O0_TIMEOUT)
         run_tool([dxv, output], timeout=10)
         if not has_dxil_container(output.read_bytes()):
             raise ValueError("compiler returned an invalid DXIL container")
