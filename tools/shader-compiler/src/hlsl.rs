@@ -406,6 +406,7 @@ struct Emitter<'a> {
     res: HashMap<usize, Vec<Res>>, // per-instruction resolved resources
     cb_size: BTreeMap<u32, u32>,   // slot -> dwords
     zero_buffer_offsets: std::cell::OnceCell<BTreeSet<(usize, u8)>>,
+    smem_constants: std::cell::OnceCell<BTreeMap<(usize, u8), u32>>,
     tex: BTreeMap<u32, u32>,       // slot -> dim
     samp: BTreeSet<u32>,
     samp_cmp: BTreeSet<u32>,
@@ -1741,6 +1742,7 @@ impl<'a> Emitter<'a> {
             res: HashMap::new(),
             cb_size: BTreeMap::new(),
             zero_buffer_offsets: Default::default(),
+            smem_constants: Default::default(),
             tex: BTreeMap::new(),
             samp: BTreeSet::new(),
             samp_cmp: BTreeSet::new(),
@@ -3105,19 +3107,18 @@ impl<'a> Emitter<'a> {
                             }
                         }
                         // Preserve heap-specific lowering above. Only fold an ordinary
-                        // descriptor-table offset when every reaching path proves zero.
-                        if !self.proven_zero_smem_offset(ins) {
-                            return Err(format!("s_load at {:#x}: dynamic soffset unsupported", ins.offset));
-                        }
+                        // descriptor-table offset when every reaching path proves its value.
                     }
+                    let off = self.static_smem_offset(ins)
+                        .ok_or_else(|| format!("s_load at {:#x}: dynamic soffset unsupported", ins.offset))?;
                     if self.mesh_bindings.as_ref().is_some_and(|mesh| {
-                        n != 4 || !mesh.tables.contains_key(&(table, ins.aux.imm as u32))
+                        n != 4 || !mesh.tables.contains_key(&(table, off))
                     }) {
                         return Err(format!("unverified mesh descriptor load at {:#x}", ins.offset));
                     }
                     for k in 0..n {
-                        sym.insert(d + k as u16, Sym::Desc { table, off: ins.aux.imm as u32, k });
-                        self.dsel_loads.insert(idx, (d, ((table as u32) << 24) | ins.aux.imm as u32));
+                        sym.insert(d + k as u16, Sym::Desc { table, off, k });
+                        self.dsel_loads.insert(idx, (d, ((table as u32) << 24) | off));
                         written.insert(d + k as u16);
                     }
                 }
@@ -6439,6 +6440,21 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
         }
         Ok(())
+    }
+
+    fn static_smem_offset(&self, ins: &Insn) -> Option<u32> {
+        let imm = u32::try_from(ins.aux.imm).ok()?;
+        if ins.raw.get(1).copied()? >> 25 == 0x7d { return Some(imm); }
+        if self.proven_zero_smem_offset(ins) { return Some(imm); }
+        let reg = ins.raw.get(1).copied()? >> 25;
+        if reg > 105 { return None; }
+        let offset = *self.smem_constants
+            .get_or_init(|| mubuf_offsets::proven_smem_constants(&disassemble(&self.ex.isa)))
+            .get(&(ins.offset, reg as u8))?;
+        let combined = imm.checked_add(offset)?;
+        // Static table selectors encode the table in the upper byte.
+        // Do not turn unaligned or out-of-range addresses into descriptors.
+        (combined <= 0x00ff_ffff && combined % 4 == 0).then_some(combined)
     }
 
     fn proven_zero_smem_offset(&self, ins: &Insn) -> bool {

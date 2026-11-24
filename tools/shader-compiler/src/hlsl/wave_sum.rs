@@ -190,6 +190,39 @@ pub(super) fn lower(insns: &mut [Insn], first: usize) -> Result<(u32, usize), &'
     Ok((width, start + last_read + 2))
 }
 
+// Restrict the proof to a small straight-line scalar slice. No lane reads,
+// EXEC/VCC values, memory operations or unrecognized definitions are admitted.
+// The caller checks all control-flow edges crossing this entire slice.
+fn uniform_scalar_chain(insns: &[Insn], end: usize, operand: Opnd) -> Option<usize> {
+    use std::collections::BTreeSet;
+    let Opnd::Sgpr(reg @ 0..=105) = operand else { return None };
+    let mut needed = BTreeSet::from([reg]);
+    for index in (end.saturating_sub(32)..end).rev() {
+        let ins = &insns[index];
+        if matches!(ins.mnemonic.as_str(), "s_nop" | "s_waitcnt") { continue; }
+        let [Opnd::Sgpr(dst @ 0..=105)] = ins.dst.as_slice() else { return None };
+        let ordinary = match (ins.enc, ins.mnemonic.as_str(), ins.src.len()) {
+            (Enc::Sop1, "s_mov_b32", 1) => true,
+            (Enc::Sop2, "s_add_u32" | "s_add_i32" | "s_sub_u32" | "s_sub_i32"
+                | "s_and_b32" | "s_or_b32" | "s_xor_b32"
+                | "s_lshl_b32" | "s_lshr_b32", 2) => true,
+            _ => false,
+        };
+        if !ordinary { return None; }
+        if needed.remove(dst) {
+            for source in &ins.src {
+                match source {
+                    Opnd::Sgpr(r @ 0..=105) => { needed.insert(*r); }
+                    Opnd::ConstInt(_) | Opnd::Literal(_) => (),
+                    _ => return None,
+                }
+            }
+        }
+        if needed.is_empty() { return Some(index); }
+    }
+    None
+}
+
 /// A forward SCC branch can skip a whole reduction without divergence when
 /// its comparison uses only immediates or the immediately preceding verified
 /// reduction's scalar result. Require the entire proof window to be free of
@@ -239,17 +272,11 @@ fn uniform_forward_guard(
                 if let Some(read) = previous_read.filter(|&read| insns[read].dst.as_slice() == [*src]) {
                     proof_start = proof_start.min(insns[read].offset as i64);
                 } else {
-                    // A directly preceding scalar literal move is unconditionally
-                    // emitted per participating invocation. Extend the protected
-                    // interval to the move so no branch can bypass its definition.
-                    let Some(def) = compare_index.checked_sub(1).map(|i| &insns[i]) else { return false };
-                    if def.enc != Enc::Sop1 || def.mnemonic != "s_mov_b32"
-                        || def.dst.as_slice() != [*src]
-                        || !matches!(def.src.as_slice(), [Opnd::ConstInt(_) | Opnd::Literal(_)])
-                    {
-                        return false;
-                    }
-                    proof_start = proof_start.min(def.offset as i64);
+                    // A contiguous straight-line chain of ordinary scalar moves
+                    // and integer operations is uniform if all of its dependencies
+                    // are literals or previously established uniform definitions.
+                    let Some(first) = uniform_scalar_chain(insns, compare_index, *src) else { return false };
+                    proof_start = proof_start.min(insns[first].offset as i64);
                 }
             }
             _ => return false,
@@ -607,6 +634,28 @@ mod tests {
             ops[0] = nop();
             offsets(&mut ops);
             ops[1].src[0] = Opnd::Sgpr(10);
+            assert!(check_control_flow(&ops, width).is_err());
+        }
+    }
+
+    #[test]
+    fn scalar_chain_guards_require_all_dependencies_and_no_bypass() {
+        for width in [32, 64] {
+            let mut ops = vec![nop(),
+                insn("s_mov_b32", Enc::Sop1, 0, vec![Opnd::Sgpr(9)], vec![Opnd::ConstInt(2)]),
+                insn("s_add_u32", Enc::Sop2, 0, vec![Opnd::Sgpr(10)], vec![Opnd::Sgpr(9), Opnd::ConstInt(1)]),
+                insn("s_mov_b32", Enc::Sop1, 0, vec![Opnd::Sgpr(11)], vec![Opnd::Sgpr(10)]),
+                compare(vec![Opnd::Sgpr(11), Opnd::Sgpr(9)]), branch(4)];
+            ops.extend(reduction(width, 7));
+            let after = ops.len();
+            ops.push(nop());
+            edge(&mut ops, 5, after, 4);
+            assert!(check_control_flow(&ops, width).is_ok());
+            edge(&mut ops, 0, 2, 8);
+            assert!(check_control_flow(&ops, width).is_err());
+            ops[0] = nop();
+            offsets(&mut ops);
+            ops[2].src[1] = Opnd::Sgpr(12);
             assert!(check_control_flow(&ops, width).is_err());
         }
     }

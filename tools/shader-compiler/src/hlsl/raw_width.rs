@@ -84,3 +84,26 @@ fn static_zero_scalar_offset_matches_immediate_descriptor_load() {
     let reason = em.resolve_resources().unwrap_err();
     assert!(reason.contains("dynamic soffset unsupported"), "{reason}");
 }
+
+#[test]
+fn exact_nonzero_scalar_offset_matches_static_descriptor_and_unknown_refuses() {
+    // s66 = 32; compare a dynamic encoding with the equivalent immediate.
+    let variants = [
+        [0xbec2_03a0, 0xf408_1000, 0xfa00_0020, 0xbf81_0000],
+        [0xbec2_03a0, 0xf408_1000, 66u32 << 25, 0xbf81_0000],
+    ];
+    let mut loads = Vec::new();
+    for words in variants {
+        let ex = compute_extract(&words);
+        let mut em = Emitter::new(&ex, disassemble(&ex.isa));
+        em.resolve_resources().unwrap();
+        loads.push(em.dsel_loads.clone());
+    }
+    assert_eq!(loads[0], loads[1]);
+    assert_eq!(loads[0].get(&1), Some(&(64, 32)));
+    // A path can skip the definition; no constant can be inferred.
+    let ex = compute_extract(&[0xbf84_0001, 0xbec2_03a0, 0xf408_1000,
+                               66u32 << 25, 0xbf81_0000]);
+    let mut em = Emitter::new(&ex, disassemble(&ex.isa));
+    assert!(em.resolve_resources().unwrap_err().contains("dynamic soffset"));
+}
