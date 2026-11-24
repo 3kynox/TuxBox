@@ -32,6 +32,8 @@ mod raw_width;
 mod wide_atomic_test;
 #[cfg(test)]
 mod cpu_oracle;
+#[cfg(test)]
+mod heap_resinfo;
 mod fssm_bindings;
 mod micropoly;
 mod mesh;
@@ -3255,8 +3257,11 @@ impl<'a> Emitter<'a> {
                     if sym.get(&rs) == Some(&Sym::HeapDescriptor(8)) {
                         let load = self.compute_heap && matches!(ins.mnemonic.as_str(), "image_load" | "image_load_mip")
                             && matches!(dim, 0 | 1 | 2 | 4 | 5);
+                        // 2D image_get_resinfo is Texture2D.GetDimensions. A16, D16, and a
+                        // depth component stay refused in the emitter.
+                        let resinfo = self.compute_heap && ins.mnemonic == "image_get_resinfo" && dim == 1;
                         let cube = self.compute_heap && dim == 3;
-                        if !load && (!ins.mnemonic.starts_with("image_sample") || !(matches!(dim, 1 | 5) || cube)) {
+                        if !load && !resinfo && (!ins.mnemonic.starts_with("image_sample") || !(matches!(dim, 1 | 5) || cube)) {
                             return Err(format!("unsupported direct heap texture operation {} dim {dim}", ins.mnemonic));
                         }
                         tex_res.push((0, Res::HeapTexture(rs, dim)));

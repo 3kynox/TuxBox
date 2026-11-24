@@ -85,6 +85,11 @@ def run_game(args, exe, host, package_dir, profile=None):
         return code if code >= 0 else 128 - code
 
 
+def misplaced_option(arguments, options):
+    """First launcher option found among the game arguments, or None."""
+    return next((arg for arg in arguments if arg.split("=", 1)[0] in options), None)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     subs = parser.add_subparsers(required=True, dest="command")
@@ -184,6 +189,11 @@ def main():
         print(json.dumps(data, indent=2))
         return 1 if "error" in data else 0
     if args.command == "run":
+        # Everything after the target is passed to the game, including launcher options.
+        options = {string for action in run._actions for string in action.option_strings} - {"-h", "--help"}
+        misplaced = misplaced_option(args.arguments, options)
+        if misplaced:
+            run.error(f"{misplaced} must come before the game path; after it, it would be passed to the game")
         return launch_game(args)
     host = Host(args.backend, args.proton, args.prefix)
     return verify(host, args.output, args.adapter, args.only, args.benchmark_samples)
