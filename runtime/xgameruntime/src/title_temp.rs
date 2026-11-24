@@ -94,8 +94,9 @@ pub(super) fn attach() {
     {
         return;
     }
-    // Titles read their package through G:, as on the console. A prefix can keep
-    // G: from an earlier title, so the launched package always replaces it.
+    // Titles read their package through G:, as on the console. The launcher records
+    // the prefix's G: before the launch and restores it after the title exits, so
+    // the launched package replaces any G: here.
     for (variable, letter, replace) in [
         ("TUXBOX_WINE_TITLE_TEMP", b'T', false),
         ("TUXBOX_WINE_PACKAGE_DRIVE", b'G', true),
