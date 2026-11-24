@@ -55,6 +55,28 @@ class SelectProton(unittest.TestCase):
             host.backend = "native"
             self.assertIsNone(configured_target())
 
+    def test_linux_package_drive_points_at_the_manifest_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prefix, package = root / "prefix", root / "game"
+            (package / "bin").mkdir(parents=True)
+            (prefix / "dosdevices").mkdir(parents=True)
+            host = Host.__new__(Host)
+            host.backend, host.command = "proton", ["umu-run"]
+            host.env = {"WINEPREFIX": str(prefix), "TUXBOX_RUNTIME_SHADERS": "0"}
+            log = Mock()
+
+            def package_drive(executable):
+                host.run_game(executable, ["-nullrhi"], log)
+                return log.run.call_args.kwargs["env"].get("TUXBOX_WINE_PACKAGE_DRIVE")
+
+            self.assertIsNone(package_drive(package / "bin/game.exe"))
+            (package / "MicrosoftGame.Config").write_text("<Game/>")
+            self.assertEqual(package_drive(package / "game.exe"), str(package.resolve()))
+            self.assertEqual(package_drive(package / "bin/game.exe"), str(package.resolve()))
+            host.backend = "native"
+            self.assertIsNone(package_drive(package / "game.exe"))
+
 
 class ConsoleConstantBuffers(unittest.TestCase):
     def setUp(self):

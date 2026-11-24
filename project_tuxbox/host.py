@@ -34,6 +34,17 @@ def proton_installation(selection):
     raise ValueError("Select an installed Proton distribution with --proton or PROTONPATH")
 
 
+def package_root(executable):
+    """Return the closest directory above the executable that holds MicrosoftGame.config."""
+    for directory in (executable.parent, *executable.parent.parents)[:4]:
+        try:
+            if any(child.name.casefold() == "microsoftgame.config" for child in directory.iterdir()):
+                return directory.resolve()
+        except OSError:
+            return None
+    return None
+
+
 class Host:
     def __init__(self, backend, proton, prefix):
         if platform.machine().lower() not in {"amd64", "x86_64"}:
@@ -82,6 +93,7 @@ class Host:
         env = self.env.copy()
         env.setdefault("TUXBOX_LOG", "stderr" if self.backend == "native" else "1")
         env.pop("TUXBOX_WINE_TITLE_TEMP", None)
+        env.pop("TUXBOX_WINE_PACKAGE_DRIVE", None)
         if self.backend in ("proton", "wine") and env.get("WINEPREFIX"):
             prefix = Path(env["WINEPREFIX"])
             drive = prefix / "dosdevices/t:"
@@ -97,6 +109,10 @@ class Host:
                     log.status(f"Could not prepare the title scratch directory {storage}: {exc}")
                 else:
                     env["TUXBOX_WINE_TITLE_TEMP"] = str(storage)
+            # Xbox titles open their package files through G:, as on the console.
+            root = package_root(executable)
+            if root is not None:
+                env["TUXBOX_WINE_PACKAGE_DRIVE"] = str(root)
         if "-nullrhi" not in (arg.lower() for arg in arguments):
             configure_console_cbv(self.backend, env, executable, log.status)
         capture = performance_capture(self.backend, env, executable, log) if mangohud else nullcontext()
