@@ -166,11 +166,11 @@ class Host:
                 else:
                     drive = prefix / "dosdevices/g:"
                     log.status(f"The package is not mapped to G: because {drive} is not a drive link")
-        if "-nullrhi" not in (arg.lower() for arg in arguments):
-            configure_console_cbv(self.backend, env, executable, log.status)
-        capture = performance_capture(self.backend, env, executable, log) if mangohud else nullcontext()
-        pipelines = pipeline_capture(self.backend, env, log) if profile_pipelines else nullcontext()
         try:
+            if "-nullrhi" not in (arg.lower() for arg in arguments):
+                configure_console_cbv(self.backend, env, executable, log.status)
+            capture = performance_capture(self.backend, env, executable, log) if mangohud else nullcontext()
+            pipelines = pipeline_capture(self.backend, env, log) if profile_pipelines else nullcontext()
             with capture, pipelines, runtime_shader_compiler(self.backend, env, executable, log.status), \
                  game_diagnostics(self.backend, env, executable.parent, log.stderr_bytes,
                                   log_path=log.path) as stderr:
