@@ -137,6 +137,13 @@ pub(super) fn lds_words(em: &Emitter<'_>) -> Option<u32> {
 
 /// Scalar EXEC/VCC branches test all lanes, including on a loop backedge.
 pub(super) fn branch_condition(em: &Emitter<'_>, i: &Insn, fallback: &str) -> String {
+    if em.resolve_wave32 {
+        return match i.op {
+            6 => "vcc_lo == 0u", 7 => "vcc_lo != 0u",
+            8 => "exec_lo == 0u", 9 => "exec_lo != 0u",
+            _ => fallback,
+        }.into();
+    }
     if !em.wave_cull || em.hoist_wave_exchanges { return fallback.into(); }
     let reg = match i.op {
         6 | 7 => "vcc_lo",

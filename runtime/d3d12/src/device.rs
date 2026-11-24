@@ -19,6 +19,7 @@ pub(crate) mod blas;
 pub(crate) mod compute;
 mod compute_scene;
 mod compute_table;
+mod mesh_table;
 pub(crate) mod depth;
 mod descriptor_copy;
 pub(crate) mod descriptor_paging;

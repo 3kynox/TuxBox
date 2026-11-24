@@ -2,13 +2,13 @@
 //! invocation per vertex/primitive, then asks the geometry engine to allocate
 //! export space. A desktop workgroup can service several such logical lanes.
 use super::{
-    disassemble, distinct_regs, mesh_bindings, mesh_exports, r, semantic, sig_type, Emitter,
-    InputInterp, Translated,
+    Emitter, InputInterp, Translated, disassemble, distinct_regs, mesh_bindings, mesh_exports, r,
+    semantic, sig_type,
 };
 use crate::{
+    ShaderExtract,
     meta::SigElement,
     rdna2::{Enc, Insn, Opnd},
-    ShaderExtract,
 };
 use std::{collections::BTreeSet, fmt::Write};
 
@@ -50,7 +50,7 @@ pub(super) fn translate(
     validate_launch(&body, group_shift, exports.lane_index)?;
     let root = ex.root_sig.as_ref().ok_or("mesh root signature missing")?;
     let bindings = if info.vertices == 128 {
-        Some(mesh_bindings::MeshBindings::read(ex).ok_or("unverified mesh shader bindings")?)
+        Some(mesh_bindings::read(ex).ok_or("unverified mesh shader bindings")?)
     } else {
         for (parameter, range_type) in [(9, 0), (10, 2)] {
             if !root.params.get(parameter).is_some_and(|p| {
@@ -83,6 +83,18 @@ pub(super) fn translate(
     em.mesh_bindings = bindings;
     em.resolve_resources()?;
     em.resolve_structured_strides();
+    if let Some(mesh) = &em.mesh_bindings {
+        for &(slot, space, count) in mesh.constants.values() {
+            if em
+                .binding_spaces
+                .insert((2, slot), space)
+                .is_some_and(|prior| prior != space)
+            {
+                return Err(format!("mesh constant b{slot} is used in multiple spaces"));
+            }
+            em.cb_size.insert(slot, count);
+        }
+    }
     em.emit_body(false)?;
     em.touch(&exports.vertices);
     em.touch(&exports.primitives);
@@ -142,6 +154,16 @@ pub(super) fn translate(
         "    s3 = (lane >> 6) << 24; v5 = group << {group_shift};"
     )
     .unwrap();
+    if let Some(mesh) = &em.mesh_bindings {
+        for (&base, &(slot, _, count)) in &mesh.constants {
+            for (offset, channel) in super::XYZW.iter().take(count as usize).enumerate() {
+                let reg = format!("s{}", usize::from(base) + offset);
+                if em.regs.contains(&reg) {
+                    writeln!(h, "    {reg} = cb{slot}[0].{channel};").unwrap();
+                }
+            }
+        }
+    }
     h.push_str(&em.body);
     h.push_str("    return result;\n}\n");
     h.push_str(
@@ -295,17 +317,19 @@ fn validate_lane_ops(body: &[Insn]) -> Result<(), String> {
                 ins.offset
             ));
         }
-        if matches!(
-            ins.enc,
-            Enc::Ds | Enc::Exp | Enc::Flat | Enc::Mimg | Enc::Mtbuf
-        ) || (ins.enc == Enc::Mubuf && !m.starts_with("buffer_load"))
+        if matches!(ins.enc, Enc::Ds | Enc::Exp | Enc::Flat | Enc::Mimg)
+            || (ins.enc == Enc::Mtbuf && ins.op >= 4)
+            || (ins.enc == Enc::Mubuf && !m.starts_with("buffer_load"))
             || (ins.enc == Enc::Vop1 && m.contains("lane") && m != "v_readfirstlane_b32")
+            || (m == "s_branch" && ins.aux.imm < 0)
             || (ins.enc == Enc::Sopp
                 && !matches!(
                     m,
                     "s_nop"
                         | "s_waitcnt"
                         | "s_inst_prefetch"
+                        | "s_branch"
+                        | "s_cbranch_scc0"
                         | "s_cbranch_scc1"
                         | "s_cbranch_execz"
                 ))
@@ -334,6 +358,8 @@ fn validate_lane_ops(body: &[Insn]) -> Result<(), String> {
                 uniform.insert(*dst);
             }
             let words = match m {
+                _ if ins.enc == Enc::Mtbuf => ins.op as u8 + 1,
+                "buffer_load_dwordx4" => 4,
                 "buffer_load_dwordx3" => 3,
                 "buffer_load_dwordx2" => 2,
                 _ => 1,
