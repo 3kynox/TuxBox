@@ -240,18 +240,37 @@ pub(super) unsafe extern "system" fn create_pipeline_x(
         Flags: desc.Flags,
         ..Default::default()
     };
-    // SAFETY: native creation consumes the descriptor synchronously. The owned
-    // clone in the C layout must be released explicitly on success and failure.
-    let create = |descriptor: &D3D12_COMPUTE_PIPELINE_STATE_DESC| crate::big_stack::run_logged(&label, || unsafe {
-        this.native
-            .CreateComputePipelineState::<ID3D12PipelineState>(descriptor)
-    });
-    let mut native = create(&host);
+    // The driver compile must own its device, root signature, and shader bytes:
+    // a deadline can return while that compile is still writing the GPU cache.
+    let signature = core::mem::ManuallyDrop::into_inner(host.pRootSignature.clone());
+    let compile = |shader: &[u8]| {
+        let device = this.native.clone();
+        let signature = signature.clone();
+        let shader = shader.to_vec();
+        let node_mask = desc.NodeMask;
+        let flags = desc.Flags;
+        crate::big_stack::run_deadline(&label, move || {
+            owned_compile(device, signature, shader, node_mask, flags)
+        })
+    };
+    let mut native = match compile(code) {
+        crate::big_stack::PipelineWait::Ready(result) => result,
+        crate::big_stack::PipelineWait::Deferred => {
+            // The original guest shader would be a second long driver compile.
+            unsafe { ManuallyDrop::drop(&mut host.pRootSignature) };
+            return unsafe { null_compute(this, root.map(|p| &p.native), desc, out) }.unwrap_or(E_NOTIMPL);
+        }
+    };
     if translation.is_some() && reflected.is_none() && scene_root.is_none() && native.is_err() {
         // Structural checks cannot validate DXIL instructions or root bindings.
         // Let the adapter handle the original guest shader if it rejects the cache.
-        host.CS = desc.CS;
-        native = create(&host);
+        native = match compile(bytes) {
+            crate::big_stack::PipelineWait::Ready(result) => result,
+            crate::big_stack::PipelineWait::Deferred => {
+                unsafe { ManuallyDrop::drop(&mut host.pRootSignature) };
+                return unsafe { null_compute(this, root.map(|p| &p.native), desc, out) }.unwrap_or(E_NOTIMPL);
+            }
+        };
     }
     unsafe { ManuallyDrop::drop(&mut host.pRootSignature) };
     if let Err(error) = &native {
@@ -279,6 +298,35 @@ pub(super) unsafe extern "system" fn create_pipeline_x(
             out,
         )
     }
+}
+
+/// Compile one compute pipeline from copies the helper thread owns.
+///
+/// The guest descriptor can be released as soon as the caller returns. A
+/// deadline does that while the driver is still compiling, so the bytes and
+/// the root signature in that descriptor must not be the ones the driver reads.
+fn owned_compile(
+    device: ID3D12Device,
+    root: Option<ID3D12RootSignature>,
+    shader: Vec<u8>,
+    node_mask: u32,
+    flags: D3D12_PIPELINE_STATE_FLAGS,
+) -> windows::core::Result<ID3D12PipelineState> {
+    let mut descriptor = D3D12_COMPUTE_PIPELINE_STATE_DESC {
+        pRootSignature: ManuallyDrop::new(root),
+        CS: D3D12_SHADER_BYTECODE {
+            pShaderBytecode: shader.as_ptr().cast(),
+            BytecodeLength: shader.len(),
+        },
+        NodeMask: node_mask,
+        Flags: flags,
+        ..Default::default()
+    };
+    // SAFETY: `shader` and `descriptor.pRootSignature` stay alive until this
+    // call returns. `device` is an AddRef held by this thread.
+    let result = unsafe { device.CreateComputePipelineState(&descriptor) };
+    unsafe { ManuallyDrop::drop(&mut descriptor.pRootSignature) };
+    result
 }
 
 /// Create a resource-free compute pipeline on the guest root (see `fallback`).

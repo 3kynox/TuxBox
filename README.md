@@ -66,6 +66,26 @@ Run `python tuxbox.py inspect /path/to/game` to see the executable TuxBox will l
 
 [Current progress](docs/PROGRESS.md) · [Xbox libraries](docs/LIBRARIES.md) · [Shader coverage](docs/SHADERS.md) · [Test results](docs/RESULTS.md) · [Architecture](docs/ARCHITECTURE.md) · [Credits and references](docs/REFERENCES.md)
 
+## Automated checks
+
+GitHub runs [these checks](.github/workflows/ci.yml) on every pull request and on every push to `main`. The workflow installs Rust 1.95, the version declared in `Cargo.toml`, and Python 3.12. The same commands run from the repository root:
+
+```sh
+python -m pip install -r requirements.txt
+python -m unittest discover -s tests -q
+cargo test --locked --target x86_64-unknown-linux-gnu --manifest-path tools/shader-compiler/Cargo.toml
+cargo test --locked --target x86_64-unknown-linux-gnu -p tuxbox-dxbc --features native-bindings
+cargo test --locked --target x86_64-unknown-linux-gnu -p tuxbox-xg-layout
+cargo check --locked --target x86_64-pc-windows-msvc -p tuxbox-d3d12
+```
+
+The D3D12 command typechecks the Windows provider. The unit tests check that `docs/progress.svg` and `docs/RESULTS.md` match the recorded evidence. After editing evidence, regenerate both from the repository root:
+
+```sh
+python tuxbox.py status > docs/RESULTS.md
+python tuxbox.py status --svg docs/progress.svg
+```
+
 ## License
 
-Copyright © 2026 TuxBox contributors. TuxBox is licensed under the Apache License 2.0. Third-party materials retain their respective terms. [License](LICENSE) · [Third-party notices](docs/REFERENCES.md#shader-compiler-attribution)
+Copyright © 2026 TuxBox contributors. TuxBox is licensed under the Apache License 2.0. Third-party materials retain their respective terms. [License](LICENSE) · [Contributing](CONTRIBUTING.md) · [Third-party notices](docs/REFERENCES.md#shader-compiler-attribution)
