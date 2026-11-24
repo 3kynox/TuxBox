@@ -1,6 +1,10 @@
 //! Survey mode (`TUXBOX_SURVEY=1`): keep a title running past recoverable
 //! failures so one launch reports many of them instead of stopping at the first.
 //!
+//! One title assert is stepped over on every launch. Its continue path is the
+//! mapping the title itself uses after the break. Survey mode steps over every
+//! other title `int3` as well.
+//!
 //! - A title `int3` assert is stepped over. The shipping code follows each such
 //!   break with its own recovery path (typically returning null), so the title
 //!   continues as it would after a debugger resumed it.
@@ -24,15 +28,28 @@ pub(crate) fn enabled() -> bool {
     *ENABLED
 }
 
+/// Title asserts whose own continue path is correct, matched by RVA and by the
+/// exact bytes there so another build cannot match.
+///
+/// ProjectScarlett 1.0.2.1, RVA `0x4ffd879`: the tile-heap mapper asserts when a
+/// request is shorter than a whole flagged page run (8 KiB against a 16 KiB
+/// run). The continue path maps `min(run, remaining)`, which is the request.
+const RECOVERABLE: [(usize, [u8; 9]); 1] =
+    [(0x4ffd879, [0xcc, 0x48, 0x8b, 0x1f, 0xe9, 0xf0, 0xfd, 0xff, 0xff])];
+
+fn is_recoverable(rva: usize, bytes: &[u8]) -> bool {
+    RECOVERABLE.iter().any(|&(site, expected)| rva == site && bytes == expected)
+}
+
 /// Install the assert handler once, when the title creates its first device.
+/// Outside survey mode the handler only steps over `RECOVERABLE`.
 pub(crate) fn install() {
     static INSTALL: Once = Once::new();
-    if !enabled() {
-        return;
-    }
     INSTALL.call_once(|| {
         let handle = unsafe { AddVectoredExceptionHandler(1, Some(handler)) };
-        log(format!("survey mode active (assert handler installed: {})", !handle.is_null()));
+        if enabled() {
+            log(format!("survey mode active (assert handler installed: {})", !handle.is_null()));
+        }
     });
 }
 
@@ -75,7 +92,9 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
         return CONTINUE_SEARCH;
     };
     if record_.ExceptionCode == EXCEPTION_ACCESS_VIOLATION {
-        describe_fault(context);
+        if enabled() {
+            describe_fault(context);
+        }
         return CONTINUE_SEARCH;
     }
     if record_.ExceptionCode != EXCEPTION_BREAKPOINT {
@@ -86,16 +105,38 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
     if !(start..end).contains(&rip) {
         return CONTINUE_SEARCH;
     }
-    // Windows reports an int3 at its own address; resume after it.
-    // SAFETY: rip lies within the mapped title image.
-    let at = if unsafe { *(rip as *const u8) } == 0xcc {
-        context.Rip += 1;
+    // Windows reports an int3 at its own address, or one byte past it.
+    // SAFETY: rip lies within the mapped title image, and rip - 1 does too when used.
+    let at_break = unsafe { *(rip as *const u8) } == 0xcc;
+    let int3 = if at_break {
         rip
     } else if rip > start && unsafe { *((rip - 1) as *const u8) } == 0xcc {
         rip - 1
     } else {
         return CONTINUE_SEARCH;
     };
+    if !enabled() {
+        if int3 + 9 > end {
+            return CONTINUE_SEARCH;
+        }
+        // SAFETY: int3..int3+9 is inside the mapped title image.
+        let bytes = unsafe { core::slice::from_raw_parts(int3 as *const u8, 9) };
+        if !is_recoverable(int3 - start, bytes) {
+            return CONTINUE_SEARCH;
+        }
+        if at_break {
+            context.Rip += 1;
+        }
+        let hits = record(&ASSERTS, int3 - start);
+        if hits.is_power_of_two() {
+            log(format!("continued past recoverable title assert RVA {:#x} (hit {hits})", int3 - start));
+        }
+        return CONTINUE_EXECUTION;
+    }
+    if at_break {
+        context.Rip += 1;
+    }
+    let at = int3;
     let hits = record(&ASSERTS, at - start);
     if hits.is_power_of_two() {
         log(format!("survey: stepped over title assert RVA {:#x} (hit {hits})", at - start));
@@ -181,5 +222,21 @@ fn describe_fault(context: &windows::Win32::System::Diagnostics::Debug::CONTEXT)
             let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ");
             log(format!("survey: {name} {:#x}: {hex}", base + row));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_recoverable;
+
+    const SCARLETT_TILE_HEAP: [u8; 9] = [0xcc, 0x48, 0x8b, 0x1f, 0xe9, 0xf0, 0xfd, 0xff, 0xff];
+
+    #[test]
+    fn only_the_scarlett_tile_heap_assert_is_recoverable() {
+        assert!(is_recoverable(0x4ffd879, &SCARLETT_TILE_HEAP));
+        let mut other = SCARLETT_TILE_HEAP;
+        other[4] = 0xeb;
+        assert!(!is_recoverable(0x4ffd879, &other));
+        assert!(!is_recoverable(0x4ffd868, &SCARLETT_TILE_HEAP));
     }
 }
