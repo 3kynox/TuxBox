@@ -79,3 +79,17 @@ The game opens its Americas window, loads its archives and presents 3840×2160 f
 In a new prefix, the game stops at a breakpoint during System Init because it reads its package through the `G:` drive, as on the console, and the launcher doesn't map that drive yet. A fix is in review. [Pull request #6](https://github.com/brcly/TuxBox/pull/6)
 
 When you report a run, include the package version, executable hash, GPU and driver, Proton build, and the log printed in the first line of the launcher's output.
+
+
+### Investigate allocation-size mismatches
+
+For a diagnostic launch, set `TUXBOX_LOG=stderr` and
+`TUXBOX_TRACE_ALLOCATION_BYTES=8192,16384,invalid` before the normal offline
+launch command. Rebuild and restage the provider first. The optional trace
+reports exact selected allocation sizes (decimal or 0x-prefixed hex), including
+the failing size sentinel with `invalid`. It records the title-relative caller,
+resource descriptions and returned alignment, not resource contents. Repeated
+records are deduplicated; at most 256 distinct records and eight descriptions
+per record are emitted. Lines share an ID to correlate interleaved threads.
+No allocation decisions are changed. This is intended to help locate the
+source of a size mismatch, not to bypass the title's assertion.
