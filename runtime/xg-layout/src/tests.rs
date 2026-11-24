@@ -343,6 +343,18 @@ fn msaa_color_samples_distinct() {
 }
 
 #[test]
+fn sparse_64k_bc7_mip_chain_has_a_64k_size() {
+    // Scarlett asks for this before the tile-heap assert's successor: a 2D
+    // BC7 array, ten mips, layout 266 (0x10a).
+    let d = Desc { flags: 0x300000, ..desc(98, 512, 512, 32, 10, 266) };
+    let plane = Plane::compute_sparse_64k(&d).expect("layout 266 mip chain");
+    assert_ne!(plane.size, 0);
+    assert_ne!(plane.size, u64::MAX);
+    assert_eq!(plane.alignment, 65536);
+    assert_eq!(plane.size % 65536, 0);
+}
+
+#[test]
 fn single_sample_color_has_no_msaa_tile() {
     let p = Plane::compute(&desc(28, 64, 64, 1, 1, TILE_4K)).unwrap();
     assert_eq!(p.color_samples(), 1);

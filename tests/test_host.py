@@ -304,3 +304,28 @@ class NvidiaShaderCache(unittest.TestCase):
         env = {}
         configure_nvidia_shader_cache(env)
         self.assertEqual(env, {})
+
+    def test_a_device_bucket_beside_glcache_fills_only_missing_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp) / "prefix"
+            device = "0ce6f6b7af2931dc61b40b11eb345732"
+            app = "92f4bb582845de36"
+            cache = prefix / "shadercache"
+            misplaced = cache / device / app
+            misplaced.mkdir(parents=True)
+            (misplaced / "92f74448a56b9fe8.bin").write_bytes(b"x" * 50)
+            (misplaced / "92f74448a56b9fe8.toc").write_bytes(b"t" * 8)
+            (misplaced / "extra.bin").write_bytes(b"new")
+            live = cache / "GLCache" / device / app
+            live.mkdir(parents=True)
+            (live / "92f74448a56b9fe8.bin").write_bytes(b"y" * 10)
+            (live / "92f74448a56b9fe8.toc").write_bytes(b"u" * 4)
+            other = cache / "fossilize"
+            other.mkdir()
+            (other / "keep").write_bytes(b"stay")
+            configure_nvidia_shader_cache({"WINEPREFIX": str(prefix)})
+            self.assertEqual((live / "92f74448a56b9fe8.bin").read_bytes(), b"y" * 10)
+            self.assertEqual((live / "92f74448a56b9fe8.toc").read_bytes(), b"u" * 4)
+            self.assertEqual((live / "extra.bin").read_bytes(), b"new")
+            self.assertFalse((cache / device).exists())
+            self.assertEqual((other / "keep").read_bytes(), b"stay")

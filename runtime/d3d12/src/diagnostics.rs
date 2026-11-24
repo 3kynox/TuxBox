@@ -10,18 +10,27 @@ use windows::Win32::Graphics::Direct3D12::{
 use windows::Win32::System::Diagnostics::Debug::OutputDebugStringA;
 use windows::core::PCSTR;
 
+pub(crate) fn logging() -> bool {
+    matches!(
+        std::env::var_os("TUXBOX_LOG").as_deref(),
+        Some(target) if target == OsStr::new("stderr") || target == OsStr::new("1")
+    )
+}
+
+pub(crate) fn log(detail: &str) {
+    let Some(target) = std::env::var_os("TUXBOX_LOG") else { return };
+    if target == OsStr::new("stderr") {
+        // A closed console must not interrupt the game's rendering thread.
+        let _ = writeln!(io::stderr().lock(), "TuxBox d3d12_xs: {detail}");
+    } else if target == OsStr::new("1") {
+        let line = format!("TuxBox d3d12_xs: {detail}\n\0");
+        // SAFETY: All milestone text is ASCII and the buffer is NUL-terminated.
+        unsafe { OutputDebugStringA(PCSTR(line.as_ptr())) };
+    }
+}
+
 pub(crate) fn log_once(site: &Once, detail: impl FnOnce() -> String) {
-    site.call_once(|| {
-        let target = std::env::var_os("TUXBOX_LOG");
-        if target.as_deref() == Some(OsStr::new("stderr")) {
-            // A closed console must not interrupt the game's rendering thread.
-            let _ = writeln!(io::stderr().lock(), "TuxBox d3d12_xs: {}", detail());
-        } else if target.as_deref() == Some(OsStr::new("1")) {
-            let line = format!("TuxBox d3d12_xs: {}\n\0", detail());
-            // SAFETY: All milestone text is ASCII and the buffer is NUL-terminated.
-            unsafe { OutputDebugStringA(PCSTR(line.as_ptr())) };
-        }
-    });
+    site.call_once(|| log(&detail()));
 }
 
 /// Whether a keyed diagnostic should print. `Full` is returned once, for the

@@ -220,6 +220,9 @@ pub(super) unsafe extern "system" fn create_pipeline_x(
         None
     };
     let code = translation.as_deref().unwrap_or(bytes);
+    let label = super::shader_cache::source_digest(bytes)
+        .map(|hash| format!("CS {}", &hash[..8]))
+        .unwrap_or_else(|| "CS".to_string());
     let mut host = D3D12_COMPUTE_PIPELINE_STATE_DESC {
         pRootSignature: ManuallyDrop::new(
             scene_root
@@ -239,7 +242,7 @@ pub(super) unsafe extern "system" fn create_pipeline_x(
     };
     // SAFETY: native creation consumes the descriptor synchronously. The owned
     // clone in the C layout must be released explicitly on success and failure.
-    let create = |descriptor: &D3D12_COMPUTE_PIPELINE_STATE_DESC| crate::big_stack::run(|| unsafe {
+    let create = |descriptor: &D3D12_COMPUTE_PIPELINE_STATE_DESC| crate::big_stack::run_logged(&label, || unsafe {
         this.native
             .CreateComputePipelineState::<ID3D12PipelineState>(descriptor)
     });
@@ -291,7 +294,7 @@ unsafe fn null_compute(
         Flags: desc.Flags,
         ..Default::default()
     };
-    let native = crate::big_stack::run(|| unsafe { this.native.CreateComputePipelineState::<ID3D12PipelineState>(&host) });
+    let native = crate::big_stack::run_logged("null CS", || unsafe { this.native.CreateComputePipelineState::<ID3D12PipelineState>(&host) });
     unsafe { ManuallyDrop::drop(&mut host.pRootSignature) };
     if native.is_err() { return None; }
     if let Ok(pipeline) = &native {

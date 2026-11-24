@@ -90,14 +90,63 @@ def restore_package_drive(prefix, report):
         report(f"Could not restore the prefix's G: drive from {record_path}: {exc}")
 
 
+def _driver_cache_name(name):
+    return len(name) == 32 and all(character in "0123456789abcdef" for character in name)
+
+
+def adopt_nvidia_glcache(cache):
+    """Fill <path>/GLCache from a device bucket that was copied beside it.
+
+    __GL_SHADER_DISK_CACHE_PATH replaces ~/.cache/nvidia. The driver then
+    reads <path>/GLCache/<device>/<app>, so a copy at <path>/<device> is never
+    opened. An existing GLCache file stays: it belongs to this path, and
+    substituting a blob from the default cache makes the driver drop both.
+    """
+    try:
+        entries = list(cache.iterdir())
+    except OSError:
+        return
+    for device in entries:
+        if not device.is_dir() or device.name == "GLCache" or not _driver_cache_name(device.name):
+            continue
+        try:
+            apps = [app for app in device.iterdir() if app.is_dir()]
+        except OSError:
+            return
+        for app in apps:
+            destination = cache / "GLCache" / device.name / app.name
+            try:
+                destination.mkdir(parents=True, exist_ok=True)
+                sources = [path for path in app.iterdir() if path.is_file()]
+            except OSError:
+                return
+            for source in sources:
+                target = destination / source.name
+                try:
+                    # A file already under GLCache was written for this path.
+                    # Replacing it with a larger copy from the default cache
+                    # makes the driver discard both and compile again.
+                    if target.exists():
+                        continue
+                    temporary = destination / f".{source.name}.adopting"
+                    shutil.copy2(source, temporary)
+                    temporary.replace(target)
+                except OSError:
+                    temporary = destination / f".{source.name}.adopting"
+                    temporary.unlink(missing_ok=True)
+                    return
+        shutil.rmtree(device, ignore_errors=True)
+
+
 def configure_nvidia_shader_cache(env, report=None):
     """Keep this prefix's compiled GPU pipelines for the next launch.
 
-    NVIDIA stores them under ~/.cache/nvidia/GLCache. Every Wine process shares
-    one application bucket there, and the driver drops that bucket once it
-    passes a small size. vkd3d can reuse its SPIR-V while the driver compiles
-    the same pipelines again. A prefix-local directory is the cache Steam gives
-    each title. An explicit path or a disabled disk cache is left alone.
+    NVIDIA stores them under <path>/GLCache. With no path set, that is
+    ~/.cache/nvidia/GLCache: every Wine process shares one application bucket,
+    and the driver drops that bucket once it passes a small size. vkd3d can
+    reuse its SPIR-V while the driver compiles the same pipelines again. A
+    prefix-local directory is the cache Steam gives each title. An explicit
+    path or a disabled disk cache is left alone.
     """
     if env.get("__GL_SHADER_DISK_CACHE") == "0" or env.get("__GL_SHADER_DISK_CACHE_PATH"):
         return
@@ -107,6 +156,7 @@ def configure_nvidia_shader_cache(env, report=None):
     cache = Path(prefix) / "shadercache"
     try:
         cache.mkdir(parents=True, exist_ok=True)
+        adopt_nvidia_glcache(cache)
     except OSError as exc:
         if report:
             report(f"NVIDIA shader cache stays in the default directory: {exc}")

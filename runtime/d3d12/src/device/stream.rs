@@ -58,6 +58,22 @@ unsafe fn equivalent_stencil(payload: *const u8, depth: &D3D12_DEPTH_STENCIL_DES
     unsafe { payload.cast::<[u8; 18]>().read_unaligned() == expected }
 }
 
+fn stream_label(original: &[Option<(&[u8], Option<usize>)>; 8]) -> String {
+    const NAMES: [&str; 8] = ["VS", "PS", "DS", "HS", "GS", "CS", "AS", "MS"];
+    let mut label = String::new();
+    for (name, stage) in NAMES.iter().zip(original) {
+        let Some((code, _)) = stage else { continue };
+        let Some(hash) = shader_cache::source_digest(code) else { continue };
+        if !label.is_empty() {
+            label.push(' ');
+        }
+        label.push_str(name);
+        label.push(' ');
+        label.push_str(&hash[..8]);
+    }
+    if label.is_empty() { "stream".to_string() } else { label }
+}
+
 unsafe fn create(
     device: &Device,
     desc: &D3D12_PIPELINE_STATE_STREAM_DESC,
@@ -352,9 +368,10 @@ unsafe fn create(
         SizeInBytes: size,
         pPipelineStateSubobjectStream: output.cast(),
     };
+    let label = stream_label(&original);
     // SAFETY: the stream storage, translated shaders, and guest-owned inputs
     // all stay alive throughout this synchronous call on the desktop Device2.
-    let initial = crate::big_stack::run(|| unsafe { host.CreatePipelineState(&native_desc) });
+    let initial = crate::big_stack::run_logged(&label, || unsafe { host.CreatePipelineState(&native_desc) });
     let Err(error) = &initial else {
         if rectangles {
             static FIRST_RECTANGLE: std::sync::Once = std::sync::Once::new();
@@ -435,7 +452,8 @@ unsafe fn create(
             linked_rectangle = unsafe { rectangle::geometry(&*field, &pixel_bytecode())? };
             unsafe { geometry_record.write(rectangle::bytecode(&linked_rectangle)) };
         }
-        let retry = crate::big_stack::run(|| unsafe { host.CreatePipelineState(&native_desc) });
+        let linked_label = format!("linked {label}");
+        let retry = crate::big_stack::run_logged(&linked_label, || unsafe { host.CreatePipelineState(&native_desc) });
         match &retry {
             Ok(_) => {
                 static VERTEX: std::sync::Once = std::sync::Once::new();

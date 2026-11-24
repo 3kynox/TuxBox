@@ -42,10 +42,11 @@ pub(super) unsafe extern "system" fn create_pipeline(
     let mut native_desc = unsafe { core::ptr::read(desc) };
     native_desc.pRootSignature = ManuallyDrop::new(root.cloned());
     super::format::host_targets(&mut native_desc.RTVFormats, &mut native_desc.DSVFormat);
+    let label = graphics_label(desc);
     let native = if native_desc.PrimitiveTopologyType.0 == rectangle::PIPELINE_TYPE {
-        crate::big_stack::run(|| unsafe { rectangle::create_pipeline(&this.native, &mut native_desc) })
+        crate::big_stack::run_logged(&label, || unsafe { rectangle::create_pipeline(&this.native, &mut native_desc) })
     } else {
-        crate::big_stack::run(|| unsafe {
+        crate::big_stack::run_logged(&label, || unsafe {
             this.native
                 .CreateGraphicsPipelineState::<ID3D12PipelineState>(&native_desc)
         })
@@ -60,4 +61,23 @@ pub(super) unsafe extern "system" fn create_pipeline(
             out,
         )
     }
+}
+
+fn graphics_label(desc: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> String {
+    let mut label = String::from("graphics");
+    let Some(vertex) = shader_prefix(&desc.VS) else { return label };
+    label = format!("VS {vertex}");
+    if let Some(pixel) = shader_prefix(&desc.PS) {
+        label = format!("VS {vertex} PS {pixel}");
+    }
+    label
+}
+
+fn shader_prefix(code: &D3D12_SHADER_BYTECODE) -> Option<String> {
+    if code.pShaderBytecode.is_null() || code.BytecodeLength == 0 {
+        return None;
+    }
+    // SAFETY: the guest retains this bytecode until CreatePipelineState returns.
+    let bytes = unsafe { core::slice::from_raw_parts(code.pShaderBytecode.cast::<u8>(), code.BytecodeLength) };
+    super::shader_cache::source_digest(bytes).map(|hash| hash[..8].to_string())
 }

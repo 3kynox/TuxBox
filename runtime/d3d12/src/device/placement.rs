@@ -126,6 +126,11 @@ pub(super) fn nv12_pitch(desc: &D3D12_RESOURCE_DESC) -> Option<u64> {
         .then(|| desc.Width.next_multiple_of(256))
 }
 
+/// Xbox layouts whose byte size comes from the XG plane calculator.
+pub(super) fn console_layout(layout: i32) -> bool {
+    matches!(layout, 0x100..=0x102 | 0x105 | 0x109..=0x10a | 0x111 | 0x112)
+}
+
 pub(super) fn color_plane(desc: &D3D12_RESOURCE_DESC) -> Result<Plane> {
     let flags = if (desc.Layout.0 == 0x105 && desc.Flags.0 & !0x300004 == 0)
         || (desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D && desc.Layout.0 == 0x105
@@ -151,8 +156,8 @@ pub(super) fn color_plane(desc: &D3D12_RESOURCE_DESC) -> Result<Plane> {
     if matches!(layout.layout, 257 | 258) {
         return Plane::compute_microtile(&layout).map_err(|status| HRESULT(status).into());
     }
-    if layout.layout == 265 {
-        // 64 KiB standard swizzle, as selected by XGCreateTextureComputer.
+    if matches!(layout.layout, 265 | 266 | 273 | 274) {
+        // 64 KiB display swizzle. Layout 266 is the mip-chain form; 265 is one mip.
         return Plane::compute_sparse_64k(&layout).map_err(|status| HRESULT(status).into());
     }
     if desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE1D && desc.Layout.0 == 0x100
