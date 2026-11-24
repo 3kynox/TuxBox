@@ -32,6 +32,8 @@ mod raw_width;
 mod wide_atomic_test;
 #[cfg(test)]
 mod heap_resinfo;
+#[cfg(test)]
+mod compute_swizzle;
 mod fssm_bindings;
 mod micropoly;
 mod mesh;
@@ -5315,7 +5317,11 @@ uint tb_fmac_half(uint a, uint b, uint c) {
     }
 
     fn emit_compute_swizzle(&mut self, idx: usize, ins: &Insn, active: &[usize]) -> Result<(), String> {
-        if ins.raw[0] & 0x3_8000 != 0 {
+        let mode = ins.aux.imm as u32;
+        // RDNA2 ISA DS_SWIZZLE_B32: offset[15] selects QDMode, which permutes
+        // within each quad by offset[7:0]. Other high offset bits and GDS stay refused.
+        let quad = mode & 0x8000 != 0;
+        if ins.raw[0] & 0x3_0000 != 0 || (quad && mode & 0xff00 != 0x8000) {
             return Err("unsupported compute DS swizzle encoding".into());
         }
         // Skipped and EXEC-masked lanes contribute zero. Rendezvous before
@@ -5325,9 +5331,13 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         let value = r(&ins.src[0])?;
         self.line(&format!("tb_swizzle[tb_lane] = ({predicate}) ? {value} : 0u;"));
         self.line("GroupMemoryBarrierWithGroupSync();");
-        let mode = ins.aux.imm as u32;
-        self.line(&format!("uint swizzle{idx} = tb_swizzle[(tb_lane & ~31u) | (((tb_lane & {}u) | {}u) ^ {}u)];",
-            mode & 31, (mode >> 5) & 31, (mode >> 10) & 31));
+        if quad {
+            self.line(&format!("uint swizzle{idx} = tb_swizzle[(tb_lane & ~3u) | (({:#x}u >> (2u * (tb_lane & 3u))) & 3u)];",
+                mode & 255));
+        } else {
+            self.line(&format!("uint swizzle{idx} = tb_swizzle[(tb_lane & ~31u) | (((tb_lane & {}u) | {}u) ^ {}u)];",
+                mode & 31, (mode >> 5) & 31, (mode >> 10) & 31));
+        }
         self.line("GroupMemoryBarrierWithGroupSync();");
         Ok(())
     }
