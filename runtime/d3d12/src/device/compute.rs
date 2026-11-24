@@ -32,8 +32,10 @@ const _: () = assert!(
         + core::mem::offset_of!(PipelineData, packets)
         == 0x10
 );
-pub(super) static PIPELINE: Slots<12> = {
-    let mut slots = child_slots::<ID3D12PipelineState, PipelineData, 12>();
+// GetInformationX is slot 11. Two methods follow it. A shorter table would
+// read off the end, so those calls fail closed.
+pub(super) static PIPELINE: Slots<14> = {
+    let mut slots = child_slots::<ID3D12PipelineState, PipelineData, 14>();
     slots[11] = crate::slot!(scratch_info);
     slots
 };
@@ -199,7 +201,7 @@ pub(super) unsafe extern "system" fn create_pipeline_x(
             (Some(code), Some(table))
         }
         Some(TableLayout::Original) => (root.and_then(|r| {
-            super::shader_cache::compute_with_root(bytes, r.state.payload())
+            super::shader_cache::compute_for_original_root(bytes, r.state.payload())
         }), None),
         _ => (super::shader_cache::prepared(bytes).or_else(|| {
             super::shader_cache::compute_with_root(bytes, root?.state.payload())
@@ -253,12 +255,30 @@ pub(super) unsafe extern "system" fn create_pipeline_x(
             owned_compile(device, signature, shader, node_mask, flags)
         })
     };
-    let mut native = match compile(code) {
-        crate::big_stack::PipelineWait::Ready(result) => result,
-        crate::big_stack::PipelineWait::Deferred => {
-            // The original guest shader would be a second long driver compile.
-            unsafe { ManuallyDrop::drop(&mut host.pRootSignature) };
-            return unsafe { null_compute(this, root.map(|p| &p.native), desc, out) }.unwrap_or(E_NOTIMPL);
+    // Boot 174727 substituted null pipelines for translated shaders whose
+    // driver compile passed 20s. Those null pipelines have no paged layout, so
+    // the dispatch that precedes the account-picker draws was dropped.
+    let mut native = if translation.is_some() {
+        static WAIT: std::sync::Once = std::sync::Once::new();
+        crate::diagnostics::log_once(&WAIT, || {
+            "translated compute pipelines wait for the driver compile".to_string()
+        });
+        let device = this.native.clone();
+        let signature = signature.clone();
+        let shader = code.to_vec();
+        let node_mask = desc.NodeMask;
+        let flags = desc.Flags;
+        crate::big_stack::run_logged(&label, move || {
+            owned_compile(device, signature, shader, node_mask, flags)
+        })
+    } else {
+        match compile(code) {
+            crate::big_stack::PipelineWait::Ready(result) => result,
+            crate::big_stack::PipelineWait::Deferred => {
+                // The original guest shader would be a second long driver compile.
+                unsafe { ManuallyDrop::drop(&mut host.pRootSignature) };
+                return unsafe { null_compute(this, root.map(|p| &p.native), desc, out) }.unwrap_or(E_NOTIMPL);
+            }
         }
     };
     if translation.is_some() && reflected.is_none() && scene_root.is_none() && native.is_err() {
