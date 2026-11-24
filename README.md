@@ -53,3 +53,7 @@ Run `python tuxbox.py inspect /path/to/game` to see the executable TuxBox will l
 [![Verified game behavior and Xbox Series shader translation measured on Frosty](docs/progress.svg)](docs/progress.svg)
 
 [Current progress](docs/PROGRESS.md) · [Xbox libraries](docs/LIBRARIES.md) · [Shader coverage](docs/SHADERS.md) · [Test results](docs/RESULTS.md) · [Architecture](docs/ARCHITECTURE.md) · [Credits and references](docs/REFERENCES.md)
+
+## License
+
+Copyright © 2026 TuxBox contributors. TuxBox is licensed under the Apache License 2.0. Third-party materials retain their respective terms. [License](LICENSE) · [Third-party notices](docs/REFERENCES.md#shader-compiler-attribution)
