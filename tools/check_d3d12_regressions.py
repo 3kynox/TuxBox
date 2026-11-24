@@ -23,12 +23,13 @@ CASES = {
     "frame": ("xbox-frame", (), "xbox-frame", ("pixels=962/962",)),
     "indirect": ("d3d12-indirect", (), "d3d12-indirect", ("list=59", "words=64/64")),
     "indirect-scarlett": ("d3d12-indirect", ("--scarlett",), "d3d12-indirect", ("list=61", "words=64/64")),
+    "buffer-remap": ("d3d12-buffer-import", ("--remap",), "d3d12-buffer-remap", ("words=768/768", "identical=1", "replacement=1")),
     "buffer-layout": ("d3d12-buffer-import", ("--layout",), "d3d12-buffer-layout", ("slot=133", "words=512/512", "VA-offsets=0,4")),
     "buffer-import": ("d3d12-buffer-import", (), "d3d12-buffer-import", ("pages=2", "words=1536/1536", "passes=2", "aliases=2")),
     "buffer-import-reject": ("d3d12-buffer-import", ("--reject",), "d3d12-buffer-import-reject", ("rejected=1",)),
     "null-usage": ("d3d12-null-usage", (), "d3d12-null-usage", ("words=64/64", "recorded=64", "valid=2")),
 }
-DEFAULT = tuple(name for name in CASES if name not in ("indirect-scarlett", "mesh", "buffer-import", "buffer-import-reject", "buffer-layout"))
+DEFAULT = tuple(name for name in CASES if name not in ("indirect-scarlett", "mesh", "buffer-import", "buffer-import-reject", "buffer-layout", "buffer-remap"))
 DIGEST = hashlib.sha256(bytes.fromhex("78563412efcdab90")).hexdigest()
 
 
@@ -53,6 +54,11 @@ def validate(case, adapter, status, output):
                     + [("imported", str(i)) for i in range(1,6)]
                     if case == "buffer-import" else [("strict_rejected", "1")])
         if sorted(records) != sorted(expected):
+            return False, passes[0]
+    if case == "buffer-remap":
+        records = re.findall(r"(?m)^(?:TuxBox d3d12_xs: )?buffer backing path=([a-z_]+) count=([0-9]+) source=place_virtual_layout bytes=65536$", output)
+        expected = [("pool_open","1"),("pool_open","2"),("pool_hit","1"),("imported","1"),("imported","2"),("imported","3")]
+        if sorted(records)!=sorted(expected) or output.count("retired stale GPU import")!=1:
             return False, passes[0]
     if case == "buffer-layout":
         records = re.findall(r"(?m)^(?:TuxBox d3d12_xs: )?buffer backing path="
@@ -82,6 +88,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     for arg in ("build-dir","proton","prefix","compiler-dir","work","output"):
         ap.add_argument("--"+arg,type=Path,required=True)
+    ap.add_argument("--xmem",type=Path)
     ap.add_argument("--adapter",required=True)
     ap.add_argument("--case",choices=tuple(CASES),action="append")
     a=ap.parse_args(argv)
@@ -107,6 +114,10 @@ def main(argv=None):
                "dxcompiler.dll":a.compiler_dir/"dxcompiler.dll",
                "dxil.dll":a.compiler_dir/"dxil.dll"}
     artifacts.update({CASES[c][0]+".exe":a.build_dir/(CASES[c][0]+".exe") for c in selected})
+    if "buffer-remap" in selected:
+        if not a.xmem:
+            ap.error("buffer-remap needs --xmem")
+        artifacts["xmem.dll"]=a.xmem
     if any(not p.is_file() for p in (*artifacts.values(),wine)):
         ap.error("missing build, Proton or compiler artifact")
     fingerprints={k:sha(p) for k,p in artifacts.items()}
