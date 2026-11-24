@@ -4689,6 +4689,17 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                         Ok(())
                     }
                     "s_flbit_i32_b32" => self.ws(&d, &format!("({a} == 0u ? ~0u : 31u - firstbithigh({a}))")),
+                    "s_flbit_i32_b64" => {
+                        self.touch(&hi(&s[0]));
+                        let ah = r(&hi(&s[0]))?;
+                        self.ws(&d, &flbit_b64_expr(&a, &ah))
+                    }
+                    "s_ff0_i32_b32" => self.ws(&d, &ff0_b32_expr(&a)),
+                    "s_ff0_i32_b64" => {
+                        self.touch(&hi(&s[0]));
+                        let ah = r(&hi(&s[0]))?;
+                        self.ws(&d, &ff0_b64_expr(&a, &ah))
+                    }
                     "s_ff1_i32_b32" => self.ws(&d, &format!("firstbitlow({a})")),
                     // s_ff1_i32_b64 is firstbitlow over the 64-bit value: the low word
                     // decides when it is nonzero, otherwise the high word.
