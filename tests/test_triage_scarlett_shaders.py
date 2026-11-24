@@ -22,6 +22,25 @@ class TriageScarlettShaders(unittest.TestCase):
         self.cache = self.root / "requests"
         self.cache.mkdir()
 
+    def test_paired_aggregate_counts_transitions_without_identifiers(self):
+        from tools.triage_scarlett_shaders import paired_aggregate
+        sources = [self.cache / f"{i}.dxbc" for i in range(5)]
+        old = [("refused", "scalar_dynamic_offset"), ("refused", "wave_divergent"),
+               ("translated", None), ("translated", None), ("failed", "io_error")]
+        new = [("translated", None), ("refused", "wave_other"),
+               ("refused", "other_refusal"), ("translated", None), ("translated", None)]
+        def probe_stub(compiler, source, timeout, *, aggregate_only):
+            self.assertTrue(aggregate_only)
+            state, reason = (old if compiler == "old" else new)[sources.index(source)]
+            return source, state, reason
+        with unittest.mock.patch("tools.triage_scarlett_shaders.probe", side_effect=probe_stub):
+            report = paired_aggregate("old", "new", sources, 2, 1)
+        self.assertEqual((report["recovered"], report["regressed"], report["inconclusive"]), (1,1,1))
+        self.assertEqual(report["baseline_refusal_buckets"]["scalar_dynamic_offset"]["translated"], 1)
+        self.assertEqual(report["baseline_refusal_buckets"]["wave_divergent"]["refused"], 1)
+        self.assertEqual(sum(t["count"] for t in report["transitions"]), 5)
+        self.assertNotIn(str(self.root), json.dumps(report))
+
     def test_masks_counters_and_registers(self):
         self.assertEqual(normalize("warning\ns_load at 0xec: dynamic soffset unsupported\n"),
                          "s_load at 0x_: dynamic soffset unsupported")

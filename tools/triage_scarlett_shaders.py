@@ -121,6 +121,41 @@ def triage(xshader, sources, jobs, timeout, examples, *, aggregate_only=False):
     }
 
 
+def paired_aggregate(baseline, candidate, sources, jobs, timeout):
+    """Same enumerated requests, emitter only, fixed labels and no identifiers."""
+    totals = {"baseline": Counter(), "candidate": Counter()}
+    transitions = Counter()
+    buckets = defaultdict(Counter)
+
+    def compare(source):
+        _, old, old_reason = probe(baseline, source, timeout, aggregate_only=True)
+        _, new, new_reason = probe(candidate, source, timeout, aggregate_only=True)
+        return old, old_reason, new, new_reason
+
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        for old, old_reason, new, new_reason in pool.map(compare, sources):
+            totals["baseline"][old] += 1
+            totals["candidate"][new] += 1
+            transitions[(old, new)] += 1
+            if old == "refused":
+                buckets[old_reason][new] += 1
+    return {
+        "schema": 1,
+        "aggregate_only": True,
+        "scope": "Same enumerated requests; emitter translation only, not DXC, GPU or gameplay. Use an unchanged archive.",
+        "requests": len(sources),
+        "totals": {side: {state: counts[state] for state in ("translated", "refused", "failed")}
+                   for side, counts in totals.items()},
+        "transitions": [{"baseline": a, "candidate": b, "count": n}
+                        for (a,b), n in sorted(transitions.items())],
+        "baseline_refusal_buckets": {label: {state: counts[state] for state in ("translated", "refused", "failed")}
+                                    for label, counts in sorted(buckets.items())},
+        "recovered": transitions["refused", "translated"],
+        "regressed": transitions["translated", "refused"],
+        "inconclusive": sum(n for (a,b),n in transitions.items() if "failed" in (a,b)),
+    }
+
+
 def markdown(report, top):
     refused = report["totals"]["refused"] or 1
     cell = lambda text: text.replace("|", "\\|")
@@ -149,6 +184,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     parser.add_argument("requests", type=Path, help="projectscarlett/<exe sha256>/requests in the Proton prefix")
     parser.add_argument("--xshader", type=Path, help="host xshader (default: build it like shader preparation)")
+    parser.add_argument("--baseline", type=Path, help="compare a baseline emitter with --xshader using --aggregate-only")
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     parser.add_argument("--timeout", type=float, default=30, help="seconds per request, as at runtime")
     parser.add_argument("--top", type=int, default=25, help="rows per table")
@@ -160,6 +196,10 @@ def main(argv=None):
 
     if args.limit < 0:
         parser.error("--limit must be 0 (all) or positive")
+    if args.baseline is not None and (not args.aggregate_only or args.xshader is None):
+        parser.error("--baseline requires --aggregate-only and an explicit --xshader")
+    if not 1 <= args.jobs <= 256 or not 0 < args.timeout <= 3600:
+        parser.error("jobs must be 1..256 and timeout in (0, 3600]")
     if not args.requests.is_dir():
         parser.error(f"not a directory: {args.requests}")
     sources = requests(args.requests)[:args.limit or None]
@@ -169,6 +209,15 @@ def main(argv=None):
         from project_tuxbox.shader_prep import shader_compiler
         args.xshader = shader_compiler()
 
+    if args.baseline is not None:
+        report = paired_aggregate(args.baseline, args.xshader, sources, args.jobs, args.timeout)
+        # Refuse overwrites and export only the fixed aggregate schema.
+        if args.json:
+            with args.json.open("x", encoding="utf-8") as output:
+                json.dump(report, output, indent=2)
+                output.write("\n")
+        print(json.dumps(report, indent=2))
+        return int(bool(report["regressed"] or report["inconclusive"]))
     report = triage(args.xshader, sources, max(1, args.jobs), args.timeout, args.examples, aggregate_only=args.aggregate_only)
     print(markdown(report, args.top))
     if args.json:
