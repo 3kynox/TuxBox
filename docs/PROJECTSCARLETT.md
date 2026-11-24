@@ -82,7 +82,38 @@ Add `--mangohud` before the package path to record frame times. The prefix defau
 
 The first launch records each shader the game requests in the prefix. Before later launches, the launcher compiles the recorded requests and shows its progress, so the game reuses those translations instead of compiling them during play. Pass `--prepare-only` to prepare without starting the game, or `--no-shader-prep` to skip preparation for one launch. Place either option before the package path. [Preparation results](../evidence/projectscarlett-shader-preparation.json)
 
-Preparation also reports the ten most frequent refusal reasons for newly attempted requests, grouped without register numbers and program counters. Cached refusals are counted separately because their reasons are not stored. For a full breakdown including cached refusals, run the read-only `tools/triage_scarlett_shaders.py` on the recorded request directory. When the request files are unavailable, the same tool can rank newly refused keys and literal sampler states from an existing runtime log: `python tools/triage_scarlett_shaders.py --log build/scarlett.log`. This log-only result is not a coverage estimate.
+### Live compilation workload
+
+During gameplay, unrelated shader requests can compile concurrently rather
+than waiting for one another. The launcher defaults to at most four jobs
+(and no more than its available CPU cores); set
+`TUXBOX_RUNTIME_SHADER_JOBS=1` for the old serial behavior or a value from 1
+to 8 to tune the CPU/memory cost. Identical shader requests within the game process still share one
+translation, including retries while the previous request remains published. Persistent refusal markers are only written for deterministic
+emitter refusals, not transient tool errors. This reduces queueing delays but
+does not make unsupported shader instructions compatible.
+
+Synthetic compute benchmark (not game performance): generate a fresh corpus with
+`python tools/reference/scarlett_worker_fixture.py /path/to/new-corpus`.
+Use `tools/benchmark_scarlett_worker.py --help` for a paired comparison of
+the old and new worker, keeping the compiler executables and corpus identical.
+On the measured Ryzen 5 5600X, 64 cold requests took a median 0.881 s serial
+and 0.300 s with four jobs (five rounds per configuration); eight jobs took
+0.229 s but had higher peak aggregate RSS. All outputs matched by SHA-256.
+A forced host-side warm-cache burst took 0.074 s serial and 0.096 s with four
+jobs; a single cold request remained about 0.065 s. The actual guest normally
+reads verified warm-cache entries directly. These are small synthetic compute
+controls, not a prediction of GTA VI loading times.
+
+The live guest control `tools/check_live_shader_worker.py` uses the synthetic
+corpus above and a disposable offline Proton prefix. It makes 24 simultaneous
+Xbox compute-pipeline calls for 16 distinct shaders, with null-pipeline fallback
+disabled. On the RTX 4080, all 24 calls succeeded at both four and eight jobs;
+each distinct source was compiled once in each run and the validated outputs
+matched across configurations. See `--help` for reproduction arguments and
+[the receipt](../evidence/scarlett-live-worker-control.json).
+
+
 
 ## What to expect
 
@@ -138,91 +169,34 @@ exercise the added forms, and use the previous PR66 emitter as the
 baseline. No real title or AMD hardware validation.
 
 
-### Compare compiler revisions without running the game
+### CPU differential verification of integer halves
 
-Use the same recorded request directory for a paired CPU-only comparison,
-with two host xshader executables and the same DXC and DXV:
+The independent packed-integer Python model now covers 14 wrapping packed
+forms, seven saturating forms and ten single-half forms (31 variants).
+The latter preserve the other half of the destination. Three additional
+ordinary compute forms are supported: `v_mul_lo_u16`, `v_max_u16`,
+`v_min_u16`. Their old destination is recorded as an input for the
+partial write. New forms refuse non-compute stages, non-VGPR sources
+and unsupported modifiers.
 
-```sh
-python tools/compare_scarlett_shaders.py /path/to/requests \
-    --baseline /path/to/old/xshader --candidate /path/to/new/xshader \
-    --dxc /path/to/dxc --dxv /path/to/dxv --jobs 2 --json comparison.json
-```
+The CPU harness generates boundary and random inputs, all half selectors,
+source/destination aliases and mixed dependent chains. LLVM gfx1030
+assembles the synthetic native instructions, the full translator emits
+HLSL, and DXC/DXV constant-fold/validate it. Only the final six observable
+register stores are added by the harness. Missing, extra, duplicate or
+nonconstant stores are failures, not successful comparisons.
 
-The production compile pipeline verifies the request digests, translates,
-compiles, and validates DXIL in fresh temporary caches. The report separates
-confirmed refusal-to-compiled recoveries, compiled-to-refused regressions,
-and retryable errors. The command returns nonzero if a baseline success
-does not compile with the candidate. The result is shader compilation
-coverage on this exact request set, not proof of rendering or gameplay.
- For a small synthetic smoke comparison without game files, generate a fresh request
-directory with `python tools/reference/scarlett_compare_fixture.py /path/to/new-directory`.
-The nine synthetic controls include two valid guarded reductions, two unproven
-guards, verified indexed reads, an unknown stride, two ordinary compute
-programs and a deliberately malformed input. Pass
-`--expect-candidate /path/to/new-directory/expected.json` when testing the
-verified patches to fail if any expected status changes. For a real request
-set use `--require-no-failures` to fail on any inconclusive tool/input error.
+[CPU receipt](../evidence/scarlett-packed-integer-cpu.json): before the
+three additions 3,379/4,480 programs passed and 1,101 were refused; after
+all 4,480 pass, with 26,880 observed values. A second seed with 4,096
+mixed chains passes another 6,528 programs (39,168 values). No numerical
+mismatches. A deliberate wrapping-add-to-subtract mutation is detected
+in 30/608 cases and then removed. Six new negative controls still refuse
+scalar operands and clamp. 264 unit tests pass (including latest main).
 
-
-### Prioritize, replay and protect shader coverage
-
-Rank distinct observed refusals from a runtime log, preserving an instruction
-name when the emitter supplies one and exact literal sampler variants:
-
-```sh
-python tools/scarlett_worklist.py --log scarlett.log --json worklist.json \
-    --manifest next-group.json --group 1
-```
-
-A worklist reports observed requests, not the number a proposed patch will
-recover. An absent log entry does not establish a fix. The replay manifest
-contains request names, not shader bytes. The owner must already have the
-matching recorded inputs; missing requests fail before compilation. Replay
-one or more groups using the existing production compiler comparison:
-
-```sh
-python tools/compare_scarlett_shaders.py /path/to/requests \
-    --baseline /path/to/old/xshader --candidate /path/to/new/xshader \
-    --dxc /path/to/dxc --dxv /path/to/dxv --jobs 2 \
-    --select next-group.json --require-no-failures --json comparison.json
-```
-
-Convert a paired comparison into a new worklist. This distinguishes recovered
-requests from unchanged refusals, different refusal reasons or sampler
-variants, and inconclusive tool/input failures. Changed successful output
-digests are flagged for review, not assumed to be incorrect rendering.
-
-```sh
-python tools/scarlett_worklist.py --comparison comparison.json \
-    --json remaining.json --manifest protected.json --protect-compiled
-```
-
-The protected manifest records every successful candidate in that comparison
-as an absolute compilation expectation. Pass it to `--select` on a later
-comparison (using a fresh report path). A lost success fails even if the
-new baseline also refuses it. Keep a full-corpus comparison for broad
-coverage; a selected replay does not replace that check.
-
-To coordinate work, optionally pass `--claims claims.json` to the worklist.
-The file contains explicit, manually maintained ownership hints, for example:
-
-```json
-[
-  {"ref": "#example", "opcode": "buffer_load_dword"},
-  {"ref": "#another", "reason": "wave reduction at 0x_ may execute in divergent control flow"}
-]
-```
-
-Use a reason, opcode, or both (exact match, combined with AND). The report
-lists unclaimed ranks, overlapping claims, and claims not observed in the
-input. A claim is not evidence of a fix; refresh it as PRs change. This
-tool does not infer ownership from GitHub titles or generate native shader
-code from an error message. Reports can contain request digests and emitter
-diagnostics; review them before sharing. All operations above use CPU only.
-
-[Validation receipt](../evidence/scarlett-worklist-control.json): 836 distinct
-refusals from the public #39 log; real compiler comparisons of nine synthetic
-requests; five protected successes, three deliberately lost successes
-detected on downgrade, and three overlapping ownership hints in a synthetic
-coordination control. No title data or game execution was needed.
+Build the `packed_integer` example as above and run
+`python tools/check_packed_integer_cpu.py --help` for the LLVM, emitter,
+DXC/DXV and fresh work/output arguments. Defaults use two CPU workers,
+four input samples per selector pair and 2,048 mixed chains. No Wine,
+Proton, game or GPU is required. This is not a replacement for subsequent
+dynamic GPU and title-level validation.
