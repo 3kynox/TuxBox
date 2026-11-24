@@ -304,6 +304,121 @@ pub(crate) fn snapshot_cbv_mirrors() {
     for mirror in live {
         mirror.snapshot();
     }
+    let mirrors = srv_mirrors().lock().unwrap_or_else(|error| error.into_inner());
+    let live: Vec<_> = mirrors.iter().cloned().collect();
+    drop(mirrors);
+    for mirror in live {
+        mirror.snapshot();
+    }
+}
+
+// Boot 190327 abort: an address SRV at 0xbbee8f770 lies in a reserved region,
+// so the placed-buffer import returns E_INVALIDARG and fail_call aborts the
+// title. Keep the view alive on an upload buffer, and refresh it before
+// submit once the guest actually commits those pages.
+struct SrvMirror {
+    guest: u64,
+    mapped: usize,
+    capacity: usize,
+    buffer: ID3D12Resource,
+}
+
+impl Drop for SrvMirror {
+    fn drop(&mut self) {
+        if self.mapped != 0 {
+            // SAFETY: Map succeeded and snapshot copies have finished.
+            unsafe { self.buffer.Unmap(0, None) };
+            self.mapped = 0;
+        }
+    }
+}
+
+impl SrvMirror {
+    fn snapshot(&self) -> usize {
+        if self.mapped == 0 || self.capacity == 0 {
+            return 0;
+        }
+        let readable = readable_prefix(self.guest, self.capacity);
+        unsafe {
+            let dst = self.mapped as *mut u8;
+            if readable < self.capacity {
+                core::ptr::write_bytes(dst.add(readable), 0, self.capacity - readable);
+            }
+            if readable > 0 {
+                core::ptr::copy_nonoverlapping(self.guest as *const u8, dst, readable);
+            }
+        }
+        readable
+    }
+}
+
+fn srv_mirrors() -> &'static std::sync::Mutex<Vec<std::sync::Arc<SrvMirror>>> {
+    static MIRRORS: std::sync::LazyLock<std::sync::Mutex<Vec<std::sync::Arc<SrvMirror>>>> =
+        std::sync::LazyLock::new(Default::default);
+    &MIRRORS
+}
+
+fn srv_mirror(device: &Device, address: u64, bytes: u64) -> windows::core::Result<std::sync::Arc<TextureAddress>> {
+    use std::sync::atomic::Ordering;
+    use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
+    // A multi-gigabyte view of uncommitted VA is not a mirror candidate.
+    if bytes == 0 || bytes > 1 << 30 {
+        return Err(windows::Win32::Foundation::E_INVALIDARG.into());
+    }
+    let desc = D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+        Width: bytes,
+        Height: 1,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+        Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+        ..Default::default()
+    };
+    let heap = D3D12_HEAP_PROPERTIES {
+        Type: D3D12_HEAP_TYPE_UPLOAD,
+        CreationNodeMask: 1,
+        VisibleNodeMask: 1,
+        ..Default::default()
+    };
+    let mut native: Option<ID3D12Resource> = None;
+    unsafe {
+        device.native.CreateCommittedResource(
+            &heap,
+            D3D12_HEAP_FLAG_NONE,
+            &desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            None,
+            &mut native,
+        )?;
+    }
+    let Some(buffer) = native else {
+        return Err(windows::Win32::Foundation::E_FAIL.into());
+    };
+    let mut mapped = core::ptr::null_mut();
+    let unread = D3D12_RANGE { Begin: 0, End: 0 };
+    unsafe { buffer.Map(0, Some(&unread), Some(&mut mapped))? };
+    if mapped.is_null() {
+        return Err(windows::Win32::Foundation::E_FAIL.into());
+    }
+    let capacity = bytes as usize;
+    unsafe { core::ptr::write_bytes(mapped.cast::<u8>(), 0, capacity) };
+    let mirror = std::sync::Arc::new(SrvMirror {
+        guest: address,
+        mapped: mapped as usize,
+        capacity,
+        buffer: buffer.clone(),
+    });
+    let copied = mirror.snapshot();
+    static NOTED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if NOTED.fetch_add(1, Ordering::Relaxed) < 4 {
+        crate::diagnostics::log(&format!(
+            "SRV mirror {address:#x} bytes={bytes} copied={copied}"
+        ));
+    }
+    srv_mirrors().lock().unwrap_or_else(|error| error.into_inner()).push(mirror);
+    mirror_count().fetch_add(1, Ordering::Release);
+    Ok(TextureAddress::at(device, &buffer, address as usize, false, None))
 }
 
 // An address-only descriptor can be the sole owner of its backing resource.
@@ -538,10 +653,21 @@ pub(super) unsafe extern "system" fn address_srv(
             unsafe { VirtualQuery(Some(desc.address as _), &mut r, size_of_val(&r)) };
             (r.AllocationBase.addr(), r.BaseAddress.addr(), r.RegionSize, r.State.0, r.Protect.0)
         };
-        let entry = buffer_at(device, desc.address, resource_desc.Width, placement_stride, true)
-            .unwrap_or_else(|e| fail_call(format_args!("import SRV at {:#x}, {} bytes stride={stride} fmt={} first={} count={} failed {:?} ({}; region {:#x?}, placement stride {})",
-                desc.address, resource_desc.Width, view.Format.0, buffer.FirstElement, buffer.NumElements, e.code(), mode.name(), region(), placement_stride)))
-            .expect("required buffer import");
+        let entry = match buffer_at(device, desc.address, resource_desc.Width, placement_stride, true) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => fail_call(format_args!(
+                "import SRV at {:#x} produced no buffer ({} bytes)",
+                desc.address, resource_desc.Width
+            )),
+            Err(error) => match srv_mirror(device, desc.address, resource_desc.Width) {
+                Ok(created) => created,
+                Err(mirror_error) => fail_call(format_args!(
+                    "import SRV at {:#x}, {} bytes stride={stride} fmt={} first={} count={} failed {:?} (mirror {:?}; {}; region {:#x?}, placement stride {})",
+                    desc.address, resource_desc.Width, view.Format.0, buffer.FirstElement, buffer.NumElements,
+                    error.code(), mirror_error.code(), mode.name(), region(), placement_stride
+                )),
+            },
+        };
         let offset = entry.offset(desc.address);
         if offset.is_multiple_of(u64::from(stride)) {
             view.Anonymous.Buffer.FirstElement = buffer.FirstElement + offset / u64::from(stride);
