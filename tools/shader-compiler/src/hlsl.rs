@@ -6435,24 +6435,38 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 }
             };
         }
-        if m == "v_mad_u64_u32" {
+        if m == "v_mad_u64_u32" || m == "v_mad_i64_i32" {
+            let signed = m == "v_mad_i64_i32";
             let Opnd::Vgpr(low) = d else { return Err("expected VGPR pair".into()); };
             let high = Opnd::Vgpr(low.checked_add(1).ok_or("VGPR pair overflows")?);
+            // LLVM writes the carry to the null register when it is unused.
             let cout = match (ins.raw[0] >> 8) & 127 {
-                n @ 0..=104 => Opnd::Sgpr(n as u8),
-                106 => Opnd::VccLo,
+                n @ 0..=104 if !signed => Opnd::Sgpr(n as u8),
+                106 if !signed => Opnd::VccLo,
+                125 => Opnd::Null,
                 _ => return Err("unsupported multiply-add carry destination".into()),
             };
+            if signed && (self.ex.stage != Stage::Compute
+                || !ins.src[..3].iter().all(|s| matches!(s, Opnd::Vgpr(_)))) {
+                return Err("unverified signed 64-bit multiply-add source or stage".into());
+            }
             if ins.raw[0] & 0x8000 != 0 || ins.raw[1] >> 27 != 0 {
                 return Err("unsupported multiply-add modifiers".into());
             }
             let (a, b, c, ch) = (r(&s[0])?, r(&s[1])?, r(&s[2])?, self.pair_high(&s[2])?);
             let t = self.tmp;
             self.tmp += 1;
-            self.line(&format!("uint t{t}lo = {a} * {b} + {c}; uint t{t}sum = tb_mulhi_u32({a}, {b}) + {ch};"));
+            // The low product word is the same for signed and unsigned inputs;
+            // the signed high word comes from the signed 32x32 product.
+            let mulhi = if signed { "tb_mulhi_i32" } else { "tb_mulhi_u32" };
+            self.line(&format!("uint t{t}lo = {a} * {b} + {c}; uint t{t}sum = {mulhi}({a}, {b}) + {ch};"));
             self.line(&format!("uint t{t}hi = t{t}sum + uint(t{t}lo < {c}); uint t{t}co = uint(t{t}sum < {ch} || t{t}hi < t{t}sum);"));
             self.wv(&d, &format!("t{t}lo"))?;
+            self.touch(&high);
             self.wv(&high, &format!("t{t}hi"))?;
+            if cout == Opnd::Null {
+                return Ok(());
+            }
             if self.resolve_wave32 {
                 return self.ws(&cout, &format!("WaveActiveBallot((exec_lo & tb_lane_bit) != 0u && t{t}co != 0u).x"));
             }
