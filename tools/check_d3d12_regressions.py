@@ -59,6 +59,7 @@ def validate(case, adapter, status, output):
         # A compatibility control must exercise the real pipeline, not a
         # successful no-op substitution (even if its output happens to match).
         if fallback or any("TuxBox d3d12_xs: null usage rank " in line for line in lines):
+            return False, passes[0]
     if case in ("buffer-import","buffer-import-reject"):
         # Proton may insert another diagnostic between the provider prefix
         # and its message. Accept an exact complete body, optionally prefixed.
@@ -167,8 +168,9 @@ def main(argv=None):
                  "WINEDEBUG":"-all","VKD3D_DEBUG":"warn","WINEDLLOVERRIDES":"d3d12,d3d12core,dxgi=n,b",
                  "XDG_CACHE_HOME":trial/"cache","XDG_RUNTIME_DIR":trial/"runtime","TMPDIR":trial/"tmp",
                  "VKD3D_SHADER_CACHE_PATH":trial,"TUXBOX_LOG":"stderr","TUXBOX_TRACE_PRESENT":"1",
-                 "TUXBOX_NULL_PIPELINES":"1" if case=="null-usage" else "0"}
-                 "VKD3D_SHADER_CACHE_PATH":trial,"TUXBOX_LOG":"stderr","TUXBOX_TRACE_PRESENT":"1", "TUXBOX_REQUIRE_BUFFER_IMPORT":"1" if case.startswith("buffer-") else "0", "TUXBOX_TRACE_BUFFER_BACKING":"1" if case.startswith("buffer-") else "0"}
+                 "TUXBOX_NULL_PIPELINES":"1" if case=="null-usage" else "0",
+                 "TUXBOX_REQUIRE_BUFFER_IMPORT":"1" if case.startswith("buffer-") else "0",
+                 "TUXBOX_TRACE_BUFFER_BACKING":"1" if case.startswith("buffer-") else "0"}
             cmd=["bwrap","--die-with-parent","--unshare-pid","--unshare-net","--ro-bind","/","/",
                  "--dev-bind","/dev","/dev","--proc","/proc","--tmpfs","/tmp","--bind",str(trial),str(trial),
                  "--unsetenv","WAYLAND_DISPLAY","--chdir",str(trial)]
