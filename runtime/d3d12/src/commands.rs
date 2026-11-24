@@ -52,7 +52,6 @@ struct Recording {
     display_bound: bool,
     trace_target: Option<ID3D12Resource>,
     trace_samples: Vec<(String, crate::present::sampler::Sample)>,
-    null_pipeline: bool,
     media: Option<media::Recording>,
     placed_reads: Vec<Arc<Texture>>,
     placed_writes: Vec<Arc<Texture>>,
@@ -101,6 +100,13 @@ impl Recording {
     }
 
     fn compute_dispatch(&mut self, list: &List, dispatch: impl FnOnce()) {
+        let null_usage = self.bindings.null_usage.clone();
+        let dispatch = move || {
+            dispatch();
+            if let Some(tag) = &null_usage {
+                crate::diagnostics::display::record_null(tag, false);
+            }
+        };
         if let Some(table) = self.bindings.reflected_table::<true>() {
             if let Err(error) = self.bindings.with_reflected_table::<true>(
                 table, list, self.descriptor_arena.as_deref(), self.resource_heap.as_ref(),
@@ -160,9 +166,17 @@ impl Recording {
     }
 
     fn draw(&mut self, list: &List, rasterizes: bool, draw: impl FnOnce()) {
-        if rasterizes {
-            crate::diagnostics::display::draw(self.display_bound, self.null_pipeline);
-        }
+        let null_usage = self.bindings.null_usage.clone();
+        let display_bound = self.display_bound;
+        let draw = move || {
+            draw();
+            if rasterizes {
+                crate::diagnostics::display::draw(display_bound, null_usage.is_some());
+                if let Some(tag) = &null_usage {
+                    crate::diagnostics::display::record_null(tag, display_bound);
+                }
+            }
+        };
         if rasterizes {
             for target in &self.bound_placed_targets {
                 if let Err(error) = Self::track_texture(&mut self.placed_writes, target) {
@@ -1037,6 +1051,13 @@ unsafe extern "system" fn copy_resource(
     });
 }
 
+// DriverHintX (Scarlett slot 101, GDK d3d12_xs.h). The desktop driver manages
+// its own hardware policy, so console tuning hints have no effect. The title
+// calls it with feature 2 and value 1 (RVA 0x50a6651) and ignores the result.
+unsafe extern "system" fn driver_hint(_list: &List, _feature: u64, _value: u64) -> u64 {
+    0
+}
+
 // Frosty's RHIDispatchIndirectComputeShader calls slot 59 (RVA 0x57876df).
 unsafe extern "system" fn execute_indirect(
     list: &List,
@@ -1210,6 +1231,12 @@ unsafe extern "system" fn reset_extended(list: &List, allocator: *mut c_void, in
 // base graphics-list IID. The List6-only cache barriers remain separate.
 static DEVICE11_LIST_SLOTS: Slots<149> = {
     let mut slots = LIST_SLOTS;
+    // Scarlett's list adds InsertGpuMarker and InsertTimingMarker after
+    // EndEvent (GDK d3d12_xs.h), so ExecuteIndirect moves from slot 59 to 61
+    // and CopyMemoryToMemoryX (slot 62) follows it. ProjectScarlett calls it
+    // from title RVA 0x248cbc1 with a one-command signature.
+    slots[61] = crate::slot!(execute_indirect);
+    slots[101] = crate::slot!(driver_hint);
     slots[70] = crate::slot!(graphics::depth_bounds);
     slots[75] = crate::slot!(graphics::force_shader_depth_order);
     slots[142] = crate::slot!(graphics::sample_mask);
@@ -1644,7 +1671,6 @@ pub(crate) unsafe fn wrap_command_list(
             display_bound: false,
             trace_target: None,
             trace_samples: Vec::new(),
-            null_pipeline: false,
             placed_reads: Vec::new(),
             placed_writes: Vec::new(),
             uploads: Vec::new(),

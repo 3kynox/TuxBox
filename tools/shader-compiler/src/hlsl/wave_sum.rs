@@ -8,18 +8,46 @@ pub(super) const READ_LANE: u32 = 0x7ff2;
 // Reductions may have a completed vector load and a second predicate.
 // The scalar AND intersects that predicate with the saved EXEC before the
 // CNDMASK sets excluded lanes to the reduction's identity.
-fn masked_prologue(insns: &[Insn], first: usize, identity: i64) -> Option<(usize, Opnd)> {
+enum NeutralIdentity {
+    // Immediate neutral: v_or_b32 / v_max_u32 (0), v_and_b32 / v_min_u32 (-1),
+    // v_add_nc_u32 (0) and v_add_f32 (0.0 == 0x00000000). Accept ConstInt or
+    // Literal encodings of the same bits.
+    Immediate(i64),
+    // Neutral held in a VGPR: floating extrema materialize +/-inf with a
+    // literal move (v_mov_b32) before the AND and CNDMASK.
+    LiteralBits(u32),
+}
+
+fn masked_prologue(insns: &[Insn], first: usize, identity: NeutralIdentity) -> Option<(usize, Opnd, Opnd)> {
     let select = insns.get(first.checked_sub(1)?)?;
-    let [Opnd::ConstInt(value), Opnd::Vgpr(_), mask @ Opnd::Sgpr(_)] = select.src[..] else {
+    let [ident, _, mask @ Opnd::Sgpr(_)] = select.src[..] else {
         return None;
     };
-    if value != identity {
-        return None;
-    }
+    let (expected, want_reg, want_literal) = match (identity, ident) {
+        (NeutralIdentity::Immediate(v), Opnd::ConstInt(k)) if k == v => {
+            (Opnd::ConstInt(v), None, None)
+        }
+        (NeutralIdentity::Immediate(v), Opnd::Literal(k)) if k == v as u32 => {
+            (Opnd::Literal(k), None, None)
+        }
+        (NeutralIdentity::LiteralBits(bits), Opnd::Vgpr(reg)) => {
+            (Opnd::Vgpr(reg), Some(reg), Some(bits))
+        }
+        _ => return None,
+    };
     let mut mask_sources = None;
+    let mut ident_reg_found = want_reg.is_none();
     for (index, op) in insns[..first - 1].iter().enumerate().rev() {
         match op.mnemonic.as_str() {
             "s_waitcnt" | "v_nop" => (),
+            "v_mov_b32" if want_reg.is_some() => {
+                let [Opnd::Vgpr(reg)] = op.dst[..] else { return None };
+                let [Opnd::Literal(bits)] = op.src[..] else { return None };
+                if reg != want_reg.unwrap() || bits != want_literal.unwrap() {
+                    return None;
+                }
+                ident_reg_found = true;
+            }
             "s_and_b32" | "s_and_b64" if mask_sources.is_none() && op.dst == [mask] => {
                 mask_sources = Some((op.mnemonic.as_str(), &op.src));
             }
@@ -33,7 +61,10 @@ fn masked_prologue(insns: &[Insn], first: usize, identity: i64) -> Option<(usize
                     }
                     None => saved == mask,
                 };
-                return matches.then_some((index, mask));
+                if matches && ident_reg_found {
+                    return Some((index, mask, expected));
+                }
+                return None;
             }
             _ => return None,
         }
@@ -41,12 +72,27 @@ fn masked_prologue(insns: &[Insn], first: usize, identity: i64) -> Option<(usize
     None
 }
 
-fn masked_identity(operation: &str) -> Option<i64> {
+fn masked_identity(operation: &str) -> Option<NeutralIdentity> {
     match operation {
-        "v_or_b32" | "v_max_u32" => Some(0),
-        "v_and_b32" | "v_min_u32" => Some(-1),
+        "v_or_b32" | "v_max_u32" => Some(NeutralIdentity::Immediate(0)),
+        "v_and_b32" | "v_min_u32" => Some(NeutralIdentity::Immediate(-1)),
+        "v_add_nc_u32" => Some(NeutralIdentity::Immediate(0)),
+        "v_add_f32" => Some(NeutralIdentity::Immediate(0)),
+        "v_min_f32" => Some(NeutralIdentity::LiteralBits(f32::INFINITY.to_bits())),
+        "v_max_f32" => Some(NeutralIdentity::LiteralBits(f32::NEG_INFINITY.to_bits())),
         _ => None,
     }
+}
+
+// Whether the floating-extrema shape is the masked form (saveexec + identity
+// move + scalar AND + CNDMASK) rather than the nand form. The caller routes
+// floating extrema here; the nand form keeps its own lowering.
+pub(super) fn masked_floating(insns: &[Insn], first: usize) -> bool {
+    let Some(insn) = insns.get(first) else { return false };
+    let Some(id) = masked_identity(&insn.mnemonic) else {
+        return false;
+    };
+    masked_prologue(insns, first, id).is_some()
 }
 
 pub(super) fn lower(insns: &mut [Insn], first: usize) -> Result<(u32, usize), &'static str> {
@@ -55,19 +101,31 @@ pub(super) fn lower(insns: &mut [Insn], first: usize) -> Result<(u32, usize), &'
     let operation = &insns[first].mnemonic;
     let floating = matches!(operation.as_str(), "v_min_f32" | "v_max_f32");
     // The floating form inserts the neutral value between SAVEEXEC and CNDMASK.
-    let identity = masked_identity(operation);
-    let masked = identity
-        .map(|neutral| {
-            masked_prologue(insns, first, neutral).ok_or("unrecognized masked DPP prologue")
-        })
+    let masked = masked_identity(operation)
+        .map(|id| masked_prologue(insns, first, id).ok_or("unrecognized masked DPP prologue"))
         .transpose()?;
-    let save = if let Some((index, _)) = masked {
-        &insns[index]
+    let (save, neutral, expected_mask): (&Insn, Opnd, Opnd) = if let Some((index, mask, neutral)) = masked {
+        (&insns[index], neutral, mask)
     } else if floating {
         let prologue = start.checked_sub(1).ok_or("missing extrema prologue")?;
-        &insns[prologue]
+        let identity_bits = if operation == "v_min_f32" {
+            f32::INFINITY.to_bits()
+        } else {
+            f32::NEG_INFINITY.to_bits()
+        };
+        if tail[0].mnemonic != "v_mov_b32" || tail[0].src != [Opnd::Literal(identity_bits)] {
+            return Err("unexpected extrema identity");
+        }
+        let [reg @ Opnd::Vgpr(_)] = tail[0].dst[..] else {
+            return Err("invalid identity register");
+        };
+        (&insns[prologue], reg, Opnd::Sgpr(0)) // mask patched after saved is bound
     } else {
-        &tail[0]
+        let int = match masked_identity(operation) {
+            Some(NeutralIdentity::Immediate(v)) => v,
+            _ => return Err("unexpected identity encoding"),
+        };
+        (&tail[0], Opnd::ConstInt(int), Opnd::Sgpr(0)) // mask patched after saved is bound
     };
     let width = match save.mnemonic.as_str() {
         "s_or_saveexec_b32" => 32,
@@ -84,25 +142,17 @@ pub(super) fn lower(insns: &mut [Insn], first: usize) -> Result<(u32, usize), &'
     let [Opnd::Vgpr(acc)] = block[1].dst[..] else {
         return Err("invalid accumulator");
     };
-    let neutral = if floating {
-        let identity = if operation == "v_min_f32" {
-            f32::INFINITY
-        } else {
-            f32::NEG_INFINITY
-        };
-        if tail[0].mnemonic != "v_mov_b32" || tail[0].src != [Opnd::Literal(identity.to_bits())] {
-            return Err("unexpected extrema identity");
-        }
-        let [reg @ Opnd::Vgpr(_)] = tail[0].dst[..] else {
-            return Err("invalid identity register");
-        };
-        reg
+    let expected_mask = if masked.is_some() {
+        expected_mask
     } else {
-        Opnd::ConstInt(identity.unwrap_or(0))
+        Opnd::Sgpr(saved)
     };
     if save.src != [Opnd::ConstInt(-1)]
         || block[1].mnemonic != "v_cndmask_b32"
-        || !matches!(block[1].src[..], [identity, Opnd::Vgpr(_), mask] if mask == masked.map_or(Opnd::Sgpr(saved), |(_, mask)| mask) && identity == neutral)
+        || block[1].src.len() != 3
+        || block[1].src[0] != neutral
+        || !matches!(block[1].src[1], Opnd::Vgpr(_))
+        || block[1].src[2] != expected_mask
     {
         return Err("invalid masked reduction input");
     }
@@ -339,8 +389,8 @@ pub(super) fn check_control_flow(insns: &[Insn], width: u32) -> Result<(), Strin
         };
         let start = if let Some(neutral) = masked_identity(&ins.mnemonic) {
             masked_prologue(insns, first, neutral)
-                .ok_or("unrecognized masked DPP prologue")?
-                .0
+                .map(|(index, _, _)| index)
+                .unwrap_or(first - prologue_len)
         } else {
             first - prologue_len
         };

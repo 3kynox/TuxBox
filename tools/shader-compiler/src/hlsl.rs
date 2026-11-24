@@ -26,6 +26,8 @@ mod compare;
 mod uniform_texel;
 mod pixel_quad;
 mod mubuf_offsets;
+mod code_offset;
+mod scalar_bits;
 #[cfg(test)]
 mod raw_width;
 #[cfg(test)]
@@ -72,6 +74,7 @@ mod ray_resolve;
 mod fspx_wave;
 mod singleton_wave;
 mod wave_sum;
+mod raw_index;
 mod reflection_compact;
 pub(crate) mod radiance_probe;
 mod screen_gather;
@@ -425,6 +428,7 @@ struct Emitter<'a> {
     res: HashMap<usize, Vec<Res>>, // per-instruction resolved resources
     cb_size: BTreeMap<u32, u32>,   // slot -> dwords
     zero_buffer_offsets: std::cell::OnceCell<BTreeSet<(usize, u8)>>,
+    ordinary_bit_sites: std::cell::OnceCell<BTreeSet<usize>>,
     smem_constants: std::cell::OnceCell<BTreeMap<(usize, u8), u32>>,
     tex: BTreeMap<u32, u32>,       // slot -> dim
     samp: BTreeSet<u32>,
@@ -435,6 +439,8 @@ struct Emitter<'a> {
     /// PersistentClusterCull's validated buffer layout and cross-group UAV queue.
     persistent_queue: bool,
     raw: BTreeSet<(bool, u32)>,
+    // Native sites with a proven byte-stride-one linear descriptor.
+    raw_byte_index: BTreeSet<usize>,
     tbuf: BTreeSet<(bool, u32)>,      // typed buffers (is_uav, slot)
     tbuf_uint: BTreeSet<u32>,         // typed UAV slots whose element must be uint (atomics)
     /// Inferred integer element type of typed buffers: (is_uav, slot) -> 1 uint, 2 sint.
@@ -673,7 +679,8 @@ fn lower_wave_reductions(insns: &mut [Insn]) -> Result<Option<u32>, String> {
             continue;
         }
         let saved_extrema = matches!(red.as_str(), "v_min_f32" | "v_max_f32")
-            && first.checked_sub(3).is_some_and(|p| matches!(insns[p].mnemonic.as_str(), "s_or_saveexec_b32" | "s_or_saveexec_b64"));
+            && (first.checked_sub(3).is_some_and(|p| matches!(insns[p].mnemonic.as_str(), "s_or_saveexec_b32" | "s_or_saveexec_b64"))
+                || wave_sum::masked_floating(insns, first));
         if matches!(red.as_str(), "v_add_nc_u32" | "v_min_u32" | "v_max_u32" | "v_add_f32" | "v_and_b32" | "v_or_b32") || saved_extrema {
             let (required, next) = wave_sum::lower(insns, first).map_err(bad)?;
             if width.replace(required).is_some_and(|w| w != required) {
@@ -1766,6 +1773,7 @@ impl<'a> Emitter<'a> {
             res: HashMap::new(),
             cb_size: BTreeMap::new(),
             zero_buffer_offsets: Default::default(),
+            ordinary_bit_sites: Default::default(),
             smem_constants: Default::default(),
             tex: BTreeMap::new(),
             samp: BTreeSet::new(),
@@ -1775,6 +1783,7 @@ impl<'a> Emitter<'a> {
             reflected_strides: BTreeSet::new(),
             persistent_queue: false,
             raw: BTreeSet::new(),
+            raw_byte_index: BTreeSet::new(),
             tbuf: BTreeSet::new(),
             tbuf_uint: BTreeSet::new(),
             tbuf_ty: BTreeMap::new(),
@@ -2260,6 +2269,7 @@ impl<'a> Emitter<'a> {
         self.bsel.clear();
         self.dsel_loads.clear();
         self.dsel_moves.clear();
+        self.raw_byte_index.clear();
         // Recording pass with the converged entry states.
         for (b, r) in ranges.iter().enumerate() {
             if let Some((mut sym, mut written)) = states[b].clone() {
@@ -3062,7 +3072,8 @@ impl<'a> Emitter<'a> {
                     // Read from an embedded constant table.
                     let n = 1u32 << ins.op;
                     let d = ins.dst.first().and_then(sg).ok_or("s_load: bad dst")?;
-                    if self.static_smem_offset(ins).is_none() {
+                    if self.static_smem_offset(ins).is_none()
+                        && self.dynamic_code_offset(idx).is_none() {
                         return Err(format!("s_load at {:#x}: code-table read with dynamic soffset unsupported", ins.offset));
                     }
                     self.uses_code = true;
@@ -3241,11 +3252,17 @@ impl<'a> Emitter<'a> {
                 Enc::Mubuf if ins.op == 0x71 || ins.op == 0x72 => {}
                 Enc::Mubuf => {
                     let rs = ins.src.get(1).and_then(sg).ok_or("mubuf: bad srsrc")?;
+                    // Never retain a provisional proof from another CFG visit.
+                    self.raw_byte_index.remove(&ins.offset);
                     if let Some(raw) = self.mesh_raw_descriptor(sym, rs)? {
+                        self.raw_byte_index.insert(ins.offset);
                         self.res.insert(idx, vec![raw]);
                         continue;
                     }
                     if let Some(Sym::DirectRaw(slot)) = sym.get(&rs) {
+                        if raw_index::local_byte_descriptor(&insns[block_start..idx], rs) {
+                            self.raw_byte_index.insert(ins.offset);
+                        }
                         self.res.insert(idx, vec![Res::Raw(*slot, false)]);
                         continue;
                     }
@@ -4350,6 +4367,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 return Ok(());
             }
         }
+        if scalar_bits::emit(self, idx, ins)? { return Ok(()); }
         match ins.enc {
             Enc::Sopp if matches!(ins.op, 0x24 | 0x25) => {
                 // MODE[7:0] exposes the guest round and denorm settings to S_GETREG.
@@ -4643,17 +4661,6 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                         Ok(())
                     }
                     "s_flbit_i32_b32" => self.ws(&d, &format!("({a} == 0u ? ~0u : 31u - firstbithigh({a}))")),
-                    "s_flbit_i32_b64" => {
-                        self.touch(&hi(&s[0]));
-                        let ah = r(&hi(&s[0]))?;
-                        self.ws(&d, &flbit_b64_expr(&a, &ah))
-                    }
-                    "s_ff0_i32_b32" => self.ws(&d, &ff0_b32_expr(&a)),
-                    "s_ff0_i32_b64" => {
-                        self.touch(&hi(&s[0]));
-                        let ah = r(&hi(&s[0]))?;
-                        self.ws(&d, &ff0_b64_expr(&a, &ah))
-                    }
                     "s_ff1_i32_b32" => self.ws(&d, &format!("firstbitlow({a})")),
                     // s_ff1_i32_b64 is firstbitlow over the 64-bit value: the low word
                     // decides when it is nonzero, otherwise the high word.
@@ -4830,10 +4837,19 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                         let ndw = ((self.ex.isa_data.len().saturating_sub(self.ex.isa.len())) / 4).max(1);
                         let t = self.tmp;
                         self.tmp += 1;
-                        let offset = self.static_smem_offset(ins).ok_or("unverified code-table offset")?;
-                        self.line(&format!("uint t{t} = ({} + {offset:#x}u) >> 2;", r(&s[0])?));
-                        for k in 0..n {
-                            self.line(&format!("uint t{t}_{k} = tb_code[(t{t} + {k}u - {}u) % {ndw}u];", self.ex.isa.len() / 4));
+                        if let Some(offset) = self.static_smem_offset(ins) {
+                            self.line(&format!("uint t{t} = ({} + {offset:#x}u) >> 2;", r(&s[0])?));
+                            for k in 0..n {
+                                self.line(&format!("uint t{t}_{k} = tb_code[(t{t} + {k}u - {}u) % {ndw}u];", self.ex.isa.len() / 4));
+                            }
+                        } else {
+                            let reg = self.dynamic_code_offset(idx).ok_or("unverified dynamic code-table offset")?;
+                            let offset = Opnd::Sgpr(reg);
+                            self.touch(&offset);
+                            self.line(&format!("uint t{t} = ({} + {} + {:#x}u - {}u) >> 2;", r(&s[0])?, r(&offset)?, ins.aux.imm, self.ex.isa.len()));
+                            for k in 0..n {
+                                self.line(&format!("uint t{t}_{k} = tb_code[t{t} + {k}u];"));
+                            }
                         }
                         for k in 0..n {
                             let dst = sreg_opnd(base + k as u8);
@@ -6395,20 +6411,21 @@ uint tb_fmac_half(uint a, uint b, uint c) {
     /// recorded for a raw binding, so IDXEN is a byte offset too. With both enables
     /// the first address VGPR is the index and the next is the byte offset.
     fn raw_address(&mut self, ins: &Insn) -> Result<String, String> {
-        let offen = ins.aux.mask & 1 != 0;
-        let idxen = ins.aux.mask & 2 != 0;
-        let vector = if idxen && offen {
-            let Opnd::Vgpr(base) = ins.src[0] else {
-                return Err("raw buffer index needs a VGPR".into());
-            };
-            let offset = Opnd::Vgpr(base.checked_add(1).ok_or("raw buffer address register overflow")?);
-            self.touch(&offset);
-            format!("({}) + ({})", r(&ins.src[0])?, r(&offset)?)
-        } else if idxen || offen {
-            r(&ins.src[0])?
-        } else {
-            "0u".to_string()
-        };
+        let (indexed, offset) = (ins.aux.mask & 2 != 0, ins.aux.mask & 1 != 0);
+        let vector = if indexed {
+            if !self.raw_byte_index.contains(&ins.offset)
+                || !ins.mnemonic.starts_with("buffer_load_dword")
+            {
+                return Err("raw buffer IDXEN needs the console descriptor stride".into());
+            }
+            let index = r(&ins.src[0])?;
+            if offset {
+                let Opnd::Vgpr(v) = ins.src[0] else { return Err("invalid indexed raw address".into()) };
+                let byte_offset = Opnd::Vgpr(v.checked_add(1).ok_or("raw address register overflow")?);
+                self.touch(&byte_offset);
+                format!("({index} + {})", r(&byte_offset)?)
+            } else { index }
+        } else if offset { r(&ins.src[0])? } else { "0u".to_string() };
         let address = format!("raw_addr{}", self.tmp);
         self.tmp += 1;
         self.line(&format!("uint {address} = {vector} + {} + {}u;", r(&ins.src[2])?, ins.aux.imm));
@@ -6569,7 +6586,11 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             let offset = format!("{address} + {}u", 4 * k);
             let reg = Opnd::Vgpr(base.checked_add(k).ok_or("raw buffer register overflow")?);
             if load {
-                self.line(&format!("uint t{t}_{k} = {buffer}.Load({offset});"));
+                if ins.aux.mask & 2 != 0 {
+                    self.line(&format!("uint t{t}_{k} = 0u; if (exec_lo & 1u) t{t}_{k} = {buffer}.Load({offset});"));
+                } else {
+                    self.line(&format!("uint t{t}_{k} = {buffer}.Load({offset});"));
+                }
             } else {
                 self.touch(&reg);
                 self.line(&format!("if (exec_lo & 1u) {buffer}.Store({offset}, {});", r(&reg)?));
@@ -6581,6 +6602,13 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
         }
         Ok(())
+    }
+
+    fn dynamic_code_offset(&self, idx: usize) -> Option<u8> {
+        if self.ex.stage != Stage::Compute || self.packed.is_some() || self.mesh_bindings.is_some() {
+            return None;
+        }
+        code_offset::prove(&self.insns, idx, self.ex.isa.len(), self.ex.isa_data.len())
     }
 
     fn static_smem_offset(&self, ins: &Insn) -> Option<u32> {
@@ -8697,6 +8725,151 @@ mod tests {
             "(~s2 != 0u ? uint(firstbitlow(~s2)) : ~s3 != 0u ? 32u + uint(firstbitlow(~s3)) : 0xffffffffu)"
         );
     }
+
+    // --- Masked prologue decode paths (int and floating) -------------------
+
+    fn masked_insn(mnemonic: &str, enc: Enc, dst: Vec<Opnd>, src: Vec<Opnd>) -> Insn {
+        Insn {
+            offset: 0x100,
+            dwords: 1,
+            enc,
+            op: 0,
+            raw: vec![0],
+            mnemonic: mnemonic.to_string(),
+            dst,
+            src,
+            aux: Default::default(),
+        }
+    }
+
+    fn masked_shuffle(mnemonic: &str, selector: u32, acc: u8, ctrl: u32) -> Insn {
+        let mut ins = masked_insn(mnemonic, Enc::Vop2, vec![Opnd::Vgpr(acc)], vec![Opnd::Raw(selector as u16), Opnd::Vgpr(acc)]);
+        ins.raw = vec![0x4a0606e9, ctrl << 8 | u32::from(acc)];
+        ins
+    }
+
+    fn masked_readlane(acc: u8, lane: u32, dst: u8) -> Insn {
+        let mut ins = masked_insn(
+            "v_readlane_b32",
+            Enc::Vop3,
+            vec![Opnd::Vgpr(dst)],
+            vec![Opnd::Vgpr(acc), Opnd::ConstInt(lane as i64), Opnd::Sgpr(0)],
+        );
+        ins.raw = vec![0xd760_0000 | u32::from(dst), ((128 + lane) << 9) | 256 | u32::from(acc)];
+        ins
+    }
+
+    fn masked_cross_row(mnemonic: &str, acc: u8, tmp: u8) -> Insn {
+        masked_insn(mnemonic, Enc::Vop2, vec![Opnd::Vgpr(acc)], vec![Opnd::Vgpr(tmp), Opnd::Vgpr(acc)])
+    }
+
+    fn masked_perm(acc: u8, tmp: u8) -> Insn {
+        masked_insn("v_permlanex16_b32", Enc::Vop3, vec![Opnd::Vgpr(tmp)], vec![Opnd::Vgpr(acc), Opnd::ConstInt(0), Opnd::ConstInt(0)])
+    }
+
+    fn masked_reduction_insns(
+        width: u32,
+        op: &str,
+        data_reg: u8,
+        float_bits: Option<u32>,
+        ident_reg: u8,
+    ) -> Vec<Insn> {
+        let is_float = float_bits.is_some();
+        let acc = 1u8;
+        let ctrl = [0xde54c1u32, 0x936012, 0x000924, 0xff0940];
+        let selector = [233u32, 233, 233, 250];
+        let mut insns = Vec::new();
+        // Prologue: saveexec + (literal identity move | AND) + CNDMASK.
+        if width == 32 {
+            insns.push(masked_insn("s_or_saveexec_b32", Enc::Sop1, vec![Opnd::Sgpr(0)], vec![Opnd::ConstInt(-1)]));
+        } else {
+            insns.push(masked_insn("s_or_saveexec_b64", Enc::Sop1, vec![Opnd::Sgpr(0)], vec![Opnd::ConstInt(-1)]));
+        }
+        if let Some(bits) = float_bits {
+            insns.push(masked_insn("v_mov_b32", Enc::Vop1, vec![Opnd::Vgpr(ident_reg)], vec![Opnd::Literal(bits)]));
+        }
+        if width == 32 {
+            insns.push(masked_insn("s_and_b32", Enc::Sopc, vec![Opnd::Sgpr(2)], vec![Opnd::Sgpr(26), Opnd::Sgpr(0)]));
+        } else {
+            insns.push(masked_insn("s_and_b64", Enc::Sopc, vec![Opnd::Sgpr(2)], vec![Opnd::Sgpr(80), Opnd::Sgpr(0)]));
+        }
+        let cndmask_src = if is_float {
+            vec![Opnd::Vgpr(ident_reg), Opnd::Vgpr(data_reg), Opnd::Sgpr(2)]
+        } else {
+            vec![Opnd::ConstInt(0), Opnd::Vgpr(data_reg), Opnd::Sgpr(2)]
+        };
+        insns.push(masked_insn("v_cndmask_b32", Enc::Vop2, vec![Opnd::Vgpr(acc)], cndmask_src));
+        for (i, (&c, &s)) in ctrl.iter().zip(selector.iter()).enumerate() {
+            let _ = i;
+            insns.push(masked_shuffle(op, s, acc, c));
+        }
+        insns.push(masked_perm(acc, ident_reg + 4));
+        insns.push(masked_cross_row(op, acc, ident_reg + 4));
+        if width == 64 {
+            insns.push(masked_readlane(acc, 32, ident_reg + 3));
+            insns.push(masked_insn(op, Enc::Vop2, vec![Opnd::Vgpr(acc)], vec![Opnd::Sgpr(ident_reg + 3), Opnd::Vgpr(acc)]));
+        }
+        insns.push(masked_readlane(acc, 0, ident_reg + 2));
+        if width == 32 {
+            insns.push(masked_insn("s_mov_b32", Enc::Sop1, vec![Opnd::ExecLo], vec![Opnd::Sgpr(0)]));
+        } else {
+            insns.push(masked_insn("s_mov_b64", Enc::Sop1, vec![Opnd::ExecLo], vec![Opnd::Sgpr(0)]));
+        }
+        insns
+    }
+
+    #[test]
+    fn int_masked_add_prologue_lowers_full_block() {
+        let mut insns = masked_reduction_insns(32, "v_add_nc_u32", 3, None, 1);
+        lower_wave_reductions(&mut insns).expect("int masked prologue lowered");
+        for ins in insns.iter().skip(3).take(4) {
+            assert_eq!(ins.op, wave_sum::DPP_REDUCE, "shuffled instruction {ins:?}");
+        }
+        assert_eq!(insns[9].op, wave_sum::READ_LANE);
+        assert_eq!(insns[9].mnemonic, "v_readlane_b32");
+        assert_eq!(insns[9].dst, vec![Opnd::Sgpr(3)]);
+    }
+
+    #[test]
+    fn floating_min_masked_prologue_with_register_identity_lowers() {
+        // +inf held in a VGPR materialized by a literal move.
+        let mut insns = masked_reduction_insns(64, "v_min_f32", 4, Some(f32::INFINITY.to_bits()), 2);
+        lower_wave_reductions(&mut insns).expect("floating masked prologue lowered");
+        assert_eq!(insns[4].op, wave_sum::DPP_REDUCE);
+        // Both readlanes became READ_LANE and returned scalars.
+        assert_eq!(insns[10].op, wave_sum::READ_LANE);
+        assert_eq!(insns[10].dst, vec![Opnd::Sgpr(5)]);
+        assert_eq!(insns[12].op, wave_sum::READ_LANE);
+        assert_eq!(insns[12].dst, vec![Opnd::Sgpr(4)]);
+    }
+
+    #[test]
+    fn floating_max_masked_prologue_with_register_identity_lowers() {
+        // -inf held in a VGPR materialized by a literal move.
+        let mut insns = masked_reduction_insns(32, "v_max_f32", 4, Some(f32::NEG_INFINITY.to_bits()), 2);
+        lower_wave_reductions(&mut insns).expect("floating masked prologue lowered");
+        assert_eq!(insns[4].op, wave_sum::DPP_REDUCE);
+        assert_eq!(insns[10].op, wave_sum::READ_LANE);
+        assert_eq!(insns[10].dst, vec![Opnd::Sgpr(4)]);
+    }
+
+    #[test]
+    fn floating_masked_prologue_rejects_unrelated_identity_register() {
+        // The identity move lives in a different register than the CNDMASK
+        // operand: must refuse, not guess.
+        let mut insns = masked_reduction_insns(32, "v_min_f32", 4, Some(f32::INFINITY.to_bits()), 2);
+        insns[1].dst = vec![Opnd::Vgpr(9)]; // identity materialized in the wrong register
+        assert!(lower_wave_reductions(&mut insns).is_err());
+    }
+
+    #[test]
+    fn floating_max_masked_prologue_rejects_immediate_select_identity() {
+        // A select with an immediate identity does not match the register-held
+        // floating shape.
+        let mut insns = masked_reduction_insns(32, "v_max_f32", 4, Some(f32::NEG_INFINITY.to_bits()), 2);
+        insns[3].src[0] = Opnd::ConstInt(f32::NEG_INFINITY.to_bits() as i64);
+        assert!(lower_wave_reductions(&mut insns).is_err());
+    }
 }
 
 #[cfg(test)]
@@ -8722,3 +8895,4 @@ mod election_order_regression {
         assert!(verify_lane_election(&mut ops, 1).is_err());
     }
 }
+

@@ -414,6 +414,11 @@ fn import_or_back(device: &Device, address: u64, desc: &D3D12_RESOURCE_DESC, sta
 }
 
 impl ImportedHeap {
+    /// False once a page remap replaced the pages this heap was imported from.
+    pub(super) fn is_live(&self) -> bool {
+        self._pin.is_live()
+    }
+
     pub(super) fn buffer_alias(self: &Arc<Self>, device: &ID3D12Device, offset: u64,
         width: u64, stride: u32, flags: D3D12_RESOURCE_FLAGS,
     ) -> windows::core::Result<(ID3D12Resource, u64)> {
@@ -918,7 +923,7 @@ impl PagePools {
             if let Some(pool) = pools.values_mut().find(|pool| pool.start <= base && base + size <= pool.end) {
                 // Interleaved allocations can revisit a page whose heap is
                 // still owned by a resource. Reuse only that exact live import.
-                return pool.pages.get_or_open(base, open);
+                return pool.pages.get_or_open(base, ImportedHeap::is_live, open);
             }
         }
         open()

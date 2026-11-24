@@ -102,6 +102,12 @@ impl TextureAddress {
         self.buffer_offset + (address - self.base as u64)
     }
 
+    /// An imported buffer whose pages were since remapped still shows the old
+    /// pages. Lookups skip it so the next use imports the current mapping.
+    fn is_stale(&self) -> bool {
+        self.buffer_heap.as_ref().is_some_and(|heap| !heap.is_live())
+    }
+
     pub(super) fn register(device: &Device, native: &ID3D12Resource, desc: &D3D12_RESOURCE_DESC) -> std::sync::Arc<Self> {
         use windows::Win32::System::Memory::{VirtualAlloc, MEM_RESERVE, PAGE_NOACCESS};
         let size = unsafe { device.native.GetResourceAllocationInfo(0, std::slice::from_ref(desc)) }.SizeInBytes;
@@ -462,7 +468,7 @@ fn buffer_at(device: &Device, address: u64, bytes: u64, stride: u32, required: b
     use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
     use windows::Win32::System::Memory::{MEMORY_BASIC_INFORMATION, MEM_COMMIT, VirtualQuery};
     crate::commands::page_mapping::GPU_APERTURE.wait(address,bytes)?;
-    if let Some(entry) = device.state.texture_addresses.preceding(address as usize) {
+    if let Some(entry) = device.state.texture_addresses.preceding(address as usize).filter(|entry| !entry.is_stale()) {
         let host = unsafe { entry.native.GetDesc() };
         if host.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER
             && entry.offset(address).is_multiple_of(u64::from(stride))
@@ -498,8 +504,8 @@ fn buffer_at(device: &Device, address: u64, bytes: u64, stride: u32, required: b
     } else { nearest };
     host.Width = bytes.checked_add(address - page).ok_or(E_INVALIDARG)?;
     if !tight { host.Width = host.Width.checked_next_multiple_of(65536).ok_or(E_INVALIDARG)?; }
-    let native = super::heap::import_buffer(device, page, &host, D3D12_RESOURCE_STATE_COMMON, "view")?;
-    Ok(Some(TextureAddress::at(device, &native, page as usize, false, None)))
+    let (native, heap) = super::heap::import_buffer_with_heap(device, page, &host, D3D12_RESOURCE_STATE_COMMON, "view")?;
+    Ok(Some(TextureAddress::with_heap(device, &native, page as usize, false, None, None, None, 0, Some(heap))))
 }
 
 pub(crate) unsafe fn command_buffer_address(device: *mut c_void, address: u64, bytes: u64) -> windows::core::Result<(Option<ID3D12Resource>, u64)> {
