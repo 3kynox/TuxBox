@@ -82,6 +82,22 @@ Add `--mangohud` before the package path to record frame times. The prefix defau
 
 The first launch records each shader the game requests in the prefix. Before later launches, the launcher compiles the recorded requests and shows its progress, so the game reuses those translations instead of compiling them during play. Pass `--prepare-only` to prepare without starting the game, or `--no-shader-prep` to skip preparation for one launch. Place either option before the package path. [Preparation results](../evidence/projectscarlett-shader-preparation.json)
 
+### Preparation speed and coverage
+
+Launch-time preparation runs one compiler job per available core, up to 8. Set
+`TUXBOX_SHADER_PREP_JOBS` to a value from 1 to 32 to change it; more jobs use
+more memory.
+
+Set `TUXBOX_SCARLETT_SEED_PACK=1` to add every shader stored in the package's
+`shaders.rpf` to the preparation list before compiling, so the first launch
+does not depend on which scenes earlier runs reached. The launcher reads the
+plain shader records after the archive's table of contents; it does not
+decrypt anything. Linked vertex/pixel pairs, stencil variants and programs
+that receive their root signature at pipeline creation are still recorded
+during play. On the 1.0.2.1 `shaders.rpf` (412 MB) the reader found 25,889
+distinct DXBC programs in 4.4 s; 5,527 of them are byte-identical to requests
+the game recorded at run time.
+
 ### Live compilation workload
 
 During gameplay, unrelated shader requests can compile concurrently rather

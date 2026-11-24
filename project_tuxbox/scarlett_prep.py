@@ -14,6 +14,7 @@ from .prep_progress import PrepPhase, desktop_progress, report_progress
 from .runtime_shaders import REQUEST_PATTERNS, ShaderRefused, compile_request, snapshot_compiler_cache
 from .shader_prep import SOURCE_CACHE
 from .shader_diagnostics import normalize_refusal
+from .shader_pack import seed_requests
 from .scarlett_report import aggregate, refusal_bucket, failure_bucket
 
 
@@ -21,6 +22,51 @@ def scarlett_requests(executable, cache):
     if executable.name.casefold() != "game_scarlett_master.exe" or not executable.with_name("shaders.rpf").is_file():
         return None
     return cache / "projectscarlett" / digest(executable) / "requests"
+
+
+PREP_JOBS_LIMIT = 32
+
+
+def prep_jobs(env, report=report_progress):
+    """Compiler jobs for launch-time preparation.
+
+    Preparation runs before the game starts, so it can use more of the CPU
+    than live compilation (TUXBOX_RUNTIME_SHADER_JOBS). Default to the
+    available cores, at most 8; TUXBOX_SHADER_PREP_JOBS chooses 1 to 32.
+    """
+    try:
+        cpus = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        cpus = os.cpu_count() or 1
+    default = max(1, min(8, cpus))
+    value = env.get("TUXBOX_SHADER_PREP_JOBS")
+    if value is None:
+        return default
+    try:
+        jobs = int(value)
+        if not 1 <= jobs <= PREP_JOBS_LIMIT:
+            raise ValueError
+    except ValueError:
+        report(None, f"Invalid TUXBOX_SHADER_PREP_JOBS={value!r}; using {default}")
+        return default
+    return jobs
+
+
+def seed_from_pack(executable, archive, env):
+    """With TUXBOX_SCARLETT_SEED_PACK=1, add every shader in shaders.rpf to the
+    request archive so the first launch prepares more than earlier runs saw."""
+    if env.get("TUXBOX_SCARLETT_SEED_PACK") != "1":
+        return
+    report_progress(None, "Reading ProjectScarlett's shader pack")
+    started = monotonic()
+    try:
+        found, added = seed_requests(executable.with_name("shaders.rpf"), archive,
+                                     lambda message: report_progress(None, message))
+    except OSError as exc:
+        report_progress(None, f"Could not read ProjectScarlett's shader pack: {exc}")
+        return
+    report_progress(None, f"Shader pack: {found} shaders found, {added} added to preparation "
+                    f"in {monotonic() - started:.1f}s.")
 
 
 def prepare_scarlett(executable, host):
@@ -31,6 +77,7 @@ def prepare_scarlett(executable, host):
     archive = scarlett_requests(executable, cache_root)
     if archive is None:
         return False
+    seed_from_pack(executable, archive, host.env)
     sources = sorted(
         path for path in archive.iterdir()
         if path.suffix in REQUEST_PATTERNS and re.fullmatch(REQUEST_PATTERNS[path.suffix], path.stem)
@@ -60,7 +107,7 @@ def prepare_scarlett(executable, host):
             except (OSError, ValueError, subprocess.SubprocessError) as exc:
                 return "failed", f"{source.name}: {exc}", failure_bucket(exc), source.suffix, None
 
-        workers = ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 1))
+        workers = ThreadPoolExecutor(max_workers=prep_jobs(host.env))
         try:
             pending = [workers.submit(compile_one, source) for source in sources]
             for completed, result in enumerate(as_completed(pending), 1):
