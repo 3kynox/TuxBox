@@ -102,23 +102,61 @@ pub fn pixel(shader: &[u8]) -> Option<[u32; 13]> {
                 _ => return None,
             };
         }
-        if sampler.replace(words).is_some_and(|prior| prior != words) {
+        let state = (words, comparison(op.op));
+        if sampler.replace(state).is_some_and(|prior| prior != state) {
             return None;
         }
     }
-    descriptor(sampler?, reg, space, 5)
+    let (words, compare) = sampler?;
+    descriptor(words, reg, space, 5, compare)
 }
 
-fn descriptor(words: [u32; 4], reg: u32, space: u32, visibility: u32) -> Option<[u32; 13]> {
-    let [address, 0xc00000, filters, 0] = words else {
+// Match the comparison sample/gather variants handled by the HLSL emitter.
+// The sampler words themselves do not distinguish Sample from SampleCmp.
+fn comparison(op: u32) -> bool {
+    matches!(op, 40..=47 | 56..=63 | 72..=79 | 88..=95)
+}
+
+fn descriptor(
+    words: [u32; 4],
+    reg: u32,
+    space: u32,
+    visibility: u32,
+    compare: bool,
+) -> Option<[u32; 13]> {
+    let [address, 0xc00000, filters, border_word] = words else {
         return None;
     };
-    let (filter, aniso) = match (filters, address >> 9) {
-        (0x14000000, 0) => (0, 1),
-        (0x14500000, 0) => (0x14, 1),
-        (0x18500000, 0) => (0x15, 1),
-        (0x18f00000, 2) => (0x55, 4),
-        _ => return None,
+    let (filter, aniso, func, border) = if compare {
+        // Invert the exact literal-state mapping in shader-compiler's
+        // sampler_heap::inline_sampler. Reject unrecognized reserved fields,
+        // biases, anisotropic modes and custom border colors.
+        if address & !0x71ff != 0 || border_word & 0x3fff_ffff != 0 {
+            return None;
+        }
+        let filter = match filters {
+            0x14000000 => 0x80,
+            0x14500000 => 0x94,
+            0x18500000 => 0x95,
+            _ => return None,
+        };
+        let border = border_word >> 30;
+        if border > 2 {
+            return None;
+        }
+        (filter, 1, ((address >> 12) & 7) + 1, border)
+    } else {
+        if border_word != 0 {
+            return None;
+        }
+        let (filter, aniso) = match (filters, address >> 9) {
+            (0x14000000, 0) => (0, 1),
+            (0x14500000, 0) => (0x14, 1),
+            (0x18500000, 0) => (0x15, 1),
+            (0x18f00000, 2) => (0x55, 4),
+            _ => return None,
+        };
+        (filter, aniso, 1, 0)
     };
     let axis = |shift: u32| match (address >> shift) & 7u32 {
         0 => Some(1),
@@ -133,8 +171,8 @@ fn descriptor(words: [u32; 4], reg: u32, space: u32, visibility: u32) -> Option<
         axis(6)?,
         0,
         aniso,
-        1,
-        0,
+        func,
+        border,
         0,
         12.0_f32.to_bits(),
         reg,
@@ -152,7 +190,7 @@ pub struct InlineSamplers {
 
 /// Classify literal states separately from the source registers. The native
 /// compiler may fold several equal samplers to the same state, so a recovered
-/// root uses private slots whose identity comes from the four descriptor words.
+/// root uses private slots keyed by the descriptor words and comparison mode.
 pub fn sites(isa: &[u8], visibility: u32) -> Option<InlineSamplers> {
     use std::collections::{BTreeMap, BTreeSet};
     let ops = rdna2::disassemble(isa);
@@ -256,7 +294,7 @@ pub fn sites(isa: &[u8], visibility: u32) -> Option<InlineSamplers> {
         for (n, word) in words.iter_mut().enumerate() {
             *word = reaching(i, base.checked_add(n as u8)?)?;
         }
-        states.insert(op.offset, words);
+        states.insert(op.offset, (words, comparison(op.op)));
     }
     let unique: BTreeSet<_> = states.values().copied().collect();
     if unique.is_empty() || unique.len() > 128 {
@@ -264,10 +302,10 @@ pub fn sites(isa: &[u8], visibility: u32) -> Option<InlineSamplers> {
     }
     let mut descriptors = Vec::new();
     let mut slots = BTreeMap::new();
-    for words in unique {
+    for (words, compare) in unique {
         let slot = descriptors.len() as u32;
-        descriptors.push(descriptor(words, slot, 32765, visibility)?);
-        slots.insert(words, slot);
+        descriptors.push(descriptor(words, slot, 32765, visibility, compare)?);
+        slots.insert((words, compare), slot);
     }
     Some(InlineSamplers {
         descriptors,
@@ -339,6 +377,75 @@ pub fn private(shader: &[u8], stage: u32) -> Option<Vec<[u32; 13]>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn comparison_sampler_recovers_opaque_white_border_and_less_equal() {
+        // State seen in ProjectScarlett issue #39. No game shader bytes needed.
+        let words = [0x30b6, 0xc00000, 0x18500000, 0x80000000];
+        assert_eq!(
+            super::descriptor(words, 7, 32765, 5, true),
+            Some([0x95, 4, 4, 3, 0, 1, 4, 2, 0, 12.0_f32.to_bits(), 7, 32765, 5])
+        );
+        assert!(super::descriptor(words, 7, 32765, 5, false).is_none());
+        for (word, mask) in [(0, 0x8000), (1, 1), (2, 0x10000), (3, 1), (3, 0x40000000)] {
+            let mut bad = words;
+            bad[word] ^= mask;
+            assert!(super::descriptor(bad, 7, 32765, 5, true).is_none());
+        }
+    }
+
+    #[test]
+    fn comparison_sampler_state_is_recovered_at_the_image_site() {
+        let mut words = [
+            0xb008_30b6u32,
+            0xbe89_03ff,
+            0x00c0_0000,
+            0xbe8a_03ff,
+            0x1850_0000,
+            0xbe8b_03ff,
+            0x8000_0000,
+            0xf0a0_0f08,
+            0x0040_0a0a, // image_sample_c
+            0xbf81_0000,
+        ];
+        let classify = |code: &[u32]| {
+            let isa: Vec<_> = code.iter().flat_map(|x| x.to_le_bytes()).collect();
+            super::sites(&isa, 5)
+        };
+        let sample = classify(&words).unwrap();
+        assert_eq!(sample.descriptors.len(), 1);
+        assert_eq!(
+            sample.descriptors[0],
+            [0x95, 4, 4, 3, 0, 1, 4, 2, 0, 12.0_f32.to_bits(), 0, 32765, 5]
+        );
+        assert_eq!(sample.sites.get(&28), Some(&0));
+        words[7] = 0xf080_0f08; // ordinary image_sample must not receive a comparison sampler
+        assert!(classify(&words).is_none());
+    }
+
+    #[test]
+    fn identical_literal_has_distinct_normal_and_comparison_slots() {
+        let words = [
+            0xb008_0092u32,
+            0xbe89_03ff,
+            0x00c0_0000,
+            0xbe8a_03ff,
+            0x1450_0000,
+            0xbe8b_0380,
+            0xf080_0f08,
+            0x0040_0a0a, // image_sample
+            0xf0a0_0f08,
+            0x0040_0a0a, // image_sample_c
+            0xbf81_0000,
+        ];
+        let isa: Vec<_> = words.iter().flat_map(|x| x.to_le_bytes()).collect();
+        let sample = super::sites(&isa, 5).unwrap();
+        assert_eq!(sample.descriptors.len(), 2);
+        assert_eq!(sample.descriptors[0][0], 0x14);
+        assert_eq!(sample.descriptors[1][0], 0x94);
+        assert_eq!(sample.sites.get(&24), Some(&0));
+        assert_eq!(sample.sites.get(&32), Some(&1));
+    }
+
     #[test]
     fn sampler_words_must_agree_on_every_reachable_loop_path() {
         // s[8:11] describe linear clamped sampling. The preheader skips a
