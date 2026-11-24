@@ -79,3 +79,31 @@ The game opens its Americas window, loads its archives and presents 3840×2160 f
 In a new prefix, the game stops at a breakpoint during System Init because it reads its package through the `G:` drive, as on the console, and the launcher doesn't map that drive yet. A fix is in review. [Pull request #6](https://github.com/brcly/TuxBox/pull/6)
 
 When you report a run, include the package version, executable hash, GPU and driver, Proton build, and the log printed in the first line of the launcher's output.
+
+
+### Packed integer compute controls
+
+The ordinary VOP3P path supports five additional forms:
+`v_pk_add_i16`, `v_pk_mad_i16`, `v_pk_mad_u16`,
+`v_pk_max_u16` and `v_pk_min_u16`. The low/high selectors are
+independent, including the third operand's high selector in bit 14 of
+the first word. Signed and unsigned arithmetic without clamp is modulo
+2^16 per half. These new forms require ordinary VGPR inputs; clamp,
+negation and other sources remain refused.
+
+[Validation receipt](../evidence/scarlett-packed-integers.json):
+22 synthetic compute programs (all refused on the prior emitter),
+176 selector combinations, with a source aliasing the destination,
+16 independent dynamic inputs per combination, 2,816 calculated
+results and 8,448 total readback words including input/guard values.
+All matched the independent Python model on RTX 4080 and stock
+Proton Experimental. Ten negative controls remain refused. This is
+not a measurement of ProjectScarlett's actual shader coverage.
+
+Build the test emitter with
+`cargo build --manifest-path tools/shader-compiler/Cargo.toml --example packed_integer --target x86_64-unknown-linux-gnu`.
+Use `python tools/check_packed_integer_gpu.py --help` for the local
+LLVM gfx1030 assembler, emitter, DXC/DXV, provider and offline Proton
+template arguments. An optional baseline binary built with the same
+example and the original integer emitter enables the before/after
+gate. No game files are used.
