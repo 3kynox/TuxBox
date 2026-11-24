@@ -48,67 +48,17 @@ pub fn pixel(shader: &[u8]) -> Option<[u32; 13]> {
         return None;
     }
 
-    let code = fssm::decode(program).ok()?;
-    let ops = rdna2::disassemble(&code.isa);
-    let mut branches = Vec::new();
-    for op in &ops {
-        if op.mnemonic == "s_branch" || op.mnemonic.starts_with("s_cbranch_") {
-            let to = (op.offset + op.dwords * 4)
-                .checked_add_signed(isize::try_from(op.aux.imm.checked_mul(4)?).ok()?)?;
-            if op.enc != Enc::Sopp || to <= op.offset {
-                return None;
-            }
-            branches.push((op.offset, to));
-        } else if op.mnemonic.starts_with("s_movrel")
-            || op.mnemonic.starts_with("s_subvector_loop")
-            || matches!(
-                op.mnemonic.as_str(),
-                "s_setpc_b64" | "s_swappc_b64" | "s_call_b64" | "s_rfe_b64" | "s_trap"
-            )
-        {
-            return None;
-        }
-    }
-    let mut sampler = None;
-    for (i, op) in ops.iter().enumerate().filter(|(_, op)| {
-        op.enc == Enc::Mimg
-            && (op.mnemonic.starts_with("image_sample")
-                || op.mnemonic.starts_with("image_gather")
-                || op.mnemonic == "image_get_lod")
-    }) {
-        let Opnd::Sgpr(base) = *op.src.last()? else {
-            return None;
-        };
-        let mut words = [0; 4];
-        for (j, dst) in words.iter_mut().enumerate() {
-            let r = base.checked_add(j as u8)?;
-            let load = ops[..i]
-                .iter()
-                .rev()
-                .find(|x| rdna2::clobbers_scalar(x, r))?;
-            if load.dst != [Opnd::Sgpr(r)]
-                || branches
-                    .iter()
-                    .any(|&(from, to)| from < load.offset && to > load.offset && to <= op.offset)
-            {
-                return None;
-            }
-            *dst = match (load.mnemonic.as_str(), load.src.as_slice()) {
-                ("s_movk_i32", []) => load.aux.imm as i16 as i32 as u32,
-                ("s_mov_b32", [Opnd::ConstInt(v)]) => *v as u32,
-                ("s_mov_b32", [Opnd::Literal(v)]) => *v,
-                ("s_brev_b32", [Opnd::ConstInt(v)]) => (*v as u32).reverse_bits(),
-                ("s_brev_b32", [Opnd::Literal(v)]) => v.reverse_bits(),
-                _ => return None,
-            };
-        }
-        let state = (words, comparison(op.op));
-        if sampler.replace(state).is_some_and(|prior| prior != state) {
-            return None;
-        }
-    }
-    let (words, compare) = sampler?;
-    descriptor(words, reg, space, 5, compare)
+    // Reuse the same control-flow proof as private sampler recovery. A
+    // single immutable state can retain the original PSV binding even if
+    // the native program copies its words or uses a loop.
+    let recovered = sites(&fssm::decode(program).ok()?.isa, 5)?;
+    let [sampler] = recovered.descriptors.as_slice() else {
+        return None;
+    };
+    let mut sampler = *sampler;
+    sampler[10] = reg;
+    sampler[11] = space;
+    Some(sampler)
 }
 
 // Match the comparison sample/gather variants handled by the HLSL emitter.
@@ -146,7 +96,7 @@ fn descriptor(
         }
         (filter, 1, ((address >> 12) & 7) + 1, border)
     } else {
-        if border_word != 0 {
+        if border_word & 0x3fff_ffff != 0 || border_word >> 30 > 2 {
             return None;
         }
         let (filter, aniso) = match (filters, address >> 9) {
@@ -156,7 +106,7 @@ fn descriptor(
             (0x18f00000, 2) => (0x55, 4),
             _ => return None,
         };
-        (filter, aniso, 1, 0)
+        (filter, aniso, 1, border_word >> 30)
     };
     let axis = |shift: u32| match (address >> shift) & 7u32 {
         0 => Some(1),
@@ -179,6 +129,13 @@ fn descriptor(
         space,
         visibility,
     ])
+}
+
+/// Match a literal state to a serialized D3D12 static sampler. The
+/// compiler and root builder share this decoder instead of maintaining
+/// independent (and potentially inconsistent) filter tables.
+pub fn matches_static(words: [u32; 4], sampler: &[u32; 13], compare: bool) -> bool {
+    descriptor(words, sampler[10], sampler[11], sampler[12], compare).as_ref() == Some(sampler)
 }
 
 /// Every PC in this map refers to a native MIMG instruction whose sampler is
@@ -242,6 +199,9 @@ pub fn sites(isa: &[u8], visibility: u32) -> Option<InlineSamplers> {
     // Accept a literal only if every reaching definition supplies exactly
     // that value, including loop backedges and moves between SGPRs.
     let reaching = |pc: usize, reg: u8| -> Option<u32> {
+        if pc == 0 {
+            return None; // No reaching definition at program entry.
+        }
         let mut literal = None;
         let mut seen = BTreeSet::new();
         let mut pending: Vec<_> = incoming[pc].iter().map(|&i| (i, reg)).collect();
@@ -251,20 +211,34 @@ pub fn sites(isa: &[u8], visibility: u32) -> Option<InlineSamplers> {
             }
             let op = &ops[i];
             if rdna2::clobbers_scalar(op, r) {
-                if op.dst != [Opnd::Sgpr(r)] {
-                    return None;
-                }
-                let value = match (op.mnemonic.as_str(), op.src.as_slice()) {
-                    ("s_movk_i32", []) => Some(op.aux.imm as i16 as i32 as u32),
-                    ("s_mov_b32", [Opnd::ConstInt(v)]) => Some(*v as u32),
-                    ("s_mov_b32", [Opnd::Literal(v)]) => Some(*v),
-                    ("s_brev_b32", [Opnd::ConstInt(v)]) => Some((*v as u32).reverse_bits()),
-                    ("s_brev_b32", [Opnd::Literal(v)]) => Some(v.reverse_bits()),
-                    ("s_mov_b32", [Opnd::Sgpr(src)]) => {
-                        r = *src;
-                        None
+                let value = if op.mnemonic == "s_mov_b64" && op.enc == Enc::Sop1 {
+                    // Resolve the requested half of an ordinary SGPR pair
+                    // copy using pre-instruction definitions, including overlap.
+                    let [Opnd::Sgpr(dst)] = op.dst[..] else { return None };
+                    let [Opnd::Sgpr(src)] = op.src[..] else { return None };
+                    if dst > 104 || src > 104 || dst % 2 != 0 || src % 2 != 0 {
+                        return None;
                     }
-                    _ => return None,
+                    let half = r.checked_sub(dst)?;
+                    if half > 1 { return None; }
+                    r = src.checked_add(half)?;
+                    None
+                } else {
+                    if op.dst != [Opnd::Sgpr(r)] {
+                        return None;
+                    }
+                    match (op.mnemonic.as_str(), op.src.as_slice()) {
+                        ("s_movk_i32", []) => Some(op.aux.imm as i16 as i32 as u32),
+                        ("s_mov_b32", [Opnd::ConstInt(v)]) => Some(*v as u32),
+                        ("s_mov_b32", [Opnd::Literal(v)]) => Some(*v),
+                        ("s_brev_b32", [Opnd::ConstInt(v)]) => Some((*v as u32).reverse_bits()),
+                        ("s_brev_b32", [Opnd::Literal(v)]) => Some(v.reverse_bits()),
+                        ("s_mov_b32", [Opnd::Sgpr(src)]) => {
+                            r = *src;
+                            None
+                        }
+                        _ => return None,
+                    }
                 };
                 if let Some(value) = value {
                     if literal.replace(value).is_some_and(|last| last != value) {
@@ -444,6 +418,74 @@ mod tests {
         assert_eq!(sample.descriptors[1][0], 0x94);
         assert_eq!(sample.sites.get(&24), Some(&0));
         assert_eq!(sample.sites.get(&32), Some(&1));
+    }
+
+    #[test]
+    fn all_six_logged_literal_states_match_the_same_static_sampler_decoder() {
+        // Six distinct states observed in the ProjectScarlett #39 log.
+        for (words, compare, filter, aniso) in [
+            ([0x30b6, 0xc00000, 0x18500000, 0x80000000], true, 0x95, 1),
+            ([0x92, 0xc00000, 0x14500000, 0], false, 0x14, 1),
+            ([0, 0xc00000, 0x14000000, 0], false, 0, 1),
+            ([0x92, 0xc00000, 0x14000000, 0], false, 0, 1),
+            ([0x400, 0xc00000, 0x18f00000, 0], false, 0x55, 4),
+            ([0x92, 0xc00000, 0x18500000, 0], false, 0x15, 1),
+        ] {
+            let sampler = super::descriptor(words, 3, 7, 5, compare).unwrap();
+            assert_eq!((sampler[0], sampler[5]), (filter, aniso));
+            assert!(super::matches_static(words, &sampler, compare));
+            // All state fields (including LODs, compare function, and
+            // anisotropy) must match. Register/space are binding identity.
+            for index in 0..10 {
+                let mut wrong = sampler;
+                wrong[index] ^= 1;
+                assert!(!super::matches_static(words, &wrong, compare), "field {index}");
+            }
+            assert!(!super::matches_static(words, &sampler, !compare));
+        }
+        for border in 0..=2 {
+            let words = [0x1b6, 0xc00000, 0x14500000, border << 30];
+            let sampler = super::descriptor(words, 0, 0, 0, false).unwrap();
+            assert_eq!(sampler[7], border);
+            assert!(super::matches_static(words, &sampler, false));
+        }
+    }
+
+    #[test]
+    fn pair_moves_recover_both_words_without_guessing() {
+        let mut words = [
+            0xb00c_0092u32, // s_movk_i32 s12, 0x92
+            0xbe8d_03ff, 0x00c0_0000, // s_mov_b32 s13, max LOD
+            0xbe8e_03ff, 0x1450_0000, // s_mov_b32 s14, linear
+            0xbe8f_0380, // s_mov_b32 s15, zero
+            0xbe88_040c, // s_mov_b64 s[8:9], s[12:13]
+            0xbe8a_040e, // s_mov_b64 s[10:11], s[14:15]
+            0xf080_0f08, 0x0040_0a0a,
+            0xbf81_0000,
+        ];
+        let classify = |code: &[u32]| {
+            let isa: Vec<_> = code.iter().flat_map(|x| x.to_le_bytes()).collect();
+            super::sites(&isa, 5)
+        };
+        let result = classify(&words).unwrap();
+        assert_eq!(result.descriptors[0][0], 0x14);
+        assert_eq!(result.sites.get(&32), Some(&0));
+        words[6] = 0xbe88_040a; // reads uninitialized s[10:11]
+        assert!(classify(&words).is_none());
+    }
+
+    #[test]
+    fn a_loop_backedge_cannot_initialize_a_sampler_at_entry() {
+        let words = [
+            0xf080_0f08u32, 0x0040_0a0a, // sample before any initialization
+            0xb008_0092,
+            0xbe89_03ff, 0x00c0_0000,
+            0xbe8a_03ff, 0x1450_0000,
+            0xbe8b_0380,
+            0xbf82_fff7, // branch back to entry
+        ];
+        let isa: Vec<_> = words.iter().flat_map(|x| x.to_le_bytes()).collect();
+        assert!(super::sites(&isa, 5).is_none());
     }
 
     #[test]
