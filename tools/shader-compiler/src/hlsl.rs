@@ -3022,8 +3022,10 @@ impl<'a> Emitter<'a> {
                         }
                         // A sampler picked at run time from the directly indexed compute sampler
                         // heap (CS_RaytracingResolve: per-material index << 4, then a waterfall).
+                        // Statically resolved sampler offsets keep their own path below.
                         if self.compute_heap && self.sampler_heap_base == Some(table) && n == 4 && ins.aux.imm == 0
                             && soff < 106 && written.contains(&soff)
+                            && !matches!(sym.get(&soff), Some(Sym::SamplerOffset(_)))
                         {
                             for k in 0..4 {
                                 sym.remove(&(d + k));
@@ -4677,6 +4679,8 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                         self.regs.insert(value.clone());
                         let dst = d.ok_or("missing sampler descriptor destination")?;
                         self.touch(&dst);
+                        // The guest sampler-heap pointer is the heap start (as for the static
+                        // path), so the byte offset over 16 is the descriptor index.
                         self.ws(&dst, &format!("({value} >> 4)"))?;
                         return Ok(());
                     }
