@@ -52,7 +52,6 @@ struct Recording {
     display_bound: bool,
     trace_target: Option<ID3D12Resource>,
     trace_samples: Vec<(String, crate::present::sampler::Sample)>,
-    null_pipeline: bool,
     media: Option<media::Recording>,
     placed_reads: Vec<Arc<Texture>>,
     placed_writes: Vec<Arc<Texture>>,
@@ -101,6 +100,13 @@ impl Recording {
     }
 
     fn compute_dispatch(&mut self, list: &List, dispatch: impl FnOnce()) {
+        let null_usage = self.bindings.null_usage.clone();
+        let dispatch = move || {
+            dispatch();
+            if let Some(tag) = &null_usage {
+                crate::diagnostics::display::record_null(tag, false);
+            }
+        };
         if let Some(table) = self.bindings.reflected_table::<true>() {
             if let Err(error) = self.bindings.with_reflected_table::<true>(
                 table, list, self.descriptor_arena.as_deref(), self.resource_heap.as_ref(),
@@ -160,9 +166,17 @@ impl Recording {
     }
 
     fn draw(&mut self, list: &List, rasterizes: bool, draw: impl FnOnce()) {
-        if rasterizes {
-            crate::diagnostics::display::draw(self.display_bound, self.null_pipeline);
-        }
+        let null_usage = self.bindings.null_usage.clone();
+        let display_bound = self.display_bound;
+        let draw = move || {
+            draw();
+            if rasterizes {
+                crate::diagnostics::display::draw(display_bound, null_usage.is_some());
+                if let Some(tag) = &null_usage {
+                    crate::diagnostics::display::record_null(tag, display_bound);
+                }
+            }
+        };
         if rasterizes {
             for target in &self.bound_placed_targets {
                 if let Err(error) = Self::track_texture(&mut self.placed_writes, target) {
@@ -1644,7 +1658,6 @@ pub(crate) unsafe fn wrap_command_list(
             display_bound: false,
             trace_target: None,
             trace_samples: Vec::new(),
-            null_pipeline: false,
             placed_reads: Vec::new(),
             placed_writes: Vec::new(),
             uploads: Vec::new(),

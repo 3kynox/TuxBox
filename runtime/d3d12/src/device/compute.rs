@@ -25,6 +25,7 @@ pub(crate) struct PipelineData {
     pub(crate) scene_root: Option<SceneRoot>,
     pub(crate) reflected: Option<std::sync::Arc<ComputeTable>>,
     pub(crate) raster_table: Option<std::sync::Arc<ComputeTable>>,
+    pub(crate) null_usage: Option<std::sync::Arc<crate::diagnostics::null_usage::Tag>>,
 }
 
 const _: () = assert!(
@@ -365,12 +366,15 @@ unsafe fn null_compute(
     let native = crate::big_stack::run_logged("null CS", || unsafe { this.native.CreateComputePipelineState::<ID3D12PipelineState>(&host) });
     unsafe { ManuallyDrop::drop(&mut host.pRootSignature) };
     if native.is_err() { return None; }
-    if let Ok(pipeline) = &native {
-        let code = unsafe { std::slice::from_raw_parts(desc.CS.pShaderBytecode.cast::<u8>(), desc.CS.BytecodeLength) };
-        if crate::diagnostics::display::enabled() && let Some(digest) = super::shader_cache::source_digest(code) {
-            crate::diagnostics::display::mark_null_compute(pipeline.as_raw(), digest);
-        }
-    }
+    let null_usage = crate::diagnostics::display::enabled().then(|| {
+        let digest = if !desc.CS.pShaderBytecode.is_null() && desc.CS.BytecodeLength <= 64 * 1024 * 1024 {
+            let code = unsafe { std::slice::from_raw_parts(desc.CS.pShaderBytecode.cast::<u8>(), desc.CS.BytecodeLength) };
+            super::shader_cache::source_digest(code)
+        } else { None };
+        std::sync::Arc::new(crate::diagnostics::null_usage::Tag {
+            kind: "compute", stages: format!("CS={}", digest.as_deref().unwrap_or("unknown")),
+        })
+    });
     substituted("compute");
-    Some(unsafe { wrap_pageable(native, &PIPELINE, this, PipelineData::default(), out) })
+    Some(unsafe { wrap_pageable(native, &PIPELINE, this, PipelineData { null_usage, ..Default::default() }, out) })
 }
