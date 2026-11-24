@@ -101,3 +101,57 @@ on the same provider. 216 Python tests pass.
   }
 }
 ```
+
+
+## Consolidated coverage after #92
+
+The follow-up consolidates the duplicate #116 test into this PR.
+Extend the original 24-word readback to five starts (0, 256, 65280,
+65536, 65792) across three committed pages. Require all five physical
+view imports: 64/128/128/64/128 KiB, respectively. The stricter
+upstream runner now disables null substitution in positive cases.
+Both the expanded root CBV control (120/120 words including guards)
+and the null-disabled negative control pass on RTX 4080 with a fresh
+provider built from the merged 9139f2f runtime. 224 Python tests pass.
+No old GPU-fault reproduction, graphics CBV or retail claim.
+
+```json
+{
+  "schema": 1,
+  "scope": "Synthetic D3D12 provider controls; not retail execution",
+  "adapter": "10de:2704",
+  "proton": "1794497090 experimental-11.0-20261112-x86_64",
+  "artifacts_sha256": {
+    "d3d12_xs.dll": "0efe7d65f21a7b58bea17f67f46dfc8e4cc5eecbf91663d3109b446ffe13fa4b",
+    "d3d12.dll": "fc2bbef02509fb11c334cc96dd211f64def94bb7b4eb82082a4808e6e0549543",
+    "d3d12core.dll": "9356501320114773be279506644aabd9a1717ff451d480ac802a4fd4e94b2576",
+    "dxgi.dll": "2814edc3350cae6d34a75b7900df19752889c310ef34255c7316c4a95e1b183f",
+    "dxcompiler.dll": "0689e2fee0a1c9df8662a59680469f24e2a3ad7ce6bbbcc9284f7a83172bfc59",
+    "dxil.dll": "64be2368211d257a038a7d4ea6bb3e24c878eb8d588c7b8414fccf759b69c2ac",
+    "wine": "7a6de49c00d8ed2ba55c6967d3643c5ef729f5e562fb51e47e4f41c6cdb5c92a",
+    "wineserver": "4c9afbd3bc3fc4229de03acc87f1abc69a9c1ab42918ef95406107b396a57486",
+    "d3d12-root-cbv-window.exe": "daffa6d0555dd5878174bfab925ff0d5547507aec808b71920999a9451f7cfdc",
+    "d3d12-null-usage.exe": "901884dd1dbdd45ac710f158b89cd792f5f7f9b7f895643897ff3a43bfdc8892"
+  },
+  "unchanged": true,
+  "cases": [
+    {
+      "case": "root-cbv-window",
+      "passed": true,
+      "exit": 0,
+      "seconds": 13.513,
+      "receipt": "d3d12-root-cbv-window PASS pci=10de:2704 words=120/120 window=65536 offsets=0,256,65280,65536,65792",
+      "null_fallback_enabled": false
+    },
+    {
+      "case": "null-disabled",
+      "passed": true,
+      "exit": 0,
+      "seconds": 15.603,
+      "receipt": "d3d12-null-disabled PASS pci=10de:2704 rejected=1 valid=1",
+      "null_fallback_enabled": false
+    }
+  ],
+  "passed": true
+}
+```
