@@ -7,6 +7,8 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
+# LazyLock::get (1.94) and the atomic try_update methods (1.95) are used by the providers.
+rust-version = "1.95"
 publish = false
 
 [workspace.dependencies]
