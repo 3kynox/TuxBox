@@ -190,10 +190,90 @@ pub(super) fn lower(insns: &mut [Insn], first: usize) -> Result<(u32, usize), &'
     Ok((width, start + last_read + 2))
 }
 
+/// A forward SCC branch can skip a whole reduction without divergence when
+/// its comparison uses only immediates or the immediately preceding verified
+/// reduction's scalar result. Require the entire proof window to be free of
+/// other control-flow edges: a lane skipping the comparison, entering its
+/// body, or revisiting it on a loop could otherwise break uniformity.
+fn uniform_forward_guard(
+    insns: &[Insn],
+    branch_index: usize,
+    reduction_end: usize,
+    verified_reads: &[usize],
+) -> bool {
+    let branch = &insns[branch_index];
+    let pc = branch.offset as i64;
+    let target = pc + 4 + 4 * branch.aux.imm;
+    if !matches!(branch.op, 4 | 5) || target <= reduction_end as i64 {
+        return false;
+    }
+    let Some(compare_index) = branch_index.checked_sub(1) else { return false };
+    let compare = &insns[compare_index];
+    if compare.enc != Enc::Sopc
+        || !matches!(compare.mnemonic.as_str(),
+            "s_cmp_eq_u32" | "s_cmp_lg_u32" | "s_cmp_gt_u32" | "s_cmp_ge_u32"
+            | "s_cmp_lt_u32" | "s_cmp_le_u32" | "s_cmp_eq_i32" | "s_cmp_lg_i32"
+            | "s_cmp_gt_i32" | "s_cmp_ge_i32" | "s_cmp_lt_i32" | "s_cmp_le_i32")
+        || compare.src.len() != 2
+    {
+        return false;
+    }
+
+    // A final READ_LANE of an already checked reduction broadcasts the same
+    // scalar to every host invocation. No intervening writes are permitted.
+    let previous_read = verified_reads.last().copied().filter(|&read| {
+        read + 1 < compare_index
+            && insns[read].op == READ_LANE
+            && insns[read].enc == Enc::Vop3
+            && insns[read + 1].mnemonic.starts_with("s_mov_b")
+            && insns[read + 1].dst == [Opnd::ExecLo]
+            && insns[read + 2..compare_index].iter().all(|i| {
+                matches!(i.mnemonic.as_str(), "s_nop" | "s_waitcnt")
+            })
+    });
+    let mut proof_start = compare.offset as i64;
+    for src in &compare.src {
+        match src {
+            Opnd::ConstInt(_) | Opnd::Literal(_) => (),
+            Opnd::Sgpr(_) => {
+                let Some(read) = previous_read else { return false };
+                if insns[read].dst.as_slice() != [*src] {
+                    return false;
+                }
+                proof_start = insns[read].offset as i64;
+            }
+            _ => return false,
+        }
+    }
+
+    for (index, op) in insns.iter().enumerate() {
+        if index == branch_index {
+            continue;
+        }
+        // Indirect edges do not have a statically bounded target.
+        if matches!(op.mnemonic.as_str(),
+            "s_setpc_b64" | "s_swappc_b64" | "s_call_b64" | "s_rfe_b64" | "s_trap")
+        {
+            return false;
+        }
+        if op.enc == Enc::Sopp && Emitter::branch_cond(op.op).is_some() {
+            let from = op.offset as i64;
+            let to = from + 4 + 4 * op.aux.imm;
+            if from.min(to) < target && from.max(to) > proof_start {
+                return false;
+            }
+        } else if op.enc == Enc::Sopp && op.op == 1 && (op.offset as i64) < target {
+            return false;
+        }
+    }
+    true
+}
+
 /// The branch emitter predicates regions per host invocation. HLSL lane reads
 /// require the source invocation to participate, including lane zero when guest
 /// EXEC has masked it. A branch around or into the region can violate that.
 pub(super) fn check_control_flow(insns: &[Insn], width: u32) -> Result<(), String> {
+    let mut verified_reads = Vec::new();
     for (first, ins) in insns.iter().enumerate() {
         if ins.op != DPP_REDUCE || ins.aux.imm != 0 {
             continue;
@@ -211,21 +291,220 @@ pub(super) fn check_control_flow(insns: &[Insn], width: u32) -> Result<(), Strin
             first - prologue_len
         };
         let start = insns[start].offset as i64;
-        let end = insns[first + if width == 32 { 7 } else { 9 }].offset as i64;
-        for branch in insns.iter().filter(|i| i.enc == Enc::Sopp) {
+        let last_read = first + if width == 32 { 6 } else { 8 };
+        // The readlane is the last collective; the following restore is
+        // part of the protected region too.
+        let restore = first + if width == 32 { 7 } else { 9 };
+        let end = insns[restore].offset as i64;
+        for (branch_index, branch) in insns.iter().enumerate().filter(|(_, i)| i.enc == Enc::Sopp) {
             let pc = branch.offset as i64;
             if branch.op == 1 && pc < start {
                 return Err(format!("wave reduction at {start:#x} after an early exit"));
             }
             if Emitter::branch_cond(branch.op).is_some() {
                 let target = pc + 4 + 4 * branch.aux.imm;
-                if (pc < start && target > start) || (pc > end && target <= end) {
+                if ((pc < start && target > start) || (pc > end && target <= end))
+                    && !(pc < start && uniform_forward_guard(insns, branch_index, end as usize, &verified_reads))
+                {
                     return Err(format!(
                         "wave reduction at {start:#x} may execute in divergent control flow"
                     ));
                 }
             }
         }
+        verified_reads.push(last_read);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn insn(mnemonic: &str, enc: Enc, op: u32, dst: Vec<Opnd>, src: Vec<Opnd>) -> Insn {
+        Insn {
+            offset: 0,
+            dwords: 1,
+            enc,
+            op,
+            raw: vec![0],
+            mnemonic: mnemonic.into(),
+            dst,
+            src,
+            aux: Default::default(),
+        }
+    }
+
+    fn nop() -> Insn {
+        insn("s_nop", Enc::Sopp, 0, vec![], vec![])
+    }
+
+    fn branch(op: u32) -> Insn {
+        insn("branch", Enc::Sopp, op, vec![], vec![])
+    }
+
+    fn compare(src: Vec<Opnd>) -> Insn {
+        insn("s_cmp_eq_u32", Enc::Sopc, 6, vec![], src)
+    }
+
+    // Synthetic input to the control-flow pass, after the exact DPP
+    // sequence has been recognized by lower(). Include both wave widths.
+    fn reduction(width: u32, result: u8) -> Vec<Insn> {
+        let mut ops = vec![nop(); if width == 32 { 10 } else { 12 }];
+        ops[0] = insn("s_or_saveexec_b64", Enc::Sop1, 0,
+                     vec![Opnd::Sgpr(0)], vec![Opnd::ConstInt(-1)]);
+        ops[2] = insn("v_add_nc_u32", Enc::Vop2, DPP_REDUCE,
+                     vec![Opnd::Vgpr(1)], vec![Opnd::Vgpr(1)]);
+        let read = ops.len() - 2;
+        ops[read] = insn("v_readlane_b32", Enc::Vop3, READ_LANE,
+                         vec![Opnd::Sgpr(result)], vec![Opnd::Vgpr(1), Opnd::ConstInt(0)]);
+        ops[read + 1] = insn("s_mov_b64", Enc::Sop1, 0,
+                             vec![Opnd::ExecLo], vec![Opnd::Sgpr(0)]);
+        ops
+    }
+
+    fn offsets(ops: &mut [Insn]) {
+        for (i, op) in ops.iter_mut().enumerate() {
+            op.offset = i * 4;
+        }
+    }
+
+    fn edge(ops: &mut [Insn], from: usize, to: usize, op: u32) {
+        ops[from] = branch(op);
+        ops[from].aux.imm = to as i64 - from as i64 - 1;
+        offsets(ops);
+    }
+
+    #[test]
+    fn translates_two_native_reductions_with_a_uniform_scc_guard() {
+        use crate::{ShaderExtract, Stage};
+        for width in [32, 64] {
+            // GFX1030 instructions assembled with llvm-mc, with the four DPP
+            // control words from the exact reduction recognized by lower().
+            let mut block = vec![
+                if width == 32 { 0xbe80_3dc1u32 } else { 0xbe80_25c1 },
+                0xd501_0002, 0x0002_0080, // v_cndmask v2, 0, v0, s0
+                0x4a04_04e9, 0xde54_c102,
+                0x4a04_04e9, 0x9360_1202,
+                0x4a04_04e9, 0x0009_2402,
+                0x4a04_04fa, 0xff09_4002,
+                0xd778_0003, 0x0201_0102, // v_permlanex16 v3, v2, 0, 0
+                0x4a04_0503,
+            ];
+            if width == 64 {
+                block.extend([0xd760_0006, 0x0001_4102, 0x4a04_0406]);
+            }
+            block.extend([0xd760_0007, 0x0001_0102,
+                          if width == 32 { 0xbefe_0300 } else { 0xbefe_0400 }]);
+            let mut words = block.clone();
+            let cmp = words.len();
+            words.extend([0xbf06_8007, 0xbf85_0000 | block.len() as u32]);
+            words.extend(&block);
+            words.push(0xbf81_0000);
+            let isa: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+            let mut ex = ShaderExtract {
+                stage: Stage::Compute,
+                shader_model: (6, 0),
+                required_features: None,
+                bitcode_stripped: true,
+                fspx_config: None,
+                ps09_pixel_inputs: None,
+                fssm: Vec::new(),
+                entry: Some("main".into()),
+                isa_data: isa.clone(),
+                isa,
+                isa_offset_in_fssm: 0,
+                psv_threads: None,
+                isa_preamble: [0, width, 1, 1],
+                has_input_sig: false,
+                has_output_sig: false,
+                has_psv0: false,
+                has_root_sig: false,
+                input_sig: Vec::new(),
+                output_sig: Vec::new(),
+                resources: Vec::new(),
+                gs_info: None,
+                mesh_info: None,
+                primitive_sig: Vec::new(),
+                root_sig: None,
+            };
+            let translated = super::super::translate(&ex).unwrap();
+            assert_eq!(translated.required_wave_size, Some(width));
+            assert!(translated.hlsl.contains("WaveReadLaneAt("));
+            // Replace the proven scalar with an unproven entry register.
+            words[cmp] = 0xbf06_8008;
+            ex.isa = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+            ex.isa_data = ex.isa.clone();
+            let refusal = super::super::translate(&ex).err().unwrap();
+            assert!(refusal.contains("divergent control flow"), "{refusal}");
+        }
+    }
+
+    #[test]
+    fn uniform_literal_guard_must_skip_the_entire_reduction() {
+        for width in [32, 64] {
+            let mut ops = vec![compare(vec![Opnd::ConstInt(1), Opnd::Literal(0)]), branch(4)];
+            ops.extend(reduction(width, 7));
+            let after = ops.len();
+            ops.push(nop());
+            edge(&mut ops, 1, after, 4);
+            assert!(check_control_flow(&ops, width).is_ok());
+            // The compare may instead use a lane-dependent scalar.
+            ops[0].src[0] = Opnd::Sgpr(9);
+            assert!(check_control_flow(&ops, width).is_err());
+            ops[0].src[0] = Opnd::ConstInt(1);
+            edge(&mut ops, 1, after - 1, 4);
+            assert!(check_control_flow(&ops, width).is_err());
+            edge(&mut ops, 1, after, 8); // EXEC is a per-invocation mask
+            assert!(check_control_flow(&ops, width).is_err());
+        }
+    }
+
+    #[test]
+    fn prior_reduction_result_is_uniform_only_without_intervening_writes() {
+        for width in [32, 64] {
+            let mut ops = reduction(width, 7);
+            let spacer = ops.len();
+            ops.push(nop());
+            ops.push(compare(vec![Opnd::Sgpr(7), Opnd::ConstInt(0)]));
+            let guard = ops.len();
+            ops.push(branch(5));
+            ops.extend(reduction(width, 8));
+            let after = ops.len();
+            ops.push(nop());
+            edge(&mut ops, guard, after, 5);
+            assert!(check_control_flow(&ops, width).is_ok());
+            ops[spacer] = insn("s_mov_b32", Enc::Sop1, 0,
+                               vec![Opnd::Sgpr(7)], vec![Opnd::Sgpr(9)]);
+            offsets(&mut ops);
+            assert!(check_control_flow(&ops, width).is_err());
+            ops[spacer] = nop();
+            offsets(&mut ops);
+            ops[guard - 1].src[0] = Opnd::Sgpr(8);
+            assert!(check_control_flow(&ops, width).is_err());
+        }
+    }
+
+    #[test]
+    fn alternate_entry_and_loop_edges_invalidate_uniform_guard() {
+        let mut ops = vec![nop(), compare(vec![Opnd::ConstInt(0), Opnd::ConstInt(0)]), branch(5)];
+        ops.extend(reduction(64, 7));
+        let after = ops.len();
+        ops.push(nop());
+        ops.push(nop());
+        edge(&mut ops, 2, after, 5);
+        assert!(check_control_flow(&ops, 64).is_ok());
+        // Another branch can enter after the comparison.
+        edge(&mut ops, 0, 2, 8);
+        assert!(check_control_flow(&ops, 64).is_err());
+        // A branch landing at the comparison, however, reconverges before SCC.
+        edge(&mut ops, 0, 1, 8);
+        assert!(check_control_flow(&ops, 64).is_ok());
+        edge(&mut ops, after + 1, 1, 8);
+        assert!(check_control_flow(&ops, 64).is_err());
+        ops[after + 1] = nop();
+        ops[0] = insn("s_endpgm", Enc::Sopp, 1, vec![], vec![]);
+        offsets(&mut ops);
+        assert!(check_control_flow(&ops, 64).is_err());
+    }
 }
