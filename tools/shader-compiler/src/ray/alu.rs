@@ -102,7 +102,7 @@ uint2 tb_ray_shift_right(uint2 pair, uint bits) {
     if (bits >= 32u) return uint2(pair.y >> (bits - 32u), 0u);
     return uint2((pair.x >> bits) | (pair.y << (32u - bits)), pair.y >> bits);
 }
-"#);
+"#, include_str!("../fract_f32.hlsl"));
 
 fn high_word(base: Opnd) -> Result<String, String> {
     match base {
@@ -546,7 +546,7 @@ pub(super) fn vector(ins: &Insn) -> Result<String, String> {
         "v_max3_f32" => Some(format!("max(max({}, {}), {})", f(0)?, f(1)?, f(2)?)),
         "v_ceil_f32" => Some(format!("ceil({})", f(0)?)),
         "v_floor_f32" => Some(format!("floor({})", f(0)?)),
-        "v_fract_f32" => Some(format!("frac({})", f(0)?)),
+        "v_fract_f32" => Some(format!("tb_fract_f32({}, 0u)", f(0)?)),
         "v_rcp_f32" | "v_rcp_iflag_f32" => Some(format!("rcp({})", f(0)?)),
         "v_sqrt_f32" => Some(format!("sqrt({})", f(0)?)),
         "v_rsq_f32" => Some(format!("rsqrt({})", f(0)?)),

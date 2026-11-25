@@ -370,6 +370,41 @@ fn f(o: &Opnd) -> Result<String, String> {
     Ok(format!("asfloat({})", r(o)?))
 }
 
+// Selector for tb_unary_f16, constant at each translated instruction.
+fn half_unary_op(mnemonic: &str) -> Option<u8> {
+    match mnemonic {
+        "v_floor_f16" => Some(0),
+        "v_ceil_f16" => Some(1),
+        "v_trunc_f16" => Some(2),
+        "v_rndne_f16" => Some(3),
+        "v_fract_f16" => Some(4),
+        _ => None,
+    }
+}
+
+fn integer_to_half(mnemonic: &str) -> bool {
+    matches!(mnemonic, "v_cvt_f16_u16" | "v_cvt_f16_i16")
+}
+
+fn normalized_half_to_integer(mnemonic: &str) -> bool {
+    matches!(mnemonic, "v_cvt_norm_u16_f16" | "v_cvt_norm_i16_f16")
+}
+
+fn half_round_or_conversion(m: &str) -> bool {
+    half_unary_op(m).is_some() || integer_to_half(m) || half_to_integer(m)
+}
+
+fn half_operand_bits(o: &Opnd) -> Result<String, String> {
+    match o {
+        Opnd::ConstF32(_) => Ok(format!("tb_f16_rne({})", f(o)?)),
+        _ => r(o),
+    }
+}
+
+fn half_to_integer(mnemonic: &str) -> bool {
+    matches!(mnemonic, "v_cvt_u16_f16" | "v_cvt_i16_f16") || normalized_half_to_integer(mnemonic)
+}
+
 /// Low `width` bits set, saturated to one word. Keep full-width shifts out of the generated code.
 fn low_mask(width: &str) -> String {
     format!("(({width}) >= 32u ? 0xffffffffu : ((1u << (({width}) & 31u)) - 1u))")
@@ -4043,9 +4078,11 @@ impl<'a> Emitter<'a> {
             if ins.mnemonic == "v_nop" {
                 continue;
             }
-            // Packed FMAC accumulates in its destination. A subword FMA also
-            // reads that register to preserve the half outside its write mask.
-            let old_dst = (matches!(ins.mnemonic.as_str(), "v_pk_fmac_f16" | "v_fma_f16" | "v_rcp_f16") || int16::new_half(ins))
+            // Accumulators and partial writes implicitly read the old destination.
+            let keep_other_bits = ins.aux.sdwa.is_none_or(|sd| (sd >> 8) & 7 != 6 && (sd >> 11) & 3 == 2);
+            let old_dst = (matches!(ins.mnemonic.as_str(), "v_pk_fmac_f16" | "v_fma_f16" | "v_rcp_f16")
+                || (half_round_or_conversion(&ins.mnemonic) && keep_other_bits)
+                || int16::new_half(ins))
                 .then(|| ins.dst.first()).flatten();
             for o in ins.src.iter().chain(old_dst) {
                 if let Opnd::Sgpr(n) | Opnd::Vgpr(n) = o {
@@ -4199,6 +4236,9 @@ impl<'a> Emitter<'a> {
         if self.insns.iter().any(|ins| matches!(ins.mnemonic.as_str(), "v_cvt_u32_f32" | "v_cvt_i32_f32")) {
             h.push_str(include_str!("float_to_integer.hlsl"));
         }
+        if self.insns.iter().any(|ins| ins.mnemonic == "v_fract_f32") {
+            h.push_str(include_str!("fract_f32.hlsl"));
+        }
         if self.insns.iter().any(|i| i.mnemonic.starts_with("v_cmp") && (i.mnemonic.ends_with("_f64") || i.mnemonic.ends_with("_f32") || i.mnemonic.ends_with("_f16"))) {
             h.push_str(compare::FLOAT_HELPERS);
         }
@@ -4227,7 +4267,17 @@ uint2 tb_field64(uint lo, uint hi, uint control, bool sign) {
 }
 "#);
         }
-        if self.regs.contains("tb_fp_mode") {
+        if self.insns.iter().any(|i| normalized_half_to_integer(&i.mnemonic)) {
+            h.push_str(include_str!("normalized_half.hlsl"));
+        }
+        let uses_half_unary = self.insns.iter().any(|i| half_unary_op(&i.mnemonic).is_some());
+        let uses_half_output = self.insns.iter().any(|i| {
+            let modified = (i.enc == Enc::Vop3 && (i.aux.imm != 0 || i.aux.imm2 != 0))
+                || i.aux.sdwa.is_some_and(|sd| sd & 0xe000 != 0);
+            modified && (half_unary_op(&i.mnemonic).is_some()
+                || integer_to_half(&i.mnemonic))
+        });
+        if self.regs.contains("tb_fp_mode") || uses_half_unary || uses_half_output {
             h.push_str(r#"
 // V_CVT_F16_F32 uses the destination round mode. Work with magnitudes
 // so tiny directed results survive the host's single-precision FTZ mode.
@@ -4240,6 +4290,25 @@ uint tb_mode_half(float value, uint mode) {
     bool away = rounding == ((bits >> 31) != 0u ? 2u : 1u);
     if (away && magnitude < 0x7f800000u && asuint(f16tof32(h & 0x7fffu)) < magnitude) h++;
     return (h & 0x7fffu) < 0x400u && (mode & 0x80u) == 0u ? h & 0x8000u : h;
+}
+"#);
+        }
+        if uses_half_unary {
+            h.push_str(include_str!("half_unary.hlsl"));
+        }
+        if uses_half_output {
+            h.push_str(r#"
+uint tb_half_output(uint bits, uint mode, float scale, bool clampResult) {
+    // Scaling preserves NaN payloads. CLAMP clears them only in DX10 mode.
+    if ((bits & 0x7fffu) > 0x7c00u)
+        return clampResult && (mode & 0x100u) != 0u ? 0u : bits;
+    // On RDNA2, OMOD is disabled with output denormals or IEEE mode.
+    if (scale != 1.0 && (mode & 0x280u) == 0u) {
+        float x = (bits & 0x7fffu) == 0u ? 0.0 : f16tof32(bits);
+        bits = tb_mode_half(x * scale, mode);
+    }
+    if (!clampResult) return bits;
+    return (bits & 0x8000u) != 0u ? 0u : min(bits, 0x3c00u);
 }
 "#);
         }
@@ -4782,9 +4851,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         expr
     }
 
-    /// Wrap a float result with VOP3 omod/clamp and convert to uint bits.
-    fn fres(&self, ins: &Insn, e: String) -> String {
-        let mut e = e;
+    fn float_result(ins: &Insn, mut e: String) -> String {
         if ins.enc == Enc::Vop3 {
             e = match ins.aux.imm2 {
                 1 => format!("(({e}) * 2.0)"),
@@ -4796,7 +4863,11 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 e = format!("saturate({e})");
             }
         }
-        format!("asuint({e})")
+        e
+    }
+
+    fn fres(&self, ins: &Insn, e: String) -> String {
+        format!("asuint({})", Self::float_result(ins, e))
     }
 
     fn pair_high(&mut self, operand: &Opnd) -> Result<String, String> {
@@ -5423,18 +5494,21 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             Enc::Sopk => {
                 let d = d.ok_or("no dst")?;
                 let imm = format!("{:#x}u", ins.aux.imm as i32 as u32);
+                let reg_id = ins.raw[0] & 63;
+                let shift = (ins.raw[0] >> 6) & 31;
+                let width = ((ins.raw[0] >> 11) & 31) + 1;
+                // MODE's low byte controls rounding and denormals; bit 9 is IEEE.
+                // A wider write can change these fields too.
+                let mode_field = reg_id == 1 && (shift + width <= 8 || (shift == 9 && width == 1)
+                    || (m != "s_getreg_b32" && shift <= 9));
                 match m {
                     "s_version" => Ok(()),
                     "s_movk_i32" => self.ws(&d, &imm),
                     "s_cmovk_i32" => self.ws(&d, &format!("((scc != 0u) ? {imm} : {})", name(&d)?)),
                     "s_setreg_imm32_b32" | "s_setreg_b32" | "s_getreg_b32"
-                        if matches!(ins.raw[0] & 63, 20 | 21) || (ins.raw[0] & 63 == 1 && ((ins.raw[0] >> 6) & 31) + ((ins.raw[0] >> 11) & 31) < 8) => {
-                        // The retail setup writes FLAT_SCRATCH_LO/HI. Model the
-                        // two register words and the encoded bit slice independently.
-                        let reg = if ins.raw[0] & 63 == 1 { "tb_fp_mode".to_string() } else { format!("tb_flat_scratch{}", ins.raw[0] & 1) };
+                        if matches!(reg_id, 20 | 21) || mode_field => {
+                        let reg = if mode_field { "tb_fp_mode".to_string() } else { format!("tb_flat_scratch{}", reg_id & 1) };
                         self.regs.insert(reg.clone());
-                        let shift = (ins.raw[0] >> 6) & 31;
-                        let width = ((ins.raw[0] >> 11) & 31) + 1;
                         if shift + width > 32 { return Err("hardware register field exceeds word".into()); }
                         let mask = u32::MAX >> (32 - width);
                         if m == "s_getreg_b32" {
@@ -5449,8 +5523,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                         self.line(&format!("{reg} = ({reg} & ~{:#x}u) | (({value} & {mask:#x}u) << {shift});", mask << shift));
                         Ok(())
                     }
-                    // Hardware mode-register writes (rounding / denormal control) and the
-                    // counter waits have no HLSL-visible effect.
+                    // Other hardware-register writes and counter waits do not change the modeled state.
                     "s_setreg_imm32_b32" | "s_setreg_b32" | "s_waitcnt_vscnt" | "s_waitcnt_vmcnt"
                     | "s_waitcnt_expcnt" | "s_waitcnt_lgkmcnt" => Ok(()),
                     "s_addk_i32" => {
@@ -6352,21 +6425,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             Ok(e)
         };
-        let hres = |e: String| -> String {
-            let mut e = e;
-            if ins.enc == Enc::Vop3 {
-                e = match ins.aux.imm2 {
-                    1 => format!("(({e}) * 2.0)"),
-                    2 => format!("(({e}) * 4.0)"),
-                    3 => format!("(({e}) * 0.5)"),
-                    _ => e,
-                };
-                if ins.aux.imm != 0 {
-                    e = format!("saturate({e})");
-                }
-            }
-            format!("tb_f16_rne({e})")
-        };
+        let hres = |e| format!("tb_f16_rne({})", Self::float_result(ins, e));
         let half_binary = matches!(m.as_str(), "v_add_f16" | "v_sub_f16" | "v_subrev_f16" | "v_mul_f16" | "v_max_f16" | "v_min_f16");
         if ins.aux.sdwa.is_none() && half_binary {
             let (a, b) = (h16(&s[0])?, h16(&s[1])?);
@@ -6388,27 +6447,62 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             let lo = format!("tb_trig_f16({bits}, {})", m == "v_cos_f16");
             return self.wv(&d, &format!("(({} & 0xffff0000u) | {lo})", r(&d)?));
         }
-        if ins.aux.sdwa.is_none() && matches!(m.as_str(), "v_rcp_f16" | "v_sqrt_f16" | "v_rsq_f16" | "v_exp_f16" | "v_floor_f16" | "v_ceil_f16" | "v_trunc_f16" | "v_rndne_f16" | "v_fract_f16") {
+        let unary_op = half_unary_op(&m);
+        let modified_half_bits = || -> Result<String, String> {
+            let mut bits = half_operand_bits(&s[0])?;
+            if ins.enc == Enc::Vop3 {
+                if ins.aux.mask & 1 != 0 { bits = format!("(({bits}) & 0x7fffu)"); }
+                if ins.aux.mask & 8 != 0 { bits = format!("(({bits}) ^ 0x8000u)"); }
+            }
+            Ok(bits)
+        };
+        let half_int_src = integer_to_half(&m);
+        if ins.aux.sdwa.is_none() && (unary_op.is_some() || half_int_src) {
+            let has_mode = self.regs.contains("tb_fp_mode");
+            let mode = if has_mode { "tb_fp_mode" } else { "0xc0u" };
+            let narrow = |value| if has_mode {
+                format!("tb_mode_half({value}, {mode})")
+            } else {
+                format!("tb_f16_rne({value})")
+            };
+            let mut bits = if let Some(op) = unary_op {
+                if let Opnd::ConstF32(value) = s[0] {
+                    // Inline floats are finite normal halves. Only 1/(2*pi)
+                    // has a distinct rounded value in the half-precision ROM.
+                    let mut value = if value.to_bits() == 0x3e22_f983 { f32::from_bits(0x3e23_0000) } else { value };
+                    if ins.enc == Enc::Vop3 {
+                        if ins.aux.mask & 1 != 0 { value = value.abs(); }
+                        if ins.aux.mask & 8 != 0 { value = -value; }
+                    }
+                    let x = f(&Opnd::ConstF32(value))?;
+                    format!("tb_finite_unary_f16({x}, {mode}, {op}u)")
+                } else {
+                    format!("tb_unary_f16({}, {mode}, {op}u)", modified_half_bits()?)
+                }
+            } else {
+                let raw = half_operand_bits(&s[0])?;
+                let integer = if m == "v_cvt_f16_i16" {
+                    format!("(asint(({raw}) << 16) >> 16)")
+                } else {
+                    format!("(({raw}) & 0xffffu)")
+                };
+                narrow(format!("(float){integer}"))
+            };
+            if ins.enc == Enc::Vop3 && (ins.aux.imm2 != 0 || ins.aux.imm != 0) {
+                let scale = ["1.0", "2.0", "4.0", "0.5"][ins.aux.imm2 as usize];
+                let clamp = ins.aux.imm != 0;
+                bits = format!("tb_half_output({bits}, {mode}, {scale}, {clamp})");
+            }
+            return self.wv(&d, &format!("(({} & 0xffff0000u) | {bits})", r(&d)?));
+        }
+        if ins.aux.sdwa.is_none() && matches!(m.as_str(), "v_rcp_f16" | "v_sqrt_f16" | "v_rsq_f16" | "v_exp_f16") {
             let a = h16(&s[0])?;
             let e = match m.as_str() {
                 "v_rcp_f16" => format!("1.0 / {a}"),
                 "v_sqrt_f16" => format!("sqrt({a})"),
                 "v_rsq_f16" => format!("rsqrt({a})"),
-                "v_exp_f16" => format!("exp2({a})"),
-                "v_floor_f16" => format!("floor({a})"),
-                "v_ceil_f16" => format!("ceil({a})"),
-                "v_trunc_f16" => format!("trunc({a})"),
-                "v_rndne_f16" => format!("round({a})"),
-                _ => format!("frac({a})"),
+                _ => format!("exp2({a})"),
             };
-            if m == "v_fract_f16" {
-                // The result stays below 1.0: a fraction that rounds up to 1.0 in half
-                // precision gives the largest half below 1 (0x3bff), as for D3D frc.
-                let t = self.tmp;
-                self.tmp += 1;
-                self.line(&format!("uint t{t} = {};", hres(e)));
-                return self.wv(&d, &format!("(t{t} == 0x3c00u ? 0x3bffu : t{t})"));
-            }
             // The compact reciprocal updates the low half. The FSPX shader first
             // writes the high reciprocal via SDWA, then fills the low half here.
             if m == "v_rcp_f16" && ins.enc == Enc::Vop1 && matches!(d, Opnd::Vgpr(_)) {
@@ -6416,21 +6510,27 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             return self.wv(&d, &hres(e));
         }
-        if m == "v_cvt_f16_u16" {
-            return self.wv(&d, &format!("tb_f16_rne((float)(({}) & 0xffffu))", r(&s[0])?));
+        let half_int_result = half_to_integer(&m);
+        if normalized_half_to_integer(&m) && ins.aux.sdwa.is_none() {
+            let bits = modified_half_bits()?;
+            let mode = if self.regs.contains("tb_fp_mode") { "tb_fp_mode" } else { "0xc0u" };
+            let signed = m == "v_cvt_norm_i16_f16";
+            return self.wv(&d, &format!("(({} & 0xffff0000u) | tb_norm_f16({bits}, {mode}, {signed}))", r(&d)?));
         }
-        if m == "v_cvt_f16_i16" {
-            return self.wv(&d, &format!("tb_f16_rne((float)(asint(({}) << 16) >> 16))", r(&s[0])?));
-        }
-        if m == "v_cvt_u16_f16" {
-            // Truncating, saturating; NaN converts to 0 (tested on the 16-bit pattern: the
-            // compiler may assume float values are never NaN).
-            let x = r(&s[0])?;
-            return self.wv(&d, &format!("((({x}) & 0x7fffu) > 0x7c00u ? 0u : (uint)clamp({}, 0.0, 65535.0))", h16(&s[0])?));
-        }
-        if m == "v_cvt_i16_f16" {
-            let x = r(&s[0])?;
-            return self.wv(&d, &format!("((({x}) & 0x7fffu) > 0x7c00u ? 0u : (asuint((int)clamp({}, -32768.0, 32767.0)) & 0xffffu))", h16(&s[0])?));
+        if half_int_result && ins.aux.sdwa.is_none() {
+            let x = h16(&s[0])?;
+            // Truncate after saturating. CLAMP controls the inexact exception,
+            // independently of the integer value produced by the conversion.
+            let mut value = if m == "v_cvt_u16_f16" {
+                format!("(uint)clamp({x}, 0.0, 65535.0)")
+            } else {
+                format!("(asuint((int)clamp({x}, -32768.0, 32767.0)) & 0xffffu)")
+            };
+            if !matches!(s[0], Opnd::ConstF32(_)) {
+                // Test NaN on its stored bits before DXC can assume a finite float.
+                value = format!("((({}) & 0x7fffu) > 0x7c00u ? 0u : {value})", r(&s[0])?);
+            }
+            return self.wv(&d, &format!("(({} & 0xffff0000u) | {value})", r(&d)?));
         }
         if matches!(m.as_str(), "v_fmaak_f16" | "v_fmamk_f16") {
             // The trailing literal dword carries the half-float constant K in its low bits.
@@ -6818,8 +6918,8 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             // The selected half operands now occupy the low word. Apply the
             // floating modifiers through the ordinary VOP3 half-float path.
-            let half_alu = half_binary || matches!(m.as_str(), "v_rcp_f16" | "v_exp_f16");
-            if half_alu {
+            let half_alu = half_binary || half_int_result || unary_op.is_some() || matches!(m.as_str(), "v_rcp_f16" | "v_exp_f16");
+            if half_alu || half_int_src {
                 c.enc = Enc::Vop3;
                 c.aux.imm = i64::from((sd >> 13) & 1);
                 c.aux.imm2 = i64::from((sd >> 14) & 3);
@@ -6847,8 +6947,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                     continue;
                 }
                 let mut x = r(&c.src[i])?;
-                if (is_cmp || half_alu) && m.ends_with("_f16") && (i == 0 || !m.contains("_class_"))
-                    && matches!(c.src[i], Opnd::ConstF32(_))
+                let half_constant = half_int_src || ((is_cmp || half_alu) && m.ends_with("_f16")
+                    && (i == 0 || !m.contains("_class_")));
+                if half_constant && matches!(c.src[i], Opnd::ConstF32(_))
                 {
                     // The inline constant ROM supplies binary16 before byte/word selection.
                     x = format!("tb_f16_rne(asfloat({x}))");
@@ -6868,19 +6969,23 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 self.line(&format!("uint tb_s{t} = {e};"));
                 c.src[i] = Opnd::Temp(t as u16);
             }
-            if dst_sel == 6 {
+            if dst_sel == 6 && !half_round_or_conversion(&m) {
                 return self.emit_vec(&c);
             }
             // Partial destination: compute into a temporary, then place the selected
             // byte/word into the register. DST_UNUSED (bits 12:11): 0 = pad with zeros,
             // 1 = sign-extend upwards, 2 = keep the other bits of the destination.
-            let (bits, lsb) = if dst_sel <= 3 { (8u32, dst_sel * 8) } else { (16, (dst_sel - 4) * 16) };
-            let mask = (1u32 << bits) - 1;
             let t = self.tmp;
             self.tmp += 1;
             self.line(&format!("uint tb_s{t} = 0u;"));
             c.dst = vec![Opnd::Temp(t as u16)];
             self.emit_vec(&c)?;
+            if dst_sel == 6 {
+                // SDWA DWORD writes the entire zero-extended 16-bit result.
+                return self.wv(&d, &format!("tb_s{t}"));
+            }
+            let (bits, lsb) = if dst_sel <= 3 { (8u32, dst_sel * 8) } else { (16, (dst_sel - 4) * 16) };
+            let mask = (1u32 << bits) - 1;
             let val = format!("(tb_s{t} & {mask:#x}u)");
             let e = match (sd >> 11) & 3 {
                 0 => format!("({val} << {lsb})"),
@@ -7076,7 +7181,10 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             "v_cvt_f32_ubyte2" => Some(format!("(float)(({a} >> 16) & 0xffu)")),
             "v_cvt_f32_ubyte3" => Some(format!("(float)(({a} >> 24) & 0xffu)")),
             "v_cvt_f32_f16" => Some(format!("f16tof32({a})")),
-            "v_fract_f32" => Some(format!("frac({})", fa()?)),
+            "v_fract_f32" => {
+                let mode = if self.regs.contains("tb_fp_mode") { "tb_fp_mode" } else { "0u" };
+                Some(format!("tb_fract_f32({}, {mode})", fa()?))
+            }
             "v_trunc_f32" => Some(format!("trunc({})", fa()?)),
             "v_ceil_f32" => Some(format!("ceil({})", fa()?)),
             "v_rndne_f32" => Some(format!("round({})", fa()?)),
@@ -9829,6 +9937,54 @@ mod tests {
             [0x1208_04f9, 0x0606_3a01],
         ] {
             assert!(translate_valu_probe(&words, 5).is_err());
+        }
+    }
+
+    #[test]
+    fn half_rounding_reads_the_entry_destination_and_obeys_fp_mode() {
+        // s_denorm_mode 4; v_floor_f16_e64 v6,-|v1| mul:2
+        let hlsl = float64::tests::translate(
+            Stage::Compute, &[0xbfa5_0004, 0xd5db_0106, 0x2800_0101],
+        ).unwrap();
+        assert!(hlsl.lines().next().unwrap().split_whitespace().any(|word| word == "v6"));
+        let write = hlsl.lines().find(|line| line.contains("v6 & 0xffff0000u")).unwrap();
+        assert!(write.contains("tb_unary_f16(") && write.contains("tb_fp_mode, 0u)"));
+        assert!(write.contains("tb_half_output(tb_unary_f16(") && write.contains("tb_fp_mode, 2.0, false"));
+    }
+
+    #[test]
+    fn half_conversion_only_reads_destination_for_partial_writes() {
+        // Both directions, signed and unsigned: convert v1.h into v6.h.
+        for opcode in [0x7e0c_a0f9, 0x7e0c_a2f9, 0x7e0c_a4f9, 0x7e0c_a6f9, 0x7e0c_c6f9, 0x7e0c_c8f9] {
+            for (extension, preserve) in [(0x51501, true), (0x50501, false), (0x50d01, false), (0x51601, false)] {
+                let hlsl = float64::tests::translate(Stage::Compute, &[opcode, extension]).unwrap();
+                let inputs = hlsl.lines().next().unwrap();
+                assert_eq!(inputs.split_whitespace().any(|word| word == "v6"), preserve);
+            }
+        }
+    }
+
+    #[test]
+    fn fract_f16_applies_the_mode_and_modifiers_to_the_low_half() {
+        // s_denorm_mode 4; v_fract_f16_e64 v4,-|v1| mul:2 (gfx1030).
+        let hlsl = float64::tests::translate(
+            Stage::Compute, &[0xbfa5_0004, 0xd5df_0104, 0x2800_0101],
+        ).unwrap();
+        assert!(hlsl.contains("v4 & 0xffff0000u"));
+        assert!(hlsl.contains("tb_fp_mode, 4u), tb_fp_mode, 2.0, false)"));
+        // An unwritten v6 supplies the high half through the entry ABI.
+        let first_write = float64::tests::translate(Stage::Compute, &[0x7e0c_bf04]).unwrap();
+        assert!(first_write.lines().next().unwrap().split_whitespace().any(|word| word == "v6"));
+    }
+
+    #[test]
+    fn fract_f32_uses_the_guest_denormal_mode() {
+        // gfx1030: v_fract_f32 v8, v4, optionally preceded by s_denorm_mode 3.
+        let fract = 0x7e10_4104;
+        for (code, mode) in [(vec![fract], "0u"), (vec![0xbfa5_0003, fract], "tb_fp_mode")] {
+            let hlsl = float64::tests::translate(Stage::Compute, &code).unwrap();
+            assert!(hlsl.contains(&format!("tb_fract_f32(asfloat(v4), {mode})")));
+            assert!(hlsl.contains("float tb_fract_f32("));
         }
     }
 
