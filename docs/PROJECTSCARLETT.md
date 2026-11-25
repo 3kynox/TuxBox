@@ -82,6 +82,35 @@ Add `--mangohud` before the package path to record frame times. The prefix defau
 
 The first launch records each shader the game requests in the prefix. Before later launches, the launcher compiles the recorded requests and shows its progress, so the game reuses those translations instead of compiling them during play. Pass `--prepare-only` to prepare without starting the game, or `--no-shader-prep` to skip preparation for one launch. Place either option before the package path. [Preparation results](../evidence/projectscarlett-shader-preparation.json)
 
+### Large pipeline compiles
+
+The driver can take minutes and about a gigabyte of memory to compile one large
+translated compute shader. When ProjectScarlett had sixteen in flight, it filled
+its memory limit and swap and stopped progressing. TuxBox therefore lets at most
+four translated compute shaders of 512 KiB or more compile at once; the others
+wait. Smaller shaders are not affected.
+
+Some of these compiles do not finish within any usable load time. A large
+translated compute pipeline (device slot 62 or 86) therefore waits only
+`TUXBOX_PIPELINE_DEADLINE` seconds (default 20). After that the game gets an
+empty stand-in and the compile continues in the background. The stand-in does no
+work, so whatever that program computes is missing until a later launch finds the
+compiled result in the driver cache. `TUXBOX_PIPELINE_DEADLINE=0` waits instead. `TUXBOX_LARGE_COMPILES` sets the number,
+and `0` removes the limit. The first launch can still spend a long time loading.
+
+### Finding why pipelines fail
+
+Each run writes every pipeline that failed, or received an empty stand-in, to
+`tuxbox_shader_cache/pipeline-failures/<run>.tsv` in the prefix's temporary
+folder: how often it happened, the error, the creation path and the guest shader
+digests. To rank the translator's refusal reasons by the pipelines each cost:
+
+```sh
+python tools/rank_pipeline_failures.py "$PREFIX/drive_c/users/steamuser/AppData/Local/Temp/tuxbox_shader_cache"
+```
+
+The files stay on your machine. The printed ranking holds no paths or shader data.
+
 ### In-game progress panel
 
 TuxBox draws a small panel over the presented frame while the game is translating
