@@ -104,6 +104,14 @@ Launch-time preparation runs one compiler job per available core, up to 8. Set
 `TUXBOX_SHADER_PREP_JOBS` to a value from 1 to 32 to change it; more jobs use
 more memory.
 
+A translator update starts a new runtime cache, but most shaders still translate
+to the same HLSL. TuxBox keeps each validated DXIL under
+`tuxbox_shader_cache/dxil`, keyed by the HLSL, the target profile and the DXC
+and validator in use, and copies it instead of running DXC again. This applies
+to preparation and to translation during play. A DXC or validator change starts
+over. A shader whose optimised compile timed out goes straight to `-O0` after
+that. Deleting the `dxil` folder is safe.
+
 Set `TUXBOX_SCARLETT_SEED_PACK=1` to add every shader stored in the package's
 `shaders.rpf` to the preparation list before compiling, so the first launch
 does not depend on which scenes earlier runs reached. The launcher reads the

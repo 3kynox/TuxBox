@@ -10,6 +10,7 @@ import subprocess
 from tempfile import TemporaryDirectory
 from time import monotonic
 
+from . import dxil_store
 from .inspect import digest
 from .prep_progress import PrepPhase, desktop_progress, report_progress
 from .runtime_shaders import REQUEST_PATTERNS, ShaderRefused, compile_request, snapshot_compiler_cache
@@ -105,6 +106,7 @@ def prepare_scarlett(executable, host):
         return True
 
     started = monotonic()
+    reused_before = dxil_store.reused["dxil"]
     totals = Counter()
     reasons = Counter()
     refusal_counts, failure_counts, request_counts = Counter(), Counter(), Counter()
@@ -150,6 +152,10 @@ def prepare_scarlett(executable, host):
         report_progress(progress, f"ProjectScarlett shader preparation took {elapsed:.1f}s. "
                         f"{totals['compiled']} compiled, {totals['cached']} cached, "
                         f"{totals['unsupported']} unsupported, {totals['failed']} failed.", 1, 1)
+        reused = dxil_store.reused["dxil"] - reused_before
+        if reused:
+            report_progress(None, f"ProjectScarlett DXIL reused for {reused} of the compiled shaders "
+                            "(unchanged since an earlier translator).")
         receipt = aggregate(totals, refusal_counts, failure_counts, request_counts)
         report_progress(None, "ProjectScarlett preparation aggregate: " +
                         json.dumps(receipt, sort_keys=True, separators=(",", ":")))

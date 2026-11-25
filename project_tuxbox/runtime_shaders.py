@@ -14,6 +14,7 @@ from tempfile import TemporaryDirectory
 from threading import Event, Lock, Thread
 from time import monotonic, sleep
 
+from .dxil_store import DxilStore, write_identity
 from .inspect import digest
 from .shader_prep import SOURCE_CACHE, ToolFailure, compiler_tools, run_tool
 
@@ -186,6 +187,26 @@ def archive_request(archive, source, inputs):
 O0_TIMEOUT = 90
 
 
+def compile_dxil(dxc, target, hlsl, output, store, request):
+    entry = [] if target == "lib_6_3" else ["-E", "main"]
+    unoptimised = [dxc, "-T", target, *entry, "-O0", "-Fo", output, hlsl]
+    # cs_6_6 programs from this boot either finish default optimisation in
+    # under a second or sit in it until the cap. The ones that sit there
+    # compile at -O0 in a few seconds, and the driver optimises that DXIL
+    # again when it builds the pipeline. A request that timed out before goes
+    # straight to -O0 rather than spending the cap again.
+    if target == "cs_6_6" or (store and store.is_slow(request, target)):
+        run_tool(unoptimised, timeout=O0_TIMEOUT)
+        return
+    try:
+        run_tool([dxc, "-T", target, *entry, "-Fo", output, hlsl], timeout=15)
+    except subprocess.TimeoutExpired:
+        if store:
+            store.mark_slow(request, target)
+        output.unlink(missing_ok=True)
+        run_tool(unoptimised, timeout=O0_TIMEOUT)
+
+
 def compile_request(source, key, tools, cache, session, *, remember=None):
     linked = source.suffix == ".link"
     xshader, dxc, dxv = tools
@@ -272,23 +293,19 @@ def compile_request(source, key, tools, cache, session, *, remember=None):
             target_stage = STAGE_IDS[target.split("_", 1)[0]]
             if target_stage not in stages:
                 raise ValueError("compiler profile differs from requested shader stage")
-            entry = [] if target == "lib_6_3" else ["-E", "main"]
-            # cs_6_6 programs from this boot either finish default optimisation in
-            # under a second or sit in it until the cap. The ones that sit there
-            # compile at -O0 in a few seconds, and the driver optimises that DXIL
-            # again when it builds the pipeline.
-            if target == "cs_6_6":
-                run_tool([dxc, "-T", target, *entry, "-O0", "-Fo", output, hlsl], timeout=O0_TIMEOUT)
-            else:
-                try:
-                    run_tool([dxc, "-T", target, *entry, "-Fo", output, hlsl], timeout=15)
-                except subprocess.TimeoutExpired:
-                    output.unlink(missing_ok=True)
-                    run_tool([dxc, "-T", target, *entry, "-O0", "-Fo", output, hlsl], timeout=O0_TIMEOUT)
-            run_tool([dxv, output], timeout=10)
-            data = bounded_shader(output)
-            if portable_stage(data) != target_stage:
-                raise ValueError("compiler returned invalid DXIL or a different shader stage")
+            # An earlier translator may have produced this exact HLSL.
+            store = DxilStore.for_cache(cache)
+            content = store.key(hlsl.read_bytes(), target) if store else None
+            data = bounded_shader(output) if store and store.fetch(content, output) else None
+            if data is None or portable_stage(data) != target_stage:
+                output.unlink(missing_ok=True)
+                compile_dxil(dxc, target, hlsl, output, store, key)
+                run_tool([dxv, output], timeout=10)
+                data = bounded_shader(output)
+                if portable_stage(data) != target_stage:
+                    raise ValueError("compiler returned invalid DXIL or a different shader stage")
+                if store:
+                    store.save(content, output)
             stamp = work / "sha256"
             stamp.write_text(hashlib.sha256(data).hexdigest())
             if session is not None:
@@ -357,6 +374,7 @@ def snapshot_compiler_cache(xshader, cache_root):
         fingerprint.update(bytes.fromhex(digest(Path(tool))))
     cache = cache_root / "runtime" / fingerprint.hexdigest()
     cache.mkdir(parents=True, exist_ok=True)
+    write_identity(cache, version, dxc, dxv)
     return tools, cache
 
 
