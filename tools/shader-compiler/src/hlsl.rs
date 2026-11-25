@@ -232,6 +232,25 @@ float3 tb_cube_dir(float s, float t, float face) { float u = (s - 1.5) * 2.0, v 
 float tb_mull(float a, float b) { return (a == 0.0 || b == 0.0) ? 0.0 : a * b; }
 uint tb_f16_cvt(float x, bool rtz) { uint u = asuint(x); uint s = (u >> 16) & 0x8000u; uint a = u & 0x7fffffffu; if (a > 0x7f800000u) return s | 0x7e00u | ((a >> 13) & 0x3ffu); if (a == 0x7f800000u) return s | 0x7c00u; if (rtz) { if (a >= 0x477fe000u) return s | 0x7bffu; } else { if (a >= 0x477ff000u) return s | 0x7c00u; } if (a >= 0x38800000u) { uint r = (a >> 13) - 0x1c000u; uint rem = a & 0x1fffu; if (!rtz && (rem > 0x1000u || (rem == 0x1000u && (r & 1u) != 0u))) r += 1u; return s | r; } if (a < 0x33000000u) return s; uint e = a >> 23; uint mant = (a & 0x7fffffu) | 0x800000u; uint sh = 126u - e; uint q = mant >> sh; uint rem = mant & ((1u << sh) - 1u); uint half = 1u << (sh - 1u); if (!rtz && (rem > half || (rem == half && (q & 1u) != 0u))) q += 1u; return s | q; }
 "#;
+fn clamped_product24(ins: &Insn) -> bool {
+    matches!(ins.mnemonic.as_str(), "v_mul_u32_u24" | "v_mul_i32_i24" | "v_mad_u32_u24" | "v_mad_i32_i24")
+        && (ins.aux.imm != 0 || ins.aux.sdwa.is_some_and(|ext| ext & (1 << 13) != 0))
+}
+
+const MAD24_SAT: &str = r#"
+uint tb_mad24_sat(uint a, uint b, uint acc, bool isSigned) {
+    a = isSigned ? asuint(asint(a << 8) >> 8) : (a & 0xffffffu);
+    b = isSigned ? asuint(asint(b << 8) >> 8) : (b & 0xffffffu);
+    uint product = a * b;
+    uint low = product + acc;
+    uint carry = uint(low < product);
+    if (!isSigned) return tb_mulhi_u32(a, b) + carry == 0u ? low : 0xffffffffu;
+    // Add the sign-extended accumulator before testing the full sum for overflow.
+    int high = asint(tb_mulhi_i32(a, b)) + (asint(acc) >> 31) + int(carry);
+    if (high == (asint(low) >> 31)) return low;
+    return high < 0 ? 0x80000000u : 0x7fffffffu;
+}
+"#;
 const HALF_RNE: &str = "uint tb_f16_rne(float x) { return tb_f16_cvt(x, false); }\n";
 // The branch-free implementation keeps the driver control-flow graph small
 // when a filter applies the conversion hundreds of times per invocation.
@@ -4162,6 +4181,9 @@ impl<'a> Emitter<'a> {
 
     fn push_helpers(&self, h: &mut String) {
         h.push_str(CUBE_HELPERS);
+        if self.insns.iter().any(clamped_product24) {
+            h.push_str(MAD24_SAT);
+        }
         h.push_str(if self.single_wave32 { HALF_RNE_STRAIGHT_LINE } else { HALF_RNE });
         h.push_str(HALF_HELPERS);
         if self.insns.iter().any(|i| i.mnemonic.starts_with("v_cmp") && (i.mnemonic.ends_with("_f64") || i.mnemonic.ends_with("_f32") || i.mnemonic.ends_with("_f16"))) {
@@ -6775,6 +6797,12 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             let mut c = ins.clone();
             c.aux.sdwa = None;
+            if clamped_product24(ins) {
+                if sd & 0xc000 != 0 || (sd >> 11) & 3 == 3 {
+                    return Err("unsupported SDWA destination control for 24-bit multiply".into());
+                }
+                c.aux.imm = 1; // Saturate the full result before packing the destination.
+            }
             // The selected half operands now occupy the low word. Apply the
             // floating modifiers through the ordinary VOP3 half-float path.
             let half_alu = half_binary || matches!(m.as_str(), "v_rcp_f16" | "v_exp_f16");
@@ -6990,6 +7018,14 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         let fc = || self.fm(ins, 2);
         let (a, b) = (r(&s[0])?, s.get(1).map(r).transpose()?.unwrap_or_default());
         let c = s.get(2).map(|o| r(o)).transpose().unwrap_or(None).unwrap_or_default();
+        if clamped_product24(ins) {
+            if vop3 && (ins.raw[0] & 0x7800 != 0 || ins.aux.mask != 0 || ins.aux.imm2 != 0) {
+                return Err("unsupported modifiers for clamped 24-bit multiply".into());
+            }
+            let acc = if m.starts_with("v_mad_") { c.as_str() } else { "0u" };
+            let signed = m.ends_with("_i24");
+            return self.wv(&d, &format!("tb_mad24_sat({a}, {b}, {acc}, {signed})"));
+        }
         // `v_mul_legacy_f32` / `v_mad_legacy_f32`: DX9 multiply rules — the product is 0 when
         // either operand is 0, even against infinity or NaN (`tb_mull`). A plain multiply
         // only matched under fast-math; with exact arithmetic it produced NaN positions.
@@ -9747,6 +9783,32 @@ mod tests {
         }
         // In e32 the same bit is part of the second source register (v66).
         assert!(translate(Stage::Compute, &[0x4a08_8501]).unwrap().contains("(v1 + v66)"));
+    }
+
+    #[test]
+    fn mul24_clamps_the_full_product_plus_accumulator_before_packing() {
+        for (words, args) in [
+            ([0xd50b_8004, 0x0002_0501], "v1, v2, 0u, false"), // unsigned MUL
+            ([0xd542_8004, 0x040e_0501], "v1, v2, v3, true"), // signed MAD
+            ([0xd543_8004, 0x040e_0501], "v1, v2, v3, false"), // unsigned MAD
+            ([0x1208_04f9, 0x0606_3201], "v1, v2, 0u, true"), // signed MUL, BYTE_2
+        ] {
+            let shader = translate_valu_probe(&words, 5).unwrap();
+            assert!(shader.contains(&format!("= tb_mad24_sat({args});")));
+            if words[0] == 0x1208_04f9 {
+                assert!(shader.contains("0xff00ffffu"));
+            }
+        }
+        let ordinary = translate_valu_probe(&[0xd50b_0004, 0x0002_0501], 5).unwrap();
+        assert!(!ordinary.contains("tb_mad24_sat"));
+        // Integer products have no floating output scale; SDWA DST_UNUSED=3 is reserved.
+        for words in [
+            [0xd50b_8004, 0x0802_0501],
+            [0x1208_04f9, 0x0606_7201],
+            [0x1208_04f9, 0x0606_3a01],
+        ] {
+            assert!(translate_valu_probe(&words, 5).is_err());
+        }
     }
 
     fn dpp16_word(src0_reg: u32, ctrl: u32, fi: u32, bc: u32, bank_m: u32, row_m: u32) -> u32 {
