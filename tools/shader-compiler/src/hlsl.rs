@@ -355,6 +355,19 @@ fn name(o: &Opnd) -> Result<String, String> {
     })
 }
 
+// Return the bits of this encoded field that can be read back or updated,
+// relative to its starting offset. MODE has a gap before FP16_OVFL (bit 23).
+fn modeled_hwreg_mask(word: u32) -> u32 {
+    let known = match word & 63 {
+        1 => 0x0080_03ff,
+        20 | 21 => u32::MAX, // FLAT_SCRATCH_LO/HI
+        _ => 0,
+    };
+    let shift = (word >> 6) & 31;
+    let encoded_width = (word >> 11) & 31;
+    (known >> shift) & (u32::MAX >> (31 - encoded_width))
+}
+
 /// Operand as a `uint` rvalue expression.
 fn r(o: &Opnd) -> Result<String, String> {
     Ok(match o {
@@ -4075,13 +4088,15 @@ impl<'a> Emitter<'a> {
         let mut written: BTreeSet<String> = BTreeSet::new();
         let mut live: BTreeSet<(u8, u32)> = BTreeSet::new();
         for ins in &self.insns {
-            if ins.mnemonic == "v_nop" {
+            if matches!(ins.mnemonic.as_str(), "v_nop" | "s_setreg_imm32_b32") {
                 continue;
             }
             // Accumulators and partial writes implicitly read the old destination.
             let keep_other_bits = ins.aux.sdwa.is_none_or(|sd| (sd >> 8) & 7 != 6 && (sd >> 11) & 3 == 2);
-            let old_dst = (matches!(ins.mnemonic.as_str(), "v_pk_fmac_f16" | "v_fma_f16" | "v_rcp_f16")
-                || (half_round_or_conversion(&ins.mnemonic) && keep_other_bits)
+            let setreg = ins.mnemonic == "s_setreg_b32";
+            let old_dst = ((setreg && modeled_hwreg_mask(ins.raw[0]) != 0)
+                || matches!(ins.mnemonic.as_str(), "v_pk_fmac_f16" | "v_fma_f16" | "v_rcp_f16")
+                || ((half_round_or_conversion(&ins.mnemonic) || ins.mnemonic == "v_cvt_f16_f32") && keep_other_bits)
                 || int16::new_half(ins))
                 .then(|| ins.dst.first()).flatten();
             for o in ins.src.iter().chain(old_dst) {
@@ -4091,6 +4106,9 @@ impl<'a> Emitter<'a> {
                         live.insert((if matches!(o, Opnd::Vgpr(_)) { 1 } else { 0 }, *n as u32));
                     }
                 }
+            }
+            if setreg {
+                continue;
             }
             if let Some(high) = float64::pair_source_highs(ins) {
                 if !written.contains(&format!("v{high}")) {
@@ -4275,7 +4293,7 @@ uint2 tb_field64(uint lo, uint hi, uint control, bool sign) {
             let modified = (i.enc == Enc::Vop3 && (i.aux.imm != 0 || i.aux.imm2 != 0))
                 || i.aux.sdwa.is_some_and(|sd| sd & 0xe000 != 0);
             modified && (half_unary_op(&i.mnemonic).is_some()
-                || integer_to_half(&i.mnemonic))
+                || integer_to_half(&i.mnemonic) || i.mnemonic == "v_cvt_f16_f32")
         });
         if self.regs.contains("tb_fp_mode") || uses_half_unary || uses_half_output {
             h.push_str(r#"
@@ -4285,6 +4303,9 @@ uint tb_mode_half(float value, uint mode) {
     uint bits = asuint(value), magnitude = bits & 0x7fffffffu;
     if (magnitude < 0x00800000u && (mode & 0x10u) == 0u)
         return (bits >> 16) & 0x8000u;
+    // FP16_OVFL saturates finite overflow, preserving true infinities.
+    if ((mode & 0x800000u) != 0u && magnitude > 0x477fe000u && magnitude < 0x7f800000u)
+        return ((bits >> 16) & 0x8000u) | 0x7bffu;
     uint rounding = (mode >> 2) & 3u;
     uint h = tb_f16_cvt(value, rounding != 0u);
     bool away = rounding == ((bits >> 31) != 0u ? 2u : 1u);
@@ -5494,23 +5515,24 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             Enc::Sopk => {
                 let d = d.ok_or("no dst")?;
                 let imm = format!("{:#x}u", ins.aux.imm as i32 as u32);
-                let reg_id = ins.raw[0] & 63;
-                let shift = (ins.raw[0] >> 6) & 31;
-                let width = ((ins.raw[0] >> 11) & 31) + 1;
-                // MODE's low byte controls rounding and denormals; bit 9 is IEEE.
-                // A wider write can change these fields too.
-                let mode_field = reg_id == 1 && (shift + width <= 8 || (shift == 9 && width == 1)
-                    || (m != "s_getreg_b32" && shift <= 9));
+                let mask = modeled_hwreg_mask(ins.raw[0]);
                 match m {
                     "s_version" => Ok(()),
                     "s_movk_i32" => self.ws(&d, &imm),
                     "s_cmovk_i32" => self.ws(&d, &format!("((scc != 0u) ? {imm} : {})", name(&d)?)),
                     "s_setreg_imm32_b32" | "s_setreg_b32" | "s_getreg_b32"
-                        if matches!(reg_id, 20 | 21) || mode_field => {
-                        let reg = if mode_field { "tb_fp_mode".to_string() } else { format!("tb_flat_scratch{}", reg_id & 1) };
-                        self.regs.insert(reg.clone());
+                        if mask != 0 => {
+                        let id = ins.raw[0] & 63;
+                        let shift = (ins.raw[0] >> 6) & 31;
+                        let width = ((ins.raw[0] >> 11) & 31) + 1;
                         if shift + width > 32 { return Err("hardware register field exceeds word".into()); }
-                        let mask = u32::MAX >> (32 - width);
+                        // Reads must be known in full. Writes need only update the
+                        // intersection with the modeled register.
+                        if m == "s_getreg_b32" && mask != u32::MAX >> (32 - width) {
+                            return Err("unmodeled MODE read field".into());
+                        }
+                        let reg = if id == 1 { "tb_fp_mode".to_string() } else { format!("tb_flat_scratch{}", id & 1) };
+                        self.regs.insert(reg.clone());
                         if m == "s_getreg_b32" {
                             return self.ws(&d, &format!("(({reg} >> {shift}) & {mask:#x}u)"));
                         }
@@ -6919,13 +6941,14 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             // The selected half operands now occupy the low word. Apply the
             // floating modifiers through the ordinary VOP3 half-float path.
             let half_alu = half_binary || half_int_result || unary_op.is_some() || matches!(m.as_str(), "v_rcp_f16" | "v_exp_f16");
-            if half_alu || half_int_src {
+            let float_source_modifiers = half_alu || m == "v_cvt_f16_f32";
+            if float_source_modifiers || half_int_src {
                 c.enc = Enc::Vop3;
                 c.aux.imm = i64::from((sd >> 13) & 1);
                 c.aux.imm2 = i64::from((sd >> 14) & 3);
             }
             if sd & 0x3030_0000 != 0 {
-                if !(half_alu || (is_cmp && (m.ends_with("_f16") || m.ends_with("_f32"))))
+                if !(float_source_modifiers || (is_cmp && (m.ends_with("_f16") || m.ends_with("_f32"))))
                     || (m.contains("_class_") && sd & 0x3000_0000 != 0)
                 {
                     return Err("unsupported SDWA neg/abs for this operand type".into());
@@ -6969,7 +6992,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 self.line(&format!("uint tb_s{t} = {e};"));
                 c.src[i] = Opnd::Temp(t as u16);
             }
-            if dst_sel == 6 && !half_round_or_conversion(&m) {
+            if dst_sel == 6 && !half_round_or_conversion(&m) && m != "v_cvt_f16_f32" {
                 return self.emit_vec(&c);
             }
             // Partial destination: compute into a temporary, then place the selected
@@ -7334,10 +7357,21 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 self.line(&format!("float t{t} = round({x});"));
                 format!("(asuint((int)t{t}) + (uint)(({x} - t{t}) == 0.5))")
             }
-            // Round to nearest even. HLSL f32tof16's rounding is the driver's choice
-            // (observed: truncation on the development GPU), so it is not used.
-            "v_cvt_f16_f32" if self.regs.contains("tb_fp_mode") => format!("tb_mode_half({}, tb_fp_mode)", fa()?),
-            "v_cvt_f16_f32" => format!("tb_f16_rne({})", fa()?),
+            "v_cvt_f16_f32" => {
+                let source = Self::select_source(ins, a, 0);
+                let modified = vop3 && (ins.aux.imm != 0 || ins.aux.imm2 != 0);
+                let mode = if self.regs.contains("tb_fp_mode") { "tb_fp_mode" } else { "0xc0u" };
+                let mut bits = if modified || self.regs.contains("tb_fp_mode") {
+                    format!("tb_mode_half(asfloat({source}), {mode})")
+                } else {
+                    format!("tb_f16_rne(asfloat({source}))")
+                };
+                if modified {
+                    let scale = ["1.0", "2.0", "4.0", "0.5"][ins.aux.imm2 as usize];
+                    bits = format!("tb_half_output({bits}, {mode}, {scale}, {})", ins.aux.imm != 0);
+                }
+                format!("(({dn} & 0xffff0000u) | {bits})")
+            }
             // Round toward zero (ISA: "ignore the current rounding mode"): finite values never
             // become infinity (|x| >= 65504 gives 65504).
             "v_cvt_pkrtz_f16_f32" => format!("(tb_f16_rtz({}) | (tb_f16_rtz({}) << 16))", fa()?, fb()?),
@@ -9986,6 +10020,65 @@ mod tests {
             assert!(hlsl.contains(&format!("tb_fract_f32(asfloat(v4), {mode})")));
             assert!(hlsl.contains("float tb_fract_f32("));
         }
+    }
+
+    #[test]
+    fn conversion_overflow_bit_can_be_set_cleared_and_read() {
+        // MODE[23] is FP16_OVFL. Reads including reserved bits remain unsupported.
+        let get = 0xb91a_05c1;
+        let hlsl = float64::tests::translate(Stage::Compute, &[
+            0xba80_05c1, 1, get, 0xba80_05c1, 0, get,
+        ]).unwrap();
+        assert!(hlsl.contains("((tb_fp_mode >> 23) & 0x1u)"));
+        assert!(hlsl.contains("((0x1u & 0x1u) << 23)") && hlsl.contains("((0x0u & 0x1u) << 23)"));
+        assert!(float64::tests::translate(Stage::Compute, &[get | (1 << 11)]).is_err());
+    }
+
+    #[test]
+    fn single_to_half_reads_the_old_destination_only_for_partial_writes() {
+        // v_cvt_f16_f32 v6,v1 and SDWA with DWORD source.
+        for (words, preserves) in [
+            (vec![0x7e0c_1501], true),
+            (vec![0x7e0c_14f9, 0x0006_1501], true),  // WORD_1, PRESERVE
+            (vec![0x7e0c_14f9, 0x0006_0501], false), // WORD_1, PAD
+            (vec![0x7e0c_14f9, 0x0006_1601], false), // DWORD
+        ] {
+            let hlsl = float64::tests::translate(Stage::Compute, &words).unwrap();
+            let incoming = hlsl.lines().next().unwrap().split_whitespace().any(|word| word == "v6");
+            assert_eq!(incoming, preserves);
+        }
+    }
+
+    #[test]
+    fn reads_all_mode_fields_through_ieee() {
+        // s_getreg_b32 s26, hwreg(MODE, shift, width).
+        for shift in 0..10 {
+            for width in 1..=10 - shift {
+                let get = 0xb91a_0001 | (shift << 6) | ((width - 1) << 11);
+                let hlsl = float64::tests::translate(Stage::Compute, &[get]).unwrap();
+                let mask = (1u32 << width) - 1;
+                assert!(hlsl.contains(&format!("((tb_fp_mode >> {shift}) & {mask:#x}u)")));
+            }
+        }
+        // LOD_CLAMPED (bit 10) is updated by texture instructions.
+        for get in [0xb91a_0281, 0xb91a_0a41] {
+            assert!(float64::tests::translate(Stage::Compute, &[get]).is_err());
+        }
+    }
+
+    #[test]
+    fn wide_mode_writes_update_readable_bits() {
+        // Write MODE[9:0] from s5, overwrite MODE[10:6] with 9, read bit 8.
+        let hlsl = float64::tests::translate(Stage::Compute,
+            &[0xb985_4801, 0xba80_2181, 9, 0xb91a_0201]).unwrap();
+        assert!(hlsl.lines().next().unwrap().split_whitespace().any(|reg| reg == "s5"));
+        assert!(hlsl.contains("((s5 & 0x3ffu) << 0)"));
+        assert!(hlsl.contains("((0x9u & 0xfu) << 6)"));
+        // The immediate form's encoding has a zero in the SGPR field, but
+        // leaves the entry value of s0 available to the following v_mov.
+        let hlsl = float64::tests::translate(Stage::Compute,
+            &[0xba80_2181, 9, 0x7e08_0200]).unwrap();
+        assert!(hlsl.lines().next().unwrap().split_whitespace().any(|reg| reg == "s0"));
     }
 
     fn dpp16_word(src0_reg: u32, ctrl: u32, fi: u32, bc: u32, bank_m: u32, row_m: u32) -> u32 {
