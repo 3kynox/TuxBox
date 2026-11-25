@@ -26,6 +26,7 @@ mod compare;
 mod uniform_texel;
 mod pixel_quad;
 mod mubuf_offsets;
+mod scalar_values;
 mod code_offset;
 mod scalar_bits;
 #[cfg(test)]
@@ -1500,8 +1501,10 @@ fn translate_outputs_once(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, ou
     let uses_quad_add = insns.iter().any(is_quad_exchange);
     let scan = if wave_cull { None } else { wave_scan::prepare(ex, &mut insns)? };
     let scan_width = scan.as_ref().map(|s| s.width);
-    let indexed_lane = !resolve_wave32 && (group_extrema || ex.stage == Stage::Compute && (indexed_lane::constant_reads(compute_group(ex), &mut insns)
-        || indexed_lane::prepare(compute_group(ex), &mut insns)));
+    let ordinary_wave = !wave_cull && !page_waves && !lone_lane::on();
+    let indexed_lane = !resolve_wave32 && (group_extrema || ex.stage == Stage::Compute
+        && (indexed_lane::constant_reads(compute_group(ex), &mut insns, ordinary_wave)
+            || indexed_lane::prepare(compute_group(ex), &mut insns)));
     // A uniform Sgpr lane operand is only expressible through the whole-wave
     // group read, which needs shared-memory exchange like a swizzle does.
     let has_dynamic_lane_read = insns.iter().any(|i| i.enc == Enc::Vop3
