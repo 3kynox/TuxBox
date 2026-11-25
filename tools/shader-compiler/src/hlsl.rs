@@ -4196,6 +4196,9 @@ impl<'a> Emitter<'a> {
         }
         h.push_str(if self.single_wave32 { HALF_RNE_STRAIGHT_LINE } else { HALF_RNE });
         h.push_str(HALF_HELPERS);
+        if self.insns.iter().any(|ins| matches!(ins.mnemonic.as_str(), "v_cvt_u32_f32" | "v_cvt_i32_f32")) {
+            h.push_str(include_str!("float_to_integer.hlsl"));
+        }
         if self.insns.iter().any(|i| i.mnemonic.starts_with("v_cmp") && (i.mnemonic.ends_with("_f64") || i.mnemonic.ends_with("_f32") || i.mnemonic.ends_with("_f16"))) {
             h.push_str(compare::FLOAT_HELPERS);
         }
@@ -7211,10 +7214,18 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             "v_alignbit_b32" => format!(
                 "((({c}) & 31u) == 0u ? {b} : (({b} >> (({c}) & 31u)) | ({a} << (32u - (({c}) & 31u)))))"
             ),
-            "v_cvt_u32_f32" => format!("(uint)max({}, 0.0)", fa()?),
-            "v_cvt_i32_f32" => format!("asuint((int){})", fa()?),
+            "v_cvt_u32_f32" => format!("tb_cvt_u32_f32({})", fa()?),
+            "v_cvt_i32_f32" => format!("tb_cvt_i32_f32({})", fa()?),
             "v_cvt_flr_i32_f32" => format!("asuint((int)floor({}))", fa()?),
-            "v_cvt_rpi_i32_f32" => format!("asuint((int)floor({} + 0.5))", fa()?),
+            "v_cvt_rpi_i32_f32" => {
+                let x = fa()?;
+                let t = self.tmp;
+                self.tmp += 1;
+                // Adding 0.5 first can round an already integral f32 to the next integer.
+                // Start with nearest-even and raise only the ties that rounded down.
+                self.line(&format!("float t{t} = round({x});"));
+                format!("(asuint((int)t{t}) + (uint)(({x} - t{t}) == 0.5))")
+            }
             // Round to nearest even. HLSL f32tof16's rounding is the driver's choice
             // (observed: truncation on the development GPU), so it is not used.
             "v_cvt_f16_f32" if self.regs.contains("tb_fp_mode") => format!("tb_mode_half({}, tb_fp_mode)", fa()?),

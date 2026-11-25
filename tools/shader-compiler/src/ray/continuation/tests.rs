@@ -91,11 +91,11 @@ fn sdwa_integer_conversions_apply_float_modifiers_before_packing() {
     // Convert -abs(v1) to signed, replacing only WORD_0 in v4.
     let signed = lift(&[0x7e08_10f9, 0x0036_1401, RETURN]).unwrap();
     assert!(signed.contains("(v[4] & 0xffff0000u)"));
-    assert!(signed.contains("tb_ray_to_int(asfloat(((v[1] & 0x7fffffffu) ^ 0x80000000u)))"));
+    assert!(signed.contains("tb_cvt_i32_f32(asfloat(((v[1] & 0x7fffffffu) ^ 0x80000000u)))"));
     // Convert v1 to unsigned, replacing only BYTE_3 in v4.
     let unsigned = lift(&[0x7e08_0ef9, 0x0006_1301, RETURN]).unwrap();
     assert!(unsigned.contains("(v[4] & 0x00ffffffu)"));
-    assert!(unsigned.contains("(tb_ray_to_uint(asfloat(v[1])) & 255u) << 24u"));
+    assert!(unsigned.contains("(tb_cvt_u32_f32(asfloat(v[1])) & 255u) << 24u"));
 }
 
 #[test]

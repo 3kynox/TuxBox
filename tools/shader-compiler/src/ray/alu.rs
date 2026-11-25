@@ -3,21 +3,9 @@
 use super::operand;
 use crate::rdna2::{Enc, Insn, Opnd};
 
-pub(super) const HLSL: &str = r#"
+pub(super) const HLSL: &str = concat!(include_str!("../float_to_integer.hlsl"), r#"
 uint tb_ray_ballot(bool active) { return WaveActiveBallot(active)[WaveGetLaneIndex() >> 5]; }
 uint tb_ray_first_lane() { return (WaveGetLaneIndex() & ~31u) + firstbitlow(tb_ray_ballot(true)); }
-bool tb_ray_nan(uint bits) { return (bits & 0x7fffffffu) > 0x7f800000u; }
-uint tb_ray_to_uint(float x) {
-    if (!(x > 0.0) || tb_ray_nan(asuint(x))) return 0u;
-    if (x >= 4294967296.0) return 0xffffffffu;
-    return uint(x);
-}
-uint tb_ray_to_int(float x) {
-    if (tb_ray_nan(asuint(x))) return 0u;
-    if (x >= 2147483648.0) return 0x7fffffffu;
-    if (x <= -2147483648.0) return 0x80000000u;
-    return asuint(int(x));
-}
 float tb_ray_legacy_mul(float a, float b) {
     if ((asuint(a) & 0x7fffffffu) == 0u || (asuint(b) & 0x7fffffffu) == 0u) return 0.0;
     return a * b;
@@ -33,7 +21,7 @@ float tb_ray_legacy_mad(float a, float b, float c) {
     return sum;
 }
 float tb_ray_median(float a, float b, float c) {
-    if (tb_ray_nan(asuint(a)) || tb_ray_nan(asuint(b)) || tb_ray_nan(asuint(c)))
+    if (tb_nan_bits(asuint(a)) || tb_nan_bits(asuint(b)) || tb_nan_bits(asuint(c)))
         return min(min(a, b), c);
     return max(min(a, b), min(max(a, b), c));
 }
@@ -114,7 +102,7 @@ uint2 tb_ray_shift_right(uint2 pair, uint bits) {
     if (bits >= 32u) return uint2(pair.y >> (bits - 32u), 0u);
     return uint2((pair.x >> bits) | (pair.y << (32u - bits)), pair.y >> bits);
 }
-"#;
+"#);
 
 fn high_word(base: Opnd) -> Result<String, String> {
     match base {
@@ -307,8 +295,8 @@ pub(super) fn vector(ins: &Insn) -> Result<String, String> {
         }
         let from_f32 = match name {
             "v_cvt_f16_f32" => Some("tb_ray_half"),
-            "v_cvt_i32_f32" => Some("tb_ray_to_int"),
-            "v_cvt_u32_f32" => Some("tb_ray_to_uint"),
+            "v_cvt_i32_f32" => Some("tb_cvt_i32_f32"),
+            "v_cvt_u32_f32" => Some("tb_cvt_u32_f32"),
             _ => None,
         };
         if let Some(convert) = from_f32 {
@@ -480,19 +468,19 @@ pub(super) fn vector(ins: &Insn) -> Result<String, String> {
             "gt" => format!("{left} > {right}"),
             "ge" => format!("{left} >= {right}"),
             "lg" if ty == "f32" => {
-                format!("!tb_ray_nan({a}) && !tb_ray_nan({b}) && {left} != {right}")
+                format!("!tb_nan_bits({a}) && !tb_nan_bits({b}) && {left} != {right}")
             }
             "neq" if ty == "f32" => {
-                format!("tb_ray_nan({a}) || tb_ray_nan({b}) || {left} != {right}")
+                format!("tb_nan_bits({a}) || tb_nan_bits({b}) || {left} != {right}")
             }
             "ngt" if ty == "f32" => {
-                format!("tb_ray_nan({a}) || tb_ray_nan({b}) || {left} <= {right}")
+                format!("tb_nan_bits({a}) || tb_nan_bits({b}) || {left} <= {right}")
             }
             "nge" if ty == "f32" => {
-                format!("tb_ray_nan({a}) || tb_ray_nan({b}) || {left} < {right}")
+                format!("tb_nan_bits({a}) || tb_nan_bits({b}) || {left} < {right}")
             }
             "nle" if ty == "f32" => {
-                format!("tb_ray_nan({a}) || tb_ray_nan({b}) || {left} > {right}")
+                format!("tb_nan_bits({a}) || tb_nan_bits({b}) || {left} > {right}")
             }
             _ => return Err(format!("unsupported ray comparison {name}")),
         };
@@ -622,8 +610,8 @@ pub(super) fn vector(ins: &Insn) -> Result<String, String> {
             };
             format!("({condition} != 0u) ? {} : {}", bits(1)?, bits(0)?)
         }
-        "v_cvt_u32_f32" => format!("tb_ray_to_uint({})", f(0)?),
-        "v_cvt_i32_f32" => format!("tb_ray_to_int({})", f(0)?),
+        "v_cvt_u32_f32" => format!("tb_cvt_u32_f32({})", f(0)?),
+        "v_cvt_i32_f32" => format!("tb_cvt_i32_f32({})", f(0)?),
         "v_cvt_f16_f32" if ins.enc == Enc::Vop1 => format!("({dst} & 0xffff0000u) | tb_ray_half({})", f(0)?),
         "v_perm_b32" => format!("tb_ray_perm({}, {}, {})", raw(0)?, raw(1)?, raw(2)?),
         "v_and_b32" => format!("{} & {}", raw(0)?, raw(1)?),
