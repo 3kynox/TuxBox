@@ -259,6 +259,17 @@ unsafe fn create(
         super::compute_table::capture_stage_root(pixel, root);
     }
     let mut rooted = [None, None];
+    // A mesh pipeline's pixel stage runs under the guest root too (its
+    // parameters are unchanged by the mesh table). Translate it against that
+    // root, as a vertex/pixel pair is, so its constant buffers and views use the
+    // root's registers rather than the root-less private space.
+    if let (Some(root), Some((pixel, _)), Some(_)) = (guest_root, original[1], original[7])
+        && original[0].is_none()
+        && let Some(variant) = shader_cache::raster_with_root(pixel, root.payload())
+        && shader_cache::prepared(&variant).is_some()
+    {
+        rooted[1] = Some(variant);
+    }
     if let Some(root) = guest_root && original[0].is_some() && original[1].is_some()
         && (root_record.is_none() || original[2..].iter().any(Option::is_some))
     {
