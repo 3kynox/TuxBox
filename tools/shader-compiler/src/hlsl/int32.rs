@@ -2,8 +2,8 @@
 //! add/subtract, 16x16+32 multiply-add, saturating integer packs and sums of
 //! absolute differences over bytes, halves and words. Add/subtract and unsigned MAD
 //! accept integer immediates, and byte SAD accepts an inline zero accumulator.
-//! Clamp (signed saturation) is refused.
-use super::{int16::half, r, Enc, Insn, Opnd};
+//! Signed add/subtract also support saturating arithmetic with clamp.
+use super::{int16::half, r, signed_add_overflow, Enc, Insn, Opnd};
 
 pub(super) fn handles(ins: &Insn) -> bool {
     ins.enc == Enc::Vop3 && matches!(ins.mnemonic.as_str(),
@@ -33,10 +33,25 @@ pub(super) fn expression(ins: &Insn) -> Result<Option<String>, String> {
     // RDNA2 ISA 6.4: op_sel bits 11 and 12 pick the 16-bit half of the two
     // multiplicands. The 32-bit addend and result take no half selection.
     let allowed_select = if mad { 0x1800 } else { 0 };
-    if w0 & 0x8700 != 0 || w0 & 0x7800 & !allowed_select != 0 || w1 >> 27 != 0 {
+    let clamped = w0 & 0x8000 != 0;
+    if (clamped && !add_sub) || w0 & 0x0700 != 0 || w0 & 0x7800 & !allowed_select != 0 || w1 >> 27 != 0 {
         return Err("unsupported ordinary 32-bit integer modifiers".into());
     }
     let (a, b) = (r(&ins.src[0])?, r(&ins.src[1])?);
+    if clamped {
+        // Use uint arithmetic so even overflowing inputs have a defined result.
+        let (result, overflow) = if ins.mnemonic == "v_add_nc_i32" {
+            let sum = format!("({a} + {b})");
+            let overflow = signed_add_overflow(&a, &b, &sum);
+            (sum, overflow)
+        } else {
+            let diff = format!("({a} - {b})");
+            let overflow = format!("((({a} ^ {b}) & ({a} ^ {diff})) >> 31)");
+            (diff, overflow)
+        };
+        // On signed overflow the first operand's sign determines which limit to use.
+        return Ok(Some(format!("({overflow} != 0u ? (0x7fffffffu + ({a} >> 31)) : {result})")));
+    }
     // |x - y| of unsigned fields, then the 32-bit accumulator S2 (modular).
     let sad = |width: u32| -> String {
         let mask = (1u64 << width) - 1;
@@ -97,8 +112,9 @@ mod tests {
             let ins = native(first, second);
             assert_eq!(ins.mnemonic, name);
             assert!(expression(&ins).unwrap().unwrap().contains(want), "{name}");
-            // clamp, abs, a scalar source and neg remain refused.
-            assert!(expression(&native(first | 0x8000, second)).is_err(), "{name} clamp");
+            if name.starts_with("v_mad_") {
+                assert!(expression(&native(first | 0x8000, second)).is_err(), "{name} clamp");
+            }
             assert!(expression(&native(first | 0x100, second)).is_err(), "{name} abs");
             assert!(expression(&native(first, (second & !511) | 4)).is_err(), "{name} sgpr");
             assert!(expression(&native(first, second | 1 << 29)).is_err(), "{name} neg");
@@ -139,6 +155,19 @@ mod tests {
             assert!(hlsl.contains(&format!("({low} | ({high} << 16))")), "{hlsl}");
             assert!(translate(Stage::Compute, &[opcode | 0x0800, body[1]]).is_err());
             assert!(translate(Stage::Compute, &[opcode, body[1] | (1 << 29)]).is_err());
+        }
+    }
+
+    #[test]
+    fn signed_add_and_subtract_accept_clamp() {
+        use crate::hlsl::float64::tests::translate;
+        use crate::Stage;
+
+        // LLVM gfx1030: v_add_nc_i32 / v_sub_nc_i32 v4, v1, v2 clamp
+        for (opcode, result) in [(0xd77f_8004, "(v1 + v2)"), (0xd776_8004, "(v1 - v2)")] {
+            let hlsl = translate(Stage::Compute, &[opcode, 0x0002_0501]).unwrap();
+            assert!(hlsl.contains(&format!("? (0x7fffffffu + (v1 >> 31)) : {result}")), "{hlsl}");
+            assert!(translate(Stage::Compute, &[opcode | 0x0100, 0x0002_0501]).is_err());
         }
     }
 
