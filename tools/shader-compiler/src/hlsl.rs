@@ -3276,13 +3276,13 @@ impl<'a> Emitter<'a> {
     fn direct_raw_descriptor(&mut self, instructions: &[Insn], written: &BTreeSet<u16>) -> Option<(u16, u32)> {
         let [format, size, low, high] = instructions else { return None; };
         if [format, size, low].iter().any(|op| op.mnemonic != "s_mov_b32")
-            || high.mnemonic != "s_or_b32" || format.src != [Opnd::Literal(0x11014fac)]
+            || format.src != [Opnd::Literal(0x11014fac)]
             || size.src != [Opnd::ConstInt(-1)] { return None; }
         let [Opnd::Sgpr(base)] = low.dst[..] else { return None; };
         let [Opnd::Sgpr(root)] = low.src[..] else { return None; };
         if base > 124 || root > 126 || written.contains(&u16::from(root)) || written.contains(&(u16::from(root)+1))
             || format.dst != [Opnd::Sgpr(base+3)] || size.dst != [Opnd::Sgpr(base+2)]
-            || high.dst != [Opnd::Sgpr(base+1)] || high.src != [Opnd::Sgpr(root+1), Opnd::Literal(65536)] { return None; }
+            || high.dst != [Opnd::Sgpr(base+1)] || !raw_index::sets_byte_stride(high, root+1) { return None; }
         let [binding] = &self.ex.resources[..] else { return None; };
         if binding.res_type != 4 || binding.lower != binding.upper { return None; }
         let slot = binding.lower;

@@ -122,6 +122,20 @@ fn proven_byte_index_emits_addresses_without_widening_loads() {
 }
 
 #[test]
+fn byte_index_accepts_commuted_stride_one_in_descriptor_high_word() {
+    let mut ex = indexed_fixture();
+    // gfx1030: s_or_b32 s9, 0x10000, s13
+    ex.isa[16..20].copy_from_slice(&0x8809_0dffu32.to_le_bytes());
+    ex.isa_data.clone_from(&ex.isa);
+    let translated = super::translate(&ex).unwrap();
+    assert_eq!(translated.hlsl.matches("raw_sbuf0.Load(").count(), 8);
+    println!("BEGIN_HLSL\n{}\nEND_HLSL", translated.hlsl);
+    ex.isa[20..24].copy_from_slice(&0x40000u32.to_le_bytes());
+    ex.isa_data.clone_from(&ex.isa);
+    assert!(super::translate(&ex).is_err());
+}
+
+#[test]
 fn indexed_descriptor_proof_does_not_cross_a_basic_block() {
     let mut ex = indexed_fixture();
     // Insert an unconditional branch between construction and the load.
