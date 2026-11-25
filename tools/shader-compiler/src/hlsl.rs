@@ -273,6 +273,36 @@ float tb_med3(float a, float b, float c) { if (tb_isnan(a) || tb_isnan(b) || tb_
 float tb_ldexp(float x, int n) { n = clamp(n, -320, 320); int k1 = clamp(n, -126, 127); n -= k1; int k2 = clamp(n, -126, 127); n -= k2; int k3 = clamp(n, -126, 127); precise float r = x * asfloat((uint)(k1 + 127) << 23); r = r * asfloat((uint)(k2 + 127) << 23); r = r * asfloat((uint)(k3 + 127) << 23); return r; }
 "#;
 
+/// Prove the non-returning 2D, DMASK=3 UMAX encoding and return its X/Y VGPRs.
+/// NSA accepts one extension word with zero unused bytes; A16/D16 stay rejected.
+fn wide_atomic_coordinates(ins: &Insn) -> Result<[u8; 2], String> {
+    let nsa = match ins.raw.as_slice() {
+        [0xf05c1308, flags] if flags & 0xc000_0000 == 0 => false,
+        [0xf05c130a, flags, coordinates]
+            if flags & 0xc000_0000 == 0 && coordinates & 0xffff_ff00 == 0 => true,
+        _ => return Err("unsupported 64-bit image access flags".into()),
+    };
+    if ins.enc != Enc::Mimg || ins.mnemonic != "image_atomic_umax"
+        || ins.aux.imm != 1 || ins.aux.mask != 3 || ins.aux.imm2 != i64::from(nsa)
+    {
+        return Err("unsupported 64-bit image access flags".into());
+    }
+    let Some(Opnd::Vgpr(x)) = ins.src.first().copied() else {
+        return Err("invalid image coordinates".into());
+    };
+    if nsa {
+        let Some(Opnd::Vgpr(y)) = ins.src.get(1).copied() else {
+            return Err("invalid image coordinates".into());
+        };
+        if x != ins.raw[1] as u8 || y != ins.raw[2] as u8 {
+            return Err("invalid image coordinates".into());
+        }
+        Ok([x, y])
+    } else {
+        Ok([x, x.checked_add(1).ok_or("64-bit image coordinate register overflow")?])
+    }
+}
+
 /// Number of VGPRs occupied by the MIMG data operand. Gather selects a channel
 /// with DMASK but returns four texels. D16 packs two components per register.
 fn image_data_registers(ins: &Insn) -> u8 {
@@ -3922,7 +3952,7 @@ impl<'a> Emitter<'a> {
             let [Res::Uav(slot, 1)] = resources.as_slice() else {
                 continue;
             };
-            if matches!(op.raw.as_slice(), [0xf05c1308, flags] if flags & 0xc000_0000 == 0)
+            if wide_atomic_coordinates(op).is_ok()
                 && self.ex.resources.iter().filter(|r| {
                     matches!(r.res_type, 6..=9)
                         && r.space == self.binding_spaces.get(&(1, *slot)).copied().unwrap_or(0)
@@ -8095,12 +8125,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 // Image atomics → Interlocked* on a RWTexture<uint> texel; vdata carries the
                 // operand in and the previous value out.
                 if ins.aux.mask == 3 && as_uint && dim == 1 {
-                    let visibility = match (self.ex.stage, ins.raw.as_slice()) {
-                        (Stage::Pixel | Stage::Compute, [0xf05c1308, flags])
-                            if flags & 0xc000_0000 == 0 =>
-                                self.wide_visibility_uavs.contains(&slot),
-                        _ => false,
-                    };
+                    let visibility = matches!(self.ex.stage, Stage::Pixel | Stage::Compute)
+                        && wide_atomic_coordinates(ins).is_ok()
+                        && self.wide_visibility_uavs.contains(&slot);
                     if !visibility {
                         return Err("unknown two-word visibility atomic".into());
                     }
