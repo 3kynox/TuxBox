@@ -2314,6 +2314,13 @@ impl<'a> Emitter<'a> {
         // Existing FSSM single-range layouts may address beyond the declared range.
         if let [range] = ranges {
             if range.base_register == 0 && range.space == 0 && matches!(range.offset_in_table, 0 | u32::MAX) {
+                // The runtime can append a reflected descriptor beyond a finite 1.1
+                // table. Use that binding before extrapolating the single range.
+                if index >= range.num && stride == 32 && self.ex.root_sig.as_ref().is_some_and(|r| r.version == 2) {
+                    if let Some((kind, register, space)) = self.uncovered_fssm_descriptor(sgpr, offset) {
+                        return Ok((Some(kind), register, space));
+                    }
+                }
                 return Ok((Some(range.range_type), index, 0));
             }
         }
