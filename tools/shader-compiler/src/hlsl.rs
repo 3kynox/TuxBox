@@ -552,6 +552,8 @@ struct Emitter<'a> {
     view_cull: Option<instance_cull_views::ViewProgram>,
     /// The shader uses wave intrinsics (needs shader model 6: DXC only).
     required_wave_size: Option<u32>,
+    // Proven whole-wave EXECZ guards of verified masked reductions.
+    reduction_execz_guards: BTreeSet<usize>,
     portable_wave64: bool,
     msel: HashMap<usize, MSel>,
     /// Buffer ops (MUBUF, s_buffer_load) whose descriptor register holds one of several
@@ -1605,7 +1607,7 @@ fn translate_outputs_once(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, ou
         em.reflected_lds_words = Some(bytes/4);
     }
     if let Some(width) = required_wave_size {
-        wave_sum::check_control_flow(&em.insns, width)?;
+        em.reduction_execz_guards = wave_sum::check_control_flow(&em.insns, width)?;
         let [x, y, z] = compute_group(ex);
         if ex.stage != Stage::Compute || !x.checked_mul(y).and_then(|n| n.checked_mul(z)).is_some_and(|n| n % width == 0) {
             return Err(format!("wave operation requires complete {width}-lane compute waves"));
@@ -2124,6 +2126,7 @@ impl<'a> Emitter<'a> {
             micropoly_vote: None,
             view_cull: None,
             required_wave_size: None,
+            reduction_execz_guards: BTreeSet::new(),
             portable_wave64: false,
             msel: HashMap::new(),
             bsel: HashMap::new(),
@@ -4613,6 +4616,10 @@ uint tb_fmac_half(uint a, uint b, uint c) {
     }
 
     fn emit_body_dispatch(&mut self, is_ps: bool, entry: usize) -> Result<(), String> {
+        // Per-invocation dispatch cannot guarantee whole-wave arrival at a vote.
+        if !self.reduction_execz_guards.is_empty() {
+            return Err("wave reduction EXECZ vote in a block-dispatched program".into());
+        }
         self.dispatched = true;
         let n = self.insns.len();
         let mut off2idx: HashMap<usize, usize> = self.insns.iter().enumerate().map(|(i, x)| (x.offset, i)).collect();
@@ -4997,6 +5004,10 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                     5 => Some("scc != 0u".into()),
                     6 => Some("(vcc_lo & 1u) == 0u".into()),
                     7 => Some("(vcc_lo & 1u) != 0u".into()),
+                    // The recorded guard reaches every invocation before the
+                    // full-mask reduction, including guest-inactive lanes.
+                    8 if self.reduction_execz_guards.contains(&idx) =>
+                        Some("!WaveActiveAnyTrue((exec_lo & 1u) != 0u)".into()),
                     8 => Some("(exec_lo & 1u) == 0u".into()),
                     9 => Some("(exec_lo & 1u) != 0u".into()),
                     // A non-final s_endpgm ends the program on this path: jump to the end label.
@@ -10185,3 +10196,68 @@ mod election_order_regression {
     }
 }
 
+#[cfg(test)]
+mod reduction_execz_regression {
+    use super::*;
+
+    mod fixture {
+        include!("../examples/support/wave_guard_fixture.rs");
+    }
+
+    /// Build native masked reductions with optional pre-guard edges and an
+    /// independent tail EXECZ; width selects the verified 32/64-lane fixture.
+    fn guarded_shader(width: u32, prefix: &[u32]) -> ShaderExtract {
+        let (mut shader, mut words, end) = fixture::shader(width);
+        words.truncate(end);
+        let skip = words.len() as u32;
+        words.splice(..0, prefix.iter().copied().chain([0xbe87_0391, 0xbf88_0000 | skip]));
+        words.extend([0xbf88_0001, 0xbf80_0000, 0xbf81_0000]);
+        shader.isa = words.into_iter().flat_map(u32::to_le_bytes).collect();
+        shader.isa_data = shader.isa.clone();
+        shader
+    }
+
+    #[test]
+    fn reduction_execz_votes_only_at_proven_guards() {
+        for width in [32, 64] {
+            let translated = translate(&guarded_shader(width, &[])).expect("guarded reduction");
+            assert_eq!(translated.required_wave_size, Some(width));
+            assert_eq!(translated.hlsl.matches("!WaveActiveAnyTrue((exec_lo & 1u) != 0u)").count(), 1);
+            assert!(translated.hlsl.contains("if ((exec_lo & 1u) == 0u)"));
+        }
+    }
+
+    #[test]
+    fn reduction_execz_accepts_direct_rejoin_at_vote() {
+        for width in [32, 64] {
+            // Skip one local vector instruction and rejoin exactly at the guard.
+            let translated = translate(&guarded_shader(width, &[0xbf88_0002, 0x4a00_0081]))
+                .expect("direct rejoin before wave vote");
+            assert_eq!(translated.hlsl.matches("!WaveActiveAnyTrue((exec_lo & 1u) != 0u)").count(), 1);
+        }
+    }
+
+    #[test]
+    fn reduction_execz_rejects_prior_bypass_before_prologue() {
+        for width in [32, 64] {
+            let (mut shader, mut words, end) = fixture::shader(width);
+            words.truncate(end);
+            let skip = words.len() as u32 + 1;
+            // The first edge bypasses the vote but lands before the prologue.
+            words.splice(..0, [0xbf88_0002, 0xbe87_0391, 0xbf88_0000 | skip, 0xbf80_0000]);
+            words.push(0xbf81_0000);
+            shader.isa = words.into_iter().flat_map(u32::to_le_bytes).collect();
+            shader.isa_data = shader.isa.clone();
+            let error = translate(&shader).err().expect("bypassed wave vote refused");
+            assert!(error.contains("divergent control flow"), "{error}");
+        }
+    }
+
+    #[test]
+    fn reduction_execz_refuses_block_dispatch() {
+        let shader = guarded_shader(32, &[]);
+        let mut emitter = Emitter::new(&shader, Vec::new());
+        emitter.reduction_execz_guards.insert(0);
+        assert!(emitter.emit_body_dispatch(false, 0).unwrap_err().contains("EXECZ vote"));
+    }
+}
