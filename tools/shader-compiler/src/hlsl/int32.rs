@@ -1,8 +1,8 @@
 //! Ordinary VOP3 integer forms with a 32-bit result: the signed no-carry
 //! add/subtract, the 16x16+32 multiply-add and the sums of absolute
 //! differences (SAD) over bytes, halves and words. Sources are VGPRs without
-//! modifiers. Add/subtract also accept integer immediates, and byte SAD
-//! accepts inline zero as its accumulator.
+//! modifiers. Add/subtract and unsigned MAD accept integer immediates,
+//! and byte SAD accepts an inline zero accumulator.
 //! Clamp (signed saturation) is refused.
 use super::{int16::half, r, Enc, Insn, Opnd};
 
@@ -24,6 +24,7 @@ pub(super) fn expression(ins: &Insn) -> Result<Option<String>, String> {
             matches!(s, Opnd::Vgpr(_))
                 || (add_sub && matches!(s, Opnd::ConstInt(_) | Opnd::Literal(_)))
                 || (index == 2 && ins.mnemonic == "v_sad_u8" && matches!(s, Opnd::ConstInt(0)))
+                || (index == 2 && ins.mnemonic == "v_mad_u32_u16" && matches!(s, Opnd::ConstInt(_)))
         }) {
         return Err("unsupported ordinary 32-bit integer source or encoding".into());
     }
@@ -102,6 +103,18 @@ mod tests {
         let expr = expression(&native(0xd773_1807, 0x041a_0b04)).unwrap().unwrap();
         assert_eq!(expr, "((v4 >> 16) * (v5 >> 16) + v6)");
         assert!(expression(&native(0xd77f_0807, 0x0202_0b04)).is_err());
+    }
+
+    #[test]
+    fn unsigned_mad_accepts_a_full_width_inline_integer_accumulator() {
+        // LLVM gfx1030: v_mad_u32_u16 v4, v1, v2, 7 (then -1).
+        for (sources, addend) in [(0x021e_0501, "0x7u"), (0x0306_0501, "0xffffffffu")] {
+            let expr = expression(&native(0xd773_0004, sources)).unwrap().unwrap();
+            assert_eq!(expr, format!("((v1 & 0xffffu) * (v2 & 0xffffu) + {addend})"));
+        }
+        // v_mad_u32_u16 v4, 7, v2, v3 and v_mad_i32_i16 v4, v1, v2, 7
+        assert!(expression(&native(0xd773_0004, 0x040e_0487)).is_err());
+        assert!(expression(&native(0xd775_0004, 0x021e_0501)).is_err());
     }
 
     #[test]
