@@ -82,6 +82,7 @@ mod ray_resolve;
 mod fspx_wave;
 mod singleton_wave;
 mod wave_sum;
+mod wave_loops;
 mod raw_index;
 mod reflection_compact;
 pub(crate) mod radiance_probe;
@@ -522,6 +523,8 @@ struct Emitter<'a> {
     view_cull: Option<instance_cull_views::ViewProgram>,
     /// The shader uses wave intrinsics (needs shader model 6: DXC only).
     required_wave_size: Option<u32>,
+    /// Structured loop latches with a verified guest trip bound.
+    wave_bounded_latches: BTreeSet<usize>,
     portable_wave64: bool,
     msel: HashMap<usize, MSel>,
     /// Buffer ops (MUBUF, s_buffer_load) whose descriptor register holds one of several
@@ -1135,6 +1138,10 @@ fn reads_sgpr(ins: &Insn, n: u8) -> bool {
     })
 }
 
+fn branch_pc(ins: &Insn) -> i64 {
+    ins.offset as i64 + 4 + ins.aux.imm * 4
+}
+
 fn branch_targets(insns: &[Insn]) -> BTreeSet<i64> {
     insns.iter()
         .filter(|b| b.enc == Enc::Sopp && Emitter::branch_cond(b.op).is_some())
@@ -1562,7 +1569,12 @@ fn translate_outputs_once(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, ou
         em.reflected_lds_words = Some(bytes/4);
     }
     if let Some(width) = required_wave_size {
-        wave_sum::check_control_flow(&em.insns, width)?;
+        if let Err(reason) = wave_sum::check_control_flow(&em.insns, width) {
+            if !em.resolve_wave32 || requires_ballot || scan_width.is_some() {
+                return Err(reason);
+            }
+            em.wave_bounded_latches = wave_loops::bounded_latches(&em).ok_or(reason)?;
+        }
         let [x, y, z] = compute_group(ex);
         if ex.stage != Stage::Compute || !x.checked_mul(y).and_then(|n| n.checked_mul(z)).is_some_and(|n| n % width == 0) {
             return Err(format!("wave operation requires complete {width}-lane compute waves"));
@@ -2081,6 +2093,7 @@ impl<'a> Emitter<'a> {
             micropoly_vote: None,
             view_cull: None,
             required_wave_size: None,
+            wave_bounded_latches: BTreeSet::new(),
             portable_wave64: false,
             msel: HashMap::new(),
             bsel: HashMap::new(),
@@ -4233,7 +4246,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 continue;
             }
             if ins.enc == Enc::Sopp && Self::branch_cond(ins.op).is_some() {
-                let t = ins.offset as i64 + 4 + ins.aux.imm * 4;
+                let t = branch_pc(ins);
                 let ti = if t >= 0 && t as usize >= prog_end {
                         self.insns.len() // at or beyond the end of the program (s_code_end padding): exit
                     } else {
@@ -4496,7 +4509,10 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 }
                 let exits: Vec<String> = labels.iter().filter(|&&t| t > i).map(|t| format!("j{t}")).collect();
                 let exit = if exits.is_empty() { String::new() } else { format!(" && !({})", exits.join(" || ")) };
-                let guard = if self.wave_cull || self.light_grid || probe_trace || self.packed.as_ref().is_some_and(|p| p.copy_backedges.contains(&i) || p.bounded_backedges.contains(&i)) {
+                let guard = if self.wave_cull || self.light_grid || probe_trace
+                    || self.wave_bounded_latches.contains(&i)
+                    || self.packed.as_ref().is_some_and(|p| p.copy_backedges.contains(&i) || p.bounded_backedges.contains(&i))
+                {
                     ""
                 } else {
                     " && ++tb_guard < 65536u"
@@ -4533,6 +4549,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
     }
 
     fn emit_body_dispatch(&mut self, is_ps: bool, entry: usize) -> Result<(), String> {
+        if !self.wave_bounded_latches.is_empty() {
+            return Err("bounded wave reduction in a block-dispatched program".into());
+        }
         self.dispatched = true;
         let n = self.insns.len();
         let mut off2idx: HashMap<usize, usize> = self.insns.iter().enumerate().map(|(i, x)| (x.offset, i)).collect();
@@ -4547,7 +4566,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 continue;
             }
             if Self::branch_cond(ins.op).is_some() {
-                let t = ins.offset as i64 + 4 + ins.aux.imm * 4;
+                let t = branch_pc(ins);
                 let ti = if t >= 0 && t as usize >= prog_end {
                         self.insns.len() // at or beyond the end of the program (s_code_end padding): exit
                     } else {
