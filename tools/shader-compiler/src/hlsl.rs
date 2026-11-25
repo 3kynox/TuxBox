@@ -408,6 +408,11 @@ fn half_round_or_conversion(m: &str) -> bool {
     half_unary_op(m).is_some() || integer_to_half(m) || half_to_integer(m)
 }
 
+// Selector 248 is the only inline float whose binary16 value differs from its binary32 value.
+fn inline_half_value(value: f32) -> f32 {
+    if value.to_bits() == 0x3e22_f983 { f32::from_bits(0x3e23_0000) } else { value }
+}
+
 fn half_operand_bits(o: &Opnd) -> Result<String, String> {
     match o {
         Opnd::ConstF32(_) => Ok(format!("tb_f16_rne({})", f(o)?)),
@@ -5045,7 +5050,12 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         let selected = if preserve { format!("q{i}pair") } else { format!("q{i}") };
         self.line(&format!("{ty} {selected} = q{i}src == 0u ? {source} : q{i}src == 1u ? q{i}x : q{i}src == 2u ? q{i}y : q{i}d;"));
         if preserve {
-            self.line(&format!("uint q{i} = q{i}pair.x; bool q{i}active = q{i}pair.y != 0u;"));
+            if ins.op == OP_QUAD_MOVE {
+                let dst = r(&ins.dst[0])?;
+                self.line(&format!("uint q{i} = q{i}pair.y != 0u ? q{i}pair.x : {dst};"));
+            } else {
+                self.line(&format!("uint q{i} = q{i}pair.x; bool q{i}active = q{i}pair.y != 0u;"));
+            }
         }
         Ok(())
     }
@@ -6795,7 +6805,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         let h16 = |o: &Opnd| -> Result<String, String> {
             let mut e = match o {
                 // Inline selector 248 has distinct binary16 and binary32 values.
-                Opnd::ConstF32(_) => format!("f16tof32(f32tof16({}))", f(o)?),
+                Opnd::ConstF32(value) => f(&Opnd::ConstF32(inline_half_value(*value)))?,
                 _ => format!("f16tof32(({}) & 0xffffu)", r(o)?),
             };
             if ins.enc == Enc::Vop3 {
@@ -6854,7 +6864,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 if let Opnd::ConstF32(value) = s[0] {
                     // Inline floats are finite normal halves. Only 1/(2*pi)
                     // has a distinct rounded value in the half-precision ROM.
-                    let mut value = if value.to_bits() == 0x3e22_f983 { f32::from_bits(0x3e23_0000) } else { value };
+                    let mut value = inline_half_value(value);
                     if ins.enc == Enc::Vop3 {
                         if ins.aux.mask & 1 != 0 { value = value.abs(); }
                         if ins.aux.mask & 8 != 0 { value = -value; }
@@ -10474,11 +10484,12 @@ mod tests {
         use super::float64::tests::translate;
         // gfx1030: v_<op>_f32_sdwa v4, -|v1| mul:2, both selectors DWORD.
         for (opcode, intrinsic) in [
-            (0x7e08_40f9, "frac"), (0x7e08_42f9, "trunc"), (0x7e08_44f9, "ceil"),
+            (0x7e08_40f9, "tb_fract_f32"), (0x7e08_42f9, "trunc"), (0x7e08_44f9, "ceil"),
             (0x7e08_46f9, "round"), (0x7e08_48f9, "floor"),
         ] {
             let hlsl = translate(Stage::Compute, &[opcode, 0x0036_5601]).unwrap();
-            let result = format!("asuint((({intrinsic}((-abs(asfloat(v1))))) * 2.0))");
+            let mode = if intrinsic == "tb_fract_f32" { ", 0u" } else { "" };
+            let result = format!("asuint((({intrinsic}((-abs(asfloat(v1))){mode})) * 2.0))");
             assert!(hlsl.contains(&result), "{hlsl}");
         }
     }
@@ -10505,7 +10516,7 @@ mod tests {
         use super::float64::tests::translate;
         // gfx1030: v_cvt_f32_f16_e32 v4, 1/(2*pi) (inline selector 248).
         let hlsl = translate(Stage::Compute, &[0x7e08_16f8]).unwrap();
-        assert!(hlsl.contains("f16tof32(f32tof16(asfloat(0x3e22f983u)))"), "{hlsl}");
+        assert!(hlsl.contains("asfloat(0x3e230000u)"), "{hlsl}");
         // v_cvt_f32_f16_sdwa v4, -|v1| clamp mul:2 dst_sel:DWORD src0_sel:WORD_1
         let hlsl = translate(Stage::Compute, &[0x7e08_16f9, 0x0035_7601]).unwrap();
         assert!(hlsl.contains("((v1 >> 16) & 0xffffu)"), "{hlsl}");
