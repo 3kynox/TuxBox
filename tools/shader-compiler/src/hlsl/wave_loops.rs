@@ -240,12 +240,16 @@ fn bounded_bitmap(
         return None;
     }
     let copy = flow.definition(latch, head, |i| writes_bitmap(&code[i], bitmap))?;
-    let [updated] = code[copy].src[..] else {
+    let mov = &code[copy];
+    let [updated] = mov.src[..] else {
         return None;
     };
     let xor = definition(copy, scalar(updated)?)?;
-    if code[copy].mnemonic != "v_mov_b32"
-        || code[copy].dst != [Opnd::Vgpr(bitmap)]
+    // The next iteration must read all 32 bits of the XOR result.
+    if mov.enc != Enc::Vop1
+        || mov.mnemonic != "v_mov_b32"
+        || mov.aux.sdwa.is_some()
+        || mov.dst != [Opnd::Vgpr(bitmap)]
         || code[xor].mnemonic != "s_xor_b32"
         || (code[xor].src != [bit, value] && code[xor].src != [value, bit])
         || definition(xor, read)? != head

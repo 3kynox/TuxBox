@@ -16,6 +16,7 @@ enum Shape {
     EmptyExec,
     ClobberSavedExec,
     NoBitmapUpdate,
+    TruncatedBitmapUpdate,
     TrailingLoop,
     ResolveSpill,
     AliasedTable,
@@ -120,16 +121,21 @@ fn shader(width: u32, shape: Shape) -> ShaderExtract {
         0xbf85_0001, // skip marker increment based on the CBV value
         0x8113_8113,
         sop2(18, 17, 15, 14), // clear the selected bit
-        vmove(
+    ]);
+    if shape == Shape::TruncatedBitmapUpdate {
+        // v_mov_b32_sdwa v5, s17 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_0
+        code.extend([0x7e0a_02f9, 0x0084_0611]);
+    } else {
+        code.push(vmove(
             5,
             if shape == Shape::NoBitmapUpdate {
                 14
             } else {
                 17
             },
-        ),
-        sop2(2, 12, 12, 129),
-    ]);
+        ));
+    }
+    code.push(sop2(2, 12, 12, 129));
     code.push(0xbf06_0e0f); // s_cmp_eq_u32 s15, s14
     code.push(branch(4, code.len(), inner));
     code.extend([0x810b_810b, 0xbf06_820b]); // increment the outer count, then compare to two.
@@ -218,6 +224,7 @@ fn refuses_unproved_ctrl_flow_and_buffer_accesses() {
         Shape::EmptyExec,
         Shape::ClobberSavedExec,
         Shape::NoBitmapUpdate,
+        Shape::TruncatedBitmapUpdate,
         Shape::UnresolvedOffset,
         Shape::PerInvocation,
     ] {
