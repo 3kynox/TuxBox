@@ -964,7 +964,7 @@ pub(super) extern "system" fn unregister_pages(device: &Device, token: usize) {
 
 #[path = "heap_page_cache.rs"]
 mod heap_page_cache;
-use heap_page_cache::PageCache;
+use heap_page_cache::{PageCache, span_key};
 
 // Registration returns an opaque cookie. Import the actual slices when a
 // resource uses them, so a large title arena doesn't pin untouched pages.
@@ -976,6 +976,11 @@ pub(super) struct PagePools {
     // 9,352 times in its first minute. Each fresh host heap is another driver
     // buffer, and RADV passes every live buffer with each submission, so the
     // kernel's per-submit validation grows with the import count.
+    //
+    // Imports of several pages share this cache under a key that also holds
+    // their page count. The same title views five fixed ranges of 448 KiB to
+    // 1.2 MiB about five times a frame each, and its recording allocators
+    // keep every import for 216 frames: about 4,500 live buffers.
     loose: std::sync::Mutex<PageCache<ImportedHeap>>,
 }
 
@@ -1014,6 +1019,13 @@ impl PagePools {
             static HIT: AtomicU64 = AtomicU64::new(0);
             let mut loose = self.loose.lock().unwrap_or_else(|e| e.into_inner());
             return reuse_page(&mut loose, base, open, [("page_open", &OPEN), ("page_hit", &HIT)], source, size);
+        }
+        if let Some(key) = span_key(base, size) {
+            use std::sync::atomic::AtomicU64;
+            static OPEN: AtomicU64 = AtomicU64::new(0);
+            static HIT: AtomicU64 = AtomicU64::new(0);
+            let mut loose = self.loose.lock().unwrap_or_else(|e| e.into_inner());
+            return reuse_page(&mut loose, key, open, [("span_open", &OPEN), ("span_hit", &HIT)], source, size);
         }
         open()
     }
