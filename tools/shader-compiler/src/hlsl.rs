@@ -46,6 +46,7 @@ mod micropoly;
 mod mesh;
 mod mesh_exports;
 mod exec_group;
+mod exec_snapshot;
 mod hair_cluster;
 mod hair_cluster_export;
 mod instance_cull;
@@ -652,6 +653,7 @@ struct Emitter<'a> {
     compute_swizzle: bool,
     vote_defs: BTreeSet<usize>,
     vote_uses: BTreeMap<usize, usize>,
+    exec_snapshots: exec_snapshot::Snapshots,
     reflected_lds_words: Option<u32>,
     hoisted_swizzle: Option<usize>,
     indexed_lane: bool,
@@ -1263,7 +1265,7 @@ fn lower_local_pc_transfers(insns: &mut [Insn]) -> Result<(), String> {
 // range, restore EXEC, broadcast the atomic result and add a per-lane prefix.
 // The two register allocations differ. Match the complete regions before changing
 // a saved EXEC mask from its usual per-invocation predicate into wave-uniform data.
-fn mark_wave_allocations(insns: &mut [Insn], wave32_mask: bool) -> Result<bool, String> {
+fn mark_wave_allocations(insns: &mut [Insn], wave32_mask: bool, election: Option<ElectionLowering>) -> Result<bool, String> {
     const REGIONS: [&[u32]; 2] = [
         &[
         0xd7650007, 0x000100c1, 0xbe8e147e, 0xbe8c047e, 0xd7660007, 0x00020ec1,
@@ -1279,13 +1281,14 @@ fn mark_wave_allocations(insns: &mut [Insn], wave32_mask: bool) -> Result<bool, 
         ],
     ];
     const COUNT: usize = 18;
+    let snapshots = election.is_some() && predicate_snapshots(insns);
     let mut found = false;
     for i in 0..insns.len() {
         // Wave32 programs keep the previous lowering unless the election verifies.
         // Modes that model EXEC as a whole-wave mask already lower it directly.
         if !wave32_mask && insns[i].mnemonic == "s_ff1_i32_b32" && insns[i].src == [Opnd::ExecLo] {
             let mut trial = insns.to_vec();
-            match verify_lane_election(&mut trial, i) {
+            match verify_lane_election(&mut trial, i, election.is_some()) {
                 Ok(()) => {
                     trial[i].mnemonic = "tb_first_active_lane".into();
                     insns.clone_from_slice(&trial);
@@ -1299,7 +1302,10 @@ fn mark_wave_allocations(insns: &mut [Insn], wave32_mask: bool) -> Result<bool, 
         let region = i.checked_sub(1).and_then(|first| insns.get(first..first + COUNT))
             .filter(|region| REGIONS.iter().any(|words| region.iter().flat_map(|op| op.raw.iter()).eq(words.iter())));
         let Some(region) = region else {
-            verify_lane_election(insns, i)?;
+            if !snapshots {
+                verify_lane_election(insns, i, election.is_some())?;
+            }
+            if election == Some(ElectionLowering::Shared64) { insns[i].mnemonic = "tb_first_exec_lane".into(); }
             continue;
         };
         let first = region[0].offset;
@@ -1316,6 +1322,93 @@ fn mark_wave_allocations(insns: &mut [Insn], wave32_mask: bool) -> Result<bool, 
         found = true;
     }
     Ok(found)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ElectionLowering {
+    Native32,
+    Shared64,
+}
+
+/// Select the lane geometry only for ordinary straight-line compute kernels.
+/// A group with at most 32 threads fits in one native wave even for a b64 search.
+/// Larger wave64 elections reuse the workgroup exchange across both halves.
+fn straight_election(ex: &ShaderExtract, insns: &[Insn]) -> Option<ElectionLowering> {
+    if ex.stage != Stage::Compute || ex.fspx_config.is_some() { return None; }
+    let threads = compute_group(ex).into_iter().fold(1u32, u32::saturating_mul);
+    if threads == 0 || threads > 1024 { return None; }
+    let first = insns.iter().find(|i| matches!(i.mnemonic.as_str(), "s_ff1_i32_b32" | "s_ff1_i32_b64"));
+    // A small group fits one wave of either guest width, even without FF1.
+    if first.is_none() && (threads > 32 || !insns.iter().any(exec_snapshot::captures_exec)) { return None; }
+    let (end, body) = insns.split_last()?;
+    if end.mnemonic != "s_endpgm" || !body.iter().all(|i| match i.mnemonic.as_str() {
+        "s_ff1_i32_b32" | "s_ff1_i32_b64" => first.is_some_and(|f| f.mnemonic == i.mnemonic) && i.src == [Opnd::ExecLo],
+        "s_load_dwordx4" | "s_waitcnt" | "s_nop" | "s_mov_b32" | "s_mov_b64"
+        | "s_and_saveexec_b32" | "s_and_saveexec_b64" | "v_mbcnt_lo_u32_b32" | "v_mbcnt_hi_u32_b32"
+        | "v_mov_b32" | "v_and_b32" | "v_lshlrev_b32" | "v_lshrrev_b32"
+        | "v_add_nc_u32" | "v_cndmask_b32" | "buffer_store_dword" => true,
+        m => m.starts_with("v_cmp_") || m.starts_with("v_cmpx_"),
+    }) { return None; }
+    Some(if threads <= 32 || first.is_some_and(|f| f.mnemonic == "s_ff1_i32_b32") {
+        ElectionLowering::Native32
+    } else {
+        ElectionLowering::Shared64
+    })
+}
+
+/// In a straight-line compute shader, a compare/save/FF1/restore sequence
+/// produces a uniform scalar value. Recognize every mask access before allowing
+/// uses other than the usual comparison against the lane index.
+fn predicate_snapshots(mut code: &[Insn]) -> bool {
+    let mask = |o: &Opnd| matches!(o, Opnd::ExecLo | Opnd::ExecHi | Opnd::VccLo | Opnd::VccHi);
+    // Numeric vector operands can read the ballot captured at SAVEEXEC. Other
+    // consumers still require proof about the representation they expect.
+    let mut saved_words = BTreeMap::new();
+    let count = code.len();
+    while let [op, rest @ ..] = code {
+        if exec_snapshot::copy_scalar_words(op, &mut saved_words) {
+            code = rest;
+            continue;
+        }
+        let numeric = exec_snapshot::numeric_sources(op) != 0;
+        if let ("v_cndmask_b32", Some(Opnd::Sgpr(lo))) = (op.mnemonic.as_str(), op.src.get(2)) {
+            let pair = [saved_words.get(lo), saved_words.get(&(lo + 1))];
+            if pair.iter().any(|w| matches!(w, Some(exec_snapshot::Word::Saved(..))))
+                && (op.enc != Enc::Vop3 || op.aux.sdwa.is_some() || pair.contains(&None))
+            {
+                return false;
+            }
+        }
+        if !numeric && saved_words.iter().any(|(&reg, word)| matches!(word, exec_snapshot::Word::Saved(..))
+            && (reads_sgpr(op, reg) || op.mnemonic.ends_with("64") && op.src.iter().any(|o| may_touch_sgpr(o, reg))))
+        {
+            return false;
+        }
+        let i = count - code.len();
+        if op.mnemonic.starts_with("v_cmp_") && op.dst == [Opnd::VccLo] {
+            let [save, search, restore, tail @ ..] = rest else { return false };
+            let [Opnd::Sgpr(saved)] = save.dst.as_slice() else { return false };
+            let [Opnd::Sgpr(result)] = search.dst.as_slice() else { return false };
+            if op.src.iter().any(mask) || save.mnemonic != "s_and_saveexec_b64" || save.src != [Opnd::VccLo]
+                || search.mnemonic != "s_ff1_i32_b64" || search.src != [Opnd::ExecLo]
+                || result == saved || u16::from(*result) == u16::from(*saved) + 1
+                || restore.mnemonic != "s_mov_b64" || restore.dst != [Opnd::ExecLo]
+                || restore.src != [Opnd::Sgpr(*saved)]
+            {
+                return false;
+            }
+            exec_snapshot::record_scalar_write(save, i + 1, &mut saved_words);
+            exec_snapshot::record_scalar_write(search, i + 2, &mut saved_words);
+            code = tail;
+        } else {
+            if op.src.iter().chain(&op.dst).any(mask) || op.mnemonic.starts_with("v_cmpx_") {
+                return false;
+            }
+            exec_snapshot::record_scalar_write(op, i, &mut saved_words);
+            code = rest;
+        }
+    }
+    true
 }
 
 /// True when `o` may name SGPR `n` as part of a 32- or 64-bit operand.
@@ -1362,7 +1455,7 @@ fn vgpr_def(insns: &[Insn], targets: &BTreeSet<i64>, at: usize, v: u8) -> Option
 /// `s_ff1_i32_b64 s, exec` (or `_b32`) compared with the full-mask `v_mbcnt` lane index. The
 /// elected lane usually adds the number of active lanes to a counter; that count
 /// reads an EXEC copy as a wave mask, so capture the copy as a ballot.
-fn verify_lane_election(insns: &mut [Insn], ff1: usize) -> Result<(), String> {
+fn verify_lane_election(insns: &mut [Insn], ff1: usize, straight_compute: bool) -> Result<(), String> {
     let at = insns[ff1].offset;
     let bad = |what: &str| format!("unverified EXEC election at {at:#x}: {what}");
     let Some(&Opnd::Sgpr(lane)) = insns[ff1].dst.first() else { return Err(bad("no scalar destination")) };
@@ -1373,7 +1466,13 @@ fn verify_lane_election(insns: &mut [Insn], ff1: usize) -> Result<(), String> {
         ins.src.iter().take(if two { 2 } else { usize::MAX }).cloned().collect::<Vec<_>>()
     };
     let cmp = (ff1 + 1..insns.len())
-        .find(|&j| sources(&insns[j]).iter().chain(&insns[j].dst).any(|o| may_touch_sgpr(o, lane)))
+        .find(|&j| {
+            let ins = &insns[j];
+            if straight_compute && ins.mnemonic == "s_mov_b32" {
+                return ins.src.iter().chain(&ins.dst).any(|o| *o == Opnd::Sgpr(lane));
+            }
+            sources(ins).iter().chain(&ins.dst).any(|o| may_touch_sgpr(o, lane))
+        })
         .ok_or_else(|| bad("unused lane"))?;
     if (ff1 + 1..=cmp).any(|j| targets.contains(&(insns[j].offset as i64))) {
         return Err(bad("branch enters the election"));
@@ -1414,6 +1513,13 @@ fn verify_lane_election(insns: &mut [Insn], ff1: usize) -> Result<(), String> {
         (cmp, restore)
     } else {
         let Some(save) = (cmp + 1..insns.len()).find(|&j| insns[j].mnemonic == format!("s_and_saveexec_{bits}")) else { return Ok(()) };
+        // A different comparison replaced VCC before SAVEEXEC. In straight-line
+        // code that save starts an independent masked region.
+        if straight_compute && c.dst == [Opnd::VccLo] && insns[save].src == [Opnd::VccLo]
+            && insns[cmp + 1..save].iter().any(|i| i.mnemonic.starts_with("v_cmp_") && i.dst == [Opnd::VccLo])
+        {
+            return Ok(());
+        }
         let Some(&Opnd::Sgpr(saved)) = insns[save].dst.first() else { return Ok(()) };
         let restore = (save + 1..insns.len())
             .find(|&j| insns[j].mnemonic == format!("s_mov_{bits}") && insns[j].dst.first() == Some(&Opnd::ExecLo)
@@ -1616,7 +1722,9 @@ fn translate_outputs_once(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, ou
     let fspx_wave = fspx_wave::width(ex, &insns);
     let wave_cull = fspx_wave.is_some() || hair_multisample || wave_cull::recognize(ex);
     let page_waves = page_waves::recognize(ex);
-    let allocation_wave64 = !lone_lane::on() && !wave_cull && !page_waves && mark_wave_allocations(&mut insns, resolve_wave32)?;
+    let generic_waves = !lone_lane::on() && !wave_cull && !page_waves;
+    let election = if generic_waves && !resolve_wave32 { straight_election(ex, &insns) } else { None };
+    let allocation_wave64 = generic_waves && mark_wave_allocations(&mut insns, resolve_wave32, election)?;
     if ex.stage == Stage::Pixel { wave_alloc::prepare(&mut insns); }
     let reflection = reflection_compact::prepare(ex, &mut insns);
     group_extrema::prepare_exchanges(ex, &mut insns)?;
@@ -1643,7 +1751,7 @@ fn translate_outputs_once(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, ou
     let scan = if wave_cull { None } else { wave_scan::prepare(ex, &mut insns)? };
     let scan_width = scan.as_ref().map(|s| s.width);
     let ordinary_wave = !wave_cull && !page_waves && !lone_lane::on();
-    let indexed_lane = !resolve_wave32 && (group_extrema || ex.stage == Stage::Compute
+    let indexed_lane = !resolve_wave32 && (election == Some(ElectionLowering::Shared64) || group_extrema || ex.stage == Stage::Compute
         && (indexed_lane::constant_reads(compute_group(ex), &mut insns, ordinary_wave)
             || indexed_lane::prepare(compute_group(ex), &mut insns)));
     // A uniform Sgpr lane operand is only expressible through the whole-wave
@@ -1666,6 +1774,12 @@ fn translate_outputs_once(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, ou
         lower_lane_spills(&mut insns, resolve_wave32, group_reads)?;
     } }
     let mut em = Emitter::new(ex, insns);
+    if let Some(mode) = election {
+        if compute_group(ex).into_iter().product::<u32>() <= 32 || em.insns.iter().any(|i| matches!(i.mnemonic.as_str(), "tb_first_exec_lane" | "s_ff1_i32_b64") && i.src == [Opnd::ExecLo]) {
+            em.exec_snapshots = exec_snapshot::analyze(&em.insns, mode);
+        }
+    }
+    let shared_mask = em.exec_snapshots.sites.values().any(|site| matches!(site, exec_snapshot::Site::Capture(ElectionLowering::Shared64)));
     em.page_waves = page_waves;
     em.wave_cull = wave_cull;
     em.fspx_wave = fspx_wave;
@@ -1756,6 +1870,13 @@ fn translate_outputs_once(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, ou
         return Err("asymmetric DPP16 row mask requires a known guest wave width".into());
     }
     let required_wave_size = required_wave_size.or((uses_quad_add && (!em.pixel_wave || em.insns.iter().any(is_row_move)) || uses_bpermute || group_extrema).then_some(32));
+    // A ballot or minimum over active invocations also works in the final
+    // partial subgroup. Keep the full-wave requirement for every other user.
+    let partial_election = required_wave_size.is_none() && election == Some(ElectionLowering::Native32);
+    let required_wave_size = required_wave_size.or_else(|| {
+        (election == Some(ElectionLowering::Native32) && (!em.exec_snapshots.sites.is_empty() || em.insns.iter().any(|i|
+            i.mnemonic == "tb_first_active_lane" || i.mnemonic == "s_ff1_i32_b64"))).then_some(32)
+    });
     em.required_wave_size = required_wave_size;
     // DS bit-mask mode operates on the low five lane bits in wave32 and wave64.
     // Map guest lanes by workgroup index, independently of the Vulkan subgroup layout.
@@ -1797,7 +1918,7 @@ fn translate_outputs_once(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, ou
             Err(reason) => return Err(reason),
         }
         let [x, y, z] = compute_group(ex);
-        if ex.stage != Stage::Compute || !x.checked_mul(y).and_then(|n| n.checked_mul(z)).is_some_and(|n| n % width == 0) {
+        if ex.stage != Stage::Compute || !x.checked_mul(y).and_then(|n| n.checked_mul(z)).is_some_and(|n| n % width == 0 || partial_election && n > 0 && n < width) {
             return Err(format!("wave operation requires complete {width}-lane compute waves"));
         }
     }
@@ -1923,6 +2044,9 @@ fn translate_outputs_once(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, ou
     }
     if light_grid { hlsl.insert_str(0, light_grid::DECLARATIONS); }
     if em.portable_wave64 { hlsl.insert_str(0, wave_sum::PORTABLE_DECLARATIONS); }
+    if shared_mask {
+        hlsl.insert_str(0, &page_waves::ballot_declarations(compute_group(ex).into_iter().product()));
+    }
     if page_waves || wave_cull {
         if fspx_wave == Some(32) {
             hlsl.insert_str(0, fspx_wave::WAVE32);
@@ -2327,6 +2451,7 @@ impl<'a> Emitter<'a> {
             compute_swizzle: false,
             vote_defs: BTreeSet::new(),
             vote_uses: BTreeMap::new(),
+            exec_snapshots: Default::default(),
             reflected_lds_words: None,
             hoisted_swizzle: None,
             indexed_lane: false,
@@ -4705,7 +4830,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 self.emit_compute_swizzle(i, ins, &active)?;
                 self.hoisted_swizzle = Some(i);
             }
-            if ins.mnemonic == "tb_first_exec_lane" {
+            if ins.mnemonic == "tb_first_exec_lane" && !self.exec_snapshots.sites.contains_key(&i) {
                 self.end_guard(&mut open);
                 cur.clear();
                 let mut condition=String::from("(exec_lo & 1u) != 0u");
@@ -5066,10 +5191,17 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             _ => return Err("unsupported 64-bit operand pair".into()),
         };
         self.touch(&high);
-        r(&high)
+        self.numeric_input(&high)
     }
 
-    fn int_compare(m: &str, a: &Opnd, b: &Opnd) -> Result<String, String> {
+    fn numeric_input(&self, operand: &Opnd) -> Result<String, String> {
+        match self.exec_snapshots.word(self.cur_idx, operand) {
+            Some(word) => Ok(word),
+            None => r(operand),
+        }
+    }
+
+    fn int_compare(&self, m: &str, a: &Opnd, b: &Opnd) -> Result<String, String> {
         let mut parts = m.rsplit('_');
         let ty = parts.next().unwrap_or("");
         let cc = parts.next().unwrap_or("");
@@ -5079,7 +5211,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                     if matches!(o, Opnd::ConstF32(_)) {
                         return Err("inline float constant in a 16-bit integer compare".into());
                     }
-                    let bits = r(o)?;
+                    let bits = self.numeric_input(o)?;
                     Ok(if ty == "i16" {
                         format!("(asint({bits} << 16) >> 16)")
                     } else {
@@ -5088,8 +5220,8 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 };
                 (half(a)?, half(b)?)
             }
-            "i32" => (format!("asint({})", r(a)?), format!("asint({})", r(b)?)),
-            "u32" => (r(a)?, r(b)?),
+            "i32" => (format!("asint({})", self.numeric_input(a)?), format!("asint({})", self.numeric_input(b)?)),
+            "u32" => (self.numeric_input(a)?, self.numeric_input(b)?),
             other => return Err(format!("compare type {other} unsupported")),
         };
         Ok(match cc {
@@ -5120,6 +5252,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         let d = ins.dst.first().cloned();
         self.line(&format!("// {:#06x} {m}", ins.offset));
         self.cur_idx = idx;
+        if let Some(&site) = self.exec_snapshots.sites.get(&idx) {
+            if site.emit(self, idx, ins)? { return Ok(()); }
+        }
         if m == "tb_reflection_far_query" {
             reflection_far::emit(self, ins);
             return Ok(());
@@ -5727,7 +5862,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                     "s_mulk_i32" => self.ws(&d, &format!("({} * {imm})", name(&d)?)),
                     _ if m.starts_with("s_cmpk_") => {
                         let fake = m.replace("s_cmpk_", "s_cmp_");
-                        let c = Self::int_compare(&fake, &d, &Opnd::ConstInt(ins.aux.imm))?;
+                        let c = self.int_compare(&fake, &d, &Opnd::ConstInt(ins.aux.imm))?;
                         self.line(&format!("scc = {c} ? 1u : 0u;"));
                         Ok(())
                     }
@@ -5752,7 +5887,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                         r(&hi(&s[0]))?,
                         r(&hi(&s[1]))?
                     ),
-                    _ => Self::int_compare(m, &s[0], &s[1])?,
+                    _ => self.int_compare(m, &s[0], &s[1])?,
                 };
                 self.line(&format!("scc = {c} ? 1u : 0u;"));
                 Ok(())
@@ -7266,7 +7401,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             } else if m.ends_with("_f64") || m.ends_with("_f32") || m.ends_with("_f16") {
                 self.compare_float(ins, mask)?
             } else {
-                Self::int_compare(&m, &s[0], &s[1])?
+                self.int_compare(&m, &s[0], &s[1])?
             };
             if self.resolve_wave32 {
                 let vote = format!("WaveActiveBallot((exec_lo & tb_lane_bit) != 0u && {c}).x");
@@ -7392,7 +7527,8 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         let fa = || self.fm(ins, 0);
         let fb = || self.fm(ins, 1);
         let fc = || self.fm(ins, 2);
-        let (a, b) = (r(&s[0])?, s.get(1).map(r).transpose()?.unwrap_or_default());
+        let a = self.numeric_input(&s[0])?;
+        let b = s.get(1).map(|operand| self.numeric_input(operand)).transpose()?.unwrap_or_default();
         let c = s.get(2).map(|o| r(o)).transpose().unwrap_or(None).unwrap_or_default();
         if clamped_product24(ins) {
             if vop3 && (ins.raw[0] & 0x7800 != 0 || ins.aux.mask != 0 || ins.aux.imm2 != 0) {
@@ -7464,7 +7600,9 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             let e = self.fres(ins, e);
             return self.wv(&d, &e);
         }
-        let mask = if self.packed.as_ref().is_some_and(|p| p.lane_masks.contains(&self.cur_idx)) {
+        let mask = if matches!(self.exec_snapshots.sites.get(&self.cur_idx), Some(exec_snapshot::Site::LaneMask(..))) {
+            format!("select_mask{}", self.cur_idx)
+        } else if self.packed.as_ref().is_some_and(|p| p.lane_masks.contains(&self.cur_idx)) {
             let upper = if self.required_wave_size == Some(64) {
                 r(&hi(&s[2]))?
             } else { "0u".into() };
@@ -10889,20 +11027,50 @@ mod election_order_regression {
         Insn { offset, dwords: 1, enc, op: 0, raw: vec![0], mnemonic: name.into(), dst, src, aux: Default::default() }
     }
     #[test]
+    fn election_ignores_independent_single_word_moves() {
+        let mut ops = vec![
+            op("v_mbcnt_lo_u32_b32", Enc::Vop3, vec![Opnd::Vgpr(2)], vec![Opnd::ConstInt(-1), Opnd::ConstInt(0)], 0),
+            op("s_ff1_i32_b32", Enc::Sop1, vec![Opnd::Sgpr(7)], vec![Opnd::ExecLo], 4),
+            op("s_mov_b32", Enc::Sop1, vec![Opnd::Sgpr(8)], vec![Opnd::Sgpr(6)], 8),
+            op("v_cmp_eq_u32", Enc::Vop3, vec![Opnd::VccLo], vec![Opnd::Vgpr(2), Opnd::Sgpr(7)], 12),
+        ];
+        assert!(verify_lane_election(&mut ops, 1, true).is_ok());
+        ops[2].mnemonic = "s_mov_b64".into(); // s[6:7] reads the elected lane.
+        assert!(verify_lane_election(&mut ops, 1, true).is_err());
+        ops[2].mnemonic = "s_mov_b32".into();
+        ops[2].dst = vec![Opnd::Sgpr(7)];
+        assert!(verify_lane_election(&mut ops, 1, true).is_err());
+    }
+
+    #[test]
+    fn later_saveexec_uses_the_redefined_vcc() {
+        let mut ops = vec![
+            op("v_mbcnt_lo_u32_b32", Enc::Vop3, vec![Opnd::Vgpr(2)], vec![Opnd::ConstInt(-1), Opnd::ConstInt(0)], 0),
+            op("s_ff1_i32_b32", Enc::Sop1, vec![Opnd::Sgpr(7)], vec![Opnd::ExecLo], 4),
+            op("v_cmp_eq_u32", Enc::Vopc, vec![Opnd::VccLo], vec![Opnd::Sgpr(7), Opnd::Vgpr(2)], 8),
+            op("v_cmp_eq_u32", Enc::Vopc, vec![Opnd::VccLo], vec![Opnd::ConstInt(0), Opnd::Vgpr(4)], 12),
+            op("s_and_saveexec_b32", Enc::Sop1, vec![Opnd::Sgpr(20)], vec![Opnd::VccLo], 16),
+        ];
+        assert!(verify_lane_election(&mut ops, 1, true).is_ok());
+        ops.remove(3);
+        assert!(verify_lane_election(&mut ops, 1, true).is_err());
+    }
+
+    #[test]
     fn symmetric_equality_still_requires_full_lane_count() {
         let mut ops = vec![
             op("v_mbcnt_lo_u32_b32", Enc::Vop3, vec![Opnd::Vgpr(2)], vec![Opnd::ConstInt(-1), Opnd::ConstInt(0)], 0),
             op("s_ff1_i32_b32", Enc::Sop1, vec![Opnd::Sgpr(7)], vec![Opnd::ExecLo], 4),
             op("v_cmp_eq_u32", Enc::Vop3, vec![Opnd::VccLo], vec![Opnd::Vgpr(2), Opnd::Sgpr(7)], 8),
         ];
-        assert!(verify_lane_election(&mut ops, 1).is_ok());
+        assert!(verify_lane_election(&mut ops, 1, true).is_ok());
         ops[2].src.swap(0, 1);
-        assert!(verify_lane_election(&mut ops, 1).is_ok());
+        assert!(verify_lane_election(&mut ops, 1, true).is_ok());
         ops[2].mnemonic = "v_cmp_ne_u32".into();
-        assert!(verify_lane_election(&mut ops, 1).is_err());
+        assert!(verify_lane_election(&mut ops, 1, true).is_err());
         ops[2].mnemonic = "v_cmp_eq_u32".into();
         ops[0].src[0] = Opnd::ConstInt(0);
-        assert!(verify_lane_election(&mut ops, 1).is_err());
+        assert!(verify_lane_election(&mut ops, 1, true).is_err());
     }
 }
 

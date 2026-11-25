@@ -58,7 +58,7 @@ impl Emitter<'_> {
                 format!("{:#x}u", bits >> 32),
             ));
         }
-        Ok((r(operand)?, self.pair_high(operand)?))
+        Ok((self.numeric_input(operand)?, self.pair_high(operand)?))
     }
 
     pub(super) fn compare_float(&mut self, ins: &Insn, mask: u8) -> Result<String, String> {

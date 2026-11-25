@@ -528,6 +528,174 @@ mod tests {
     }
 
     #[test]
+    fn first_active_election_uses_the_guest_wave_boundary() {
+        // Full lane index, FF1 of EXEC, independent adjacent move, equality comparison.
+        let mut ex = compute_extract(&[0xd765_0006, 0x0001_00c1, 0xd766_0006, 0x0002_0cc1,
+            0xbe98_147e, 0xbe99_0387, 0x7d84_0c18, 0xbf81_0000]);
+        let hlsl = super::super::translate(&ex).unwrap().hlsl;
+        assert!(hlsl.contains("InterlockedMin(") && hlsl.contains("tb_lane & 63u"), "{hlsl}");
+        ex.isa_preamble = [0, 8, 4, 1];
+        let translated = super::super::translate(&ex).unwrap();
+        assert_eq!(translated.required_wave_size, Some(32));
+        assert!(translated.hlsl.contains("WaveActiveMin(") && !translated.hlsl.contains("InterlockedMin("));
+    }
+
+    #[test]
+    fn first_active_lane_survives_restoring_the_predicate() {
+        // CMP, SAVEEXEC, FF1, restore, broadcast the saved index.
+        let mut words = [0x7d86_00a3, 0xbe94_246a, 0xbe98_147e, 0xbefe_0414, 0x7e08_0218, 0xbf81_0000];
+        let ex = compute_extract(&words);
+        let shader = super::super::translate(&ex).unwrap();
+        assert!(shader.hlsl.contains("InterlockedMin("));
+        words[4] = 0x7e08_0214; // exposing the saved mask as scalar data requires a ballot
+        let scalar_mask = super::super::translate(&compute_extract(&words)).unwrap();
+        assert!(scalar_mask.hlsl.contains("tb_page_ballot(tb_lane,") && scalar_mask.hlsl.contains("saved_exec1.x"));
+        words[4] = 0x7e08_0218;
+        words[3] = 0xbefe_0416; // restore from s[22:23] instead of the saved s[20:21]
+        assert!(super::super::translate(&compute_extract(&words)).is_err());
+        words[3] = 0xbefe_0414;
+        words[2] = 0xbe95_147e; // FF1 clobbers the high half of the saved EXEC.
+        words[4] = 0x7e08_0215;
+        assert!(super::super::translate(&compute_extract(&words)).is_err());
+    }
+
+    #[test]
+    fn numeric_inputs_and_lane_predicate_keep_their_distinct_exec_views() {
+        // Save EXEC. Add its two words, use the saved pair as a lane predicate,
+        // overwrite the upper word and repeat the same addition.
+        let mut ex = compute_extract(&[0xbe9c_047e, 0xd525_0004, 0x0000_381d,
+            0xd501_0005, 0x0072_0880, 0xbe9d_0391, 0xd525_0004, 0x0000_381d, 0xbf81_0000]);
+        ex.isa_preamble = [0, 21, 1, 1];
+        let hlsl = super::super::translate(&ex).unwrap().hlsl;
+        assert!(hlsl.contains("(saved_exec0.y + saved_exec0.x)"), "{hlsl}");
+        assert!(hlsl.contains("((s28 & 1u) != 0u)"), "{hlsl}");
+        assert!(hlsl.contains("(s29 + saved_exec0.x)"), "{hlsl}");
+        assert_eq!(hlsl.matches("WaveActiveBallot(").count(), 1);
+    }
+
+    #[test]
+    fn vector_comparisons_read_the_saved_word_before_overwriting_the_mask() {
+        // Save EXEC, compare a signed VGPR against its low word, then write
+        // an equality predicate to the same pair that holds the saved mask.
+        let mut ex = compute_extract(&[0xbe9c_047e, 0x7d12_121c, 0xd481_006a, 0x0000_3909,
+            0xd4c2_001c, 0x0002_121c, 0xd501_0005, 0x0072_0880, 0xbf81_0000]);
+        ex.isa_preamble = [0, 21, 1, 1];
+        let hlsl = super::super::translate(&ex).unwrap().hlsl;
+        assert!(hlsl.contains("(asint(saved_exec0.x << 16) >> 16)"), "{hlsl}");
+        assert!(hlsl.contains("(asint(v9) < asint(saved_exec0.x))"), "{hlsl}");
+        assert!(hlsl.contains("(saved_exec0.x == v9)"), "{hlsl}");
+        assert!(hlsl.contains("((s28 & 1u) != 0u)"), "{hlsl}");
+        assert_eq!(hlsl.matches("WaveActiveBallot(").count(), 1);
+    }
+
+    #[test]
+    fn pair_comparisons_resolve_each_half_at_its_last_write() {
+        // Overwrite the first saved pair's low word and the second pair's high
+        // word. Both comparisons must combine ordinary SGPRs with saved bits.
+        let mut ex = compute_extract(&[0xbe9c_047e, 0xbe9c_0393, 0xd4a1_006a, 0x0002_141c,
+            0xbe9e_047e, 0xbe9f_0391, 0xd4e2_006a, 0x0000_3c1c, 0xbf81_0000]);
+        ex.isa_preamble = [0, 21, 1, 1];
+        let hlsl = super::super::translate(&ex).unwrap().hlsl;
+        assert!(hlsl.contains("asint(saved_exec0.y) < asint(v11)"), "{hlsl}");
+        assert!(hlsl.contains("saved_exec0.y == v11 && s28 < v10"), "{hlsl}");
+        assert!(hlsl.contains("saved_exec0.y == s31 && s28 == saved_exec3.x"), "{hlsl}");
+        assert_eq!(hlsl.matches("WaveActiveBallot(").count(), 2);
+    }
+
+    #[test]
+    fn restore_uses_the_bits_of_the_reassembled_exec_pair() {
+        // Swap both halves. A small group's lanes now take their bits from
+        // the original upper word, which contains no active lanes.
+        let mut ex = compute_extract(&[0xbe9c_047e, 0xbe9e_031d, 0xbe9f_031c, 0xbefe_041e,
+            0x7e08_0281, 0xbf81_0000]);
+        ex.isa_preamble = [0, 21, 1, 1];
+        let hlsl = super::super::translate(&ex).unwrap().hlsl;
+        assert!(hlsl.contains("exec_lo = ((saved_exec0.y >> (WaveGetLaneIndex() & 31u)) & 1u)"), "{hlsl}");
+    }
+
+    #[test]
+    fn conditional_select_reads_the_predicate_bit_and_the_full_numeric_operand() {
+        // Swap the EXEC words and use s30 as both the false value and mask base.
+        let mut ex = compute_extract(&[0xbe9c_047e, 0xbe9e_031d, 0xbe9f_031c,
+            0xd501_0004, 0x007a_121e, 0xbf81_0000]);
+        ex.isa_preamble = [0, 21, 1, 1];
+        let hlsl = super::super::translate(&ex).unwrap().hlsl;
+        assert!(hlsl.contains("uint select_mask3 = ((saved_exec0.y >> (WaveGetLaneIndex() & 31u)) & 1u)"), "{hlsl}");
+        assert!(hlsl.contains("((select_mask3 & 1u) != 0u) ? v9 : saved_exec0.y"), "{hlsl}");
+    }
+
+    #[test]
+    fn conditional_select_after_election_requires_a_known_saved_mask_pair() {
+        // Restore EXEC after FF1, keep the saved low word, replace the high word.
+        let mut words = vec![0x7d86_0087, 0xbe94_246a, 0xbe98_147e, 0xbefe_0414,
+            0xbe9e_0414, 0xbe94_0480, 0xbe9f_03ff, 0x8000_0001, 0xd501_0009,
+            0x0079_0280, 0x4a08_1218, 0xbf81_0000];
+        let hlsl = super::super::translate(&compute_extract(&words)).unwrap().hlsl;
+        assert!(hlsl.contains("((tb_lane & 32u) == 0u ? saved_lane1 : ((s31 >> (tb_lane & 31u)) & 1u))"), "{hlsl}");
+        // Copy the elected lane into the high word. FF1 produces an ordinary
+        // integer even though its source was the EXEC predicate.
+        let mut dynamic = words.clone();
+        dynamic.splice(6..8, [0xbe9f_0318]);
+        for group_size in [21, 64] {
+            let mut ex = compute_extract(&dynamic);
+            ex.isa_preamble = [0, group_size, 1, 1];
+            let hlsl = super::super::translate(&ex).unwrap().hlsl;
+            assert!(hlsl.contains("uint select_mask7 = "), "{hlsl}");
+            if group_size == 64 {
+                assert!(hlsl.contains("((s31 >> (tb_lane & 31u)) & 1u)"), "{hlsl}");
+            }
+        }
+        words.splice(6..8, [0xbe9f_0311]); // copy the unknown s17 instead of the literal
+        assert!(super::super::translate(&compute_extract(&words)).is_err());
+    }
+
+    #[test]
+    fn aligned_halves_from_different_saves_reuse_each_lanes_predicate() {
+        let ex = compute_extract(&[0xd765_0006, 0x0001_00c1, 0xd766_0006, 0x0002_0cc1,
+            0xbe98_147e, 0x7d84_0c18, 0xbe9c_047e, 0xbe94_246a, 0xbea0_047e, 0xbefe_0414,
+            0xbe9d_0321, 0xbefe_041c, 0x7e08_0281, 0xbf81_0000]);
+        let hlsl = super::super::translate(&ex).unwrap().hlsl;
+        assert!(hlsl.contains("exec_lo = ((tb_lane & 32u) == 0u ? saved_lane4 : saved_lane6)"), "{hlsl}");
+        assert!(!hlsl.contains("tb_page_ballot("));
+    }
+
+    #[test]
+    fn restored_exec_pair_can_be_copied_and_used_as_numeric_data() {
+        // Save and restore EXEC around FF1. The copy of the saved pair remains
+        // live after its original registers are cleared.
+        let ex = compute_extract(&[0x7d86_0087, 0xbe94_246a, 0xbe98_147e, 0xbefe_0414,
+            0xbe9e_0414, 0xbe94_0480, 0xd525_0009, 0x0000_3e1e, 0x4a08_1218, 0xbf81_0000]);
+        let hlsl = super::super::translate(&ex).unwrap().hlsl;
+        assert!(hlsl.contains("(saved_exec1.x + saved_exec1.y)"), "{hlsl}");
+    }
+
+    #[test]
+    fn scalar_copies_retain_the_original_mask_words_until_overwritten() {
+        // Copy and swap the mask words, clear the source, and copy the pair
+        // onto itself. Replacing the low word later ends just that alias.
+        let mut ex = compute_extract(&[0xbe9c_047e, 0xbe9e_041c, 0xbe9f_031e, 0xbe9e_031d,
+            0xbe9c_0480, 0xbe9e_041e, 0xd525_0004, 0x0000_3e1e, 0xbe9e_0311,
+            0xd525_0004, 0x0000_3e1e, 0xbf81_0000]);
+        ex.isa_preamble = [0, 21, 1, 1];
+        let hlsl = super::super::translate(&ex).unwrap().hlsl;
+        assert!(hlsl.contains("(saved_exec0.y + saved_exec0.x)"), "{hlsl}");
+        assert!(hlsl.contains("(s30 + saved_exec0.x)"), "{hlsl}");
+        assert_eq!(hlsl.matches("WaveActiveBallot(").count(), 1);
+    }
+
+    #[test]
+    fn partial_register_write_preserves_only_the_other_snapshot_word() {
+        // Copy EXEC to s[28:29], overwrite s29, then broadcast both registers.
+        let mut ex = compute_extract(&[0xbe9c_047e, 0xbe9d_0391, 0x7e08_021c, 0x7e0a_021d, 0xbf81_0000]);
+        ex.isa_preamble = [0, 7, 3, 1];
+        let shader = super::super::translate(&ex).unwrap();
+        assert_eq!(shader.required_wave_size, Some(32));
+        assert!(shader.hlsl.contains("v4 = saved_exec0.x;"));
+        assert!(shader.hlsl.contains("v5 = s29;"));
+        assert!(!shader.hlsl.contains("saved_exec0.y;"));
+    }
+
+    #[test]
     fn compute_register_writes_share_one_exec_region() {
         // v_add_nc_u32 v1, v0, v0; v_add_nc_u32 v2, v1, v1; s_endpgm
         let ex = compute_extract(&[0x4a02_0100, 0x4a04_0301, 0xbf81_0000]);
