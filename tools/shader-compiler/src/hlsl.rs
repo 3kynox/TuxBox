@@ -1619,13 +1619,10 @@ fn translate_outputs_once(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, ou
     em.view_cull = view_cull;
     em.light_grid = light_grid;
     em.emit_body(is_ps)?;
-    if ex.stage == Stage::Pixel || fspx_wave.is_some()
-        || (ex.stage == Stage::Compute
-            && (packed_root::matches_program(&ex.isa, 60424, 0xc449ec66f2170fb3)
-                || packed_root::matches_program(&ex.isa, 56932, 0x5504968d23557c53)))
-    {
-        em.body = exec_group::group(&em.body);
-    }
+    // Each guarded VGPR write would otherwise be its own branch. The region
+    // closes before anything other than pure register arithmetic, so this is
+    // the same program in every stage, with fewer blocks for DXC and dxil-spirv.
+    em.body = exec_group::group(&em.body);
     if hair_cluster_export {
         em.body.insert_str(0, "    uint4 hair_record = 0;\n");
         em.body.push_str(hair_cluster_export::EPILOGUE);
