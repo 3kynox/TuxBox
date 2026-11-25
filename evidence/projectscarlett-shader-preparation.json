@@ -1,13 +1,13 @@
 {
   "schema": 1,
-  "date_utc": "2026-11-24",
+  "date_utc": "2026-11-25",
   "executable_sha256": "e95020b2fa4a721db3df59fdecf75621730ac559d8835252f6c3b658d5a08993",
-  "compiler_sha256": "a6e8ec309bd27b45ac04eb293bb290cf1f30c9e47a37e55885a85c682244efec",
-  "log_sha256": "ebc7c88979521c201bb78b349fc695e475b063c0ea40885d68cea7d0b35d0e63",
+  "compiler_sha256": "d978a3311e60a8a20ab8209845d2a3569fd08aabadd8aa71baae580525d41fdc",
+  "log_sha256": "1cf12ab7bd061e03f99faef15600b98da6863eaee7e999acb298048ffb67b8c7",
   "requests": {
-    "total": 16025,
-    "compiled": 6487,
-    "unsupported": 9538,
+    "total": 16868,
+    "compiled": 12038,
+    "unsupported": 4830,
     "failed": 0
   },
   "mesh_pipelines": {
@@ -16,5 +16,7 @@
     "tested": 74,
     "created": 74,
     "log_sha256": "20fcf954f7ed2f098ede9eb455e77a4ae44b3f96b6681d507a532398316c3cd3"
-  }
+  },
+  "duration_seconds": 139.9,
+  "dxil_reused": 11629
 }

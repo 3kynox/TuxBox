@@ -127,6 +127,22 @@ Frosty’s menu material at entry 2 illustrates the overlap with AnyPS5’s inst
 
 ## ProjectScarlett refusals
 
+On November 25, 2026, preparation compiled 12,038 of 16,868 recorded requests and refused 4,830. None failed in DXC or the validator. [Preparation record](../evidence/projectscarlett-shader-preparation.json)
+
+| Refusal reason | Requests |
+| --- | --- |
+| Wave reduction that may execute in divergent control flow | 2,171 |
+| Mesh request recorded without a root signature | 1,551 |
+| Image or buffer store to a table that isn't an unordered-access table | 293 |
+| Raw buffer `IDXEN` access that needs the console descriptor stride | 125 |
+| Lane operation with a non-constant lane | 114 |
+
+The counts are per recorded request, so they overstate what a live run loses: a request recorded without its root signature can't be translated offline. Rank failures by the pipelines a run lost with the [pipeline failure record](PROJECTSCARLETT.md#finding-why-pipelines-fail).
+
+Most wave reduction refusals come from programs over 6,000 instructions, where the translator doesn't try its one-lane-per-wave form. In a trial on an earlier set of 1,442 such compute shaders, removing that limit translated 1,211. Six sampled outputs compiled in 2 to 12 seconds with DXC optimization off, and mostly produced 1 to 2 MB of DXIL. Large compiles in a recorded run took the driver 6 minutes or more, so the limit stays until the generated code compiles faster. The outputs weren't tested in a game.
+
+### Earlier survey
+
 Shader preparation reports only how many recorded requests xshader refused. `tools/triage_scarlett_shaders.py` runs the HLSL emitter on each recorded request in the prefix's `projectscarlett/<exe sha256>/requests` directory. It groups the refusal messages with program counters and register numbers masked. It does not run DXC and does not write to the cache. On 9,102 requests recorded through player selection, xshader translated 4,383 and refused 4,719. The largest groups were `s_load` with a dynamic SOFFSET (29%), sampler descriptors resolved from an inline word (19%), and wave reductions in divergent control flow (13%).
 
 ## Reusing compiled shaders during play
