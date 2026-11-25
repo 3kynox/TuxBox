@@ -6708,6 +6708,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 match (ins.raw[0] >> 8) & 0x7f {
                     c @ 0..=105 => Opnd::Sgpr(c as u8),
                     106 => Opnd::VccLo,
+                    125 if ins.raw[1] >> 27 == 0 => Opnd::Null,
                     c => return Err(format!("carry-out register code {c} unsupported")),
                 }
             } else {
@@ -6730,7 +6731,8 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             }
             let t = self.tmp;
             self.tmp += 1;
-            if m.starts_with("v_add") {
+            let add = m.starts_with("v_add");
+            if add {
                 self.line(&format!(
                     "uint t{t}c = ({cin}) & 1u; uint t{t}a = {a} + {b}; uint t{t} = t{t}a + t{t}c; uint t{t}o = ((t{t}a < {a}) || (t{t} < t{t}a)) ? 1u : 0u;"
                 ));
@@ -6739,7 +6741,14 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                     "uint t{t}c = ({cin}) & 1u; uint t{t}a = {a} - {b}; uint t{t} = t{t}a - t{t}c; uint t{t}o = (({b} > {a}) || (t{t}c > t{t}a)) ? 1u : 0u;"
                 ));
             }
+            if vop3f && ins.raw[0] & 0x8000 != 0 {
+                // Clamp the vector result only. SDST reports the original carry or borrow.
+                let limit = if add { "0xffffffffu" } else { "0u" };
+                self.line(&format!("if (t{t}o != 0u) t{t} = {limit};"));
+            }
             self.wv(&d, &format!("t{t}"))?;
+            // A null SDST discards the outgoing flag after the incoming mask has been read.
+            if cout == Opnd::Null { return Ok(()); }
             self.touch(&cout);
             if self.persistent_queue {
                 self.line(&format!("uint2 carry{t} = tb_ballot((exec_lo & t{t}o) != 0u);"));
@@ -9681,6 +9690,42 @@ fn compute_heap_base(ex: &ShaderExtract) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vector_add_sub_can_discard_the_carry_destination() {
+        use super::float64::tests::translate;
+
+        // gfx1030 VOP3B add, sub and subrev with SDST=null; the _ci_ forms read VCC.
+        for (opcode, sources) in [
+            (0xd70f_7d04, 0x0002_0501), (0xd710_7d04, 0x0002_0501),
+            (0xd719_7d04, 0x0002_0501), (0xd528_7d04, 0x01aa_0501),
+            (0xd529_7d04, 0x01aa_0501), (0xd52a_7d04, 0x01aa_0501),
+        ] {
+            let hlsl = translate(Stage::Compute, &[opcode, sources]).unwrap();
+            assert!(hlsl.contains("v4 = t"), "{hlsl}");
+            assert!(!hlsl.lines().any(|line| {
+                let stmt = line.trim_start();
+                stmt.starts_with("vcc_lo =") || stmt.starts_with("vcc_hi =") || stmt.starts_with("nul =")
+            }), "{hlsl}");
+            assert!(translate(Stage::Compute, &[opcode, sources | (1 << 29)]).is_err());
+        }
+    }
+
+    #[test]
+    fn vector_carry_clamp_saturates_the_result_and_keeps_the_overflow_flag() {
+        use super::float64::tests::translate;
+
+        for (opcode, limit) in [(0xd70f_ea04, "0xffffffffu"), (0xd710_ea04, "0u")] {
+            // gfx1030: v_{add,sub}_co_u32 v4, vcc_lo, v1, v2 clamp
+            let hlsl = translate(Stage::Compute, &[opcode, 0x0002_0501]).unwrap();
+            assert!(hlsl.contains(&format!("if (t0o != 0u) t0 = {limit};")), "{hlsl}");
+            assert!(hlsl.lines().any(|line| line.trim_start().starts_with("vcc_lo =") && line.contains("t0o")));
+        }
+
+        // In e32 the same bit belongs to the source register v66.
+        let hlsl = translate(Stage::Compute, &[0x5008_8501]).unwrap();
+        assert!(!hlsl.contains("if (t0o != 0u)"), "{hlsl}");
+    }
 
     fn dpp16_word(src0_reg: u32, ctrl: u32, fi: u32, bc: u32, bank_m: u32, row_m: u32) -> u32 {
         // [src0_reg:8][ctrl:9][fi:1][bc:1][bank_m:4][row_m:4]
