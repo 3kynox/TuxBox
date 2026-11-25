@@ -7075,6 +7075,10 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             "v_lshrrev_b32" => format!("({b} >> ({a} & 31u))"),
             "v_lshlrev_b32" => format!("({b} << ({a} & 31u))"),
             "v_ashrrev_i32" => format!("asuint(asint({b}) >> ({a} & 31u))"),
+            // Unsigned VOP3 clamp limits the operand before the operation can wrap.
+            "v_add_nc_u32" if vop3 && ins.aux.imm != 0 => format!("(min({a}, ~{b}) + {b})"),
+            "v_sub_nc_u32" if vop3 && ins.aux.imm != 0 => format!("(max({a}, {b}) - {b})"),
+            "v_subrev_nc_u32" if vop3 && ins.aux.imm != 0 => format!("(max({b}, {a}) - {a})"),
             "v_add_nc_u32" => format!("({a} + {b})"),
             "v_sub_nc_u32" => format!("({a} - {b})"),
             "v_subrev_nc_u32" => format!("({b} - {a})"),
@@ -9725,6 +9729,24 @@ mod tests {
         // In e32 the same bit belongs to the source register v66.
         let hlsl = translate(Stage::Compute, &[0x5008_8501]).unwrap();
         assert!(!hlsl.contains("if (t0o != 0u)"), "{hlsl}");
+    }
+
+    #[test]
+    fn unsigned_no_carry_clamp_is_specific_to_the_long_encoding() {
+        use super::float64::tests::translate;
+        // LLVM gfx1030: v_{add,sub,subrev}_nc_u32_e64 v4, v1, v2 clamp.
+        for (opcode, saturated, wrapping) in [
+            (0xd525_8004, "(min(v1, ~v2) + v2)", "(v1 + v2)"),
+            (0xd526_8004, "(max(v1, v2) - v2)", "(v1 - v2)"),
+            (0xd527_8004, "(max(v2, v1) - v1)", "(v2 - v1)"),
+        ] {
+            let hlsl = translate(Stage::Compute, &[opcode, 0x0002_0501]).unwrap();
+            assert!(hlsl.contains(saturated), "{hlsl}");
+            let hlsl = translate(Stage::Compute, &[opcode & !0x8000, 0x0002_0501]).unwrap();
+            assert!(hlsl.contains(wrapping), "{hlsl}");
+        }
+        // In e32 the same bit is part of the second source register (v66).
+        assert!(translate(Stage::Compute, &[0x4a08_8501]).unwrap().contains("(v1 + v66)"));
     }
 
     fn dpp16_word(src0_reg: u32, ctrl: u32, fi: u32, bc: u32, bank_m: u32, row_m: u32) -> u32 {
