@@ -764,8 +764,9 @@ fn is_quad_exchange(i: &Insn) -> bool {
         || (i.enc == Enc::Vop1 && (i.op == OP_QUAD_MOVE || i.op == OP_ROW_MIRROR))
 }
 
-fn is_bitwise_quad_exchange(i: &Insn) -> bool {
-    i.enc == Enc::Vop2 && matches!(i.mnemonic.as_str(), "v_or_b32" | "v_and_b32" | "v_xor_b32")
+fn is_integer_quad_exchange(i: &Insn) -> bool {
+    i.enc == Enc::Vop2 && matches!(i.mnemonic.as_str(),
+        "v_or_b32" | "v_and_b32" | "v_xor_b32" | "v_sub_nc_u32" | "v_subrev_nc_u32")
         && i.src.first() == Some(&Opnd::Raw(250))
         // Full destination masks, no source modifiers, selector within a quad.
         && i.raw.get(1).is_some_and(|ctrl| ctrl & 0xfff3_0000 == 0xff00_0000)
@@ -828,11 +829,11 @@ fn lower_wave_reductions(insns: &mut [Insn]) -> Result<Option<u32>, String> {
         let off = insns[first].offset;
         let bad = |what: &str| format!("wave reduction at {off:#x}: {what}");
         let red = insns[first].mnemonic.clone();
-        let bitwise_quad = is_bitwise_quad_exchange(&insns[first]);
-        if bitwise_quad || (red == "v_add_f32" && insns[first].src.first() == Some(&Opnd::Raw(250))) {
+        let integer_quad = is_integer_quad_exchange(&insns[first]);
+        if integer_quad || (red == "v_add_f32" && insns[first].src.first() == Some(&Opnd::Raw(250))) {
             let ctrl = *insns[first].raw.get(1).ok_or_else(|| bad("missing DPP16 control word"))?;
             // Keep the existing FP32 add subset at FI=1 and BC=1.
-            if !bitwise_quad && ctrl & 0xffff0000 != 0xff0c0000 {
+            if !integer_quad && ctrl & 0xffff0000 != 0xff0c0000 {
                 return Err(bad("unsupported DPP16 FP32 add controls"));
             }
             insns[first].op = OP_QUAD_BINARY;
@@ -1432,7 +1433,7 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     // Once this exact exchange subset is recognized, a later binding or
     // emitter error must not silently replace its collectives with copies.
     let mut original = disassemble(&ex.isa);
-    if original.iter().any(is_bitwise_quad_exchange) {
+    if original.iter().any(is_integer_quad_exchange) {
         // This standalone exchange observes its source lane even if the exact
         // translation failed elsewhere. A per-lane retry would drop that operand.
         return first;
@@ -6406,6 +6407,8 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 "v_or_b32" => format!("{peer} | {}", r(&s[1])?),
                 "v_and_b32" => format!("{peer} & {}", r(&s[1])?),
                 "v_xor_b32" => format!("{peer} ^ {}", r(&s[1])?),
+                "v_sub_nc_u32" => format!("{peer} - {}", r(&s[1])?),
+                "v_subrev_nc_u32" => format!("{} - {peer}", r(&s[1])?),
                 _ => return Err("unknown quad binary operation".into()),
             };
             // FI=0 and BOUND_CTRL=0 suppress the entire write on an inactive source.

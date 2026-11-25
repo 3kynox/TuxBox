@@ -147,6 +147,24 @@ mod tests {
     }
 
     #[test]
+    fn quad_subtractions_permute_only_the_first_operand() {
+        // gfx1030 quad_perm:[1,0,3,2], full row and bank masks.
+        for (op, expression) in [(0x4c08_04fa, "q0 - v2"), (0x4e08_04fa, "v2 - q0")] {
+            for control in [0xff00_b101, 0xff04_b101, 0xff08_b101, 0xff0c_b101] {
+                let ex = compute_extract(&[op, control, 0xbf81_0000]);
+                let hlsl = super::super::translate(&ex).unwrap().hlsl;
+                assert!(hlsl.contains("WaveReadLaneAt("), "{hlsl}");
+                let write = if control == 0xff00_b101 {
+                    format!("v4 = q0active ? ({expression}) : v4;")
+                } else {
+                    format!("v4 = {expression};")
+                };
+                assert!(hlsl.contains(&write), "{hlsl}");
+            }
+        }
+    }
+
+    #[test]
     fn compute_register_writes_share_one_exec_region() {
         // v_add_nc_u32 v1, v0, v0; v_add_nc_u32 v2, v1, v1; s_endpgm
         let ex = compute_extract(&[0x4a02_0100, 0x4a04_0301, 0xbf81_0000]);
