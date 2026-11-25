@@ -768,11 +768,19 @@ const OP_WAVE_REDUCE: u32 = 0x7ff0;
 const OP_DPP_BINARY: u32 = 0x7ff5;
 const OP_LOCAL_EXTREMA: u32 = 0x7fe3;
 const OP_QUAD_MOVE: u32 = 0x7fe1;
-const OP_ROW_MIRROR: u32 = 0x7fe2;
+const OP_ROW_XOR_MOVE: u32 = 0x7fe2;
+const OP_ROW_SHARE_MOVE: u32 = 0x7fe3;
+const OP_ROW_ROR_MOVE: u32 = 0x7fe4;
+const OP_ROW_SHIFT_MOVE: u32 = 0x7fe5;
+
+fn is_row_move(i: &Insn) -> bool {
+    i.enc == Enc::Vop1 && matches!(i.op, OP_ROW_XOR_MOVE | OP_ROW_SHARE_MOVE | OP_ROW_ROR_MOVE | OP_ROW_SHIFT_MOVE)
+}
 
 fn is_quad_exchange(i: &Insn) -> bool {
     (i.enc == Enc::Vop2 && i.op == OP_DPP_BINARY)
-        || (i.enc == Enc::Vop1 && (i.op == OP_QUAD_MOVE || i.op == OP_ROW_MIRROR))
+        || (i.enc == Enc::Vop1 && i.op == OP_QUAD_MOVE)
+        || is_row_move(i)
 }
 
 fn lower_dpp_binary(ins: &mut Insn) {
@@ -873,30 +881,28 @@ fn quad_cndmasks_with_lane_vcc(insns: &[Insn]) -> BTreeSet<usize> {
 fn lower_wave_reductions(insns: &mut [Insn]) -> Result<Option<u32>, String> {
     for op in insns.iter_mut().filter(|op| op.enc == Enc::Vop1 && op.mnemonic == "v_mov_b32" && op.src == [Opnd::Raw(250)]) {
         let ctrl = *op.raw.get(1).ok_or("missing DPP16 move controls")?;
-        // DPP16 control word: [src0_reg:8][ctrl:9][neg0:1][abs0:1][bc:1][fi:1][bank_m:4][row_m:4]
-        // (see Leonida rdna2_decode.py). Accept the exact shape the GPU emits for the two
-        // moves we lower: quad_perm with FI=1 and row_mirror with FI=0.
         let src0_reg = ctrl & 0xff;
-        let ctrl_field = (ctrl >> 8) & 0x1ff;
-        let fi = (ctrl >> 18) & 1;
-        let bc = (ctrl >> 19) & 1;
+        let ctrl_field = i64::from((ctrl >> 8) & 0x1ff);
         let neg0 = (ctrl >> 20) & 1;
         let abs0 = (ctrl >> 21) & 1;
-        let bank_m = (ctrl >> 24) & 0xf;
-        let row_m = (ctrl >> 28) & 0xf;
-        if ctrl_field <= 0xff && fi == 1 && bc == 1 && neg0 == 0 && abs0 == 0 && bank_m == 0xf && row_m == 0xf {
-            op.op = OP_QUAD_MOVE;
-            op.src[0] = Opnd::Vgpr(src0_reg as u8);
-            op.aux.imm = ((ctrl >> 8) & 255) as i64;
-            continue;
+        let unsupported = || format!("unsupported DPP16 move at {:#x}", op.offset);
+        if neg0 != 0 || abs0 != 0 {
+            return Err(unsupported());
         }
-        if ctrl_field == 0x140 && fi == 0 && bc == 1 && neg0 == 0 && abs0 == 0 && bank_m == 0xf && row_m == 0xf {
-            op.op = OP_ROW_MIRROR;
-            op.src[0] = Opnd::Vgpr(src0_reg as u8);
-            op.aux.imm = 0;
-            continue;
-        }
-        return Err(format!("unsupported DPP16 move at {:#x}", op.offset));
+        let (opcode, selector) = match ctrl_field {
+            0..=0xff => (OP_QUAD_MOVE, ctrl_field),
+            0x101..=0x10f => (OP_ROW_SHIFT_MOVE, ctrl_field - 0x100), // row_shl
+            0x111..=0x11f => (OP_ROW_SHIFT_MOVE, 0x110 - ctrl_field), // row_shr
+            0x121..=0x12f => (OP_ROW_ROR_MOVE, ctrl_field - 0x120),
+            0x140 => (OP_ROW_XOR_MOVE, 15), // row_mirror
+            0x141 => (OP_ROW_XOR_MOVE, 7),  // row_half_mirror
+            0x150..=0x15f => (OP_ROW_SHARE_MOVE, ctrl_field - 0x150), // row_share
+            0x160..=0x16f => (OP_ROW_XOR_MOVE, ctrl_field - 0x160), // row_xmask
+            _ => return Err(unsupported()),
+        };
+        op.op = opcode;
+        op.src[0] = Opnd::Vgpr(src0_reg as u8);
+        op.aux.imm = selector;
     }
     let mut width = None;
     let mut proven_cndmasks = None;
@@ -1737,7 +1743,19 @@ fn translate_outputs_once(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, ou
         && em.insns.iter().all(|i| i.op != wave_sum::DPP_REDUCE || i.enc != Enc::Vop2
             || matches!(i.mnemonic.as_str(), "v_and_b32" | "v_or_b32" | "v_min_u32" | "v_max_u32" | "v_min_f32" | "v_max_f32" | "v_add_nc_u32" | "v_add_f32"));
     let required_wave_size = if em.pixel_wave { None } else { required_wave_size };
-    let required_wave_size = required_wave_size.or(scan_width).or(register_wave_size).or((requires_ballot || !em.vote_uses.is_empty()).then_some(64)).or((uses_quad_add && !(em.pixel_wave && em.insns.iter().all(|i| i.op != OP_ROW_MIRROR || i.enc != Enc::Vop1)) || uses_bpermute || group_extrema).then_some(32));
+    let required_wave_size = required_wave_size.or(scan_width).or(register_wave_size).or((requires_ballot || !em.vote_uses.is_empty()).then_some(64));
+    // With more than 32 threads, rows 2 and 3 could instead be rows 0 and 1 of
+    // a second wave. The fallback host width cannot resolve an asymmetric guest mask.
+    if uses_quad_add && required_wave_size.is_none() && !em.one_word_vector_mask()
+        && compute_group(ex).into_iter().fold(1u32, u32::saturating_mul) > 32
+        && em.insns.iter().filter(|i| is_quad_exchange(i) && i.enc == Enc::Vop1).any(|i| {
+            let rows = i.raw[1] >> 28;
+            i.raw[1] & 0x0f00_0000 != 0 && rows & 3 != rows >> 2
+        })
+    {
+        return Err("asymmetric DPP16 row mask requires a known guest wave width".into());
+    }
+    let required_wave_size = required_wave_size.or((uses_quad_add && (!em.pixel_wave || em.insns.iter().any(is_row_move)) || uses_bpermute || group_extrema).then_some(32));
     em.required_wave_size = required_wave_size;
     // DS bit-mask mode operates on the low five lane bits in wave32 and wave64.
     // Map guest lanes by workgroup index, independently of the Vulkan subgroup layout.
@@ -4714,44 +4732,75 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 return Ok(());
             }
             if is_quad_exchange(ins) {
-                if self.loop_depth != 0 && !(self.pixel_wave && ins.op != OP_ROW_MIRROR) {
+                if self.loop_depth != 0 && (!self.pixel_wave || is_row_move(ins)) {
                     return Err("DPP16 exchange inside backward control flow".into());
                 }
                 if open {
                     self.end_guard(&mut open);
                     cur.clear();
                 }
-                if self.pixel_wave && ins.op != OP_ROW_MIRROR {
+                if self.pixel_wave && !is_row_move(ins) {
                     self.emit_pixel_quad_exchange(i, ins)?;
-                } else if ins.op == OP_ROW_MIRROR {
-                    let source = r(&ins.src[0])?;
-                    // FI=0: a source lane inactive in EXEC contributes 0. row_mirror
-                    // mirrors local lanes within a 16-lane row.
-                    self.line(&format!("uint q{i}lane = WaveGetLaneIndex();"));
-                    self.line(&format!("uint q{i}src = (q{i}lane & ~15u) | (15u - (q{i}lane & 15u));"));
-                    self.line(&format!("uint q{i}act = q{i}src < 32u ? (exec_lo >> q{i}src) & 1u : (exec_hi >> (q{i}src - 32u)) & 1u;"));
-                    self.line(&format!("uint q{i} = q{i}act != 0u ? WaveReadLaneAt({source}, q{i}src) : 0u;"));
                 } else {
                     let source = r(&ins.src[0])?;
-                    // All host lanes participate before the guest destination guards.
-                    let perm = ins.aux.imm;
-                    self.line(&format!("uint q{i}lane = WaveGetLaneIndex();"));
-                    let dpp8 = group_extrema::is_dpp8(ins);
-                    let lane = if dpp8 {
-                        format!("(q{i}lane & ~7u) | (({perm}u >> (3u * (q{i}lane & 7u))) & 7u)")
-                    } else if perm == 0x140 {
-                        format!("q{i}lane ^ 15u")
-                    } else if (0x121..=0x12f).contains(&perm) {
-                        format!("(q{i}lane & ~15u) | ((q{i}lane - {}u) & 15u)", perm & 15)
-                    } else { format!("(q{i}lane & ~3u) | (({perm}u >> (2u * (q{i}lane & 3u))) & 3u)") };
-                    if dpp8 || ins.raw[1] & (1 << 18) != 0 {
-                        self.line(&format!("uint q{i} = WaveReadLaneAt({source}, {lane});"));
-                    } else if ins.raw[1] & (1 << 19) != 0 {
-                        self.line(&format!("uint q{i} = WaveReadLaneAt((exec_lo & 1u) != 0u ? {source} : 0u, {lane});"));
+                    if ins.op == OP_DPP_BINARY {
+                        // All host lanes participate before the guest destination guards.
+                        let perm = ins.aux.imm;
+                        self.line(&format!("uint q{i}lane = WaveGetLaneIndex();"));
+                        let dpp8 = group_extrema::is_dpp8(ins);
+                        let lane = if dpp8 {
+                            format!("(q{i}lane & ~7u) | (({perm}u >> (3u * (q{i}lane & 7u))) & 7u)")
+                        } else if perm == 0x140 {
+                            format!("q{i}lane ^ 15u")
+                        } else if (0x121..=0x12f).contains(&perm) {
+                            format!("(q{i}lane & ~15u) | ((q{i}lane - {}u) & 15u)", perm & 15)
+                        } else { format!("(q{i}lane & ~3u) | (({perm}u >> (2u * (q{i}lane & 3u))) & 3u)") };
+                        if dpp8 || ins.raw[1] & (1 << 18) != 0 {
+                            self.line(&format!("uint q{i} = WaveReadLaneAt({source}, {lane});"));
+                        } else if ins.raw[1] & (1 << 19) != 0 {
+                            self.line(&format!("uint q{i} = WaveReadLaneAt((exec_lo & 1u) != 0u ? {source} : 0u, {lane});"));
+                        } else {
+                            self.line(&format!("uint2 q{i}pair = WaveReadLaneAt(uint2({source}, exec_lo & 1u), {lane});"));
+                            self.line(&format!("uint q{i} = q{i}pair.x;"));
+                            self.line(&format!("bool q{i}active = q{i}pair.y != 0u;"));
+                        }
                     } else {
-                        self.line(&format!("uint2 q{i}pair = WaveReadLaneAt(uint2({source}, exec_lo & 1u), {lane});"));
-                        self.line(&format!("uint q{i} = q{i}pair.x;"));
-                        self.line(&format!("bool q{i}active = q{i}pair.y != 0u;"));
+                        let selector = ins.aux.imm;
+                        let lane = match ins.op {
+                            OP_QUAD_MOVE => {
+                                self.line(&format!("uint q{i}lane = WaveGetLaneIndex();"));
+                                format!("(q{i}lane & ~3u) | (({selector}u >> (2u * (q{i}lane & 3u))) & 3u)")
+                            }
+                            OP_ROW_SHARE_MOVE => format!("(WaveGetLaneIndex() & ~15u) | {selector}u"),
+                            OP_ROW_ROR_MOVE => format!("(WaveGetLaneIndex() & ~15u) | ((WaveGetLaneIndex() - {selector}u) & 15u)"),
+                            OP_ROW_SHIFT_MOVE => {
+                                let sign = if selector < 0 { "-" } else { "+" };
+                                self.line(&format!("uint q{i}offset = (WaveGetLaneIndex() & 15u) {sign} {}u;", selector.abs()));
+                                // Keep the wave read in range even for lanes that will discard its value.
+                                format!("(WaveGetLaneIndex() & ~15u) | (q{i}offset & 15u)")
+                            }
+                            _ => format!("WaveGetLaneIndex() ^ {selector}u"),
+                        };
+                        let fetch_inactive = ins.raw[1] & (1 << 18) != 0;
+                        let bound_ctrl = ins.raw[1] & (1 << 19) != 0;
+                        let lane = if is_row_move(ins) || !fetch_inactive {
+                            self.line(&format!("uint q{i}src = {lane};"));
+                            format!("q{i}src")
+                        } else { lane };
+                        if fetch_inactive {
+                            self.line(&format!("uint q{i} = WaveReadLaneAt({source}, {lane});"));
+                        } else if bound_ctrl {
+                            self.line(&format!("uint q{i} = WaveReadLaneAt((exec_lo & 1u) != 0u ? {source} : 0u, {lane});"));
+                        } else {
+                            // An inactive source suppresses the write to this lane's destination.
+                            let dst = r(&ins.dst[0])?;
+                            self.line(&format!("uint2 q{i}pair = WaveReadLaneAt(uint2({source}, exec_lo & 1u), {lane});"));
+                            self.line(&format!("uint q{i} = q{i}pair.y != 0u ? q{i}pair.x : {dst};"));
+                        }
+                        if ins.op == OP_ROW_SHIFT_MOVE {
+                            let fallback = if bound_ctrl { "0u".to_string() } else { r(&ins.dst[0])? };
+                            self.line(&format!("if (q{i}offset >= 16u) q{i} = {fallback};"));
+                        }
                     }
                 }
             }
@@ -4935,7 +4984,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 for o in ins.src.iter().chain(ins.dst.iter()) {
                     self.touch(o);
                 }
-                if is_quad_exchange(ins) && self.pixel_wave && ins.op != OP_ROW_MIRROR {
+                if is_quad_exchange(ins) && self.pixel_wave && !is_row_move(ins) {
                     self.emit_pixel_quad_exchange(i, ins)?;
                 }
                 let is_ctl = ins.enc == Enc::Sopp && (Self::branch_cond(ins.op).is_some() || ins.op == 1);
@@ -6519,11 +6568,26 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             return self.wv(&d, &value);
         }
         if is_quad_exchange(ins) {
-            if self.dispatched && !(self.pixel_wave && ins.op != OP_ROW_MIRROR) {
+            if self.dispatched && (!self.pixel_wave || is_row_move(ins)) {
                 return Err("quad exchange in a block-dispatched program".into());
             }
+            if ins.op != OP_DPP_BINARY {
+                let value = format!("q{}", self.cur_idx);
+                let control = ins.raw[1];
+                if control >> 24 != 0xff {
+                    if self.ex.stage != Stage::Compute {
+                        return Err("masked DPP16 move requires a known compute wave width".into());
+                    }
+                    // Destination masks do not affect which lanes can supply the source.
+                    let rows = control >> 28;
+                    let banks = (control >> 24) & 15;
+                    let row = format!("({rows:#x}u >> (WaveGetLaneIndex() >> 4u))");
+                    let bank = format!("({banks:#x}u >> ((WaveGetLaneIndex() >> 2u) & 3u))");
+                    return self.wv(&d, &format!("(({row} & {bank} & 1u) != 0u) ? {value} : {}", r(&d)?));
+                }
+                return self.wv(&d, &value);
+            }
             let peer = format!("q{}", self.cur_idx);
-            if ins.op != OP_DPP_BINARY { return self.wv(&d, &peer); }
             let value = match ins.mnemonic.as_str() {
                 op @ ("v_add_f32" | "v_sub_f32" | "v_subrev_f32" | "v_mul_f32" | "v_mul_legacy_f32") => {
                     let (a, b) = dpp_fp32_sources(ins, peer.clone())?;
@@ -10330,12 +10394,15 @@ mod tests {
     }
 
     #[test]
-    fn dpp16_row_mirror_fi0_is_accepted_as_row_mirror_move() {
-        let mut insns = vec![dpp16_move_insn(dpp16_word(2, 0x140, 0, 1, 0xf, 0xf))];
-        lower_wave_reductions(&mut insns).expect("row_mirror accepted");
-        assert_eq!(insns[0].op, OP_ROW_MIRROR);
-        assert_eq!(insns[0].src, vec![Opnd::Vgpr(2)]);
-        assert_eq!(insns[0].aux.imm, 0);
+    fn dpp16_row_moves_select_the_source_lane_by_xor() {
+        let mirrors = [(0x141, 7), (0x140, 15)];
+        for (ctrl, mask) in mirrors.into_iter().chain((0..16).map(|mask| (0x160 + mask, mask))) {
+            let mut insns = [dpp16_move_insn(dpp16_word(2, ctrl, 0, 1, 0xf, 0xf))];
+            lower_wave_reductions(&mut insns).unwrap();
+            assert_eq!(insns[0].op, OP_ROW_XOR_MOVE);
+            assert_eq!(insns[0].src, [Opnd::Vgpr(2)]);
+            assert_eq!(insns[0].aux.imm, i64::from(mask));
+        }
     }
 
     #[test]
@@ -10348,17 +10415,9 @@ mod tests {
     }
 
     #[test]
-    fn dpp16_row_mirror_with_fi1_is_refused() {
-        // row_mirror with FI=1 reads the pre-existing value; not the accepted shape.
-        let mut insns = vec![dpp16_move_insn(dpp16_word(2, 0x140, 1, 1, 0xf, 0xf))];
-        let err = lower_wave_reductions(&mut insns).expect_err("refused");
-        assert!(err.contains("unsupported DPP16 move"));
-    }
-
-    #[test]
     fn dpp16_unimplemented_control_is_refused() {
-        // row_half_mirror, and quad_perm with a negation modifier.
-        let mut insns = vec![dpp16_move_insn(dpp16_word(2, 0x141, 0, 1, 0xf, 0xf))];
+        // Zero is outside the row_ror range. Quad moves with negation are also unsupported.
+        let mut insns = vec![dpp16_move_insn(dpp16_word(2, 0x120, 0, 1, 0xf, 0xf))];
         assert!(lower_wave_reductions(&mut insns).is_err());
         let mut insns = vec![dpp16_move_insn(dpp16_word(2, 0x0, 1, 1, 0xf, 0xf) | (1u32 << 20))];
         assert!(lower_wave_reductions(&mut insns).is_err());

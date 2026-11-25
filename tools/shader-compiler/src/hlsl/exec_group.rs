@@ -414,6 +414,120 @@ mod tests {
     }
 
     #[test]
+    fn dpp_row_moves_mask_the_source_value_before_the_lane_read() {
+        // gfx1030: v_mov_b32_dpp v4, v1 with row_mirror, row_half_mirror, or row_xmask:3.
+        for (control, mask) in [(0xff09_4001, 15), (0xff09_4101, 7), (0xff09_6301, 3)] {
+            let ex = compute_extract(&[0x7e08_02fa, control, 0xbf81_0000]);
+            let hlsl = super::super::translate(&ex).unwrap().hlsl;
+            assert!(hlsl.contains(&format!("WaveGetLaneIndex() ^ {mask}u")), "{hlsl}");
+            assert!(hlsl.contains("WaveReadLaneAt((exec_lo & 1u) != 0u ? v1 : 0u,"), "{hlsl}");
+        }
+    }
+
+    #[test]
+    fn dpp_row_share_reads_a_fixed_lane_in_each_row() {
+        // gfx1030: v_mov_b32_dpp v4, v1 row_share:N, FI=0 and BC=1.
+        for lane in 0..16 {
+            let control = 0xff09_5001 | (lane << 8);
+            let ex = compute_extract(&[0x7e08_02fa, control, 0xbf81_0000]);
+            let hlsl = super::super::translate(&ex).unwrap().hlsl;
+            assert!(hlsl.contains(&format!("(WaveGetLaneIndex() & ~15u) | {lane}u")), "{hlsl}");
+            assert!(hlsl.contains("WaveReadLaneAt((exec_lo & 1u) != 0u ? v1 : 0u,"), "{hlsl}");
+        }
+    }
+
+    #[test]
+    fn dpp_row_moves_fetch_preexisting_values_when_fi_is_set() {
+        for op in [0x140, 0x141, 0x150, 0x167] {
+            for bound in [0, 1] {
+                let control = 0xff04_0001 | (op << 8) | (bound << 19);
+                let ex = compute_extract(&[0x7e08_02fa, control, 0xbf81_0000]);
+                let hlsl = super::super::translate(&ex).unwrap().hlsl;
+                assert!(hlsl.contains("WaveReadLaneAt(v1, q0src)"), "{hlsl}");
+            }
+        }
+    }
+
+    #[test]
+    fn dpp_row_moves_keep_the_destination_when_the_source_is_inactive_by_default() {
+        for control in [0xff01_4001, 0xff01_4101, 0xff01_5001, 0xff01_6701] {
+            let ex = compute_extract(&[0x7e08_02fa, control, 0xbf81_0000]);
+            let hlsl = super::super::translate(&ex).unwrap().hlsl;
+            assert!(hlsl.contains("WaveReadLaneAt(uint2(v1, exec_lo & 1u), q0src)"), "{hlsl}");
+            assert!(hlsl.contains("q0pair.y != 0u ? q0pair.x : v4"), "{hlsl}");
+        }
+    }
+
+    #[test]
+    fn dpp_row_ror_wraps_the_source_index_within_its_row() {
+        // gfx1030: v_mov_b32_dpp v4, v1 row_ror:N, FI=0 and BC=0.
+        for distance in 1..16 {
+            let control = 0xff01_2001 | (distance << 8);
+            let ex = compute_extract(&[0x7e08_02fa, control, 0xbf81_0000]);
+            let hlsl = super::super::translate(&ex).unwrap().hlsl;
+            let lane = format!("(WaveGetLaneIndex() & ~15u) | ((WaveGetLaneIndex() - {distance}u) & 15u)");
+            assert!(hlsl.contains(&lane), "{hlsl}");
+        }
+    }
+
+    #[test]
+    fn dpp_row_shifts_apply_bound_control_outside_each_row() {
+        for (control, offset, fallback) in [
+            (0xff01_0101, "+ 1u", "v4"),
+            (0xff09_0f01, "+ 15u", "0u"),
+            (0xff0d_1101, "- 1u", "0u"),
+            (0xff05_1f01, "- 15u", "v4"),
+        ] {
+            let ex = compute_extract(&[0x7e08_02fa, control, 0xbf81_0000]);
+            let hlsl = super::super::translate(&ex).unwrap().hlsl;
+            assert!(hlsl.contains(&format!("(WaveGetLaneIndex() & 15u) {offset}")), "{hlsl}");
+            assert!(hlsl.contains(&format!("if (q0offset >= 16u) q0 = {fallback};")), "{hlsl}");
+        }
+    }
+
+    #[test]
+    fn dpp_masks_select_destinations_after_the_lane_read() {
+        // Row mask 5, bank mask 9: read v1 even from a masked bank, then update v4.
+        for control in [0x5909_4001, 0x590c_1b01] { // row_mirror, quad_perm:[3,2,1,0]
+            let ex = compute_extract(&[0x7e08_02fa, control, 0xbf81_0000]);
+            let hlsl = super::super::translate(&ex).unwrap().hlsl;
+            let (_, write) = hlsl.split_once("WaveReadLaneAt(").unwrap();
+            assert!(write.contains("0x5u >> (WaveGetLaneIndex() >> 4u)"), "{hlsl}");
+            assert!(write.contains("0x9u >> ((WaveGetLaneIndex() >> 2u) & 3u)"), "{hlsl}");
+            assert!(write.contains("? q0 : v4;"), "{hlsl}");
+        }
+    }
+
+    #[test]
+    fn asymmetric_row_mask_requires_a_known_guest_width_for_large_groups() {
+        let mov = [0x7e08_02fa, 0x1f09_4001, 0xbf81_0000];
+        let mut ex = compute_extract(&mov);
+        assert!(matches!(super::super::translate(&ex), Err(msg) if msg.contains("guest wave width")));
+        ex.psv_threads = Some([32, 1, 1]);
+        assert!(super::super::translate(&ex).is_ok());
+
+        // v_cmp_gt_u32 s3,v0,v1 establishes a single-word comparison result (wave32).
+        let words = [&[0xd4c4_0003, 0x0202_0300][..], &mov].concat();
+        assert!(super::super::translate(&compute_extract(&words)).is_ok());
+    }
+
+    #[test]
+    fn quad_move_with_fi_clear_obeys_bound_control_for_inactive_sources() {
+        // v_mov_b32_dpp v4, v1 quad_perm:[1,2,3,0], with each BOUND_CTRL setting.
+        for (control, read) in [
+            (0xff00_3901, "WaveReadLaneAt(uint2(v1, exec_lo & 1u), q0src)"),
+            (0xff08_3901, "WaveReadLaneAt((exec_lo & 1u) != 0u ? v1 : 0u, q0src)"),
+        ] {
+            let ex = compute_extract(&[0x7e08_02fa, control, 0xbf81_0000]);
+            let hlsl = super::super::translate(&ex).unwrap().hlsl;
+            assert!(hlsl.contains(read), "{hlsl}");
+            if control == 0xff00_3901 {
+                assert!(hlsl.contains("q0pair.y != 0u ? q0pair.x : v4"), "{hlsl}");
+            }
+        }
+    }
+
+    #[test]
     fn compute_register_writes_share_one_exec_region() {
         // v_add_nc_u32 v1, v0, v0; v_add_nc_u32 v2, v1, v1; s_endpgm
         let ex = compute_extract(&[0x4a02_0100, 0x4a04_0301, 0xbf81_0000]);
