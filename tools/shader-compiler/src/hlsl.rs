@@ -682,13 +682,20 @@ impl HeapView {
 const SPACE_ALIAS: u32 = 1 << 16;
 /// Synthetic opcode of the wave-reduction instruction produced by `lower_wave_reductions`.
 const OP_WAVE_REDUCE: u32 = 0x7ff0;
-const OP_QUAD_ADD_F32: u32 = 0x7ff5;
+const OP_QUAD_BINARY: u32 = 0x7ff5;
 const OP_QUAD_MOVE: u32 = 0x7fe1;
 const OP_ROW_MIRROR: u32 = 0x7fe2;
 
 fn is_quad_exchange(i: &Insn) -> bool {
-    (i.enc == Enc::Vop2 && i.op == OP_QUAD_ADD_F32)
+    (i.enc == Enc::Vop2 && i.op == OP_QUAD_BINARY)
         || (i.enc == Enc::Vop1 && (i.op == OP_QUAD_MOVE || i.op == OP_ROW_MIRROR))
+}
+
+fn is_bitwise_quad_exchange(i: &Insn) -> bool {
+    i.enc == Enc::Vop2 && matches!(i.mnemonic.as_str(), "v_or_b32" | "v_and_b32" | "v_xor_b32")
+        && i.src.first() == Some(&Opnd::Raw(250))
+        // Full destination masks, no source modifiers, selector within a quad.
+        && i.raw.get(1).is_some_and(|ctrl| ctrl & 0xfff3_0000 == 0xff00_0000)
 }
 
 /// Whole-wave reductions (HLSL `WaveActiveMin` / `WaveActiveMax`; observed in
@@ -748,13 +755,14 @@ fn lower_wave_reductions(insns: &mut [Insn]) -> Result<Option<u32>, String> {
         let off = insns[first].offset;
         let bad = |what: &str| format!("wave reduction at {off:#x}: {what}");
         let red = insns[first].mnemonic.clone();
-        if red == "v_add_f32" && insns[first].src.first() == Some(&Opnd::Raw(250)) {
+        let bitwise_quad = is_bitwise_quad_exchange(&insns[first]);
+        if bitwise_quad || (red == "v_add_f32" && insns[first].src.first() == Some(&Opnd::Raw(250))) {
             let ctrl = *insns[first].raw.get(1).ok_or_else(|| bad("missing DPP16 control word"))?;
-            // DPP16 quad_perm, all rows and banks, BC=1, FI=1, no modifiers.
-            if ctrl & 0xffff0000 != 0xff0c0000 {
+            // Keep the existing FP32 add subset at FI=1 and BC=1.
+            if !bitwise_quad && ctrl & 0xffff0000 != 0xff0c0000 {
                 return Err(bad("unsupported DPP16 FP32 add controls"));
             }
-            insns[first].op = OP_QUAD_ADD_F32;
+            insns[first].op = OP_QUAD_BINARY;
             insns[first].src[0] = Opnd::Vgpr(ctrl as u8);
             insns[first].aux.imm = ((ctrl >> 8) & 255) as i64;
             at = first + 1;
@@ -1347,6 +1355,11 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     // Once this exact exchange subset is recognized, a later binding or
     // emitter error must not silently replace its collectives with copies.
     let mut original = disassemble(&ex.isa);
+    if original.iter().any(is_bitwise_quad_exchange) {
+        // This standalone exchange observes its source lane even if the exact
+        // translation failed elsewhere. A per-lane retry would drop that operand.
+        return first;
+    }
     if (ex.root_sig.is_some() || original.iter().all(|i| !matches!(i.enc, Enc::Smem | Enc::Mubuf)))
         && wave_sum::straight_exchange(&mut original, compute_group(ex)) {
         return first;
@@ -4466,12 +4479,19 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                     self.line(&format!("uint q{i} = q{i}act != 0u ? WaveReadLaneAt({source}, q{i}src) : 0u;"));
                 } else {
                     let source = r(&ins.src[0])?;
-                    // FI=1 fetches the saved VGPR even from an EXEC-disabled lane. All
-                    // host lanes must reach the exchange, including those skipping this
-                    // block. Reapply the branch and EXEC guards to the destination write.
+                    // All host lanes participate before the guest destination guards.
                     let perm = ins.aux.imm;
                     self.line(&format!("uint q{i}lane = WaveGetLaneIndex();"));
-                    self.line(&format!("uint q{i} = WaveReadLaneAt({source}, (q{i}lane & ~3u) | (({perm}u >> (2u * (q{i}lane & 3u))) & 3u));"));
+                    let lane = format!("(q{i}lane & ~3u) | (({perm}u >> (2u * (q{i}lane & 3u))) & 3u)");
+                    if ins.raw[1] & (1 << 18) != 0 {
+                        self.line(&format!("uint q{i} = WaveReadLaneAt({source}, {lane});"));
+                    } else if ins.raw[1] & (1 << 19) != 0 {
+                        self.line(&format!("uint q{i} = WaveReadLaneAt((exec_lo & 1u) != 0u ? {source} : 0u, {lane});"));
+                    } else {
+                        self.line(&format!("uint2 q{i}pair = WaveReadLaneAt(uint2({source}, exec_lo & 1u), {lane});"));
+                        self.line(&format!("uint q{i} = q{i}pair.x;"));
+                        self.line(&format!("bool q{i}active = q{i}pair.y != 0u;"));
+                    }
                 }
             }
             if restored_waits.contains(&i) {
@@ -4553,12 +4573,42 @@ uint tb_fmac_half(uint a, uint b, uint c) {
     /// (Implicit-derivative sampling cannot live inside this loop — FXC rejects it, and the
     /// shader then fails to compile rather than silently changing meaning.)
     fn emit_pixel_quad_exchange(&mut self, i: usize, ins: &Insn) -> Result<(), String> {
-        let source = r(&ins.src[0])?;
+        let mut source = r(&ins.src[0])?;
+        let mut ty = "uint";
+        let ctrl = ins.raw[1];
+        let check_exec = ctrl & (1 << 18) == 0;
+        let preserve = check_exec && ctrl & (1 << 19) == 0;
+        if check_exec {
+            // Pixel entry initializes the per-invocation EXEC bit even on helper
+            // lanes. Only trust it after an explicit full-wave reset; CMPX may
+            // then disable individual lanes, including covered pixels.
+            let prefix = &self.insns[..i];
+            let mut preceding = prefix.iter().rev();
+            let mut reset = preceding.next();
+            if reset.is_some_and(|op| op.mnemonic.starts_with("v_cmpx_")) {
+                reset = preceding.next();
+            }
+            let full_exec = reset.is_some_and(|op| op.mnemonic == "s_mov_b64"
+                && op.dst == [Opnd::ExecLo] && op.src == [Opnd::ConstInt(-1)]);
+            if !full_exec || self.dispatched || self.insns.iter().any(|op| op.enc == Enc::Sopp && Self::branch_cond(op.op).is_some()) {
+                return Err(format!("pixel DPP16 FI=0 at {:#x} requires a proven source EXEC mask", ins.offset));
+            }
+            if preserve {
+                ty = "uint2";
+                source = format!("uint2({source}, exec_lo & 1u)");
+            } else {
+                source = format!("((exec_lo & 1u) != 0u ? {source} : 0u)");
+            }
+        }
         let perm = ins.aux.imm;
-        // Quad operations include helper lanes, as FI=1 does. Lane bits are x, y.
+        // Quad operations exchange values with helper lanes. Lane bits are x, y.
         self.line(&format!("uint q{i}lane = WaveGetLaneIndex() & 3u, q{i}src = (({perm}u >> (2u * q{i}lane)) & 3u) ^ q{i}lane;"));
-        self.line(&format!("uint q{i}x = QuadReadAcrossX({source}), q{i}y = QuadReadAcrossY({source}), q{i}d = QuadReadAcrossDiagonal({source});"));
-        self.line(&format!("uint q{i} = q{i}src == 0u ? {source} : q{i}src == 1u ? q{i}x : q{i}src == 2u ? q{i}y : q{i}d;"));
+        self.line(&format!("{ty} q{i}x = QuadReadAcrossX({source}), q{i}y = QuadReadAcrossY({source}), q{i}d = QuadReadAcrossDiagonal({source});"));
+        let selected = if preserve { format!("q{i}pair") } else { format!("q{i}") };
+        self.line(&format!("{ty} {selected} = q{i}src == 0u ? {source} : q{i}src == 1u ? q{i}x : q{i}src == 2u ? q{i}y : q{i}d;"));
+        if preserve {
+            self.line(&format!("uint q{i} = q{i}pair.x; bool q{i}active = q{i}pair.y != 0u;"));
+        }
         Ok(())
     }
 
@@ -6188,8 +6238,20 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             if self.dispatched && !(self.pixel_wave && ins.op != OP_ROW_MIRROR) {
                 return Err("quad exchange in a block-dispatched program".into());
             }
-            if ins.op != OP_QUAD_ADD_F32 { return self.wv(&d, &format!("q{}", self.cur_idx)); }
-            return self.wv(&d, &format!("asuint(asfloat(q{}) + {})", self.cur_idx, f(&s[1])?));
+            let peer = format!("q{}", self.cur_idx);
+            if ins.op != OP_QUAD_BINARY { return self.wv(&d, &peer); }
+            let value = match ins.mnemonic.as_str() {
+                "v_add_f32" => format!("asuint(asfloat({peer}) + {})", f(&s[1])?),
+                "v_or_b32" => format!("{peer} | {}", r(&s[1])?),
+                "v_and_b32" => format!("{peer} & {}", r(&s[1])?),
+                "v_xor_b32" => format!("{peer} ^ {}", r(&s[1])?),
+                _ => return Err("unknown quad binary operation".into()),
+            };
+            // FI=0 and BOUND_CTRL=0 suppress the entire write on an inactive source.
+            if ins.raw[1] & (3 << 18) == 0 {
+                return self.wv(&d, &format!("{peer}active ? ({value}) : {}", r(&d)?));
+            }
+            return self.wv(&d, &value);
         }
         if ins.op == OP_WAVE_REDUCE && ins.enc == Enc::Vop3 {
             // See `lower_wave_reductions`. Every invocation computes the same value; lanes
@@ -9693,9 +9755,8 @@ mod tests {
         assert_eq!(pixel_heap_base(&ex, 5), None);
     }
 
-    #[test]
-    fn pixel_wave_quad_exchange_works_in_block_dispatch() {
-        let ex = ShaderExtract {
+    fn pixel_wave_test_extract() -> ShaderExtract {
+        ShaderExtract {
             stage: Stage::Pixel,
             shader_model: (6, 6),
             required_features: None,
@@ -9722,7 +9783,38 @@ mod tests {
             mesh_info: None,
             primitive_sig: vec![],
             root_sig: None,
+        }
+    }
+
+    #[test]
+    fn pixel_fi0_quad_exchange_requires_a_proven_exec_mask() {
+        let ex = pixel_wave_test_extract();
+        let emit = |prefix: &[u32], bound: u32| {
+            // GFX1030: v_or_b32_dpp v7, v5, v6 quad_perm:[1,0,3,2].
+            let mut words = prefix.to_vec();
+            words.extend([0x380e_0cfa, dpp16_word(5, 0xb1, 0, bound, 15, 15)]);
+            let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+            let mut insns = tuxbox_dxbc::rdna2::disassemble(&bytes);
+            lower_wave_reductions(&mut insns)?;
+            let mut em = Emitter::new(&ex, insns);
+            em.pixel_wave = true;
+            em.emit_body(true)
         };
+        let full = 0xbefe_04c1; // s_mov_b64 exec, -1
+        let cmpx = 0x7daa_1081; // v_cmpx_ne_u32 1, v8
+        for bound in [0, 1] {
+            emit(&[full], bound).unwrap();
+            emit(&[full, cmpx], bound).unwrap();
+            for prefix in [&[][..], &[cmpx], &[0xbf84_0001, full, cmpx]] {
+                let error = emit(prefix, bound).unwrap_err();
+                assert!(error.contains("requires a proven source EXEC mask"), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn pixel_wave_quad_exchange_works_in_block_dispatch() {
+        let ex = pixel_wave_test_extract();
         let mut insns = vec![Insn { offset: 0x0, ..dpp16_move_insn(dpp16_word(0, 0xb1, 1, 1, 0xf, 0xf)) }];
         lower_wave_reductions(&mut insns).unwrap();
         let mut em = Emitter::new(&ex, insns.clone());
