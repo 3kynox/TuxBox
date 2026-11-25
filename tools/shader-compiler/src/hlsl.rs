@@ -293,7 +293,6 @@ bool tb_isnan(float x) { return (asuint(x) & 0x7fffffffu) > 0x7f800000u; }
 float tb_min(float a, float b) { return tb_isnan(a) ? b : (tb_isnan(b) ? a : (a < b ? a : b)); }
 float tb_max(float a, float b) { return tb_isnan(a) ? b : (tb_isnan(b) ? a : (a > b ? a : b)); }
 float tb_med3(float a, float b, float c) { if (tb_isnan(a) || tb_isnan(b) || tb_isnan(c)) return tb_min(tb_min(a, b), c); float mx = tb_max(tb_max(a, b), c); if (mx == a) return tb_max(b, c); if (mx == b) return tb_max(a, c); return tb_max(a, b); }
-float tb_ldexp(float x, int n) { n = clamp(n, -320, 320); int k1 = clamp(n, -126, 127); n -= k1; int k2 = clamp(n, -126, 127); n -= k2; int k3 = clamp(n, -126, 127); precise float r = x * asfloat((uint)(k1 + 127) << 23); r = r * asfloat((uint)(k2 + 127) << 23); r = r * asfloat((uint)(k3 + 127) << 23); return r; }
 "#;
 
 /// Prove the non-returning 2D, DMASK=3 UMAX encoding and return its X/Y VGPRs.
@@ -952,7 +951,7 @@ fn lower_wave_reductions(insns: &mut [Insn]) -> Result<Option<u32>, String> {
         let saved_extrema = matches!(red.as_str(), "v_min_f32" | "v_max_f32")
             && (first.checked_sub(3).is_some_and(|p| matches!(insns[p].mnemonic.as_str(), "s_or_saveexec_b32" | "s_or_saveexec_b64"))
                 || wave_sum::masked_floating(insns, first));
-        if matches!(red.as_str(), "v_add_nc_u32" | "v_min_u32" | "v_max_u32" | "v_add_f32" | "v_and_b32" | "v_or_b32") || saved_extrema {
+        if matches!(red.as_str(), "v_add_nc_u32" | "v_min_u32" | "v_max_u32" | "v_min_i32" | "v_max_i32" | "v_add_f32" | "v_and_b32" | "v_or_b32" | "v_xor_b32") || saved_extrema {
             let (required, next) = wave_sum::lower(insns, first).map_err(bad)?;
             if width.replace(required).is_some_and(|w| w != required) {
                 return Err(bad("conflicting integer sum wave widths"));
@@ -1434,10 +1433,18 @@ fn may_touch_sgpr(o: &Opnd, n: u8) -> bool {
 /// vector lane-mask sources, and descriptor or address bases of memory operations.
 fn reads_sgpr(ins: &Insn, n: u8) -> bool {
     let m = ins.mnemonic.as_str();
+    // GETPC has no source. Its unused SOP1 source field decodes as s0.
+    if m == "s_getpc_b64" { return false; }
+    // Scalar loads encode their offset register separately from the base operands.
+    if ins.enc == Enc::Smem && n <= 105 && ins.raw.get(1).is_some_and(|w| w >> 25 == u32::from(n)) {
+        return true;
+    }
     let memory = if m.starts_with("image_") { 8 }
         else if m.starts_with("s_buffer") || m.starts_with("buffer_") || m.starts_with("tbuffer_") { 4 }
         else if m.starts_with("s_load") || m.starts_with("global_") { 2 } else { 0 };
     ins.src.iter().enumerate().any(|(i, o)| {
+        // VOP3 decodes three source fields; LDEXP uses only the value and exponent.
+        if m == "v_ldexp_f32" && i == 2 { return false; }
         let Opnd::Sgpr(k) = *o else { return false };
         let width: u16 = if memory != 0 { memory } else if m.starts_with("s_") && (m.ends_with("64") || m.contains("saveexec_b64")) { 2 }
             else if m.starts_with("v_") && i >= 2 { 2 } else { 1 };
@@ -4510,11 +4517,16 @@ impl<'a> Emitter<'a> {
         }
         h.push_str(if self.single_wave32 { HALF_RNE_STRAIGHT_LINE } else { HALF_RNE });
         h.push_str(HALF_HELPERS);
-        if self.insns.iter().any(|ins| matches!(ins.mnemonic.as_str(), "v_cvt_u32_f32" | "v_cvt_i32_f32")) {
+        let has_fp_mode = self.regs.contains("tb_fp_mode");
+        if self.insns.iter().any(|ins| matches!(ins.mnemonic.as_str(), "v_cvt_u32_f32" | "v_cvt_i32_f32" | "v_cvt_pk_u8_f32")
+            || (has_fp_mode && matches!(ins.mnemonic.as_str(), "v_cvt_f32_i32" | "v_cvt_f32_u32"))) {
             h.push_str(include_str!("float_to_integer.hlsl"));
         }
         if self.insns.iter().any(|ins| ins.mnemonic == "v_fract_f32") {
             h.push_str(include_str!("fract_f32.hlsl"));
+        }
+        if self.insns.iter().any(|ins| ins.mnemonic == "v_ldexp_f32") {
+            h.push_str(include_str!("ldexp_f32.hlsl"));
         }
         if self.insns.iter().any(|i| i.op == OP_DPP_BINARY && matches!(i.mnemonic.as_str(), "v_min_f32" | "v_max_f32")) {
             h.push_str(r#"
@@ -6704,13 +6716,6 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         }
         if ins.enc == Enc::Vop2 && ins.op == wave_sum::DPP_REDUCE {
             // Read the partner before the EXEC-guarded write, including when VDST aliases VSRC.
-            let lane = match ins.aux.imm {
-                0 => "WaveGetLaneIndex() ^ 1u",
-                1 => "(WaveGetLaneIndex() & ~3u) | ((WaveGetLaneIndex() ^ 2u) & 2u)",
-                2 => "(WaveGetLaneIndex() & ~7u) | ((WaveGetLaneIndex() ^ 4u) & 4u)",
-                3 => "WaveGetLaneIndex() ^ 15u",
-                _ => return Err("invalid integer sum step".into()),
-            };
             let t = self.tmp;
             self.tmp += 1;
             let acc = r(&s[0])?;
@@ -6719,16 +6724,30 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 self.pixel_sum = m.starts_with("v_add");
                 return self.wv(&d, &acc);
             }
+            let id = if self.portable_wave64 { "gtid.x" } else { "WaveGetLaneIndex()" };
+            let control = ins.raw[1] >> 8; // The reduction matcher verified this word.
+            let lane = match (ins.aux.imm, control) {
+                (0, _) => format!("{id} ^ 1u"),
+                (1, 0x936012) => format!("({id} & ~3u) | (({id} ^ 2u) & 2u)"),
+                (2, 0x000924) => format!("({id} & ~7u) | (({id} ^ 4u) & 4u)"),
+                (1, 0xb3e21a) => format!("{id} ^ 2u"),
+                (2, 0x688fac) => format!("{id} ^ 4u"),
+                (1 | 2, _) => format!("({id} & ~7u) | (({control:#x}u >> (3u * ({id} & 7u))) & 7u)"),
+                (3, _) => format!("{id} ^ 15u"),
+                _ => return Err("invalid integer sum step".into()),
+            };
             let partner = if self.portable_wave64 {
-                let lane = lane.replace("WaveGetLaneIndex()", "gtid.x");
                 format!("tb_reduction_read(gtid.x, {acc}, {lane})")
             } else { format!("WaveReadLaneAt({acc}, {lane})") };
             let combined = match m.as_str() {
                 "v_add_nc_u32" => format!("{partner} + {acc}"),
                 "v_and_b32" => format!("{partner} & {acc}"),
                 "v_or_b32" => format!("{partner} | {acc}"),
+                "v_xor_b32" => format!("{partner} ^ {acc}"),
                 "v_min_u32" => format!("min({partner}, {acc})"),
                 "v_max_u32" => format!("max({partner}, {acc})"),
+                "v_min_i32" => format!("asuint(min(asint({partner}), asint({acc})))"),
+                "v_max_i32" => format!("asuint(max(asint({partner}), asint({acc})))"),
                 "v_add_f32" => format!("asuint(asfloat({partner}) + asfloat({acc}))"),
                 "v_min_f32" => format!("asuint(min(asfloat({partner}), asfloat({acc})))"),
                 "v_max_f32" => format!("asuint(max(asfloat({partner}), asfloat({acc})))"),
@@ -7098,7 +7117,8 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             let t = self.tmp;
             self.tmp += 1;
             self.line(&format!("uint t{t}shift = ({} & 3u) * 8u;", r(&s[1])?));
-            self.line(&format!("uint t{t}byte = tb_isnan({x}) ? 0u : (uint)round(clamp({x}, 0.0, 255.0));"));
+            let mode = if self.regs.contains("tb_fp_mode") { "tb_fp_mode" } else { "0u" };
+            self.line(&format!("uint t{t}byte = tb_round_u8({x}, {mode});"));
             return self.wv(&d, &format!("({} & ~(255u << t{t}shift)) | (t{t}byte << t{t}shift)", r(&s[2])?));
         }
         if matches!(m.as_str(), "v_pk_fma_f16" | "v_pk_add_f16" | "v_pk_mul_f16" | "v_pk_min_f16" | "v_pk_max_f16") {
@@ -7585,6 +7605,13 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         let a = self.numeric_input(&s[0])?;
         let b = s.get(1).map(|operand| self.numeric_input(operand)).transpose()?.unwrap_or_default();
         let c = s.get(2).map(|o| r(o)).transpose().unwrap_or(None).unwrap_or_default();
+        if m == "v_ldexp_f32" {
+            let mode = if self.regs.contains("tb_fp_mode") { "tb_fp_mode" } else { "0u" };
+            let bits = Self::select_source(ins, a, 0);
+            let scale = [0, 1, 2, -1][ins.aux.imm2 as usize];
+            let clamp = ins.aux.imm != 0;
+            return self.wv(&d, &format!("tb_ldexp_f32({bits}, asint({b}), {mode}, {scale}, {clamp})"));
+        }
         if clamped_product24(ins) {
             if vop3 && (ins.raw[0] & 0x7800 != 0 || ins.aux.mask != 0 || ins.aux.imm2 != 0) {
                 return Err("unsupported modifiers for clamped 24-bit multiply".into());
@@ -7621,7 +7648,10 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             "v_max3_f32" => Some(format!("max(max({}, {}), {})", fa()?, fb()?, fc()?)),
             // ISA: any NaN operand -> V_MIN3_F32 of the three; otherwise the median.
             "v_med3_f32" => Some(format!("tb_med3({}, {}, {})", fa()?, fb()?, fc()?)),
-            "v_ldexp_f32" => Some(format!("tb_ldexp({}, asint({b}))", fa()?)),
+            "v_cvt_f32_i32" | "v_cvt_f32_u32" if self.regs.contains("tb_fp_mode") => {
+                let signed = m == "v_cvt_f32_i32";
+                Some(format!("tb_integer_to_f32({a}, {signed}, tb_fp_mode)"))
+            }
             "v_cvt_f32_i32" => Some(format!("(float)asint({a})")),
             "v_cvt_f32_u32" => Some(format!("(float)({a})")),
             "v_cvt_off_f32_i4" => Some(format!("((float)(asint({a} << 28) >> 28) * 0.0625f)")),
@@ -10566,6 +10596,18 @@ mod tests {
         let hlsl = translate(Stage::Compute, &[0x7e08_16f9, 0x0035_7601]).unwrap();
         assert!(hlsl.contains("((v1 >> 16) & 0xffffu)"), "{hlsl}");
         assert!(hlsl.contains("saturate((((-abs(f16tof32("), "{hlsl}");
+    }
+
+    #[test]
+    fn byte_pack_uses_the_current_single_precision_round_mode() {
+        // gfx1030: v_cvt_pk_u8_f32 v4, v1, v0, v4, with and without s_round_mode.
+        let pack = [0xd55e_0004, 0x0412_0101];
+        let translate = |words: &[u32]| float64::tests::translate(Stage::Compute, words).unwrap();
+        let default = translate(&pack);
+        assert!(default.contains("tb_round_u8(asfloat(v1), 0u)"));
+        let mut words = vec![0xbfa4_0001];
+        words.extend(pack);
+        assert!(translate(&words).contains("tb_round_u8(asfloat(v1), tb_fp_mode)"));
     }
 
     fn dpp16_word(src0_reg: u32, ctrl: u32, fi: u32, bc: u32, bank_m: u32, row_m: u32) -> u32 {
