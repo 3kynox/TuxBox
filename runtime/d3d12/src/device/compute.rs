@@ -26,6 +26,7 @@ pub(crate) struct PipelineData {
     pub(crate) reflected: Option<std::sync::Arc<ComputeTable>>,
     pub(crate) raster_table: Option<std::sync::Arc<ComputeTable>>,
     pub(crate) null_usage: Option<std::sync::Arc<crate::diagnostics::null_usage::Tag>>,
+    pub(crate) compute_threads: Option<[u32; 3]>,
 }
 
 const _: () = assert!(
@@ -211,6 +212,7 @@ unsafe fn create_pipeline_x_inner(
         Ok(layout) => layout,
         Err(error) => return error.code(),
     };
+    let guest_threads = tuxbox_dxbc::shader_compute_threads(bytes);
     let (translation, reflected) = match layout {
         Some(TableLayout::Reflected(table)) => {
             // Embedded RTS0 cannot be replaced. The translator reads that original
@@ -220,7 +222,7 @@ unsafe fn create_pipeline_x_inner(
             let Some(code) = code else {
                 super::compute_table::capture_stage_root(bytes, &table.original);
                 crate::diagnostics::compute_failure(bytes, E_NOTIMPL.0);
-                return unsafe { null_compute(this, root.map(|p| &p.native), desc, out) }.unwrap_or(E_NOTIMPL);
+                return unsafe { null_compute(this, root.map(|p| &p.native), desc, guest_threads, out) }.unwrap_or(E_NOTIMPL);
             };
             (Some(code), Some(table))
         }
@@ -231,6 +233,8 @@ unsafe fn create_pipeline_x_inner(
             super::shader_cache::compute_with_root(bytes, root?.state.payload())
         }), None),
     };
+    let compute_threads = guest_threads
+        .or_else(|| translation.as_deref().and_then(tuxbox_dxbc::shader_compute_threads));
     let scene_root = if let Some(translated) = &translation {
         match super::compute_scene::private_root(
             &this.native,
@@ -310,7 +314,7 @@ unsafe fn create_pipeline_x_inner(
             crate::big_stack::PipelineWait::Deferred => {
                 // The original guest shader would be a second long driver compile.
                 unsafe { ManuallyDrop::drop(&mut host.pRootSignature) };
-                return unsafe { null_compute(this, root.map(|p| &p.native), desc, out) }.unwrap_or(E_NOTIMPL);
+                return unsafe { null_compute(this, root.map(|p| &p.native), desc, compute_threads, out) }.unwrap_or(E_NOTIMPL);
             }
         }
     };
@@ -321,7 +325,7 @@ unsafe fn create_pipeline_x_inner(
             crate::big_stack::PipelineWait::Ready(result) => result,
             crate::big_stack::PipelineWait::Deferred => {
                 unsafe { ManuallyDrop::drop(&mut host.pRootSignature) };
-                return unsafe { null_compute(this, root.map(|p| &p.native), desc, out) }.unwrap_or(E_NOTIMPL);
+                return unsafe { null_compute(this, root.map(|p| &p.native), desc, compute_threads, out) }.unwrap_or(E_NOTIMPL);
             }
         };
     }
@@ -329,7 +333,7 @@ unsafe fn create_pipeline_x_inner(
     if let Err(error) = &native {
         if let Some(root) = root { super::compute_table::capture_stage_root(bytes, &root.state); }
         crate::diagnostics::compute_failure(bytes, error.code().0);
-        if let Some(status) = unsafe { null_compute(this, root.map(|p| &p.native), desc, out) } {
+        if let Some(status) = unsafe { null_compute(this, root.map(|p| &p.native), desc, compute_threads, out) } {
             return status;
         }
     } else if let Some(table) = &reflected {
@@ -346,6 +350,7 @@ unsafe fn create_pipeline_x_inner(
             PipelineData {
                 scene_root,
                 reflected,
+                compute_threads,
                 ..Default::default()
             },
             out,
@@ -404,7 +409,8 @@ fn owned_compile(
 
 /// Create a resource-free compute pipeline on the guest root (see `fallback`).
 unsafe fn null_compute(
-    this: &Device, root: Option<&ID3D12RootSignature>, desc: &D3D12_COMPUTE_PIPELINE_STATE_DESC, out: Out,
+    this: &Device, root: Option<&ID3D12RootSignature>, desc: &D3D12_COMPUTE_PIPELINE_STATE_DESC,
+    compute_threads: Option<[u32; 3]>, out: Out,
 ) -> Option<HRESULT> {
     use super::fallback::{Stage, bytecode, enabled, shader, substituted};
     if !enabled() { return None; }
@@ -428,5 +434,5 @@ unsafe fn null_compute(
         })
     });
     substituted("compute");
-    Some(unsafe { wrap_pageable(native, &PIPELINE, this, PipelineData { null_usage, ..Default::default() }, out) })
+    Some(unsafe { wrap_pageable(native, &PIPELINE, this, PipelineData { null_usage, compute_threads, ..Default::default() }, out) })
 }
