@@ -1,6 +1,6 @@
 # Set up ProjectScarlett (GTA VI) on Linux
 
-This guide stages GTA VI 1.0.2.1 (`ProjectScarlett`) with TuxBox's providers and starts it on Valve's stock Proton Experimental. The current result is the player selection prompt at 3840×2160. [Title progress](PROGRESS.md) · [Run record](../evidence/projectscarlett-startup.json)
+This guide stages GTA VI 1.0.2.1 (`ProjectScarlett`) with TuxBox's providers and starts it on Valve's stock Proton Experimental. The furthest recorded run got into the story intro and crashed after about ten minutes. The game isn't playable. [What to expect](#what-to-expect) · [Title progress](PROGRESS.md) · [Run record](../evidence/projectscarlett-gameplay.json)
 
 You supply the game package. TuxBox doesn't include any game files. The recorded runs use package `RockstarGamesInc.28872443D20A7` 1.0.2.1, whose `game_scarlett_master.exe` has SHA-256 `e95020b2fa4a721db3df59fdecf75621730ac559d8835252f6c3b658d5a08993`. Other builds may need different providers or shader requests.
 
@@ -98,6 +98,23 @@ work, so whatever that program computes is missing until a later launch finds th
 compiled result in the driver cache. `TUXBOX_PIPELINE_DEADLINE=0` waits instead. `TUXBOX_LARGE_COMPILES` sets the number,
 and `0` removes the limit. The first launch can still spend a long time loading.
 
+### GPU waits and sample masks
+
+Two guest commands have no complete desktop equivalent. TuxBox logs each case
+and keeps the queue running instead of failing it:
+
+- A GPU memory wait recorded after rendering commands in the same list becomes a
+  global barrier.
+- A GPU memory wait that TuxBox performs on the queue is released after five
+  seconds if its target value never arrives. The log line says
+  `GPU memory wait released`. Work that depended on the missing write may then
+  run too early.
+- A sample mask that differs between the pixels of a quad is ignored, so the
+  draw uses full coverage.
+
+These keep a run going. They can also cause wrong output, so treat the log lines
+as open compatibility problems.
+
 ### Finding why pipelines fail
 
 Each run writes every pipeline that failed, or received an empty stand-in, to
@@ -186,11 +203,29 @@ matched across configurations. See `--help` for reproduction arguments and
 
 ## What to expect
 
-The game opens its Americas window, loads its archives and presents 3840×2160 frames. The recorded run reached the player selection prompt, with Account Picker, Screen Narration and TuxBox options. It stopped at a title breakpoint 97 seconds after launch. Intro video, input after player selection and gameplay aren't verified yet. [Current priorities](PROGRESS.md#current-priorities)
+On November 25, 2026, an offline run on a GeForce RTX 4070 Ti SUPER ran for
+9 minutes 50 seconds. The game's own crash report records the state `Game
+Running`, frame 10,146 and the story intro script. The run then ended with exit
+code 5. The cause isn't established. [Run record](../evidence/projectscarlett-gameplay.json)
 
-In a new prefix, the game stops at a breakpoint during System Init because it reads its package through the `G:` drive, as on the console, and the launcher doesn't map that drive yet. A fix is in review. [Pull request #6](https://github.com/brcly/TuxBox/pull/6)
+- **Missing effects.** Many shaders are still unsupported, and large compute
+  pipelines can receive empty stand-ins. Expect missing or wrong rendering.
+  Image correctness hasn't been checked. [Shader coverage](SHADERS.md#projectscarlett-refusals)
+- **Long loads.** The driver takes minutes to compile the largest translated
+  compute shaders.
+- **Crashes.** The run above ended in a crash while large compiles were still
+  running.
+- **Not yet verified:** input and audio during play, frame times, and any other
+  GPU or Windows.
 
-When you report a run, include the package version, executable hash, GPU and driver, Proton build, and the log printed in the first line of the launcher's output.
+An earlier run record covers startup up to the player selection prompt at
+3840×2160. [Startup record](../evidence/projectscarlett-startup.json)
+
+While it runs, the launcher maps the prefix's `G:` drive to the package, because
+the game reads its files through that drive on the console. The previous links
+are restored afterwards.
+
+When you report a run, include the package version, executable hash, GPU and driver, Proton build, the log printed in the first line of the launcher's output, and the pipeline failure file described [above](#finding-why-pipelines-fail).
 
 
 ### Packed integer compute controls

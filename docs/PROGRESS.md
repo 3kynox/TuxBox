@@ -12,12 +12,20 @@ With the packaged Xbox graphics settings on stock Proton, Frosty rendered its ma
 | --- | --- | --- |
 | **Lanes** | Runs through TuxBox's Xbox graphics, memory and input providers. Its replay checks GPU output and game state. | Continue testing presentation, input and other providers across systems. [Lanes](../examples/lanes/README.md) |
 | **The Matrix Awakens (Frosty)** | With the original Xbox graphics settings, a Linux run rendered the menu, played Wake Up and loaded the first street corner of the chase intro. Earlier reduced-settings runs reached the highway and city with missing and distorted surfaces. | Verify the shooting tutorial, image quality and frame times with the packaged settings. [Setup and results](MATRIX_AWAKENS.md) · [Recorded original-settings run](../evidence/matrix-awakens/packaged-settings-room.json) |
-| **ProjectScarlett (GTA VI 1.0.2.1)** | Shows the player selection prompt in the Americas window at 3840×2160 on stock Proton Experimental. [Run record](../evidence/projectscarlett-startup.json) | Verify intro video and gameplay after player selection. |
+| **ProjectScarlett (GTA VI 1.0.2.1)** | An offline Linux run got into the story intro: the game reported `Game Running` at frame 10,146 after 9 m 41 s, then crashed. [Run record](../evidence/projectscarlett-gameplay.json) · [Startup record](../evidence/projectscarlett-startup.json) | Find the crash cause, support the remaining shaders, shorten large driver compiles, then check images, input and frame times. [Setup guide](PROJECTSCARLETT.md#what-to-expect) |
 | **Fortnite** | One supplied build provided graphics API call-site evidence. | Test initialization and rendering in TuxBox for a specific build. [Device evidence](../evidence/fortnite-device.json) |
 
 No other retail title is currently claimed playable. Record the build, settings, host, provider and observed faults for each run, and distinguish starting, rendering, input and sustained gameplay.
 
 ## Current priorities
+
+### ProjectScarlett
+
+1. Find the cause of the crash in the recorded gameplay run, including the GPU memory waits that never reach their target.
+2. Make large translated compute shaders compile quickly enough to use. Most unsupported programs need this before translating them helps. [Shader coverage](SHADERS.md#projectscarlett-refusals)
+3. Support the remaining refused shader forms, ranked with the [pipeline failure record](PROJECTSCARLETT.md#finding-why-pipelines-fail).
+
+### The Matrix Awakens
 
 1. Finish the five remaining non-ray-tracing pixel shaders. Two light hair strands and three cull distance-field objects. Check their output with the packaged bindings on both GPUs. [Shader survey](SHADERS.md#measured-on-the-matrix-awakens)
 2. Identify the GPU command that faults while the first chase street corner loads, then verify the shooting tutorial with the packaged settings. [Retail result](../evidence/matrix-awakens/packaged-settings-room.json)
