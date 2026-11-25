@@ -6432,7 +6432,8 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         // exactly as for f32 (see `fm` / `fres`).
         let h16 = |o: &Opnd| -> Result<String, String> {
             let mut e = match o {
-                Opnd::ConstF32(_) => f(o)?,
+                // Inline selector 248 has distinct binary16 and binary32 values.
+                Opnd::ConstF32(_) => format!("f16tof32(f32tof16({}))", f(o)?),
                 _ => format!("f16tof32(({}) & 0xffffu)", r(o)?),
             };
             if ins.enc == Enc::Vop3 {
@@ -6938,11 +6939,18 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 }
                 c.aux.imm = 1; // Saturate the full result before packing the destination.
             }
-            // The selected half operands now occupy the low word. Apply the
-            // floating modifiers through the ordinary VOP3 half-float path.
-            let half_alu = half_binary || half_int_result || unary_op.is_some() || matches!(m.as_str(), "v_rcp_f16" | "v_exp_f16");
-            let float_source_modifiers = half_alu || m == "v_cvt_f16_f32";
-            if float_source_modifiers || half_int_src {
+            // Reuse VOP3 floating modifiers after source selection and before destination packing.
+            let half_alu = half_binary || half_int_result || unary_op.is_some() || matches!(m.as_str(), "v_rcp_f16" | "v_exp_f16" | "v_cvt_f32_f16");
+            let float_alu = half_alu || matches!(m.as_str(),
+                "v_add_f32" | "v_sub_f32" | "v_subrev_f32" | "v_mul_f32" | "v_mul_legacy_f32"
+                | "v_min_f32" | "v_max_f32" | "v_fract_f32" | "v_trunc_f32" | "v_ceil_f32"
+                | "v_rndne_f32" | "v_floor_f32");
+            // Integer conversions accept floating output modifiers but keep integer source rules.
+            let int_to_float = matches!(m.as_str(),
+                "v_cvt_f32_i32" | "v_cvt_f32_u32" | "v_cvt_off_f32_i4" | "v_cvt_f32_ubyte0"
+                | "v_cvt_f32_ubyte1" | "v_cvt_f32_ubyte2" | "v_cvt_f32_ubyte3");
+            let float_source_modifiers = float_alu || m == "v_cvt_f16_f32";
+            if float_source_modifiers || int_to_float || half_int_src {
                 c.enc = Enc::Vop3;
                 c.aux.imm = i64::from((sd >> 13) & 1);
                 c.aux.imm2 = i64::from((sd >> 14) & 3);
@@ -7203,7 +7211,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             "v_cvt_f32_ubyte1" => Some(format!("(float)(({a} >> 8) & 0xffu)")),
             "v_cvt_f32_ubyte2" => Some(format!("(float)(({a} >> 16) & 0xffu)")),
             "v_cvt_f32_ubyte3" => Some(format!("(float)(({a} >> 24) & 0xffu)")),
-            "v_cvt_f32_f16" => Some(format!("f16tof32({a})")),
+            "v_cvt_f32_f16" => Some(h16(&s[0])?),
             "v_fract_f32" => {
                 let mode = if self.regs.contains("tb_fp_mode") { "tb_fp_mode" } else { "0u" };
                 Some(format!("tb_fract_f32({}, {mode})", fa()?))
@@ -10079,6 +10087,67 @@ mod tests {
         let hlsl = float64::tests::translate(Stage::Compute,
             &[0xba80_2181, 9, 0x7e08_0200]).unwrap();
         assert!(hlsl.lines().next().unwrap().split_whitespace().any(|reg| reg == "s0"));
+    }
+
+    #[test]
+    fn sdwa_f32_applies_modifiers_before_preserving_unselected_bits() {
+        use super::float64::tests::translate;
+        // gfx1030: v_add_f32_sdwa v4, -|v1|, v2 clamp mul:2 dst_sel:WORD_1
+        // dst_unused:UNUSED_PRESERVE src0_sel:DWORD src1_sel:DWORD
+        let hlsl = translate(Stage::Compute, &[0x0608_04f9, 0x0636_7501]).unwrap();
+        assert!(hlsl.contains("saturate((((-abs(asfloat(v1))) + asfloat(v2)) * 2.0))"), "{hlsl}");
+        assert!(hlsl.contains("(v4) & 0xffffu"), "{hlsl}");
+    }
+
+    #[test]
+    fn sdwa_f32_scales_a_full_word_without_source_modifiers() {
+        use super::float64::tests::translate;
+        // gfx1030: v_mul_f32_sdwa v4, v1, v2 div:2 (all selectors DWORD).
+        let hlsl = translate(Stage::Compute, &[0x1008_04f9, 0x0606_d601]).unwrap();
+        assert!(hlsl.contains("v4 = asuint(((asfloat(v1) * asfloat(v2)) * 0.5))"), "{hlsl}");
+    }
+
+    #[test]
+    fn sdwa_f32_rounding_applies_input_and_output_modifiers() {
+        use super::float64::tests::translate;
+        // gfx1030: v_<op>_f32_sdwa v4, -|v1| mul:2, both selectors DWORD.
+        for (opcode, intrinsic) in [
+            (0x7e08_40f9, "frac"), (0x7e08_42f9, "trunc"), (0x7e08_44f9, "ceil"),
+            (0x7e08_46f9, "round"), (0x7e08_48f9, "floor"),
+        ] {
+            let hlsl = translate(Stage::Compute, &[opcode, 0x0036_5601]).unwrap();
+            let result = format!("asuint((({intrinsic}((-abs(asfloat(v1))))) * 2.0))");
+            assert!(hlsl.contains(&result), "{hlsl}");
+        }
+    }
+
+    #[test]
+    fn sdwa_integer_to_float_has_float_output_and_integer_input_modifiers() {
+        use super::float64::tests::translate;
+        // gfx1030: signed/unsigned dword, signed nibble offset, then unsigned bytes 0..3.
+        // Each writes v4 from v1 with clamp mul:4 and both selectors DWORD.
+        let sdwa = 0x0006_b601;
+        for opcode in [0x7e08_0af9, 0x7e08_0cf9, 0x7e08_1cf9, 0x7e08_22f9,
+                       0x7e08_24f9, 0x7e08_26f9, 0x7e08_28f9] {
+            let hlsl = translate(Stage::Compute, &[opcode, sdwa]).unwrap();
+            assert!(hlsl.lines().any(|line| line.contains("v4 = asuint(saturate(")
+                && line.ends_with(" * 4.0)));")), "{hlsl}");
+            // SRC0_NEG is invalid for an integer input.
+            let error = translate(Stage::Compute, &[opcode, sdwa | (1 << 20)]).unwrap_err();
+            assert!(error.contains("unsupported SDWA neg/abs"), "{error}");
+        }
+    }
+
+    #[test]
+    fn widen_f16_reads_a_half_precision_source_before_applying_modifiers() {
+        use super::float64::tests::translate;
+        // gfx1030: v_cvt_f32_f16_e32 v4, 1/(2*pi) (inline selector 248).
+        let hlsl = translate(Stage::Compute, &[0x7e08_16f8]).unwrap();
+        assert!(hlsl.contains("f16tof32(f32tof16(asfloat(0x3e22f983u)))"), "{hlsl}");
+        // v_cvt_f32_f16_sdwa v4, -|v1| clamp mul:2 dst_sel:DWORD src0_sel:WORD_1
+        let hlsl = translate(Stage::Compute, &[0x7e08_16f9, 0x0035_7601]).unwrap();
+        assert!(hlsl.contains("((v1 >> 16) & 0xffffu)"), "{hlsl}");
+        assert!(hlsl.contains("saturate((((-abs(f16tof32("), "{hlsl}");
     }
 
     fn dpp16_word(src0_reg: u32, ctrl: u32, fi: u32, bc: u32, bank_m: u32, row_m: u32) -> u32 {
