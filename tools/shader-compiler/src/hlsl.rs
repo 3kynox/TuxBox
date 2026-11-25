@@ -5097,6 +5097,13 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 leaders.insert(i + 1);
             }
         }
+        // A guest wave reaches S_BARRIER as a whole: lanes that left a loop early wait in
+        // EXEC for the rest. Here each lane follows its own blocks, so the barrier starts
+        // one that a lane enters only when its wave has caught up.
+        let barriers: Vec<usize> = (entry..n)
+            .filter(|&i| self.is_cs && self.insns[i].enc == Enc::Sopp && self.insns[i].op == 0x0a)
+            .collect();
+        leaders.extend(&barriers);
         let starts: Vec<usize> = leaders.into_iter().filter(|&s| s < n).collect();
         self.loop_depth = 0;
         if entry == 0 {
@@ -5108,7 +5115,16 @@ uint tb_fmac_half(uint a, uint b, uint c) {
         self.loop_depth += 1;
         // Flat `if (tb_sel == K)` tests on a snapshot of the block id (FXC mishandles a
         // `switch` whose selector is assigned inside its cases).
-        self.line("uint tb_sel = tb_pc; tb_pc = 0xffffffffu;");
+        if barriers.is_empty() {
+            self.line("uint tb_sel = tb_pc; tb_pc = 0xffffffffu;");
+        } else {
+            let at = barriers.iter().map(|i| format!("tb_pc == {i}u")).collect::<Vec<_>>().join(" || ");
+            self.line(&format!("bool tb_wait = {at};"));
+            // When lanes stand at different barriers the earliest goes first.
+            self.line("bool tb_busy = WaveActiveAnyTrue(!tb_wait); uint tb_low = WaveActiveMin(tb_pc);");
+            self.line("tb_wait = tb_wait && (tb_busy || tb_pc != tb_low);");
+            self.line("uint tb_sel = tb_wait ? 0xfffffffeu : tb_pc; if (!tb_wait) tb_pc = 0xffffffffu;");
+        }
         let insns = self.insns.clone();
         for (b, &start) in starts.iter().enumerate() {
             let end = starts.get(b + 1).copied().unwrap_or(n);
@@ -11140,6 +11156,35 @@ mod reduction_execz_regression {
             let error = translate(&shader).err().expect("bypassed wave vote refused");
             assert!(error.contains("divergent control flow"), "{error}");
         }
+    }
+
+    #[test]
+    fn dispatched_lanes_wait_for_their_wave_at_a_barrier() {
+        let op = |offset, op, mnemonic: &str, imm| Insn {
+            offset, dwords: 1, enc: Enc::Sopp, op, raw: vec![0xbf80_0000 | op << 16], mnemonic: mnemonic.into(),
+            dst: Vec::new(), src: Vec::new(), aux: tuxbox_dxbc::rdna2::InsnAux { imm, ..Default::default() },
+        };
+        let emit = |barrier: bool| {
+            let shader = guarded_shader(32, &[]);
+            // A lane leaves the loop at its first EXECZ and may reach the barrier before the others.
+            let mut emitter = Emitter::new(&shader, vec![
+                op(0, 8, "s_cbranch_execz", 1),
+                op(4, 2, "s_branch", -2),
+                if barrier { op(8, 0x0a, "s_barrier", 0) } else { op(8, 0, "s_nop", 0) },
+                op(12, 1, "s_endpgm", 0),
+            ]);
+            emitter.emit_body_dispatch(false, 0).unwrap();
+            emitter.body
+        };
+        let body = emit(true);
+        assert!(body.contains("bool tb_wait = tb_pc == 2u;"), "{body}");
+        let block = body.find("if (tb_sel == 2u) {").expect("the barrier starts a block");
+        let wait = body.find("WaveActiveAnyTrue(!tb_wait)").expect("waits for its wave");
+        let sync = body.find("GroupMemoryBarrierWithGroupSync();").unwrap();
+        assert!(wait < block && block < sync, "{body}");
+        assert!(body.contains("uint tb_sel = tb_wait ? 0xfffffffeu : tb_pc;"), "{body}");
+        let body = emit(false);
+        assert!(!body.contains("tb_wait") && body.contains("uint tb_sel = tb_pc;"), "{body}");
     }
 
     #[test]
