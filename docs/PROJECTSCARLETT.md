@@ -155,6 +155,31 @@ matched across configurations. See `--help` for reproduction arguments and
 
 
 
+### Experimental persistent DXC
+
+On Linux, build the helper against the same Microsoft DXC release used by
+TuxBox. Set `DXC_ROOT` to the extracted release directory.
+
+```sh
+mkdir -p build
+c++ -std=c++17 -O2 -isystem "$DXC_ROOT/include" tools/dxc_worker.cpp \
+    -L "$DXC_ROOT/lib" -ldxcompiler -o build/dxc-worker
+export TUXBOX_PERSISTENT_DXC="$PWD/build/dxc-worker"
+```
+
+The live worker starts helpers on demand for optimized `cs_6_0` requests.
+Each helper handles one request at a time and stays open for the session.
+The worker retries once if a helper exits during compilation and falls
+back to the CLI if the helper or validation fails. Each newly compiled
+result still passes DXV before publication. The CLI handles other profiles
+and slow requests. The experimental cache identity includes the helper
+binary. Unset `TUXBOX_PERSISTENT_DXC` to use the default CLI.
+
+For a synthetic comparison, run the worker benchmark described above
+with `--jobs 4` and add `--dxc-helper build/dxc-worker` for the experimental
+variant. Give each run a fresh output path. Compare per-request SHA-256
+values and latency.
+
 ## What to expect
 
 The game opens its Americas window, loads its archives and presents 3840×2160 frames. The recorded run reached the player selection prompt, with Account Picker, Screen Narration and TuxBox options. It stopped at a title breakpoint 97 seconds after launch. Intro video, input after player selection and gameplay aren't verified yet. [Current priorities](PROGRESS.md#current-priorities)
