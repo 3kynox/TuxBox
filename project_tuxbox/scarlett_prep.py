@@ -1,7 +1,8 @@
 """Compile ProjectScarlett's recorded shader requests before launching the title."""
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import os
+from itertools import islice
 import json
 from pathlib import Path
 import re
@@ -69,6 +70,23 @@ def seed_from_pack(executable, archive, env):
                     f"in {monotonic() - started:.1f}s.")
 
 
+def bounded_results(executor, compile_one, sources, jobs):
+    """Keep at most twice the worker count in flight, including queued jobs."""
+    if jobs < 1:
+        raise ValueError("at least one preparation worker required")
+    remaining = iter(sources)
+    pending = {executor.submit(compile_one, source) for source in islice(remaining, jobs * 2)}
+    while pending:
+        done, pending = wait(pending, return_when=FIRST_COMPLETED)
+        # Drop the completed futures as they are consumed; never enqueue an
+        # entire title's request archive. Refill only as capacity is freed.
+        while done:
+            result = done.pop().result()
+            for source in islice(remaining, 1):
+                pending.add(executor.submit(compile_one, source))
+            yield result
+
+
 def prepare_scarlett(executable, host):
     if (host.env.get("TUXBOX_RUNTIME_SHADERS") == "0"
             or not executable.with_name("d3d12_xs.dll").is_file()):
@@ -107,11 +125,11 @@ def prepare_scarlett(executable, host):
             except (OSError, ValueError, subprocess.SubprocessError) as exc:
                 return "failed", f"{source.name}: {exc}", failure_bucket(exc), source.suffix, None
 
-        workers = ThreadPoolExecutor(max_workers=prep_jobs(host.env))
+        jobs = prep_jobs(host.env)
+        workers = ThreadPoolExecutor(max_workers=jobs)
         try:
-            pending = [workers.submit(compile_one, source) for source in sources]
-            for completed, result in enumerate(as_completed(pending), 1):
-                category, error, bucket, suffix, reason = result.result()
+            for completed, result in enumerate(bounded_results(workers, compile_one, sources, jobs), 1):
+                category, error, bucket, suffix, reason = result
                 totals[category] += 1
                 request_counts[suffix] += 1
                 if category == "unsupported":
