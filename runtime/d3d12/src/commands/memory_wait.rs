@@ -18,8 +18,13 @@ impl Packet {
         unsafe {
             match self {
                 Self::Marker(write) => {
-                    list.cast::<ID3D12GraphicsCommandList2>()?
-                        .WriteBufferImmediate(1, write, None);
+                    // Marker-out lands after the preceding work, as the
+                    // bottom-of-pipe write it stands for does.
+                    list.cast::<ID3D12GraphicsCommandList2>()?.WriteBufferImmediate(
+                        1,
+                        write,
+                        Some(&D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT),
+                    );
                 }
                 Self::Timestamp(heap, index, dest, offset) => {
                     list.EndQuery(heap, D3D12_QUERY_TYPE_TIMESTAMP, *index);
@@ -105,17 +110,163 @@ impl Word {
         })
     }
 
-    fn reached(&self, value: u64) -> bool {
+    fn value(&self) -> u64 {
         // X64 aligned 64-bit load. The COM resource and its CPU mapping stay alive
         // until all queued waits release their segment.
-        unsafe { AtomicU64::from_ptr(self.mapped as *mut u64).load(Ordering::Acquire) >= value }
+        unsafe { AtomicU64::from_ptr(self.mapped as *mut u64).load(Ordering::Acquire) }
+    }
+
+    fn reached(&self, value: u64) -> bool {
+        self.value() >= value
     }
 }
+
+/// How long the queue is held for a guest memory word before it is released.
+const STALL: Duration = Duration::from_secs(5);
 
 pub(super) struct Segment {
     prefix: Option<(ID3D12CommandList, ID3D12CommandAllocator)>,
     word: Word,
+    address: u64,
     target: u64,
+}
+
+/// One fence label operation a list recorded.
+#[derive(Clone, Copy)]
+pub(super) struct Label {
+    /// `None` for a write. For a wait, whether it holds the queue (`false` when
+    /// it came after rendering commands and became a barrier).
+    wait: Option<bool>,
+    address: u64,
+    value: u64,
+}
+
+impl Label {
+    pub(super) fn write(address: u64, value: u64) -> Self {
+        Self { wait: None, address, value }
+    }
+}
+
+/// What happened to a closed list.
+#[derive(Clone, Copy)]
+pub(super) enum Fate {
+    /// Submitted to a queue of this command list type.
+    Submitted(i32),
+    /// Rejected at Close with this status, so it never runs.
+    Dropped(i32),
+}
+
+struct Seen {
+    order: u64,
+    list: usize,
+    fate: Fate,
+    labels: Vec<Label>,
+}
+
+/// The most recent lists that wrote or waited on a label, oldest first.
+static HISTORY: std::sync::Mutex<std::collections::VecDeque<Seen>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
+
+pub(super) fn note_list(list: usize, fate: Fate, labels: &[Label]) {
+    if labels.is_empty() {
+        return;
+    }
+    static ORDER: AtomicU64 = AtomicU64::new(0);
+    let mut history = HISTORY.lock().unwrap_or_else(|e| e.into_inner());
+    if history.len() >= 4096 {
+        history.pop_front();
+    }
+    history.push_back(Seen {
+        order: ORDER.fetch_add(1, Ordering::Relaxed),
+        list,
+        fate,
+        labels: labels.to_vec(),
+    });
+}
+
+fn fate(seen: &Seen) -> String {
+    match seen.fate {
+        Fate::Submitted(kind) => format!("submitted to a type {kind} queue"),
+        Fate::Dropped(status) => format!("rejected at Close ({status:#010x})"),
+    }
+}
+
+/// Say which lists should have satisfied a stalled wait, and which waits stand
+/// before it: the one waiting and the one writing.
+fn explain(address: u64, target: u64) {
+    let history = HISTORY.lock().unwrap_or_else(|e| e.into_inner());
+    let mut found = 0;
+    for seen in history.iter() {
+        for (at, label) in seen.labels.iter().enumerate() {
+            let matches = label.address == address
+                && match label.wait {
+                    None => label.value >= target,
+                    Some(_) => label.value == target,
+                };
+            if !matches || found >= 6 {
+                continue;
+            }
+            found += 1;
+            let earlier: Vec<_> = seen.labels[..at]
+                .iter()
+                .filter(|l| l.wait == Some(true))
+                .map(|l| format!("{:#x}>={:#x}", l.address, l.value))
+                .collect();
+            crate::diagnostics::log(&format!(
+                "stalled label {address:#x} target {target:#x}: {} by list {:#x} (order {}), {}, after waits [{}]",
+                if label.wait.is_some() { "waited" } else { "written" },
+                seen.list, seen.order, fate(seen), earlier.join(" "),
+            ));
+        }
+    }
+    if !history.iter().any(|seen| seen.labels.iter().any(|l| {
+        l.wait.is_none() && l.address == address && l.value >= target
+    })) {
+        crate::diagnostics::log(&format!(
+            "stalled label {address:#x} target {target:#x}: no submitted or rejected list writes it"
+        ));
+    }
+}
+
+/// Guest addresses the title has waited on, so writes to them can be logged.
+static WAITED: std::sync::Mutex<Vec<(u64, u64)>> = std::sync::Mutex::new(Vec::new());
+
+/// Log the first waits on each address, then each power of two.
+fn trace_wait(address: u64, target: u64, value: u64, list_type: i32, mid_list: bool) {
+    let mut waited = WAITED.lock().unwrap_or_else(|e| e.into_inner());
+    let count = if let Some((_, count)) = waited.iter_mut().find(|(known, _)| *known == address) {
+        *count += 1;
+        *count
+    } else if waited.len() < 256 {
+        waited.push((address, 1));
+        1
+    } else {
+        return;
+    };
+    drop(waited);
+    if count <= 4 || count.is_power_of_two() {
+        crate::diagnostics::log(&format!(
+            "memory wait trace #{count} address={address:#x} target={target:#x} value={value:#x} list_type={list_type} mid_list={mid_list}"
+        ));
+    }
+}
+
+/// Report a guest command that writes a waited-on address.
+pub(super) fn trace_write(source: &str, address: u64, bytes: u64, value: u64) {
+    let hit = WAITED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|(waited, _)| address < waited.saturating_add(8) && *waited < address.saturating_add(bytes));
+    if hit {
+        static COUNT: AtomicU64 = AtomicU64::new(0);
+        let count = COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        if count <= 32 || count.is_power_of_two() {
+            crate::diagnostics::log(&format!(
+                "memory wait write #{count} {source} address={address:#x} bytes={bytes:#x} value={value:#x}"
+            ));
+        }
+    }
 }
 
 pub(super) unsafe extern "system" fn wait_value64(
@@ -137,11 +288,34 @@ pub(super) unsafe extern "system" fn wait_value64(
         if target == 0 {
             return Ok(());
         }
+        let list_type = unsafe { list.native.GetType() }.0;
+        trace_wait(address, target, word.value(), list_type, state.prefix.in_body);
+        let split = !state.prefix.in_body;
+        state.labels.push(Label { wait: Some(split), address, value: target });
         if state.prefix.in_body {
-            crate::diagnostics::recording_error(format_args!(
-                "GPU memory wait after rendering commands"
+            // Honoring this would split the list and replay its bound state.
+            // Order the work already in this list with a global UAV barrier and
+            // continue: a value produced by another queue or the CPU is not
+            // waited for, so later commands can read data before it is ready.
+            // Failing the list would poison the queue and fail Present.
+            if unsafe { list.native.GetType() } != D3D12_COMMAND_LIST_TYPE_COPY {
+                let barrier = D3D12_RESOURCE_BARRIER {
+                    Type: D3D12_RESOURCE_BARRIER_TYPE_UAV,
+                    Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+                    Anonymous: D3D12_RESOURCE_BARRIER_0 {
+                        UAV: std::mem::ManuallyDrop::new(D3D12_RESOURCE_UAV_BARRIER {
+                            pResource: std::mem::ManuallyDrop::new(None),
+                        }),
+                    },
+                };
+                // SAFETY: the list is open, and a null resource names every UAV.
+                unsafe { list.native.ResourceBarrier(&[barrier]) };
+            }
+            static FIRST: std::sync::Once = std::sync::Once::new();
+            crate::diagnostics::log_once(&FIRST, || format!(
+                "GPU memory wait {address:#x} >= {target:#x} after rendering commands replaced by a barrier"
             ));
-            return Err(E_NOTIMPL.into());
+            return Ok(());
         }
         state
             .prefix
@@ -171,6 +345,7 @@ pub(super) unsafe extern "system" fn wait_value64(
         state.prefix.segments.push(Arc::new(Segment {
             prefix,
             word,
+            address,
             target,
         }));
         Ok(())
@@ -201,9 +376,17 @@ impl Worker {
                 for job in jobs {
                     let result = (|| -> Result<()> {
                         unsafe { job.fence.SetEventOnCompletion(1, HANDLE::default())? };
+                        let started = std::time::Instant::now();
                         while !job.segment.word.reached(job.segment.target) {
                             unsafe {
                                 job.device.GetDeviceRemovedReason()?;
+                            }
+                            if started.elapsed() >= STALL {
+                                // Nothing wrote the value, for example because
+                                // the work that should have was dropped. A queue
+                                // held forever trips the title's GPU watchdog.
+                                report_stall(job.segment.address, job.segment.target, job.segment.word.value());
+                                break;
                             }
                             std::thread::sleep(Duration::from_millis(1));
                         }
@@ -231,6 +414,21 @@ impl Worker {
             })
             .map_err(|_| E_OUTOFMEMORY)?;
         Ok(Self(sender))
+    }
+}
+
+/// Report a released wait: the first eight, then each power of two.
+fn report_stall(address: u64, target: u64, value: u64) {
+    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let count = COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    if count <= 8 || count.is_power_of_two() {
+        crate::diagnostics::log(&format!(
+            "GPU memory wait released after {}s without reaching its target (#{count}): address={address:#x} target={target:#x} value={value:#x}",
+            STALL.as_secs()
+        ));
+    }
+    if count <= 8 {
+        explain(address, target);
     }
 }
 

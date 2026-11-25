@@ -1,8 +1,9 @@
 //! Ordinary VOP3 integer forms with a 32-bit result: the signed no-carry
 //! add/subtract, the 16x16+32 multiply-add and the sums of absolute
-//! differences (SAD) over bytes, halves and words. Like the newer 16-bit forms
-//! they are initially limited to VGPR sources without modifiers; in
-//! particular clamp (signed saturation) is refused.
+//! differences (SAD) over bytes, halves and words. Sources are VGPRs without
+//! modifiers. Add/subtract also accept integer immediates, and byte SAD
+//! accepts inline zero as its accumulator.
+//! Clamp (signed saturation) is refused.
 use super::{int16::half, r, Enc, Insn, Opnd};
 
 pub(super) fn handles(ins: &Insn) -> bool {
@@ -16,9 +17,14 @@ pub(super) fn expression(ins: &Insn) -> Result<Option<String>, String> {
         return Ok(None);
     }
     let mad = ins.mnemonic.starts_with("v_mad_");
-    let arity = if mad || ins.mnemonic.starts_with("v_sad_") { 3 } else { 2 };
+    let add_sub = matches!(ins.mnemonic.as_str(), "v_add_nc_i32" | "v_sub_nc_i32");
+    let arity = if add_sub { 2 } else { 3 };
     if !ins.is_complete() || ins.raw.len() < 2 || ins.src.len() < arity
-        || !ins.src[..arity].iter().all(|s| matches!(s, Opnd::Vgpr(_))) {
+        || !ins.src[..arity].iter().enumerate().all(|(index, s)| {
+            matches!(s, Opnd::Vgpr(_))
+                || (add_sub && matches!(s, Opnd::ConstInt(_) | Opnd::Literal(_)))
+                || (index == 2 && ins.mnemonic == "v_sad_u8" && matches!(s, Opnd::ConstInt(0)))
+        }) {
         return Err("unsupported ordinary 32-bit integer source or encoding".into());
     }
     let (w0, w1) = (ins.raw[0], ins.raw[1]);
@@ -96,6 +102,38 @@ mod tests {
         let expr = expression(&native(0xd773_1807, 0x041a_0b04)).unwrap().unwrap();
         assert_eq!(expr, "((v4 >> 16) * (v5 >> 16) + v6)");
         assert!(expression(&native(0xd77f_0807, 0x0202_0b04)).is_err());
+    }
+
+    #[test]
+    fn signed_add_and_subtract_accept_immediate_operands() {
+        use crate::hlsl::float64::tests::translate;
+        use crate::Stage;
+
+        // LLVM gfx1030: v_add_nc_i32 v7, v4, -1
+        //              v_sub_nc_i32 v8, 0x80000000, v7
+        let hlsl = translate(
+            Stage::Compute,
+            &[0xd77f_0007, 0x0001_8304, 0xd776_0008, 0x0002_0eff, 0x8000_0000],
+        )
+        .unwrap();
+        assert!(hlsl.contains("v4 + 0xffffffffu"), "{hlsl}");
+        assert!(hlsl.contains("0x80000000u - v7"), "{hlsl}");
+    }
+
+    #[test]
+    fn byte_sad_accepts_inline_zero_only_as_the_accumulator() {
+        // LLVM gfx1030: v_sad_u8 v4, v1, v2, 0
+        let expr = expression(&native(0xd55a_0004, 0x0202_0501)).unwrap().unwrap();
+        assert_eq!(expr.matches("max(").count(), 4);
+        assert!(expr.ends_with("+ 0x0u)"), "{expr}");
+
+        for (opcode, sources) in [
+            (0xd55a_0004, 0x0206_0501), // v_sad_u8 v4, v1, v2, 1
+            (0xd55a_0004, 0x040e_0480), // v_sad_u8 v4, 0, v2, v3
+            (0xd55b_0004, 0x0202_0501), // v_sad_hi_u8 v4, v1, v2, 0
+        ] {
+            assert!(expression(&native(opcode, sources)).is_err());
+        }
     }
 
     #[test]

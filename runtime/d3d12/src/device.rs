@@ -166,6 +166,7 @@ unsafe extern "system" fn reset_allocator(this: &Allocator) -> HRESULT {
     let status = unsafe { (host.vtable().Reset)(host.as_raw()) };
     if status.is_ok() {
         sources.clear();
+        crate::commands::list_memory::release(std::sync::Arc::as_ptr(&this.state) as usize);
     }
     status
 }
@@ -906,6 +907,19 @@ unsafe extern "system" fn release_device(this: *mut Device) -> u32 {
             callback(this.cast(), core::ptr::with_exposed_provenance_mut(context));
         }
     }) }
+}
+
+/// Add this thread's pipeline to the per-run failure record if it failed or got
+/// a stand-in.
+///
+/// # Safety
+/// The guest shaders given to `failures::stage` must still be readable.
+pub(super) unsafe fn record_pipeline(path: &str, status: HRESULT) {
+    // SAFETY: forwarded from the caller.
+    let started = unsafe { crate::failures::finish(path, status.0, shader_cache::source_digest) };
+    if let Some(file) = started {
+        crate::diagnostics::log(&format!("pipeline failures are recorded in {}", file.display()));
+    }
 }
 
 static DEVICE: Slots<160> = {

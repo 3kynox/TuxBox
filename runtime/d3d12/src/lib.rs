@@ -2,10 +2,15 @@
 
 mod big_stack;
 mod clwb;
+mod clzero;
+mod insertq;
+mod mwaitx;
 mod commands;
+mod compile_gate;
 mod device;
 mod diagnostics;
 mod exports;
+mod failures;
 mod guids;
 mod present;
 mod private_driver;

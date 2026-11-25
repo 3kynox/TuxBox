@@ -22,7 +22,8 @@ mod depth;
 mod enhanced;
 mod descriptors;
 mod graphics;
-mod linear_upload;
+mod copy_memory;
+pub(crate) mod list_memory;
 mod media;
 mod memory_wait;
 pub(crate) mod page_mapping;
@@ -42,6 +43,8 @@ enum ListState {
 
 struct Recording {
     prefix: memory_wait::Prefix,
+    /// Fence label writes and waits, for explaining a stalled wait.
+    labels: Vec<memory_wait::Label>,
     timestamp_page: Option<(ID3D12QueryHeap, u32)>,
     resources: device::MediaResources,
     scene_commands: Vec<raytracing::SceneCommand>,
@@ -55,8 +58,6 @@ struct Recording {
     media: Option<media::Recording>,
     placed_reads: Vec<Arc<Texture>>,
     placed_writes: Vec<Arc<Texture>>,
-    /// CPU bytes copied into upload heaps at ExecuteCommandLists.
-    uploads: Vec<linear_upload::Pending>,
     bound_placed_targets: Vec<Arc<Texture>>,
     resource_heap: Option<descriptors::ResourceHeap>,
     descriptor_arena: Option<Arc<device::descriptor_paging::Arena>>,
@@ -65,6 +66,8 @@ struct Recording {
     sampled_heaps: Vec<Range<usize>>,
     phase: ListState,
     error: HRESULT,
+    /// `RecordingGuard` has logged the current error.
+    error_reported: bool,
 }
 
 impl Recording {
@@ -72,13 +75,6 @@ impl Recording {
         if !accesses.iter().any(|known| Arc::ptr_eq(known, texture)) {
             accesses.try_reserve(1).map_err(|_| E_OUTOFMEMORY)?;
             accesses.push(Arc::clone(texture));
-        }
-        Ok(())
-    }
-
-    fn snapshot_uploads(&self) -> Result<(), HRESULT> {
-        for upload in &self.uploads {
-            upload.snapshot().map_err(|error| error.code())?;
         }
         Ok(())
     }
@@ -99,6 +95,20 @@ impl Recording {
         Ok(())
     }
 
+    /// Leave out one command TuxBox cannot express. Failing the list instead
+    /// would also drop its other work, including the fence writes other queues
+    /// wait for, and a stalled queue trips the title's GPU watchdog.
+    fn skip(what: &str, error: HRESULT) {
+        static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let count = COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        if count <= 16 || count.is_power_of_two() {
+            crate::diagnostics::log(&format!(
+                "skipped {what} ({:#010x}, #{count}, guest caller {:#x})",
+                error.0, crate::survey::title_rva().unwrap_or(0),
+            ));
+        }
+    }
+
     fn compute_dispatch(&mut self, list: &List, dispatch: impl FnOnce()) {
         let null_usage = self.bindings.null_usage.clone();
         let dispatch = move || {
@@ -112,20 +122,16 @@ impl Recording {
                 table, list, self.descriptor_arena.as_deref(), self.resource_heap.as_ref(),
                 &mut self.sampled_heaps, &self.resources, dispatch,
             ) {
-                self.error = error.code();
+                Self::skip("compute dispatch with a reflected table", error.code());
             }
             return;
         }
         if self.descriptor_arena.is_some() && !self.bindings.supports_paged_draw::<true>() {
-            static FIRST: std::sync::Once = std::sync::Once::new();
-            crate::diagnostics::log_once(&FIRST, || {
-                "compute dispatch dropped: descriptor heap is bound and this pipeline has no paged layout".to_string()
-            });
-            self.error = E_NOTIMPL;
+            Self::skip("compute dispatch: pipeline has no paged descriptor layout", E_NOTIMPL);
             return;
         }
         if let Err(error) = self.bindings.refresh_inline_tables::<true>(self.descriptor_arena.as_deref()) {
-            self.error = error.code();
+            Self::skip("compute dispatch: descriptor table refresh", error.code());
             return;
         }
         self.sample_tables::<true>();
@@ -158,10 +164,7 @@ impl Recording {
                 Ok(())
             });
         if let Err(error) = result {
-            crate::diagnostics::recording_error(format_args!(
-                "inline ray scene binding: {:?}", error.code()
-            ));
-            self.error = error.code();
+            Self::skip("compute dispatch: inline ray scene binding", error.code());
         }
     }
 
@@ -199,7 +202,10 @@ impl Recording {
             }
         };
         if let Some(table) = self.bindings.reflected_table::<false>() {
-            if self.stencil_slot.is_some() { self.error = E_NOTIMPL; return; }
+            if self.stencil_slot.is_some() {
+                Self::skip("draw: stencil export with a reflected table", E_NOTIMPL);
+                return;
+            }
             if let Some(binding) = table.index_map {
                 // These PSOs have one descriptor table followed by one root
                 // constants parameter. The native ISA selects its scalar
@@ -208,7 +214,10 @@ impl Recording {
                     .and_then(|word| self.resource_heap.as_ref()?.scalar_descriptor(
                         word & binding.scalar_mask, self.descriptor_arena.as_deref(),
                     ));
-                let Some(descriptor) = descriptor else { self.error = E_INVALIDARG; return };
+                let Some(descriptor) = descriptor else {
+                    Self::skip("draw: no scalar descriptor for the indexed load", E_INVALIDARG);
+                    return;
+                };
                 if self.scalar_descriptors.try_reserve(1).is_err() {
                     self.error = E_OUTOFMEMORY;
                     return;
@@ -227,28 +236,16 @@ impl Recording {
             if let Err(error) = self.bindings.with_reflected_table::<false>(
                 table, list, self.descriptor_arena.as_deref(), self.resource_heap.as_ref(), &mut self.sampled_heaps, &self.resources, draw,
             ) {
-                self.error = error.code();
-                if crate::diagnostics::display::trace_views() {
-                    crate::diagnostics::log_once(&std::sync::Once::new(), || format!(
-                        "reflected raster binding failed {:#010x} guest RVA {:#x}", self.error.0,
-                        crate::survey::title_rva().unwrap_or(0),
-                    ));
-                }
+                Self::skip("draw with a reflected table", error.code());
             } else { trace(self); }
             return;
         }
         if self.descriptor_arena.is_some() && !self.bindings.supports_paged_draw::<false>() {
-            self.error = E_NOTIMPL;
+            Self::skip("draw: pipeline has no paged descriptor layout", E_NOTIMPL);
             return;
         }
         if let Err(error) = self.bindings.refresh_inline_tables::<false>(self.descriptor_arena.as_deref()) {
-            self.error = error.code();
-            if crate::diagnostics::display::trace_views() {
-                crate::diagnostics::log_once(&std::sync::Once::new(), || format!(
-                    "original raster binding failed {:#010x} guest RVA {:#x}", self.error.0,
-                    crate::survey::title_rva().unwrap_or(0),
-                ));
-            }
+            Self::skip("draw: descriptor table refresh", error.code());
             return;
         }
         self.sample_tables::<false>();
@@ -261,7 +258,7 @@ impl Recording {
                 .ok_or_else(|| windows::core::Error::from(E_NOTIMPL))
                 .and_then(|t| t.draw(&list.native, slot, draw));
             if let Err(e) = status {
-                self.error = e.code();
+                Self::skip("draw: stencil export", e.code());
             } else { trace(self); }
         } else {
             draw();
@@ -339,11 +336,51 @@ const _: () =
     assert!(mem::offset_of!(List, state) + mem::offset_of!(ListData, write_cursor) == 0x18);
 const _: () = assert!(mem::offset_of!(List, state) + mem::offset_of!(ListData, packet_end) == 0x30);
 
-fn recording(list: &List) -> MutexGuard<'_, Recording> {
-    list.state
-        .recording
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+#[track_caller]
+fn recording(list: &List) -> RecordingGuard<'_> {
+    RecordingGuard(
+        list.state
+            .recording
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()),
+        std::panic::Location::caller(),
+    )
+}
+
+/// The locked recording state. A command that puts the list into its error
+/// state is reported as it returns, while its title caller is still known.
+struct RecordingGuard<'a>(MutexGuard<'a, Recording>, &'static std::panic::Location<'static>);
+
+impl std::ops::Deref for RecordingGuard<'_> {
+    type Target = Recording;
+    fn deref(&self) -> &Recording {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for RecordingGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Recording {
+        &mut self.0
+    }
+}
+
+impl Drop for RecordingGuard<'_> {
+    fn drop(&mut self) {
+        if self.0.error.is_ok() {
+            self.0.error_reported = false;
+        } else if !self.0.error_reported {
+            self.0.error_reported = true;
+            static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let count = COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+            if count <= 32 || count.is_power_of_two() {
+                crate::diagnostics::log(&format!(
+                    "command list failed {:#010x} (#{count}) in the command at {}:{}, guest caller {:#x}",
+                    self.0.error.0, self.1.file(), self.1.line(),
+                    crate::survey::title_rva().unwrap_or(0),
+                ));
+            }
+        }
+    }
 }
 
 // FD3D12CommandListFence::Signal reads the type at queue+0x10 before
@@ -424,10 +461,10 @@ unsafe extern "system" fn reset(
         )
     };
     if hr.is_ok() {
-        state.uploads.clear();
         state.phase = ListState::Open;
         state.resources = allocator.state.clone();
         state.timestamp_page = None;
+        state.labels.clear();
         state.prefix = memory_wait::Prefix::default();
         state.scene_commands.clear();
         state.bindings = compute_bindings::Bindings::new(initial);
@@ -467,11 +504,22 @@ unsafe extern "system" fn close(list: &List) -> HRESULT {
         }
     }
     state.phase = ListState::Closed;
-    if state.error.is_err() && crate::diagnostics::display::trace_views() {
-        crate::diagnostics::log_once(&std::sync::Once::new(), || format!(
-            "graphics command list Close rejected {:#010x} (list {list:p}, guest caller {:#x})",
-            state.error.0, crate::survey::title_rva().unwrap_or(0),
-        ));
+    if state.error.is_err() {
+        memory_wait::note_list(
+            ptr::from_ref(list).addr(),
+            memory_wait::Fate::Dropped(state.error.0),
+            &state.labels,
+        );
+        // A rejected list drops all its work, including writes other queues
+        // wait for, so always say so.
+        static REJECTED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let count = REJECTED.fetch_add(1, Ordering::Relaxed) + 1;
+        if count <= 16 || count.is_power_of_two() {
+            crate::diagnostics::log(&format!(
+                "graphics command list Close rejected {:#010x} (#{count}, list {list:p}, guest caller {:#x})",
+                state.error.0, crate::survey::title_rva().unwrap_or(0),
+            ));
+        }
     }
     state.error
 }
@@ -1120,21 +1168,84 @@ unsafe extern "system" fn execute_indirect(
     }
 }
 
-// Record the title's four-byte progress marker at the requested GPU address.
-unsafe extern "system" fn write_marker(list: &List, address: u64, value: u32, flags: u32, reserved: u32) {
+// Write32BitValueBottomOfPipeX: store a value once earlier GPU work finishes.
+// The flush argument selects console caches; the desktop driver manages its own.
+unsafe extern "system" fn write_marker(list: &List, address: u64, value: u32, _flush: u32, flags: u32) {
     let mut state = recording(list);
-    if !state.ensure_open(&list.native) { return; }
-    if address == 0 || !address.is_multiple_of(4) || flags != 0 || reserved != 0 {
-        state.error = E_INVALIDARG;
+    if !state.ensure_open(&list.native) {
+        // Keep what a failed list would have written, to explain a stall.
+        state.labels.push(memory_wait::Label::write(address, u64::from(value)));
         return;
     }
-    let result = (|| -> windows::core::Result<()> {
-        let (resource, dest) = unsafe { device::command_buffer_address(parent(&list.parent), address, 4)? };
-        if let Some(buffer) = &resource { raytracing::retain(&state, &[buffer])?; }
-        let write = D3D12_WRITEBUFFERIMMEDIATE_PARAMETER { Dest: dest, Value: value };
-        state.prefix.push(&list.native, memory_wait::Packet::Marker(write))
-    })();
-    if let Err(error) = result { state.error = error.code(); }
+    let result = if flags != 0 || address == 0 || !address.is_multiple_of(4) {
+        Err(E_INVALIDARG.into())
+    } else {
+        write_dword(list, &mut state, address, value)
+            .map(|()| {
+                state.labels.push(memory_wait::Label::write(address, u64::from(value)));
+                memory_wait::trace_write("Write32BitValueBottomOfPipeX", address, 4, u64::from(value));
+            })
+    };
+    if let Err(error) = result {
+        crate::diagnostics::recording_error(format_args!(
+            "Write32BitValueBottomOfPipeX address={address:#x} value={value:#x} flags={flags:#x}"
+        ));
+        state.error = error.code();
+    }
+}
+
+/// `D3D12XBOX_WRITE_VALUE_BOP_FLAG_GPU_TIMESTAMP`.
+const BOP_GPU_TIMESTAMP: u32 = 1;
+
+// Write64BitValueBottomOfPipeX: a GPU timestamp, or a value such as the fence
+// labels other queues wait on with Wait64BitValueX.
+unsafe extern "system" fn write_value64(list: &List, address: u64, value: u64, flush: u32, flags: u32) {
+    let mut state = recording(list);
+    if !state.ensure_open(&list.native) {
+        // Keep what a failed list would have written, to explain a stall.
+        state.labels.push(memory_wait::Label::write(address, value));
+        return;
+    }
+    let result = if address == 0 || !address.is_multiple_of(8) {
+        Err(E_INVALIDARG.into())
+    } else if flags == BOP_GPU_TIMESTAMP {
+        queries::timestamp(list, &mut state, address)
+    } else if flags != 0 {
+        Err(E_NOTIMPL.into())
+    } else {
+        // Desktop immediate writes are 32 bits wide. Store the high half first,
+        // so a counter below 2^32 changes in one step.
+        write_dword(list, &mut state, address + 4, (value >> 32) as u32)
+            .and_then(|()| write_dword(list, &mut state, address, value as u32))
+            .map(|()| {
+                state.labels.push(memory_wait::Label::write(address, value));
+                memory_wait::trace_write("Write64BitValueBottomOfPipeX", address, 8, value);
+            })
+    };
+    if let Err(error) = result {
+        crate::diagnostics::recording_error(format_args!(
+            "Write64BitValueBottomOfPipeX address={address:#x} value={value:#x} flush={flush:#x} flags={flags:#x}"
+        ));
+        state.error = error.code();
+    }
+}
+
+fn write_dword(list: &List, state: &mut Recording, address: u64, value: u32) -> windows::core::Result<()> {
+    let (resource, dest) = unsafe { device::command_buffer_address(parent(&list.parent), address, 4)? };
+    if let Some(buffer) = &resource { raytracing::retain(state, &[buffer])?; }
+    let write = D3D12_WRITEBUFFERIMMEDIATE_PARAMETER { Dest: dest, Value: value };
+    state.prefix.push(&list.native, memory_wait::Packet::Marker(write))
+}
+
+// XboxBvhBuilder emits this when its inline packet space is exhausted, with
+// the same words it otherwise writes as a 0x4003cc00 packet: group counts X,
+// Y, Z and a flags word (0x20 or 0x8020 in the rehydrate path). The flags have
+// no desktop equivalent, so the dispatch is recorded as an ordinary one.
+unsafe extern "system" fn dispatch_flagged(list: &List, x: u32, y: u32, z: u32, flags: u32) {
+    static FIRST: std::sync::Once = std::sync::Once::new();
+    crate::diagnostics::log_once(&FIRST, || format!(
+        "slot 80 dispatch groups=({x},{y},{z}) flags={flags:#x}"));
+    unsafe { compute::dispatch(list, x, y, z) }
 }
 
 static LIST_SLOTS: Slots<149> = {
@@ -1192,17 +1303,17 @@ static LIST_SLOTS: Slots<149> = {
     slots[57] = crate::slot!(standard::begin_event);
     slots[58] = crate::slot!(standard::end_event);
     // Slots after EndEvent differ between Xbox generations. Keep traced
-    // assignments, including slot 59 and the slot 62 upload.
+    // assignments, including slot 59 and the slot 62 memory copy.
     slots[59] = crate::slot!(execute_indirect);
-    // Scarlett video upload, title RVA 0x979650. The CPU buffer is filled
-    // after this returns, so the bytes are snapshotted at execute. Device11
-    // and extended lists copy this table.
-    slots[62] = crate::slot!(linear_upload::linear_upload);
+    // CopyMemoryToMemoryX; ProjectScarlett reads textures back through it
+    // (title RVA 0x979650). Device11 and extended lists copy this table.
+    slots[62] = crate::slot!(copy_memory::copy_memory);
     slots[67] = crate::slot!(flush_texture_cache);
     slots[68] = crate::slot!(graphics::depth_bounds);
     slots[71] = crate::slot!(write_marker);
-    slots[72] = crate::slot!(queries::timestamp_at);
+    slots[72] = crate::slot!(write_value64);
     slots[74] = crate::slot!(memory_wait::wait_value64);
+    slots[80] = crate::slot!(dispatch_flagged);
     slots[83] = crate::slot!(copy_texture);
     slots[84] = crate::slot!(copy_resource);
     // GTA's texture uploader uses this entry for a placed footprint to a
@@ -1219,6 +1330,8 @@ static LIST_SLOTS: Slots<149> = {
     slots[131] = crate::slot!(build_raytracing::batch);
     slots[139] = crate::slot!(reset_extended);
     slots[146] = crate::slot!(enhanced::barrier);
+    // XboxBvhBuilder's batched builds take descriptor memory from the list.
+    slots[148] = crate::slot!(list_memory::allocate_slot);
     slots
 };
 
@@ -1248,18 +1361,18 @@ static DEVICE11_LIST_SLOTS: Slots<149> = {
     slots[122] = crate::slot!(ray_dispatch::pipeline);
     slots[123] = crate::slot!(ray_dispatch::dispatch);
     slots[129] = crate::slot!(graphics::dispatch_mesh);
+    // SyncTopOfPipeX and SyncBottomOfPipeX; ProjectScarlett calls slot 131
+    // from title RVA 0x1560994. The batched build moves to slot 133.
+    slots[131] = crate::slot!(extended_cache_barrier);
+    slots[132] = crate::slot!(extended_cache_barrier);
+    slots[133] = crate::slot!(build_raytracing::batch);
     slots[70] = crate::slot!(graphics::depth_bounds);
     slots[75] = crate::slot!(graphics::force_shader_depth_order);
     slots[142] = crate::slot!(graphics::sample_mask);
     slots
 };
 
-static EXTENDED_LIST_SLOTS: Slots<149> = {
-    let mut slots = DEVICE11_LIST_SLOTS;
-    slots[131] = crate::slot!(extended_cache_barrier);
-    slots[132] = crate::slot!(extended_cache_barrier);
-    slots
-};
+static EXTENDED_LIST_SLOTS: Slots<149> = DEVICE11_LIST_SLOTS;
 
 unsafe fn guest_list<'a>(object: *mut c_void, device: *mut c_void) -> Option<&'a List> {
     unsafe {
@@ -1291,7 +1404,9 @@ unsafe extern "system" fn execute_frame(
     // suppresses a hardware buffer switch and bit 1 chains indirect buffers.
     // The desktop queue owns its packet storage and takes the ordered list
     // array in one submission. The frame token labels that submission.
-    if queue.state.kind != D3D12_COMMAND_LIST_TYPE_DIRECT || flags & !3 != 0 {
+    // Direct and compute queues both submit this way. Each list's type is
+    // checked against the queue with the rest of the batch.
+    if flags & !3 != 0 {
         crate::diagnostics::recording_error(format_args!("extended command-list submission flags {flags:#x}"));
         reject(queue, E_NOTIMPL);
         return;
@@ -1349,7 +1464,11 @@ unsafe fn execute_batch(queue: &Queue, count: u32, lists: *const *mut c_void, fr
                     return Err(E_INVALIDARG);
                 }
             }
-            state.snapshot_uploads()?;
+            memory_wait::note_list(
+                ptr::from_ref(list).addr(),
+                memory_wait::Fate::Submitted(queue.state.kind.0),
+                &state.labels,
+            );
             splits.try_reserve(state.prefix.segments.len()).map_err(|_| E_OUTOFMEMORY)?;
             splits.extend(state.prefix.segments.iter().map(|s| (list_index, s.clone())));
             list_index += 1;
@@ -1539,6 +1658,23 @@ unsafe extern "system" fn present(
     result
 }
 
+/// Say every ten seconds how many frames reached the screen.
+fn frame_heartbeat(token: u64) {
+    static FRAMES: Mutex<Option<(std::time::Instant, u64, u64)>> = Mutex::new(None);
+    let mut state = FRAMES.lock().unwrap_or_else(|e| e.into_inner());
+    let (since, recent, total) = state.get_or_insert_with(|| (std::time::Instant::now(), 0, 0));
+    *recent += 1;
+    *total += 1;
+    let elapsed = since.elapsed().as_secs_f32();
+    if elapsed >= 10.0 {
+        crate::diagnostics::log(&format!(
+            "presented {recent} frames in {elapsed:.0}s, {total} in total, token={token}"
+        ));
+        *since = std::time::Instant::now();
+        *recent = 0;
+    }
+}
+
 unsafe fn present_planes(
     queue: &Queue, count: u32, planes: *const PresentPlane, params: *const PresentParameters,
 ) -> HRESULT {
@@ -1592,6 +1728,9 @@ unsafe fn present_planes(
         }
     }
     let result = queue.state.presentation.present(&queue.native, source);
+    if result == S_OK {
+        frame_heartbeat(plane.token);
+    }
     // Frame pacing must advance even if the host present failed; the title
     // otherwise waits forever for this token's flip.
     unsafe { device::frame_events::display_flip(parent(&queue.parent), plane.token) };
@@ -1671,6 +1810,7 @@ pub(crate) unsafe fn wrap_command_list(
         mesh: OnceLock::new(),
         raytracing,
         recording: Mutex::new(Recording {
+            labels: Vec::new(),
             timestamp_page: None,
             prefix: memory_wait::Prefix::default(),
             resources: allocator.state.clone(),
@@ -1684,7 +1824,6 @@ pub(crate) unsafe fn wrap_command_list(
             trace_samples: Vec::new(),
             placed_reads: Vec::new(),
             placed_writes: Vec::new(),
-            uploads: Vec::new(),
             bound_placed_targets: Vec::new(),
             resource_heap: None,
             descriptor_arena: None,
@@ -1694,6 +1833,7 @@ pub(crate) unsafe fn wrap_command_list(
             media: compact.then(|| media::Recording::new(allocator)),
             phase: ListState::Fresh(allocator.native.clone(), initial.map(|p| p.native.clone())),
             error: S_OK,
+            error_reported: false,
         }),
     };
     unsafe {
