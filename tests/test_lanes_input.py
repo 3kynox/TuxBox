@@ -1,8 +1,10 @@
 import unittest
+from unittest import mock
 
+import tools.check_lanes_input as check
 from tools.check_lanes_input import (ACTIVE, BOTTOM, HEIGHT, IDLE, INK, LEFT, MID, NEXT_ROW, PAPER, RED,
-                                     RIGHT, TEAL, TOP, WIDTH, Board, center, frame_pixels, read_board,
-                                     step_toward)
+                                     RIGHT, TEAL, TOP, WIDTH, Board, CheckFailed, center, frame_pixels,
+                                     play, read_board, step_toward)
 
 
 def paint(lane=1, hazard: int | None = 2, title=None, player=True):
@@ -75,6 +77,68 @@ class FrameTests(unittest.TestCase):
         self.assertEqual(pixel(1, 1), (0xcc, 0xbb, 0xaa))
         with self.assertRaisesRegex(ValueError, "outside"):
             pixel(2, 0)
+
+
+class FakeLanes:
+    """Enough of Lanes for play(): a course, the lane, the finish state, and presses that get lost."""
+
+    def __init__(self, lost=0, keys=None):
+        self.hazards = [2, 1, 0] * 6  # barrier lane per row
+        self.lost, self.keys = lost, keys or {"Left": -1, "space": 0, "Right": 1}
+        self.lane, self.turn, self.finish, self.focus_calls, self._frames = 1, 0, "playing", 0, {}
+
+    def capture(self, *_origin):
+        state = (self.lane, self.hazards[self.turn], {"crashed": "COLLISION"}.get(self.finish))
+        if state not in self._frames:
+            self._frames[state] = paint(*state)
+        return self._frames[state]
+
+    def press(self, key):
+        if self.lost:
+            self.lost -= 1
+        elif key == "r":
+            self.lane, self.turn, self.finish = 1, 0, "playing"
+        elif self.finish == "playing" and key in self.keys:
+            self.lane = max(0, min(2, self.lane + self.keys[key]))
+            self.finish = "crashed" if self.lane == self.hazards[self.turn] else "playing"
+            self.turn += 1
+
+    def focus(self, _window):
+        self.focus_calls += 1
+        return True
+
+
+class Running:
+    returncode = None
+
+    def poll(self):
+        return None
+
+
+@mock.patch.multiple(check, FIRST_PRESS_WAIT=0.15, PRESS_WAIT=0.15, FOCUS_SETTLE=0, IGNORED_WAIT=0)
+class PlayTests(unittest.TestCase):
+    def test_plays_a_course(self):
+        lanes, steps = FakeLanes(), []
+        self.assertEqual(play(lanes, 1, (0, 0), steps, Running()), 2)  # Left (safe), then Right into the barrier
+        self.assertEqual([s["key"] for s in steps], [None, "Left", "Right", "Right", "r"])
+        self.assertEqual(lanes.focus_calls, 0)
+
+    def test_repeats_a_first_press_that_never_arrived(self):
+        lanes, steps = FakeLanes(lost=2), []
+        self.assertEqual(play(lanes, 1, (0, 0), steps, Running()), 2)
+        self.assertEqual((lanes.focus_calls, steps[1]["attempts"]), (2, 3))
+
+    def test_gives_up_after_three_lost_presses(self):
+        lanes = FakeLanes(lost=3)
+        with self.assertRaisesRegex(CheckFailed, "safe move"):
+            play(lanes, 1, (0, 0), [], Running())
+        self.assertEqual(lanes.focus_calls, 2)
+
+    def test_never_repeats_a_press_that_changed_the_board(self):
+        lanes = FakeLanes(keys={"Left": 1, "Right": -1, "space": 0})  # Left lands in the barrier lane
+        with self.assertRaisesRegex(CheckFailed, "safe move"):
+            play(lanes, 1, (0, 0), [], Running())
+        self.assertEqual(lanes.focus_calls, 0)
 
 
 if __name__ == "__main__":

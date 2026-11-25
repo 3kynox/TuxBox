@@ -41,6 +41,12 @@ ACTIVE, IDLE = (42, 64, 76), (34, 42, 59)
 BANNERS = {(len("COLLISION") * 6 - 1) * 3: "crashed", (len("COURSE COMPLETE") * 6 - 1) * 3: "won"}
 KEYS = {-1: "Left", 0: "space", 1: "Right"}
 PACKAGE = ("lanes.exe", "d3d12_xs.dll", "GameInput.dll", "xmem.dll")
+# GameInput reads the keyboard only while the game is the Win32 foreground window. A first key can
+# be lost while Wine is still activating the new window (seen once in 13 runs, right after a full
+# verify). The board then stays exactly at the start, so it is safe to focus again and repeat that
+# one press; any other board is a failure.
+FIRST_PRESS_ATTEMPTS, FIRST_PRESS_WAIT, FOCUS_SETTLE = 3, 1.5, 0.5
+PRESS_WAIT, IGNORED_WAIT = 5.0, 0.75  # how long a move may take to show; how long an ignored one is watched
 
 
 class CheckFailed(Exception):
@@ -134,6 +140,7 @@ class Display:
                 ("XTranslateCoordinates", c.c_int, [p, w, w, c.c_int, c.c_int, c.POINTER(c.c_int),
                                                     c.POINTER(c.c_int), c.POINTER(w)]),
                 ("XRaiseWindow", c.c_int, [p, w]), ("XSetInputFocus", c.c_int, [p, w, c.c_int, w]),
+                ("XGetInputFocus", c.c_int, [p, c.POINTER(w), c.POINTER(c.c_int)]),
                 ("XGetImage", c.POINTER(XImage), [p, w, c.c_int, c.c_int, c.c_uint, c.c_uint, w, c.c_int]),
                 ("XDestroyImage", c.c_int, [c.POINTER(XImage)]), ("XStringToKeysym", w, [c.c_char_p]),
                 ("XKeysymToKeycode", c.c_ubyte, [p, w]), ("XSync", c.c_int, [p, c.c_int]),
@@ -198,9 +205,17 @@ class Display:
         return None
 
     def focus(self, window):
+        """Give the window the X input focus; return whether the server reports it there."""
         self.x11.XRaiseWindow(self.dpy, window)
         self.x11.XSetInputFocus(self.dpy, window, 2, 0)  # RevertToParent, CurrentTime
         self.x11.XSync(self.dpy, 0)
+        deadline = time.monotonic() + 2
+        while True:
+            current, revert = ctypes.c_ulong(), ctypes.c_int()
+            self.x11.XGetInputFocus(self.dpy, ctypes.byref(current), ctypes.byref(revert))
+            if current.value == window or time.monotonic() > deadline:
+                return current.value == window
+            time.sleep(0.05)
 
     def capture(self, x, y):
         """pixel(x, y) over the board's on-screen rectangle, read from the root window."""
@@ -250,12 +265,12 @@ def prefix_processes(prefix):
     return found
 
 
-def play(display, origin, steps, game):
+def play(display, window, origin, steps, game):
     """Drive one course from the start position, append each step to steps, return accepted moves."""
     last = {}
 
-    def wait(predicate, what, timeout=5.0):
-        deadline = time.monotonic() + timeout
+    def wait(predicate, what, timeout=None):
+        deadline = time.monotonic() + (PRESS_WAIT if timeout is None else timeout)
         while time.monotonic() < deadline:
             if game.poll() is not None:
                 raise CheckFailed(f"{what}: the game exited with {game.returncode}")
@@ -268,20 +283,33 @@ def play(display, origin, steps, game):
             time.sleep(0.05)
         raise CheckFailed(f"{what}: last board {last.get('board')}")
 
-    def press(key, predicate, what):
+    def press(key, predicate, what, attempts=1):
         before = last.get("board")
-        display.press(key)
-        board = wait(predicate, what)
+        attempt = 1
+        while True:
+            display.press(key)
+            try:
+                board = wait(predicate, what, timeout=FIRST_PRESS_WAIT if attempt < attempts else None)
+                break
+            except CheckFailed:
+                # Retry only a press that never arrived: any other board is a real failure.
+                if attempt >= attempts or last.get("board") != before:
+                    raise
+                attempt += 1
+                display.focus(window)
+                time.sleep(FOCUS_SETTLE)
         steps.append(dict(key=key, before=vars(before) if isinstance(before, Board) else before,
-                          after=vars(board)))
+                          after=vars(board), **({"attempts": attempt} if attempt > 1 else {})))
         return board
 
     board = wait(lambda b: b.lane == 1 and b.finish == "playing" and b.hazard is not None,
                  "start position", timeout=10.0)
     steps.append(dict(key=None, after=vars(board)))
+    time.sleep(FOCUS_SETTLE)  # let Wine make the game the foreground window before the first key
     # A safe sideways move: the highlighted lane must follow the key.
     target = 0 if board.hazard != 0 else 2
-    board = press(KEYS[target - board.lane], lambda b: b.lane == target and b.finish == "playing", "safe move")
+    board = press(KEYS[target - board.lane], lambda b: b.lane == target and b.finish == "playing", "safe move",
+                  attempts=FIRST_PRESS_ATTEMPTS)
     moves = 1
     # Steer into the next barrier; when it is two lanes away, the middle lane is a safe step.
     while board.finish == "playing":
@@ -297,7 +325,7 @@ def play(display, origin, steps, game):
     crashed = board
     ignored = KEYS[1 if crashed.lane < 2 else -1]
     display.press(ignored)
-    time.sleep(0.75)
+    time.sleep(IGNORED_WAIT)
     after = read_board(display.capture(*origin))
     if after != crashed:
         raise CheckFailed(f"move accepted after the collision: {after}")
@@ -359,8 +387,8 @@ def main():
                     raise CheckFailed("the lanes window did not appear" if game.poll() is None
                                       else f"the launcher exited with {game.returncode} before the window appeared")
                 window, *origin = found
-                display.focus(window)
-                moves = play(display, origin, record["steps"], game)
+                record["focused"] = display.focus(window)
+                moves = play(display, window, origin, record["steps"], game)
                 display.press("Escape")
                 try:
                     code = game.wait(timeout=30)
