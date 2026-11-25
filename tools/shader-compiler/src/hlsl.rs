@@ -418,6 +418,16 @@ fn half_to_integer(mnemonic: &str) -> bool {
     matches!(mnemonic, "v_cvt_u16_f16" | "v_cvt_i16_f16") || normalized_half_to_integer(mnemonic)
 }
 
+fn mul24_expr(op: &str, a: &str, b: &str) -> Option<String> {
+    Some(match op {
+        "v_mul_u32_u24" => format!("(({a} & 0xffffffu) * ({b} & 0xffffffu))"),
+        "v_mul_i32_i24" => format!("asuint((asint({a} << 8) >> 8) * (asint({b} << 8) >> 8))"),
+        "v_mul_hi_u32_u24" => format!("tb_mulhi_u32({a} & 0xffffffu, {b} & 0xffffffu)"),
+        "v_mul_hi_i32_i24" => format!("tb_mulhi_i32(asuint(asint({a} << 8) >> 8), asuint(asint({b} << 8) >> 8))"),
+        _ => return None,
+    })
+}
+
 /// Low `width` bits set, saturated to one word. Keep full-width shifts out of the generated code.
 fn low_mask(width: &str) -> String {
     format!("(({width}) >= 32u ? 0xffffffffu : ((1u << (({width}) & 31u)) - 1u))")
@@ -755,21 +765,87 @@ impl HeapView {
 const SPACE_ALIAS: u32 = 1 << 16;
 /// Synthetic opcode of the wave-reduction instruction produced by `lower_wave_reductions`.
 const OP_WAVE_REDUCE: u32 = 0x7ff0;
-const OP_QUAD_BINARY: u32 = 0x7ff5;
+const OP_DPP_BINARY: u32 = 0x7ff5;
+const OP_LOCAL_EXTREMA: u32 = 0x7fe3;
 const OP_QUAD_MOVE: u32 = 0x7fe1;
 const OP_ROW_MIRROR: u32 = 0x7fe2;
 
 fn is_quad_exchange(i: &Insn) -> bool {
-    (i.enc == Enc::Vop2 && i.op == OP_QUAD_BINARY)
+    (i.enc == Enc::Vop2 && i.op == OP_DPP_BINARY)
         || (i.enc == Enc::Vop1 && (i.op == OP_QUAD_MOVE || i.op == OP_ROW_MIRROR))
 }
 
-fn is_integer_quad_exchange(i: &Insn) -> bool {
-    i.enc == Enc::Vop2 && matches!(i.mnemonic.as_str(),
-        "v_or_b32" | "v_and_b32" | "v_xor_b32" | "v_sub_nc_u32" | "v_subrev_nc_u32")
-        && i.src.first() == Some(&Opnd::Raw(250))
-        // Full destination masks, no source modifiers, selector within a quad.
-        && i.raw.get(1).is_some_and(|ctrl| ctrl & 0xfff3_0000 == 0xff00_0000)
+fn lower_dpp_binary(ins: &mut Insn) {
+    let control = ins.raw[1];
+    let selector = if group_extrema::is_dpp8(ins) { control >> 8 } else { (control >> 8) & 0x1ff };
+    ins.op = OP_DPP_BINARY;
+    ins.aux.imm = i64::from(selector);
+    ins.src[0] = Opnd::Vgpr(control as u8);
+}
+
+fn dpp_fp32_sources(ins: &Insn, first: String) -> Result<(String, String), String> {
+    // DPP8 encodes lane selectors in the same bits, and ordinary VOP2
+    // instructions can have a literal extension instead of a DPP control.
+    let flags = if ins.raw.first().is_some_and(|word| word & 0x1ff == 250) {
+        *ins.raw.get(1).ok_or("missing DPP16 controls")? >> 20
+    } else {
+        0
+    };
+    let modified = |bits, flags: u32| {
+        compare::sign_modifiers(bits, 0x8000_0000, flags & 2 != 0, flags & 1 != 0)
+    };
+    Ok((modified(first, flags), modified(r(&ins.src[1])?, flags >> 2)))
+}
+
+fn is_binary_quad_perm(i: &Insn) -> bool {
+    if i.enc != Enc::Vop2 || i.src.first() != Some(&Opnd::Raw(250)) {
+        return false;
+    }
+    let Some(control) = i.raw.get(1) else { return false };
+    // A quad selector uses eight bits. Row and bank masks govern the write.
+    if control & 0x0003_0000 != 0 {
+        return false;
+    }
+    match i.mnemonic.as_str() {
+        "v_add_f32" | "v_sub_f32" | "v_subrev_f32" | "v_mul_f32" | "v_mul_legacy_f32"
+        | "v_cvt_pkrtz_f16_f32" | "v_min_f32" | "v_max_f32" => true,
+        "v_or_b32" | "v_and_b32" | "v_xor_b32" | "v_xnor_b32"
+        | "v_lshlrev_b32" | "v_lshrrev_b32" | "v_ashrrev_i32"
+        | "v_add_nc_u32" | "v_sub_nc_u32" | "v_subrev_nc_u32"
+        | "v_min_i32" | "v_max_i32" | "v_min_u32" | "v_max_u32"
+        | "v_mul_i32_i24" | "v_mul_hi_i32_i24" | "v_mul_u32_u24" | "v_mul_hi_u32_u24"
+        | "v_cndmask_b32" => control & 0x00f0_0000 == 0, // No FP source modifiers.
+        _ => false,
+    }
+}
+
+// VOP2 CNDMASK reads the destination lane's VCC. A vector compare writes a
+// per-invocation predicate here, while a scalar write can hold a packed mask.
+fn quad_cndmasks_with_lane_vcc(insns: &[Insn]) -> BTreeSet<usize> {
+    let targets = branch_targets(insns);
+    let mut selects = BTreeSet::new();
+    let mut lane_vcc = false;
+    for (index, ins) in insns.iter().enumerate() {
+        if targets.contains(&(ins.offset as i64)) { lane_vcc = false; }
+        if lane_vcc && ins.mnemonic == "v_cndmask_b32" && is_binary_quad_perm(ins) {
+            selects.insert(index);
+        }
+        if ins.mnemonic.starts_with("v_cmpx_") { continue; } // RDNA2 CMPX writes EXEC.
+        if ins.dst.first() == Some(&Opnd::VccLo) {
+            lane_vcc = ins.mnemonic.starts_with("v_cmp_")
+                || (ins.mnemonic == "s_mov_b64" && matches!(ins.src[..], [Opnd::ConstInt(0 | -1)]));
+        } else {
+            lane_vcc &= match ins.enc {
+                Enc::Vop1 | Enc::Vop2 => matches!(ins.dst[..], [Opnd::Vgpr(_)])
+                    && !ins.mnemonic.contains("_co_"),
+                Enc::Sop1 => matches!(ins.mnemonic.as_str(), "s_mov_b32" | "s_mov_b64" | "s_wqm_b32" | "s_wqm_b64")
+                    && !ins.dst.contains(&Opnd::VccHi),
+                Enc::Sopp => matches!(ins.mnemonic.as_str(), "s_nop" | "s_waitcnt"),
+                _ => false,
+            };
+        }
+    }
+    selects
 }
 
 /// Whole-wave reductions (HLSL `WaveActiveMin` / `WaveActiveMax`; observed in
@@ -823,24 +899,33 @@ fn lower_wave_reductions(insns: &mut [Insn]) -> Result<Option<u32>, String> {
         return Err(format!("unsupported DPP16 move at {:#x}", op.offset));
     }
     let mut width = None;
+    let mut proven_cndmasks = None;
     let is_dpp = |i: &Insn| i.enc == Enc::Vop2 && matches!(i.src.first(), Some(Opnd::Raw(233 | 234 | 250)));
     let mut at = 0;
     while let Some(first) = (at..insns.len()).find(|&i| is_dpp(&insns[i])) {
         let off = insns[first].offset;
         let bad = |what: &str| format!("wave reduction at {off:#x}: {what}");
         let red = insns[first].mnemonic.clone();
-        let integer_quad = is_integer_quad_exchange(&insns[first]);
-        if integer_quad || (red == "v_add_f32" && insns[first].src.first() == Some(&Opnd::Raw(250))) {
-            let ctrl = *insns[first].raw.get(1).ok_or_else(|| bad("missing DPP16 control word"))?;
-            // Keep the existing FP32 add subset at FI=1 and BC=1.
-            if !integer_quad && ctrl & 0xffff0000 != 0xff0c0000 {
-                return Err(bad("unsupported DPP16 FP32 add controls"));
+        // A full saved-EXEC extrema reduction can begin with quad shuffles,
+        // then combine different quads. A quad followed solely by a lane read
+        // still selects within its quad and must not become a whole-wave min/max.
+        let starts_wave_extrema = matches!(red.as_str(), "v_min_f32" | "v_max_f32")
+            && first >= 3 && (insns[first - 3].enc, insns[first - 3].op) == (Enc::Sop1, 0x29)
+            && insns[first - 2].mnemonic == "v_mov_b32" && insns[first - 1].mnemonic == "v_cndmask_b32"
+            && insns[first + 1..].iter()
+                .take_while(|i| is_dpp(i) && i.mnemonic == red && i.dst == insns[first].dst)
+                .any(|i| !is_binary_quad_perm(i));
+        if is_binary_quad_perm(&insns[first]) && !starts_wave_extrema {
+            if red == "v_cndmask_b32" && !proven_cndmasks
+                .get_or_insert_with(|| quad_cndmasks_with_lane_vcc(insns)).contains(&first) {
+                return Err(bad("quad CNDMASK requires a known per-lane VCC predicate"));
             }
-            insns[first].op = OP_QUAD_BINARY;
-            insns[first].src[0] = Opnd::Vgpr(ctrl as u8);
-            insns[first].aux.imm = ((ctrl >> 8) & 255) as i64;
+            lower_dpp_binary(&mut insns[first]);
             at = first + 1;
             continue;
+        }
+        if red == "v_add_f32" && insns[first].src.first() == Some(&Opnd::Raw(250)) {
+            return Err(bad("unsupported DPP16 FP32 add controls"));
         }
         let saved_extrema = matches!(red.as_str(), "v_min_f32" | "v_max_f32")
             && (first.checked_sub(3).is_some_and(|p| matches!(insns[p].mnemonic.as_str(), "s_or_saveexec_b32" | "s_or_saveexec_b64"))
@@ -1433,7 +1518,7 @@ fn translate_outputs(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, output_
     // Once this exact exchange subset is recognized, a later binding or
     // emitter error must not silently replace its collectives with copies.
     let mut original = disassemble(&ex.isa);
-    if original.iter().any(is_integer_quad_exchange) {
+    if original.iter().any(is_binary_quad_perm) || group_extrema::prepare_exchanges(ex, &mut original).unwrap_or(true) {
         // This standalone exchange observes its source lane even if the exact
         // translation failed elsewhere. A per-lane retry would drop that operand.
         return first;
@@ -1528,6 +1613,7 @@ fn translate_outputs_once(ex: &ShaderExtract, feeds_ps: Option<&InputInterp>, ou
     let allocation_wave64 = !lone_lane::on() && !wave_cull && !page_waves && mark_wave_allocations(&mut insns, resolve_wave32)?;
     if ex.stage == Stage::Pixel { wave_alloc::prepare(&mut insns); }
     let reflection = reflection_compact::prepare(ex, &mut insns);
+    group_extrema::prepare_exchanges(ex, &mut insns)?;
     let group_extrema = group_extrema::prepare(ex, &mut insns);
     let straight_exchange = ex.stage == Stage::Compute && !lone_lane::on()
         && !wave_cull && !page_waves && !resolve_wave32 && !allocation_wave64
@@ -4245,6 +4331,13 @@ impl<'a> Emitter<'a> {
         out
     }
 
+    fn fp32_extrema(&self, ins: &Insn, first: String) -> Result<String, String> {
+        let maximum = ins.mnemonic == "v_max_f32";
+        let mode = if self.regs.contains("tb_fp_mode") { "tb_fp_mode" } else { "0xc0u" };
+        let (first, second) = dpp_fp32_sources(ins, first)?;
+        Ok(format!("tb_quad_extrema({first}, {second}, {maximum}, {mode})"))
+    }
+
     fn push_helpers(&self, h: &mut String) {
         h.push_str(CUBE_HELPERS);
         if self.insns.iter().any(clamped_product24) {
@@ -4257,6 +4350,24 @@ impl<'a> Emitter<'a> {
         }
         if self.insns.iter().any(|ins| ins.mnemonic == "v_fract_f32") {
             h.push_str(include_str!("fract_f32.hlsl"));
+        }
+        if self.insns.iter().any(|i| i.op == OP_DPP_BINARY && matches!(i.mnemonic.as_str(), "v_min_f32" | "v_max_f32")) {
+            h.push_str(r#"
+uint tb_quad_extrema(uint a, uint b, bool maximum, uint mode) {
+    if ((mode & 0x10u) == 0u) {
+        if ((a & 0x7fffffffu) < 0x00800000u) a &= 0x80000000u;
+        if ((b & 0x7fffffffu) < 0x00800000u) b &= 0x80000000u;
+    }
+    // Order -0 below +0. Keep operands as bits for the non-IEEE NaN selection rule.
+    uint keyA = (a & 0x80000000u) != 0u ? ~a : a ^ 0x80000000u;
+    uint keyB = (b & 0x80000000u) != 0u ? ~b : b ^ 0x80000000u;
+    uint result = (maximum ? keyA > keyB : keyA < keyB) ? a : b;
+    if ((a & 0x7fffffffu) > 0x7f800000u) result = b;
+    else if ((b & 0x7fffffffu) > 0x7f800000u) result = a;
+    if ((mode & 0x20u) == 0u && (result & 0x7fffffffu) < 0x00800000u) result &= 0x80000000u;
+    return result;
+}
+"#);
         }
         if self.insns.iter().any(|i| i.mnemonic.starts_with("v_cmp") && (i.mnemonic.ends_with("_f64") || i.mnemonic.ends_with("_f32") || i.mnemonic.ends_with("_f16"))) {
             h.push_str(compare::FLOAT_HELPERS);
@@ -4625,8 +4736,15 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                     // All host lanes participate before the guest destination guards.
                     let perm = ins.aux.imm;
                     self.line(&format!("uint q{i}lane = WaveGetLaneIndex();"));
-                    let lane = format!("(q{i}lane & ~3u) | (({perm}u >> (2u * (q{i}lane & 3u))) & 3u)");
-                    if ins.raw[1] & (1 << 18) != 0 {
+                    let dpp8 = group_extrema::is_dpp8(ins);
+                    let lane = if dpp8 {
+                        format!("(q{i}lane & ~7u) | (({perm}u >> (3u * (q{i}lane & 7u))) & 7u)")
+                    } else if perm == 0x140 {
+                        format!("q{i}lane ^ 15u")
+                    } else if (0x121..=0x12f).contains(&perm) {
+                        format!("(q{i}lane & ~15u) | ((q{i}lane - {}u) & 15u)", perm & 15)
+                    } else { format!("(q{i}lane & ~3u) | (({perm}u >> (2u * (q{i}lane & 3u))) & 3u)") };
+                    if dpp8 || ins.raw[1] & (1 << 18) != 0 {
                         self.line(&format!("uint q{i} = WaveReadLaneAt({source}, {lane});"));
                     } else if ins.raw[1] & (1 << 19) != 0 {
                         self.line(&format!("uint q{i} = WaveReadLaneAt((exec_lo & 1u) != 0u ? {source} : 0u, {lane});"));
@@ -6396,26 +6514,68 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             } else { format!("WaveReadLaneAt({value}, {lane})") };
             return self.ws(&d, &read);
         }
+        if ins.enc == Enc::Vop2 && ins.op == OP_LOCAL_EXTREMA {
+            let value = self.fp32_extrema(ins, r(&s[0])?)?;
+            return self.wv(&d, &value);
+        }
         if is_quad_exchange(ins) {
             if self.dispatched && !(self.pixel_wave && ins.op != OP_ROW_MIRROR) {
                 return Err("quad exchange in a block-dispatched program".into());
             }
             let peer = format!("q{}", self.cur_idx);
-            if ins.op != OP_QUAD_BINARY { return self.wv(&d, &peer); }
+            if ins.op != OP_DPP_BINARY { return self.wv(&d, &peer); }
             let value = match ins.mnemonic.as_str() {
-                "v_add_f32" => format!("asuint(asfloat({peer}) + {})", f(&s[1])?),
+                op @ ("v_add_f32" | "v_sub_f32" | "v_subrev_f32" | "v_mul_f32" | "v_mul_legacy_f32") => {
+                    let (a, b) = dpp_fp32_sources(ins, peer.clone())?;
+                    match op {
+                        "v_add_f32" => format!("asuint(asfloat({a}) + asfloat({b}))"),
+                        "v_sub_f32" => format!("asuint(asfloat({a}) - asfloat({b}))"),
+                        "v_subrev_f32" => format!("asuint(asfloat({b}) - asfloat({a}))"),
+                        "v_mul_f32" => format!("asuint(asfloat({a}) * asfloat({b}))"),
+                        _ => format!("asuint(tb_mull(asfloat({a}), asfloat({b})))"),
+                    }
+                }
+                "v_min_f32" | "v_max_f32" => self.fp32_extrema(ins, peer.clone())?,
+                "v_cvt_pkrtz_f16_f32" => {
+                    let (lo, hi) = dpp_fp32_sources(ins, peer.clone())?;
+                    format!("(tb_f16_rtz(asfloat({lo})) | (tb_f16_rtz(asfloat({hi})) << 16))")
+                }
                 "v_or_b32" => format!("{peer} | {}", r(&s[1])?),
                 "v_and_b32" => format!("{peer} & {}", r(&s[1])?),
                 "v_xor_b32" => format!("{peer} ^ {}", r(&s[1])?),
+                "v_xnor_b32" => format!("~({peer} ^ {})", r(&s[1])?),
+                "v_cndmask_b32" => format!("(vcc_lo & 1u) != 0u ? {} : {peer}", r(&s[1])?),
+                "v_add_nc_u32" => format!("{peer} + {}", r(&s[1])?),
                 "v_sub_nc_u32" => format!("{peer} - {}", r(&s[1])?),
                 "v_subrev_nc_u32" => format!("{} - {peer}", r(&s[1])?),
-                _ => return Err("unknown quad binary operation".into()),
+                "v_lshlrev_b32" => format!("{} << ({peer} & 31u)", r(&s[1])?),
+                "v_lshrrev_b32" => format!("{} >> ({peer} & 31u)", r(&s[1])?),
+                "v_ashrrev_i32" => format!("asuint(asint({}) >> ({peer} & 31u))", r(&s[1])?),
+                "v_min_i32" => format!("asuint(min(asint({peer}), asint({})))", r(&s[1])?),
+                "v_max_i32" => format!("asuint(max(asint({peer}), asint({})))", r(&s[1])?),
+                "v_min_u32" => format!("min({peer}, {})", r(&s[1])?),
+                "v_max_u32" => format!("max({peer}, {})", r(&s[1])?),
+                op => mul24_expr(op, &peer, &r(&s[1])?).ok_or("unknown quad binary operation")?,
             };
-            // FI=0 and BOUND_CTRL=0 suppress the entire write on an inactive source.
-            if ins.raw[1] & (3 << 18) == 0 {
-                return self.wv(&d, &format!("{peer}active ? ({value}) : {}", r(&d)?));
+            // The source exchange precedes both the destination mask and EXEC.
+            let mut guards = Vec::new();
+            if let Some(mask) = group_extrema::destination_mask(ins) {
+                if self.ex.stage != Stage::Compute {
+                    return Err("DPP16 destination masks require a logical compute lane index".into());
+                }
+                let rows = mask >> 4;
+                let banks = mask & 15;
+                if rows != 15 {
+                    let row_bits = group_extrema::row_index_mask(self, rows, banks)?;
+                    guards.push(format!("(({rows:#x}u >> ((tb_lane >> 4u) & {row_bits}u)) & 1u) != 0u"));
+                }
+                if banks != 15 { guards.push(format!("(({banks:#x}u >> ((tb_lane >> 2u) & 3u)) & 1u) != 0u")); }
             }
-            return self.wv(&d, &value);
+            if !group_extrema::is_dpp8(ins) && ins.raw[1] & (3 << 18) == 0 {
+                guards.push(format!("{peer}active"));
+            }
+            if guards.is_empty() { return self.wv(&d, &value); }
+            return self.wv(&d, &format!("{} ? ({value}) : {}", guards.join(" && "), r(&d)?));
         }
         if ins.op == OP_WAVE_REDUCE && ins.enc == Enc::Vop3 {
             // See `lower_wave_reductions`. Every invocation computes the same value; lanes
@@ -7277,8 +7437,6 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             "v_max_u32" => format!("max({a}, {b})"),
             "v_min_i32" => format!("asuint(min(asint({a}), asint({b})))"),
             "v_max_i32" => format!("asuint(max(asint({a}), asint({b})))"),
-            "v_mul_u32_u24" => format!("(({a} & 0xffffffu) * ({b} & 0xffffffu))"),
-            "v_mul_i32_i24" => format!("asuint((asint({a} << 8) >> 8) * (asint({b} << 8) >> 8))"),
             "v_mul_lo_u32" => format!("({a} * {b})"),
             // Count the mask bits below this lane in the selected 32-bit word.
             "v_mbcnt_lo_u32_b32" | "v_mbcnt_hi_u32_b32" => {
@@ -7314,8 +7472,6 @@ uint tb_fmac_half(uint a, uint b, uint c) {
                 format!("({b} + t{t})")
             }
             "v_mul_hi_u32" => format!("tb_mulhi_u32({a}, {b})"),
-            "v_mul_hi_u32_u24" => format!("tb_mulhi_u32({a} & 0xffffffu, {b} & 0xffffffu)"),
-            "v_mul_hi_i32_i24" => format!("tb_mulhi_i32(asuint(asint({a} << 8) >> 8), asuint(asint({b} << 8) >> 8))"),
             // Leading bits equal to the sign bit, from the MSB; -1 when all bits are equal.
             "v_ffbh_i32" => format!("(((asint({a}) < 0) ? ~({a}) : ({a})) == 0u ? 0xffffffffu : (31u - firstbithigh((asint({a}) < 0) ? ~({a}) : ({a}))))"),
             // {S0:S1} >> (8 * S2[1:0]), low 32 bits.
@@ -7391,7 +7547,7 @@ uint tb_fmac_half(uint a, uint b, uint c) {
             "v_sat_pk_u8_i16" => format!(
                 "((uint)clamp(asint({a} << 16) >> 16, 0, 255) | ((uint)clamp(asint({a}) >> 16, 0, 255) << 8))"
             ),
-            _ => return Err("unsupported vector op".into()),
+            op => mul24_expr(op, &a, &b).ok_or("unsupported vector op")?,
         };
         self.wv(&d, &e)
     }
@@ -9447,7 +9603,8 @@ void main(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID) {{");
             if self.page_waves || self.wave_cull {
                 writeln!(h, "    uint tb_wave_tid = gtid.x + {tx}u * (gtid.y + {ty_}u * gtid.z);").unwrap();
             }
-            if self.compute_swizzle || self.indexed_lane || self.single_wave32 {
+            let masked_dpp = self.insns.iter().any(|i| i.op == OP_DPP_BINARY && group_extrema::destination_mask(i).is_some());
+            if self.compute_swizzle || self.indexed_lane || self.single_wave32 || masked_dpp {
                 writeln!(h, "    uint tb_lane = gtid.x + {tx}u * (gtid.y + {ty_}u * gtid.z);").unwrap();
             }
             if self.resolve_wave32 {
