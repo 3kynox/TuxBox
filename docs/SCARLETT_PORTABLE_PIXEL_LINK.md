@@ -154,3 +154,66 @@ AMD or FPS. 164 shader compiler, 53 DXBC and 225 Python tests passed
   }
 }
 ```
+
+
+## Actual slot 86 on-demand follow-up
+
+Run tools/check_slot86_portable_link.py with a freshly built host emitter
+and provider (including the import library). The synthetic Scarlett
+Device11 guest submits the native vertex container and two distinct
+portable pixel consumers to slot 86. Both initially require incompatible
+signatures to be repaired. The actual provider and launcher worker
+compile the ordinary producer and each exact link. The guest draws
+four times, alternating consumers, and compares all RGBA pixels against
+independent expected values, including 175 guards per draw.
+A second process starts from a separate disposable prefix with only
+the verified persistent compiler cache copied from the first. The
+optional cache reset in the helper touches only the disposable prefix.
+
+Eight draws, 2048 pixels, 3 cold compilations and 0 warm compilations.
+Both cache receipts match exactly. Null substitutions are disabled.
+Repeated successfully after rebuilding the provider and emitter from
+465318f. 232 Python tests pass. This exercises the VS/PS slot 86 request,
+worker, retry, draw and warm cache path; not a native GS/MS consumer or
+retail replay. No AMD, retail coverage, VRAM or FPS claim.
+
+```json
+{
+  "schema": 1,
+  "passed": true,
+  "adapter": "10de:2704",
+  "tools_sha256": {
+    "emitter": "8cc80b0c89f14448d8722b17cb2618a4a0b3ca92cf836d908f85fe5df184af0e",
+    "provider": "8e682fef5b467cf1b2b77cad0f4bc65bdc6479faa2bd72263e6360fa18260ff8",
+    "dxc": "3dfc856b76291ffc7e45e21fd37ab80e85b34101de76a03253df6608785c92a0",
+    "dxv": "33778294d67143d9f81526f4759c66d5a67a95ea9873448ef3595650a643cbd3"
+  },
+  "runs": {
+    "cold": {
+      "draws": 4,
+      "pixels": 1024,
+      "compiled": 3,
+      "cached_programs": 3,
+      "guest_sha256": "0041cbb521d9e4625e535f09cdee3151227e229f28b5f9907c7a36cb868c3afe",
+      "program_sha256": {
+        "939f54dd0a56f6225f44c4895d27db083075073a783876ad56f92f1640b41380": "01f6cfbf43142655720e6d8bd52f36b398c29329018d8c58931902571d0b83b9",
+        "939f54dd0a56f6225f44c4895d27db083075073a783876ad56f92f1640b41380_5c8b8f8668730b5c037ef03908ef55578f8e3834c966d8e0f6b5eefc6f4103ae_5c8b8f8668730b5c037ef03908ef55578f8e3834c966d8e0f6b5eefc6f4103ae": "70f148b0cc7b0ea73ff25e8b4d6522149ca3b5ab5b64871a4506459e90031cfd",
+        "939f54dd0a56f6225f44c4895d27db083075073a783876ad56f92f1640b41380_5d1127142d06e7fb724e806b2438fd2ebb2b23243e6e8939a76381fb4841775f_5d1127142d06e7fb724e806b2438fd2ebb2b23243e6e8939a76381fb4841775f": "92d6d4873a6b723ef9bfb827eb73b7cda3bc7a87033037e2e106b11f0c8bed48"
+      }
+    },
+    "warm": {
+      "draws": 4,
+      "pixels": 1024,
+      "compiled": 0,
+      "cached_programs": 3,
+      "guest_sha256": "0041cbb521d9e4625e535f09cdee3151227e229f28b5f9907c7a36cb868c3afe",
+      "program_sha256": {
+        "939f54dd0a56f6225f44c4895d27db083075073a783876ad56f92f1640b41380": "01f6cfbf43142655720e6d8bd52f36b398c29329018d8c58931902571d0b83b9",
+        "939f54dd0a56f6225f44c4895d27db083075073a783876ad56f92f1640b41380_5c8b8f8668730b5c037ef03908ef55578f8e3834c966d8e0f6b5eefc6f4103ae_5c8b8f8668730b5c037ef03908ef55578f8e3834c966d8e0f6b5eefc6f4103ae": "70f148b0cc7b0ea73ff25e8b4d6522149ca3b5ab5b64871a4506459e90031cfd",
+        "939f54dd0a56f6225f44c4895d27db083075073a783876ad56f92f1640b41380_5d1127142d06e7fb724e806b2438fd2ebb2b23243e6e8939a76381fb4841775f_5d1127142d06e7fb724e806b2438fd2ebb2b23243e6e8939a76381fb4841775f": "92d6d4873a6b723ef9bfb827eb73b7cda3bc7a87033037e2e106b11f0c8bed48"
+      }
+    }
+  },
+  "scope": "synthetic native VS and portable PS, actual Scarlett slot 86 and worker, cold and warm processes"
+}
+```
